@@ -698,7 +698,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Kernel,
                     context.CurrentGoal,
                     context.Workspace,
-                    abandonReason));
+                    abandonReason,
+                    context.CleanupContext.Hooks));
                 return false;
             }
 
@@ -706,7 +707,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.CurrentGoal,
                 context.Workspace,
-                abandonReason);
+                abandonReason,
+                context.CleanupContext.Hooks);
             ConsoleViews.PrintGoalAbandonPlan(abandonPlan);
             if (!abandonPlan.CanApply)
             {
@@ -965,7 +967,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             ConsoleViews.PrintGoals(context.Kernel);
-            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(context.Workspace.ExecutionDirectory));
+            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(
+                context.Workspace.ExecutionDirectory,
+                context.CleanupContext.Hooks));
             return false;
 
         case "agents":
@@ -1130,7 +1134,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoalArtifactRetentionPlan(GoalArtifactRetentionPlanner.Build(
                 context.Kernel,
                 context.CurrentGoal,
-                context.Workspace));
+                context.Workspace,
+                buildStorageRoot: context.CleanupContext.Hooks.BuildStorageRoot));
             return false;
 
         case "acceptance-queue":

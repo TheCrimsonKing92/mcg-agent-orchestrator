@@ -372,7 +372,9 @@ internal sealed partial class ConductorDriver
                 ?? throw new EvidenceMutationLeaseUnavailableException(
                     $"GOAL_OPERATION_BLOCKED goal={goal.Id.Value} operation=conductor:workspace-create reason=concurrent-acceptance-or-replacement");
             GoalOperationJournal.Begin(dir, goal, "conductor:workspace-create", GoalWorktrees.BranchName(goal.Id));
-            var path = GoalWorktrees.Ensure(dir, goal.Id);
+            // Worktree-add retry clears an orphan directory; that deletion, its warning sink and
+            // lock-holder discovery must use the same cleanup owner as conductor cleanup below.
+            var path = GoalWorktrees.Ensure(dir, goal.Id, _cohortCleanupHooks);
             GoalOperationJournal.Completed(dir, goal, "conductor:workspace-create", path);
             worktreeSnapshot[goal.Id] = path;
             RefreshJournal(goal.Id);

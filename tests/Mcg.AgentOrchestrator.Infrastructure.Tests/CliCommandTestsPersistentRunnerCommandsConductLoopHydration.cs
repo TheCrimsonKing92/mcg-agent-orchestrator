@@ -580,7 +580,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
 
             var storedKernel = await repository.LoadAsync();
             var storedGoal = storedKernel.GetGoal(goal.Id);
-            var stopPlan = GoalAbandonPlanner.Build(storedKernel, storedGoal, workspace, "operator stop");
+            var stopPlan = GoalAbandonPlanner.Build(storedKernel, storedGoal, workspace, "operator stop", new());
             Xunit.Assert.Equal(storedStatus, stopPlan.GoalStatus);
             Xunit.Assert.Contains(stopPlan.Steps, step =>
                 step.Kind == GoalAbandonStepKind.GoalStatus &&

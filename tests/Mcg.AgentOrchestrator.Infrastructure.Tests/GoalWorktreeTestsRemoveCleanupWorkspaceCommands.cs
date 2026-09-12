@@ -540,4 +540,164 @@ public sealed class GoalWorktreeTestsRemoveCleanupWorkspaceCommands : GoalWorktr
             DeleteDirectory(repo);
         }
     }
+
+    // The deferred cleanup-debt write applies escalation threshold, escalated retry interval,
+    // clock and attention-store directory. Dropping the command's cleanup owner replaces all of
+    // them with record literals, so this asserts the configured values reached the durable record.
+    [Xunit.Fact(DisplayName = "Cli_deferred_cleanup_debt_applies_the_owning_cleanup_configuration")]
+    public void CliDeferredCleanupDebtAppliesTheOwningCleanupConfiguration()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Owned deferred cleanup configuration", repo);
+            RunGit(repo, "branch", GoalWorktrees.BranchName(goal.Id));
+            var now = DateTimeOffset.Parse("2026-09-12T04:00:00Z", CultureInfo.InvariantCulture);
+            var attentionDirectory = Path.Combine(repo, ".orchestrator-owned-attention");
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var ownedHooks = GoalWorktreeCleanupHooks.ForConfiguration(
+                // Escalate on the first failure and hold for a distinctly non-default interval.
+                new GoalWorktreeCleanupOptions(TimeSpan.FromMinutes(5), 1, TimeSpan.FromDays(7)),
+                attentionDirectory,
+                new DotnetBuildStorageRoot(Path.Combine(repo, ".orchestrator", "test-dotnet"))) with
+            {
+                CleanupUtcNow = () => now,
+                FindLockHoldersForCleanup = _ => [],
+                CleanupWarningSink = warnings.Add
+            };
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                CleanupContext = new WorktreeCleanupContext(ownedHooks)
+            };
+
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force"],
+                context));
+
+            var backoff = GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, ownedHooks);
+            Assert.NotNull(backoff);
+            Assert.Equal("remove:goal-mark-landed-deferred", backoff!.Reason);
+            Assert.Equal(now.AddDays(7), backoff.SkipUntilUtc);
+            Assert.Contains($"skip_until_utc={now.AddDays(7):O}", output, StringComparison.Ordinal);
+            Assert.Contains(warnings, warning => warning.Operation == "cleanup-debt-escalated");
+
+            var ownedAttention = Assert.Single(CollaborationItemStore.ForDirectory(attentionDirectory)
+                .GetAttentionQueueAsync().GetAwaiter().GetResult());
+            Assert.Contains("cleanup-debt escalation", ownedAttention.Body, StringComparison.Ordinal);
+            Assert.Contains(
+                $"workspace remove {goal.Id.Value[..8]}",
+                ownedAttention.Body,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                    .GetAttentionQueueAsync().GetAwaiter().GetResult(),
+                item => item.Body.Contains("cleanup-debt escalation", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    // Listing cleanup debt reports the same counts under any hook record, so the observable
+    // ownership difference is the failure sink: an unreadable cleanup-state store must warn
+    // through the command's own sink instead of the process-default console writer.
+    [Xunit.Fact(DisplayName = "Cli_goals_listing_reports_cleanup_debt_read_failure_to_its_owner")]
+    public void CliGoalsListingReportsCleanupDebtReadFailureToItsOwner()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Owned cleanup-debt listing",
+                [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            var context = new CliExecutionContext(
+                kernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                goal)
+            {
+                CleanupContext = CreateIsolatedCleanupContext(
+                    repo,
+                    new GoalWorktreeCleanupHooks { CleanupWarningSink = warnings.Add })
+            };
+            // The cleanup-state store is the workspace state database; replacing it with a
+            // non-database file makes the debt read fail deterministically.
+            File.WriteAllText(workspace.SqliteStatePath, "not a sqlite database");
+
+            _ = CaptureConsole(() => CliCommandHandlers.Execute(["goals"], context));
+
+            var warning = Assert.Single(warnings);
+            Assert.Equal("cleanup-status:read", warning.Operation);
+            Assert.Equal(Path.GetFullPath(repo), Path.GetFullPath(warning.Path));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    // Conductor workspace creation retries worktree-add after clearing an orphan directory.
+    // That deletion is cleanup, so it must run through the conductor's own cleanup owner.
+    [Xunit.Fact(DisplayName = "Conductor_workspace_create_clears_an_orphan_through_its_cleanup_owner")]
+    public void ConductorWorkspaceCreateClearsAnOrphanThroughItsCleanupOwner()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Conductor orphan clearing",
+                [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var orphanPath = GoalWorktrees.WorktreePath(repo, goal.Id);
+            Directory.CreateDirectory(orphanPath);
+            File.WriteAllText(
+                Path.Combine(orphanPath, "orphan.txt"),
+                "left by an interrupted conductor workspace creation");
+            var clearedPaths = new List<string>();
+            var cleanupHooks = CreateIsolatedCleanupContext(repo).Hooks with
+            {
+                DeleteDirectoryForCleanup = directory =>
+                {
+                    clearedPaths.Add(directory);
+                    return GoalWorktrees.DeleteDirectoryWithReason(directory);
+                }
+            };
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                FakeAcceptanceVerifier.Passed(),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupHooks);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.Equal(GoalLifecycleState.Created, executed.FromState);
+            Assert.Equal(orphanPath, Assert.Single(clearedPaths));
+            Assert.False(File.Exists(Path.Combine(orphanPath, "orphan.txt")));
+            Assert.Equal(orphanPath, GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
 }

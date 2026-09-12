@@ -1,15 +1,15 @@
 # Cleanup ownership migration
 
-Current candidate status (2026-09-09): mutable cleanup hooks and scheduler policy
+Current candidate status (2026-09-12): mutable cleanup hooks and scheduler policy
 have scoped owners; the obsolete cleanup collection and its two lane exclusion
 keys have been removed in the candidate. The first concurrent integration run
-passed all 228 cleanup and 395 lifecycle cases. Follow-up manifest checks exposed
-resource-scope metadata and the remaining token environment mutation; those were
-corrected and the 42-case manifest/token selection passed. That later correction
-is not covered by the earlier full-lane receipt. Do not treat focused or earlier
-receipts as the final candidate's native acceptance verdict.
-Commit `278aa387` is the pre-removal timing baseline with matching case identities.
-Final comparison, native acceptance, and landing remain required.
+passed all 228 cleanup and 395 lifecycle cases, and the matched 623-case
+before/after comparison is complete (see the full-lane section below).
+The 2026-09-12 caller corrections close the last seven production callers that
+resolved default cleanup hooks; they are new source that no executed receipt
+covers. Do not treat focused or earlier receipts as the final candidate's native
+acceptance verdict: fresh focused execution of the named controls and a fresh
+full native acceptance at the delivered candidate remain required before landing.
 
 This table is the completion inventory for cleanup ownership. A row remains open until its listed
 legacy path has no production or test caller. `WorktreeCleanupContext` is immutable for one host or
@@ -47,6 +47,36 @@ command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup opera
 | Dashboard hosted sweep | DI singleton context loaded from the configured application base directory | Hosted service receives the singleton scheduler |
 | Acceptance cohort, partition, and merge-train materialization | The conductor previously selected a process-wide cleanup policy during cleanup-debt recording | The conductor's `CleanupContext.Hooks` is carried by each disposable workspace | Production callers pass their operation hook; nullable overload fallbacks construct fixed defaults only for direct callers and tests |
 | Nullable cleanup-hook overloads and `TerminalGoalSweep.Run` fallback | Compatibility fallback for direct callers and tests | **Open:** remove only after all callers pass explicit hooks |
+
+### Caller corrections (2026-09-12)
+
+The seven rows below were the remaining production callers that resolved a default hook record.
+Enumerating every production call of `Ensure`, `Remove*`, `Sweep*`, `ListCleanupDebt`,
+`TryGetCleanupBackoff` and `RecordGoalCleanupNeeded` now yields no unowned site: the only
+remaining default-resolving callers are the nullable overloads themselves.
+
+| Caller | Owning context | Hook dependency | Verification |
+| --- | --- | --- | --- |
+| `CliCommandHandlers.Goals.Workspace.cs` deferred cleanup debt (acceptance, lifecycle, acceptance-queue, goal-mark-landed) | `context.CleanupContext.Hooks` | Escalation threshold, escalated retry interval, clock, attention-store directory, lock-holder discovery, warning sink — all configuration-bearing | `GoalWorktreeTestsRemoveCleanupWorkspaceCommands.CliDeferredCleanupDebtAppliesTheOwningCleanupConfiguration` drives `goal-mark-landed` with threshold 1, a seven-day escalated interval, a fixed clock and a non-default attention directory, and asserts the durable record and attention item carry them |
+| `CliCommandHandlers.Goals.Workspace.cs` `RecordDeferredGoalCleanup(string, GoalId, string)` | none | none | **Deleted:** the overload had no caller in `src` or `tests` after the migration; it is not replaced |
+| `CliCommandHandlers.Goals.cs` goals listing `ListCleanupDebt` | `context.CleanupContext.Hooks` | Warning sink on an unreadable cleanup-state store; fallback backoff duration and clock feed only unprinted fields, so no configured value changes the printed counts | `GoalWorktreeTestsRemoveCleanupWorkspaceCommands.CliGoalsListingReportsCleanupDebtReadFailureToItsOwner` replaces the cleanup-state store with a non-database file and asserts the `cleanup-status:read` warning reaches the command's own sink |
+| `CliPersistentStateRunner.cs` metadata-only goals listing `ListCleanupDebt` | Injected `acceptanceCleanupContext`, otherwise `WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory)` — the same source the runner's other three operations use | Same as the goals listing above | Source-verified; the observable contract is the shared `ListCleanupDebt` ownership control listed above. The cleanup-state store is `workspace.SqliteStatePath`, so a store-corruption control at this entry point would fail the metadata read before the debt read and could not attribute the warning |
+| `CliPersistentStateRunner.cs` terminal-sweep candidate `TryGetCleanupBackoff` (via `LoadConductLoopSweepKernel` and `CountMetadataOnlyTerminalSweepExclusions`) | The conduct-startup `cleanupContext`, now created before the sweep kernel loads so both share one owner | Warning sink on an unreadable backoff store only: the predicate tests presence, and neither clock nor backoff duration changes a null/non-null result, so no scheduling outcome depends on the owner | Source-verified, with the presence-only reasoning recorded at the call site. No behavioral control is claimed and none is possible without changing the selection contract |
+| `ConductorDriver.cs` workspace-create `Ensure` | `_cohortCleanupHooks`, the same field the conductor's cleanup-debt path at line 965 already used | Worktree-add retry runs `ClearOrphanDirectory`: reason-preserving delete, warning sink, lock-holder discovery and build storage root | `GoalWorktreeTestsRemoveCleanupWorkspaceCommands.ConductorWorkspaceCreateClearsAnOrphanThroughItsCleanupOwner` seeds an orphan directory at the goal worktree path and asserts the conductor's own delete hook cleared it before the retry succeeded |
+| `GoalAbandonPlanner.cs` `RemoveTerminal`, `InspectGoalLease`, `TryCleanupOrphanedGoalLease` | Required `GoalWorktreeCleanupHooks` parameter supplied by the `abandon-goal` CLI caller's `CleanupContext`, matching the `GoalsPrunePlanner.Apply` contract | Full terminal-removal hook set plus the build storage root used to inspect and delete the goal lease | `GoalWorktreeTestsRemoveCleanupTerminal.GoalAbandonCleansOnlyItsOwnedBuildLeaseRoot` proves the previewed lease step and retention item describe the supplied root, that applying deletes it, and that an independent root holding the same goal id is untouched |
+
+Two adjacent lease readers were corrected with the same rule so a single command cannot report one
+storage namespace and delete another: `GoalArtifactRetentionPlanner.Build` takes an optional
+`buildStorageRoot` supplied by `retention-plan` and by `GoalAbandonPlanner`, and
+`GoalRecoveryPlanner.Build` forwards the `cleanupHooks` it already receives. Both default to the
+ambient root for callers that supply no owner, preserving existing behavior for those callers.
+
+`ChildConsoleLaunchPolicy.PrepareDelayHookForTests` remains a mutable static test seam in
+production Infrastructure. It is not a cleanup hook and was introduced by the integrated console
+starvation repair; its only consumers sit in the `xunit:ProcessSpawning` exclusive lane, which is
+the guard that keeps it safe. It runs against this goal's architecture decision and is recorded
+here as remaining debt, not as migrated: removing it belongs with child-launch ownership, not with
+cleanup ownership.
 
 The candidate removes `GoalWorktreeCleanupHooks`: its CLI, verdict-carry-forward,
 and prune fixtures now receive explicit storage roots; the deletion-only fixture
@@ -565,10 +595,16 @@ guards remain unchanged pending the integrated migration validation.
 ### Full-lane integration and cross-process scope (2026-09-09)
 
 The guard-removal candidate passed228/228cleanup and395/395lifecycle tests on the
-same binary5FF4E1E4..., with zero skips and clean terminal receipts. Selected-case
-intervals overlapped1151.1395s; combined span1163.0128s. These measurements describe
-that candidate only. A pre-removal baseline at278aa387 is being executed with the
-same case identities, seed and per-process cap, obeying its original shared key.
+same binary5FF4E1E4..., with zero skips and clean terminal receipts.
+
+That checkpoint's intermediate lane-interval numbers are superseded and must not be
+quoted as the comparison. The completed matched comparison is
+`.orchestrator/operator-evidence/rearchitecture-20260906/cleanup-console-full-comparison.json`:
+623 identical case identities, baseline span1945.9259527s with zero lane overlap
+versus candidate span945.44685s with873s overlap, all four TRX receipts green. Its
+candidate 591b7f27 already contains the final manifest and token corrections; the
+only difference between 591b7f27 and 5d7fead2 is three starvation fixtures. The
+pre-removal baseline is complete, not still executing.
 
 Manifest validation then exposed an incorrect equivalence between xUnit
 nonparallel collections and cross-process resource ownership. The owning
@@ -585,6 +621,13 @@ token and all original landing/cleanup assertions remain. The final manifest and
 token selection passed42/42 with zero skips and clean exit. Source/PDB bindings
 include OperatorComms embedded symbols. Reviews and resolutions are recorded in
 cleanup-collection-scope-review, cleanup-token-input-review and
-cleanup-final-guards-review-resolution. Final native acceptance and matched-scope
-performance evidence remain required; the preceding623-case receipt predates
-these final metadata/token corrections.
+cleanup-final-guards-review-resolution.
+
+The 623-case comparison above was taken at 591b7f27, which already contains these
+metadata and token corrections; the earlier statement that the receipt predated
+them was wrong and is withdrawn. What remains outstanding is different and
+narrower: the 2026-09-12 caller corrections in this document are new source that
+no executed receipt covers, so fresh focused execution of the named controls and
+a fresh full native acceptance at the delivered candidate are still required
+before landing. Overall performance and configured live-host evidence stay
+operator-owned.

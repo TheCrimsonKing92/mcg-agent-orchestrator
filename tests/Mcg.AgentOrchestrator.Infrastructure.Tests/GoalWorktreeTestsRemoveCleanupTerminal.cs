@@ -214,7 +214,8 @@ public sealed class GoalWorktreeTestsRemoveCleanupTerminal : GoalWorktreeTestBas
                 kernel,
                 goal,
                 OrchestratorWorkspace.ForDirectory(repo),
-                "No longer required.");
+                "No longer required.",
+                CreateIsolatedCleanupContext(repo).Hooks);
 
             Assert.True(result.CanApply);
             Assert.Equal(GoalStatus.Cancelled, kernel.GetGoal(goal.Id).Status);
@@ -223,6 +224,56 @@ public sealed class GoalWorktreeTestsRemoveCleanupTerminal : GoalWorktreeTestBas
                 ? Directory.EnumerateDirectories(worktreesRoot)
                 : []);
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    // abandon-goal inspects and deletes a goal build lease. Both the reported plan and the
+    // deletion must use the caller's build storage root; reverting to the process default would
+    // leave the owned lease in place and describe a namespace the command does not own.
+    [Xunit.Fact(DisplayName = "GoalAbandon_cleans_only_its_owned_build_lease_root")]
+    public void GoalAbandonCleansOnlyItsOwnedBuildLeaseRoot()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Abandon owned build lease",
+                [new TaskSpec(TaskId.New(), "Abandon clean worktree.", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            _ = GoalWorktrees.Ensure(repo, goal.Id);
+            var cleanupHooks = CreateIsolatedCleanupContext(repo).Hooks;
+            var ownedLeaseRoot = DotnetBuildEnvironmentManager.GoalRoot(goal.Id, cleanupHooks.BuildStorageRoot);
+            Directory.CreateDirectory(ownedLeaseRoot);
+            File.WriteAllText(
+                Path.Combine(ownedLeaseRoot, "owned-marker.txt"),
+                "abandon must remove its owned lease");
+            var foreignRoot = new DotnetBuildStorageRoot(Path.Combine(repo, ".orchestrator", "foreign-dotnet"));
+            var foreignLeaseRoot = DotnetBuildEnvironmentManager.GoalRoot(goal.Id, foreignRoot);
+            Directory.CreateDirectory(foreignLeaseRoot);
+            var foreignMarker = Path.Combine(foreignLeaseRoot, "foreign-marker.txt");
+            File.WriteAllText(foreignMarker, "preserve this independent owner");
+
+            var preview = GoalAbandonPlanner.Build(kernel, goal, workspace, "No longer required.", cleanupHooks);
+
+            Assert.Contains(preview.Steps, step =>
+                step.Kind == GoalAbandonStepKind.BuildLease &&
+                step.Disposition == GoalAbandonDisposition.Apply);
+            Assert.Contains(preview.RetentionPlan.Items, item =>
+                item.Kind == RetentionArtifactKind.BuildLease &&
+                string.Equals(item.Path, ownedLeaseRoot, StringComparison.OrdinalIgnoreCase));
+
+            var applied = GoalAbandonPlanner.Apply(kernel, goal, workspace, "No longer required.", cleanupHooks);
+
+            Assert.True(applied.CanApply);
+            Assert.Equal(GoalStatus.Cancelled, kernel.GetGoal(goal.Id).Status);
+            Assert.False(Directory.Exists(ownedLeaseRoot));
+            Assert.Equal("preserve this independent owner", File.ReadAllText(foreignMarker));
         }
         finally
         {

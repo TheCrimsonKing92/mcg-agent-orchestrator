@@ -60,7 +60,7 @@ internal static class GoalRecoveryPlanner
             ? RepositoryTestImpactPlanner.Plan(changeSummary)
             : RepositoryTestImpactPlanner.Plan(changeSummary, worktree);
         var operationJournal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
+        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, cleanupHooks?.BuildStorageRoot);
         var cleanupBackoff = includeCleanupBackoff
             ? GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id, cleanupHooks)
             : null;
