@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -14,6 +15,37 @@ public sealed class AdvanceLoopTests
         SeedLocalSkillCatalog(path);
         _ = StateDbMigrations.EnsureUpToDate(OrchestratorWorkspace.ForDirectory(path).SqliteStatePath);
         return path;
+    }
+
+    private static readonly TimeSpan WatchCompletionTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Awaits the per-watch completion signal instead of polling IsRunning against a wall clock.
+    /// On timeout the failure names IterationCount, elapsed milliseconds, and StopReason so a gate
+    /// TRX distinguishes a watch that never stopped from one that stopped late.
+    /// </summary>
+    private static async Task AwaitWatchCompletionAsync(
+        DashboardContinuationService service,
+        string goalId,
+        Stopwatch clock)
+    {
+        try
+        {
+            await service.WaitForWatchCompletionAsync(goalId).WaitAsync(WatchCompletionTimeout);
+        }
+        catch (TimeoutException)
+        {
+            var elapsedMs = clock.ElapsedMilliseconds;
+            var statuses = service.GetStatuses();
+            var status = statuses.FirstOrDefault(row =>
+                string.Equals(row.GoalId, goalId, StringComparison.OrdinalIgnoreCase));
+            var prefix = goalId.Length <= 8 ? goalId : goalId[..8];
+            Assert.Fail(status is null
+                ? $"no continuation status row for goal {prefix} after {elapsedMs} ms; rows present: {statuses.Count}"
+                : $"continuation watch for goal {prefix} did not stop within {WatchCompletionTimeout.TotalSeconds:0} s: " +
+                  $"IsRunning={status.IsRunning}, IterationCount={status.IterationCount}, " +
+                  $"elapsed={elapsedMs} ms, StopReason='{status.StopReason}'");
+        }
     }
 
     private const string BlockingCodexProfileCommand =
@@ -1258,21 +1290,18 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         lifetime,
         service);
 
+    var clock = Stopwatch.StartNew();
     var started = service.StartSubscriptionWatch(services, goal.Id.Value);
 
     Assert.True(started.IsRunning);
 
-    var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
-    while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Single().IsRunning)
-    {
-        await Task.Delay(75);
-    }
+    await AwaitWatchCompletionAsync(service, goal.Id.Value, clock);
 
     var status = service.GetStatuses().Single();
     var restored = await repository.LoadAsync();
     var restoredTask = restored.GetTask(goal.Id, task.Id);
-    Assert.False(status.IsRunning);
-    Assert.True(status.IterationCount > 0);
+    Assert.False(status.IsRunning, $"watch still running after completion signal; StopReason='{status.StopReason}'");
+    Assert.True(status.IterationCount > 0, $"expected at least one iteration; StopReason='{status.StopReason}'");
     Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
     Assert.True(restoredTask.LastVerification?.Succeeded is true);
 }
@@ -1324,19 +1353,16 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         lifetime,
         service);
 
+    var clock = Stopwatch.StartNew();
     var started = service.StartSubscriptionWatch(services, goal.Id.Value);
     Assert.True(started.IsRunning);
 
-    var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-    while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Single().IsRunning)
-    {
-        await Task.Delay(25);
-    }
+    await AwaitWatchCompletionAsync(service, goal.Id.Value, clock);
 
     var restored = await repository.LoadAsync();
     var restoredTask = restored.GetTask(goal.Id, task.Id);
     var status = service.GetStatuses().Single();
-    Assert.False(status.IsRunning);
+    Assert.False(status.IsRunning, $"watch still running after completion signal; StopReason='{status.StopReason}'");
     Assert.Equal(alternate.Id, restoredTask.AssignedAgentId);
     Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
     Assert.True(restored.GetTimeline(goal.Id).Any(evt =>
