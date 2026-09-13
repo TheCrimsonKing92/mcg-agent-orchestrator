@@ -222,6 +222,38 @@ public sealed class GoalWorktreeTestsRemoveCleanupStorage : GoalWorktreeTestBase
     }
 
     [Xunit.Fact]
+    public void RotateGoalLeaseKeepsRotatedLeaseInsideItsOwnStorageRoot()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var rootA = new DotnetBuildStorageRoot(Path.Combine(repo, "rotate-a"));
+            var rootB = new DotnetBuildStorageRoot(Path.Combine(repo, "rotate-b"));
+            var owned = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "rotate-owner-a", storageRoot: rootA);
+            var foreign = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "rotate-owner-b", storageRoot: rootB);
+            var foreignMetadata = File.ReadAllBytes(foreign.LeaseMetadataPath!);
+            var ambientGoalRoot = DotnetBuildEnvironmentManager.GoalRoot(goalId);
+            Assert.False(Directory.Exists(ambientGoalRoot));
+
+            Assert.True(DotnetBuildEnvironmentManager.TryRotateGoalLease(goalId, "corrupt-cache", rootA));
+
+            var rotatedRoot = Path.Combine(owned.RootPath, "rotated-leases");
+            Assert.Single(Directory.GetDirectories(rotatedRoot));
+            Assert.False(Directory.Exists(Path.Combine(owned.RootPath, "lease")));
+
+            // Rotating under root A must leave root B's lease and the ambient namespace untouched.
+            Assert.Equal(foreignMetadata, File.ReadAllBytes(foreign.LeaseMetadataPath!));
+            Assert.False(Directory.Exists(Path.Combine(foreign.RootPath, "rotated-leases")));
+            Assert.False(Directory.Exists(ambientGoalRoot));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
     public void ExplicitStorageRootKeepsCreationPermitAndRunCleanupInOneNamespace()
     {
         var repo = CreateSeededRepository();

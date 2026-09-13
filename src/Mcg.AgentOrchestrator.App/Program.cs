@@ -386,7 +386,7 @@ if (startupArgs.Count > 0)
 {
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
+        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -513,7 +513,7 @@ while (true)
             continue;
         }
 
-        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
+        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
     }
     catch (Exception ex)
     {

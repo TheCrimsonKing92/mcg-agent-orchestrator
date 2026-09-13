@@ -40,10 +40,10 @@ command operation; `GoalWorktreeCleanupHooks` is immutable for one cleanup opera
 
 | Caller | Owning context | Current state |
 | --- | --- | --- |
-| Program startup and worker-process startup cleanup | Program-created context from `Load(AppContext.BaseDirectory)` and workspace orchestrator directory | Passes its scheduler explicitly |
+| Program startup and worker-process startup cleanup | Program-created context from `Load(AppContext.BaseDirectory)` and workspace orchestrator directory | Passes its scheduler explicitly to startup worker-process cleanup, and passes the same context to `CliCommandDispatcher` and to both `CliPersistentStateRunner.ExecuteCommand` invocations (startup argument command and REPL command), so startup cleanup and the later conduct/reconcile sweeps share one scheduler and its cadence stamp |
 | CLI command dispatch and cleanup status | One dispatcher-created context | Status reads `CleanupContext.Hooks` |
 | CLI readiness, recovery, next, conduct, lifecycle, and subscription-ready terminal sweeps | The command's `CleanupContext` | Each terminal sweep receives the same explicit hooks as its scheduler |
-| Persistent conduct startup, global reconcile, and acceptance preflight terminal sweeps | One locally loaded context per operation | Terminal sweep and cadence scheduler share that instance |
+| Persistent conduct startup, global reconcile, and acceptance preflight terminal sweeps | The context Program supplies; a locally loaded one only when a caller omits it | Terminal sweep and cadence scheduler share that instance |
 | Dashboard hosted sweep | DI singleton context loaded from the configured application base directory | Hosted service receives the singleton scheduler |
 | Acceptance cohort, partition, and merge-train materialization | The conductor previously selected a process-wide cleanup policy during cleanup-debt recording | The conductor's `CleanupContext.Hooks` is carried by each disposable workspace | Production callers pass their operation hook; nullable overload fallbacks construct fixed defaults only for direct callers and tests |
 | Nullable cleanup-hook overloads and `TerminalGoalSweep.Run` fallback | Compatibility fallback for direct callers and tests | **Open:** remove only after all callers pass explicit hooks |
@@ -634,9 +634,11 @@ operator-owned.
 
 ### Operation cadence preservation
 
-The persistent runner passes the supplied cleanup context through both conduct and global reconcile.
-Conduct startup and the loop dispatcher share one scheduler; separate operation contexts retain independent
-cadence. `CliCommandTestsCleanupCadence` checks both commands before the interval, at its one-hour boundary,
+The persistent runner passes the supplied cleanup context through both conduct and global reconcile, and
+`Program` supplies its startup-created context to both persistent-runner invocations — the startup argument
+command and the REPL command — so the CLI host constructs no second context and the startup sweep stamp
+governs the runner's later cadence. Conduct startup and the loop dispatcher share one scheduler; separate
+operation contexts retain independent cadence. `CliCommandTestsCleanupCadence` checks both commands before the interval, at its one-hour boundary,
 and with an independent context using a controlled clock. The existing Cli lane selects this class.
 The runner size ceiling increases from 4858 to 4863 lines for explicit context parameters and forwarding;
 this bounded ownership repair does not claim to decompose the runner.
@@ -656,13 +658,20 @@ and none of that lane's three exclusions.
 
 The first full gate at this candidate failed exactly one case,
 `Cli_acceptance_lands_after_transient_state_write_lock_releases`, on its own 60-second hang guard, and the
-cleanup lane's wall clock barely moved. Both facts have one cause, recorded with its measurement in
-[acceptance-gate-resource-isolation.md](acceptance-gate-resource-isolation.md) under the goal `5daaa1db`
-amendment: median per-case slowdown of 10.53x across the whole lane against 5% wall-clock gain. That is
-host oversubscription, not a contention path in the acceptance/landing CLI seam — a shared lock produces
-one outlier, not a uniform tenfold across 125 cases.
+cleanup lane's wall clock barely moved. What the two lane receipts show, and no more, is recorded with its
+measurement in [acceptance-gate-resource-isolation.md](acceptance-gate-resource-isolation.md) under the
+goal `5daaa1db` amendment: a median per-case ratio of 10.53x over the 125 cases at or above one second,
+against 5% of wall-clock gain. Those two receipts are not a controlled comparison — they differ in case
+count and in concurrency at the same time, and no serialized-versus-concurrent run at fixed inputs was
+taken — so they measure the cost without isolating its cause. This document therefore asserts no cause.
 
-Three corrections follow.
+Criterion 6 (comparable before/after full-gate and per-lane timing with commit identity, runner class,
+selected counts, lane start/end and actual overlap) is operator-owned and remains open at this candidate.
+The focused receipt at 4a96f18f — 121/121 over the caller-correction, host-capacity and landing-lock
+classes — is focused evidence of those classes only and says nothing about lane timing or overlap.
+
+Three corrections follow. The first is a bounded mitigation taken while the cause is unestablished, not a
+fix for a diagnosed one.
 
 **Host-capacity budget.** `HostCapacityTestBudget` (TestSupport) bounds concurrently executing
 host-capacity-bound tests inside one test process to one slot per eight logical processors, clamped to

@@ -50,5 +50,3 @@ public sealed class CliCommandTestsCleanupCadence : CliCommandTestBase
         finally { CleanupAcceptanceRepository(root, null); }
     }
 }
-
-

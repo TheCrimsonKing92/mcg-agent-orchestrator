@@ -118,12 +118,11 @@ between 0 and `595,660 - 575,700 = 19,960 ms` saved (at most 3.35%), for a shard
 575,700 and 595,660 ms. A materially larger saving would require changed lane durations or a broken chain
 and must be reconciled from the per-shard receipt rather than attributed to this scheduler change.
 
-### Goal `5daaa1db` amendment: host capacity is not an exclusive resource
+### Goal `5daaa1db` amendment: measured overlap cost, cause not established
 
 Removing `xunit:GoalWorktreeCleanupHooks` and its collection let `Goal lifecycle commands` and
 `Goal worktree cleanup` overlap, and let the cleanup lane's own classes overlap each other for the first
-time. The first full gate at that candidate failed one test and produced almost no wall-clock gain. Both
-outcomes have the same cause, and it is not a contention path in the acceptance/landing CLI seam.
+time. The first full gate at that candidate failed one test and produced almost no wall-clock gain.
 
 Measured from the two lane receipts, same lane filter:
 
@@ -136,17 +135,23 @@ Cli_acceptance_lands_after_transient_state_write_lock_releases: 3.5-11.8s across
   receipts, 100.0s at the candidate, of which 60s was its own WaitAsync hang guard expiring.
 ```
 
-A single contention path produces one outlier. A median of 10.53x across every case in the lane is the
-host: these fixtures spend their time in git subprocesses, worktree file I/O and SQLite, and the gate
-already runs up to `maxConcurrentShards` test processes at once, each with xUnit's default
-`maxParallelThreads` of `Environment.ProcessorCount`. Per-operation ownership made the tests independent;
-it did not make them free. Wall clock moved 1305s to 1237s — 5% — while every case became ten times
-slower, which is the signature of oversubscription rather than of parallelism.
+That is the whole of what the receipts establish: per-operation ownership made these cases overlap, and at
+this concurrency each case took about ten times as long while the lane wall clock moved 1305s to 1237s —
+5%. The two runs are not a controlled comparison. They differ in case count (213 against 232) and in
+concurrency at the same time, they were taken on an unmeasured host with the gate already running up to
+`maxConcurrentShards` test processes at once (each at xUnit's default `maxParallelThreads` of
+`Environment.ProcessorCount`), and no serialized-versus-concurrent run at a fixed case set and fixed
+concurrency was taken. Host load and a remaining contention path in these fixtures — git subprocesses,
+worktree file I/O and SQLite — are both consistent with these numbers, and nothing here separates them.
+No cause is claimed and no host threshold is asserted. Settling it requires the controlled comparison in
+the criterion 6 paragraph below, run at a recorded concurrency over one case set.
 
-`HostCapacityTestBudget` therefore bounds how many host-capacity-bound tests run at once inside one test
-process: one slot per eight logical processors, clamped to `[2, 4]`, overridable with
+`HostCapacityTestBudget` bounds how many host-capacity-bound tests run at once inside one test process:
+one slot per eight logical processors, clamped to `[2, 4]`, overridable with
 `MCG_TEST_HOST_CAPACITY_SLOTS`. `HostCapacityBoundTestBase` takes a slot for each test body, and the
-`GoalWorktreeTestBase` and `CliCommandTestBase` families derive from it.
+`GoalWorktreeTestBase` and `CliCommandTestBase` families derive from it. It is a bounded load cap adopted
+while the cause is unestablished — its own value is unproven until that comparison runs, and its
+`[2, 4]` clamp is a conservative default, not a measured host limit.
 
 This is deliberately **not** an exclusive resource key and **not** a nonparallel collection:
 
@@ -155,8 +160,11 @@ This is deliberately **not** an exclusive resource key and **not** a nonparallel
 - It is per-process, so it makes no cross-process claim. The rows above still govern that question.
 - It caps load, so it can only reduce overlap, never introduce an interleaving that did not already occur.
 
-Criterion 6 stays open and operator-owned. The predeclared comparison is: rerun both lanes at the
-delivered candidate with `MCG_TEST_HOST_CAPACITY_SLOTS` held fixed across the compared runs, and report
-per-lane start/end, selected counts, summed case seconds and actual overlap. Delivery requires a
-demonstrable reduction in the affected serial critical path. The 5% above is the number that must
-improve; the removed attributes are not themselves the result.
+Criterion 6 stays open and operator-owned, and is unmet at the current candidate. The predeclared
+comparison is: rerun both lanes at the delivered candidate with `MCG_TEST_HOST_CAPACITY_SLOTS` and shard
+concurrency held fixed across the compared runs, and report commit identity, runner class, per-lane
+start/end, selected counts, summed case seconds and actual overlap, noting any case-count difference that
+limits comparability. Delivery requires a demonstrable reduction in the affected serial critical path. The
+5% above is the number that must improve; the removed attributes are not themselves the result. The
+focused receipt at 4a96f18f (121/121 over the caller-correction, host-capacity and landing-lock classes)
+is focused evidence of those classes only and contributes nothing to this criterion.

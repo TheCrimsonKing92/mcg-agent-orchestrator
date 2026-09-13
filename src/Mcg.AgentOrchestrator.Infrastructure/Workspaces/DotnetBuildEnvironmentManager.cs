@@ -403,13 +403,17 @@ public static class DotnetBuildEnvironmentManager
 
     public static bool TryRotateGoalLease(GoalId goalId, string reason, DotnetBuildStorageRoot? storageRoot = null)
     {
-        var leaseDirectory = LeaseDirectory(goalId, storageRoot ?? CaptureStorageRoot());
+        storageRoot ??= CaptureStorageRoot();
+        var leaseDirectory = LeaseDirectory(goalId, storageRoot);
         if (!Directory.Exists(leaseDirectory))
         {
             return true;
         }
 
-        var rotatedRoot = Path.Combine(GoalRoot(goalId), "rotated-leases");
+        // The rotated lease stays inside the goal root of the same storage root the lease came from:
+        // resolving it ambiently would write another root's lease into the current-directory namespace
+        // (and can fail outright across volumes).
+        var rotatedRoot = Path.Combine(GoalRoot(goalId, storageRoot), "rotated-leases");
         Directory.CreateDirectory(rotatedRoot);
         var target = Path.Combine(rotatedRoot, $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Sanitize(reason)}");
         try
