@@ -71,13 +71,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
         Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
         Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
-        Xunit.Assert.Equal(
-            ["xunit:GoalWorktreeCleanupHooks"],
+        Xunit.Assert.Empty(
             settings.InfrastructureTestLanes
                 .Single(lane => lane.Name == "Goal lifecycle commands")
                 .ExclusiveResourceKeys);
-        Xunit.Assert.Equal(
-            ["xunit:GoalWorktreeCleanupHooks"],
+        Xunit.Assert.Empty(
             settings.InfrastructureTestLanes
                 .Single(lane => lane.Name == "Goal worktree cleanup")
                 .ExclusiveResourceKeys);
@@ -350,6 +348,17 @@ public sealed class AcceptanceGateEngineSettingsTests
     {
         var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
         var testAssembly = typeof(AcceptanceGateEngineSettingsTests).Assembly;
+        var processLocalCollections = testAssembly.GetTypes()
+            .Where(type => type.IsDefined(typeof(ProcessLocalTestCollectionAttribute), inherit: false))
+            .Select(type =>
+            {
+                var definition = type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>();
+                Xunit.Assert.NotNull(definition);
+                Xunit.Assert.True(definition.DisableParallelization,
+                    $"Process-local collection '{type.Name}' must retain in-process serialization.");
+                return definition.Name;
+            })
+            .ToHashSet(StringComparer.Ordinal);
         var disabledCollections = testAssembly
             .GetTypes()
             .Select(type => type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>())
@@ -395,7 +404,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 .Select(entry => entry.Lane)
                 .DistinctBy(lane => lane.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            if (lanes.Length < 2)
+            if (lanes.Length < 2 || processLocalCollections.Contains(collection.Key))
             {
                 continue;
             }

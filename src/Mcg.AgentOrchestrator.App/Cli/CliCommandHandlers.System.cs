@@ -313,7 +313,7 @@ internal static partial class CliCommandHandlers
             }
 
             case "cleanup-status":
-                PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupHooks);
+                PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupContext.Hooks);
                 return false;
 
             case "attention":
@@ -1509,13 +1509,17 @@ internal static partial class CliCommandHandlers
             throw new ArgumentException("Usage: stable-slot-dotnet <dotnet-arguments>");
         }
 
-        using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock();
+        // One root owns this command's slot lease and its run cleanup: acquiring under the configured
+        // root and cleaning up under the ambient one would leave the run directory behind.
+        var storageRoot = context.CleanupHooks.BuildStorageRoot;
+        using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+            storageRoot: storageRoot);
         if (parts[1].Equals("mtp-test", StringComparison.OrdinalIgnoreCase))
         {
             var resultsSurviveCleanup = RunStableSlotMtpTest(parts, context, lease);
             if (resultsSurviveCleanup)
             {
-                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment, storageRoot);
             }
 
             return;
@@ -1532,7 +1536,7 @@ internal static partial class CliCommandHandlers
         }
 
         lease.ReleaseExecutionLock();
-        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
+        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment, storageRoot);
     }
 
     private static bool RunStableSlotMtpTest(

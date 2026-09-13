@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class SourceBacklogSiblingCreationTests : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_active_slice_owner_allows_sibling_goal")]

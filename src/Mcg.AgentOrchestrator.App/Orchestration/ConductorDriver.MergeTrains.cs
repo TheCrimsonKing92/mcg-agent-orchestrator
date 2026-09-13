@@ -57,7 +57,8 @@ internal sealed partial class ConductorDriver
                 workspace = GoalWorktrees.CreateMergeTrainWorkspace(
                     _cohortWorkspace.ExecutionDirectory,
                     selection.Members[0].MainRevision,
-                    composition);
+                    composition,
+                    _cohortCleanupHooks);
             }
             catch (InvalidOperationException ex)
             {

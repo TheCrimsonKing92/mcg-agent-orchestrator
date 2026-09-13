@@ -10,13 +10,13 @@ public static partial class GoalWorktrees
         string executionDirectory,
         GoalId goalId,
         GoalWorktreeCleanupHooks? hooks = null) =>
-        TryGetCleanupBackoff(WorktreePath(executionDirectory, goalId), hooks ?? GoalWorktreeCleanupHooks.Default);
+        TryGetCleanupBackoff(WorktreePath(executionDirectory, goalId), hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(
         string path,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         return TryReadOrphanCleanupBackoff(path, out var entry, hooks: hooks)
             ? ToCleanupBackoff(entry, hooks)
             : null;
@@ -26,7 +26,7 @@ public static partial class GoalWorktrees
         string executionDirectory,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         var statePath = CleanupStateStorePathForRoot(executionDirectory);
         if (!File.Exists(statePath))
         {
@@ -101,7 +101,7 @@ public static partial class GoalWorktrees
         string reason,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         var path = WorktreePath(executionDirectory, goalId);
         RecordCleanupNeeded(path, reason, goalId: goalId, hooks: hooks);
         return TryGetCleanupBackoff(path, hooks);
@@ -189,7 +189,7 @@ public static partial class GoalWorktrees
         string? cleanupStateRoot = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         entry = default!;
         if (!operation.Equals("orphan-sweep", StringComparison.OrdinalIgnoreCase) &&
             !operation.Equals("owned-ephemeral-sweep", StringComparison.OrdinalIgnoreCase) &&
@@ -225,7 +225,7 @@ public static partial class GoalWorktrees
         string path,
         string? cleanupStateRoot = null,
         GoalWorktreeCleanupHooks? hooks = null) =>
-        ClearOrphanCleanupBackoff(path, cleanupStateRoot, hooks ?? GoalWorktreeCleanupHooks.Default);
+        ClearOrphanCleanupBackoff(path, cleanupStateRoot, hooks ?? new GoalWorktreeCleanupHooks());
 
     private static bool IsLockHeldCleanupNeededReason(string reason) =>
         reason.EndsWith(":lock-held", StringComparison.OrdinalIgnoreCase);
@@ -241,7 +241,7 @@ public static partial class GoalWorktrees
         GoalId? goalId = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         try
         {
             var observation = WithCleanupBackoffConnection(
@@ -290,7 +290,7 @@ public static partial class GoalWorktrees
         string? cleanupStateRoot = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         entry = default!;
         try
         {
@@ -330,7 +330,7 @@ public static partial class GoalWorktrees
         string? cleanupStateRoot = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         var wasEscalated = false;
         try
         {
@@ -490,7 +490,7 @@ public static partial class GoalWorktrees
         bool incrementFailureCount = true,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         var normalizedPath = NormalizePath(path);
         var now = hooks.CleanupUtcNow();
         var cleanupOptions = hooks.CleanupOptions();

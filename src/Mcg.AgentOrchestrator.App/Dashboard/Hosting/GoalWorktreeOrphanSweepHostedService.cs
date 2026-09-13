@@ -3,16 +3,18 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Hosting;
 
-internal sealed class GoalWorktreeOrphanSweepHostedService(OrchestratorWorkspace workspace) : BackgroundService
+internal sealed class GoalWorktreeOrphanSweepHostedService(
+    OrchestratorWorkspace workspace,
+    WorktreeCleanupContext cleanupContext) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
+        cleanupContext.Scheduler.SweepNow(workspace.ExecutionDirectory);
 
-        using var timer = new PeriodicTimer(GoalWorktreeOrphanSweepScheduler.Options.SweepInterval);
+        using var timer = new PeriodicTimer(cleanupContext.Scheduler.Options.SweepInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            GoalWorktreeOrphanSweepScheduler.SweepNow(workspace.ExecutionDirectory);
+            cleanupContext.Scheduler.SweepNow(workspace.ExecutionDirectory);
         }
     }
 }

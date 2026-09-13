@@ -6,8 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 using static LandingExecutorTests;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
-public sealed class AcceptanceVerdictCarryForwardTests
+public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBase
 {
     [Xunit.Fact]
     public void CarryForward_DisjointLanding_LandsWithoutRegateOrIntent()
@@ -268,7 +267,11 @@ public sealed class AcceptanceVerdictCarryForwardTests
             workspace,
             new FakeAcceptanceVerifier(),
             DefaultAgents(),
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            cleanupHooks: WorktreeCleanupContext.Load(
+                attentionStoreDirectory: workspace.OrchestratorDirectory,
+                buildStorageRoot: new DotnetBuildStorageRoot(
+                    Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "test-dotnet"))).Hooks);
         return new CandidateFixture(
             workspace,
             kernel,

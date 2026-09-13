@@ -60,6 +60,35 @@ public sealed class WorktreeCleanupConfigurationTests
         Assert.Equal(parameterName, exception.ParamName);
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktree_cleanup_hooks_for_configuration_fix_options_and_normalize_attention_directory")]
+    public void GoalWorktreeCleanupHooksForConfigurationFixOptionsAndNormalizeAttentionDirectory()
+    {
+        var options = new GoalWorktreeCleanupOptions(
+            TimeSpan.FromMinutes(7),
+            5,
+            TimeSpan.FromDays(2));
+        var relativeAttentionDirectory = Path.Combine("cleanup-attention", Guid.NewGuid().ToString("N"));
+
+        var hooks = GoalWorktreeCleanupHooks.ForConfiguration(options, relativeAttentionDirectory);
+
+        Assert.Same(options, hooks.CleanupOptions());
+        Assert.Equal(Path.GetFullPath(relativeAttentionDirectory), hooks.CleanupAttentionStoreDirectory());
+    }
+
+    [Xunit.Fact(DisplayName = "GoalWorktree_cleanup_hooks_for_configuration_reject_invalid_options")]
+    public void GoalWorktreeCleanupHooksForConfigurationRejectInvalidOptions()
+    {
+        var options = new GoalWorktreeCleanupOptions(
+            TimeSpan.Zero,
+            1,
+            TimeSpan.FromDays(1));
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => GoalWorktreeCleanupHooks.ForConfiguration(options));
+
+        Assert.Equal("SweepInterval", exception.ParamName);
+    }
+
     private static IConfiguration BuildSection(IReadOnlyDictionary<string, string?> values) =>
         new ConfigurationBuilder()
             .AddInMemoryCollection(values)
