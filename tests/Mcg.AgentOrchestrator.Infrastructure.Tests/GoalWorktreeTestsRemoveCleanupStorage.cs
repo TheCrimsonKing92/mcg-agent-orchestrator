@@ -286,6 +286,41 @@ public sealed class GoalWorktreeTestsRemoveCleanupStorage : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Inspect_without_lease_metadata_reports_requested_root_artifacts")]
+    public void InspectWithoutLeaseMetadataReportsRequestedRootArtifacts()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var rootA = new DotnetBuildStorageRoot(Path.Combine(repo, "inspect-a"));
+            var rootB = new DotnetBuildStorageRoot(Path.Combine(repo, "inspect-b"));
+            // Root B holds a real lease for the same goal, so a cross-root resolution has a populated
+            // namespace to reach. Root A's goal root exists with its artifacts but no lease metadata,
+            // which is the only branch that resolves the artifacts path without reading metadata.
+            var foreign = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "inspect-owner-b", storageRoot: rootB);
+            var foreignMetadata = File.ReadAllBytes(foreign.LeaseMetadataPath!);
+            var expectedArtifacts = Path.Combine(DotnetBuildEnvironmentManager.GoalRoot(goalId, rootA), "artifacts");
+            Directory.CreateDirectory(expectedArtifacts);
+            var ambientArtifacts = DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId);
+
+            var status = DotnetBuildEnvironmentManager.InspectGoalLease(goalId, rootA);
+
+            Assert.False(status.LeaseMetadataExists);
+            Assert.Equal(expectedArtifacts, status.ArtifactsPath);
+            Assert.True(status.ArtifactsPathExists);
+            Assert.True(rootA.ContainsPath(status.ArtifactsPath));
+            Assert.False(rootB.ContainsPath(status.ArtifactsPath));
+            // The ambient namespace is what a root-less fallback would report for this same lease.
+            Assert.NotEqual(ambientArtifacts, status.ArtifactsPath);
+            Assert.Equal(foreignMetadata, File.ReadAllBytes(foreign.LeaseMetadataPath!));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_persists_cleanup_needed_when_goal_artifacts_delete_fails")]
     public void GoalWorktreesRemovePersistsCleanupNeededWhenGoalArtifactsDeleteFails()
     {

@@ -1179,7 +1179,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new InvalidOperationException("build-lease-cleanup deletes an orphaned goal build lease. Re-run with --confirm-build-lease-cleanup after goal-recovery reports canCleanup=True.");
             }
 
-            if (!DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(context.CurrentGoal.Id, out _, out var cleanupDetail))
+            if (!DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(
+                    context.CurrentGoal.Id,
+                    out _,
+                    out var cleanupDetail,
+                    context.CleanupHooks.BuildStorageRoot))
             {
                 throw new InvalidOperationException(cleanupDetail);
             }

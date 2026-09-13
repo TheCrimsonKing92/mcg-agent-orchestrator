@@ -717,3 +717,46 @@ Worker-executable evidence for this round is the sanctioned build only:
 `Infrastructure.Tests:AcceptanceGateEngineSettingsTests` for the collection/lane mapping contract; and
 the `Goal lifecycle commands` and `Goal worktree cleanup` lanes for the restored guard and the bounded
 overlap. Operator owns the criterion 6 before/after timing described in the amendment.
+
+## Root-less path resolution in the inspect fallback
+
+`InspectGoalLease` received a storage root and used it for the goal root, the lease directory and the
+metadata path, but its no-metadata fallback called `GoalArtifactsPath(goalId)` with no root. For a lease
+located under the supplied root but carrying no metadata file, the reported `ArtifactsPath` came from
+`CaptureStorageRoot()` - another root's namespace - and `ArtifactsPathExists` answered about that other
+root. The fallback now receives the same `storageRoot` the rest of the call already used.
+`Inspect_without_lease_metadata_reports_requested_root_artifacts` is the discriminating control: root B
+holds a real lease for the same goal, root A holds the goal artifacts with no metadata file, and the
+inspection under A must report A's artifacts path, must not report a path inside B, and must differ from
+the ambient path a root-less fallback would return. The existing
+`ExplicitStorageRootKeepsCreationPermitAndRunCleanupInOneNamespace` inspects only after `CreateAttempt`,
+so metadata is always present there and it cannot reach this branch.
+
+**Sibling sweep of root-dependent path builders.** Every production call of `GoalArtifactsPath`,
+`GoalRoot`, `BaseBuildCacheRoot`, `BuildSlotHeartbeatPath`, `InspectGoalLease`, `TryDeleteGoalArtifacts`,
+`TryRotateGoalLease`, `TryCleanupOrphanedGoalLease`, `CreateAttempt`, `CreateStableSlotAttempt`,
+`ResolveGoalEnvironment`, `TryCleanupSuccessfulRun` and the stable-slot lock calls was checked for a
+per-operation root in scope.
+
+Two mutating CLI callers had one and now pass it. `build-lease-cleanup` deleted an orphaned goal lease
+through the ambient root while `context.CleanupHooks.BuildStorageRoot` sat in the same switch (the
+adjacent `retention-plan` case already used it), so a configured host could report one root's lease and
+delete another's; it now passes that root. `stable-slot-dotnet` acquired its slot lease ambiently and
+then called `TryCleanupSuccessfulRun` ambiently; both now take the same context root, because the
+cleanup guard requires the run directory to sit under the root it is given and a split pair would leave
+the run directory behind.
+
+Left ambient deliberately, with no per-operation root in scope and no new resolution mechanism invented
+to manufacture one: `DashboardResponseMapper.ToGoalBuildEnvironmentDto` and
+`WorkerProfileDispatcher.AddBuildEnvironmentFinding` are process-wide reports of where this host's build
+environment lives, and the ambient root is exactly what the dispatched child resolves;
+`WorkerArtifactWriter` prompt text describes the same thing to the worker; `LocalProcessVerifier`,
+`GoalAcceptanceVerifier.ResolveExecutionEnvironment` and its focused-evidence baseline have no root
+parameter anywhere in their seam, so supplying one is a signature change across the verifier rather than
+a leak fix; `GateHeartbeatArtifacts.GetStableSlotPath` and `DotnetBaseBuildCache.Default` are the
+process-wide default accessors whose whole contract is the ambient root.
+
+Worker-executable evidence for this round is the sanctioned build only: `Invoke-WorkerBuildCheck.ps1`
+returned `PASS build: 0 errors` for `Mcg.AgentOrchestrator.Infrastructure`,
+`Mcg.AgentOrchestrator.Infrastructure.Tests` and `Mcg.AgentOrchestrator.App`. Requested from Acceptance,
+which owns test execution: `Infrastructure.Tests:GoalWorktreeTestsRemoveCleanupStorage`.

@@ -463,7 +463,9 @@ public static class DotnetBuildEnvironmentManager
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var rootExists = Directory.Exists(root);
         var metadataExists = File.Exists(metadataPath);
-        var artifactsPath = TryReadArtifactsPath(metadataPath) ?? GoalArtifactsPath(goalId);
+        // The no-metadata fallback stays inside the inspected storage root: resolving it ambiently would
+        // report another root's artifacts for a lease this call already located under storageRoot.
+        var artifactsPath = TryReadArtifactsPath(metadataPath) ?? GoalArtifactsPath(goalId, storageRoot);
         var artifactsExist = Directory.Exists(artifactsPath);
         var ownerProcessId = metadataExists ? TryReadOwnerProcessId(metadataPath) : null;
         var ownerAlive = ownerProcessId is not null && IsProcessRunning(ownerProcessId.Value);
