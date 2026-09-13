@@ -271,6 +271,189 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
+    public void ExecutedMergeBaseInheritedOriginAttestsRedAtProvenScopeOnly()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        const string identity = "Tests.BaselineFixture.Fails";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a")
+            ]);
+
+        var observed = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            observed, [checkName], current, [failedCheck]);
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, observed.Attestation);
+        Assert.Equal(CleanBaselineAttestation.AttestedRed, attested.Attestation);
+        Assert.Equal(current.Value, attested.SourceGoalId);
+        Assert.Null(attested.SourceAt);
+        Assert.Contains("executed merge-base baseline arm", attested.Evidence, StringComparison.Ordinal);
+        Assert.Contains("proven only for that executed focused selection", attested.Evidence, StringComparison.Ordinal);
+        Assert.Contains("merge-base base-a", attested.Evidence, StringComparison.Ordinal);
+        // The correlated-observation reporting stays readable beside the proof.
+        Assert.Contains("retained observation:", attested.Evidence, StringComparison.Ordinal);
+        Assert.Equal(observed.SharedFailingChecks, attested.SharedFailingChecks);
+    }
+
+    [Xunit.Fact]
+    public void ExecutedMergeBaseIntroducedOriginsAttestGreenOnlyForExecutedSelection()
+    {
+        var current = GoalId.New();
+        const string checkName = "core tests";
+        const string identity = "Tests.Core.Introduced";
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Introduced,
+                    "focused identity was green at merge-base base-a")
+            ]);
+
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            CleanTestBaseline.Unattested("main-a"), [checkName], current, [failedCheck]);
+
+        Assert.Equal(CleanBaselineAttestation.AttestedGreen, attested.Attestation);
+        Assert.Contains(
+            "attests only that executed focused selection",
+            attested.Evidence,
+            StringComparison.Ordinal);
+        Assert.Contains("not the whole baseline at main", attested.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ExecutedMergeBaseGreenArmMissingAFailingCheckStaysUnattested()
+    {
+        var current = GoalId.New();
+        const string covered = "core tests";
+        const string uncovered = "infrastructure tests";
+        var failedCheck = new AcceptanceCheckResult(
+            covered,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: ["Tests.Core.Introduced"],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    "Tests.Core.Introduced",
+                    AcceptanceTestFailureOrigin.Introduced,
+                    "focused identity was green at merge-base base-a")
+            ]);
+
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            CleanTestBaseline.Unattested("main-a"), [covered, uncovered], current, [failedCheck]);
+
+        Assert.Equal(CleanBaselineAttestation.Unattested, attested.Attestation);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void NameOnlyOrMixedEvidenceNeverProducesAuthoritativeAttestation(bool supplyMixedIdentities)
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        AcceptanceCheckResult[]? receipts = supplyMixedIdentities
+            ?
+            [
+                new AcceptanceCheckResult(
+                    checkName,
+                    false,
+                    1,
+                    "failure",
+                    FailingTestIdentities: ["Tests.One", "Tests.Two"],
+                    FailingTestAttributions:
+                    [
+                        new AcceptanceTestFailureAttribution("Tests.One", AcceptanceTestFailureOrigin.Inherited, "failed at merge-base base-a"),
+                        new AcceptanceTestFailureAttribution("Tests.Two", AcceptanceTestFailureOrigin.Unattributed, "baseline inconclusive at merge-base base-a")
+                    ])
+            ]
+            : null;
+
+        var observed = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            observed, [checkName], current, receipts);
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, attested.Attestation);
+        Assert.Equal(observed.Evidence, attested.Evidence);
+        Assert.Equal(observed.SourceGoalId, attested.SourceGoalId);
+    }
+
+    [Xunit.Fact]
+    public void AuthoritativeAttestationDoesNotChangeTypedOriginOrCauseForConsumers()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        const string identity = "Tests.BaselineFixture.Fails";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a")
+            ]);
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, [checkName], journals, current, "main-a", [failedCheck]));
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            receipt, [checkName], current, [failedCheck]);
+        var summary = new AcceptanceVerificationSummary(
+            false,
+            [failedCheck],
+            FailedChecks: [checkName],
+            CheckAttributions: [attribution],
+            BaselineAttestation: CleanTestBaseline.FormatFailureAttestation(attested));
+
+        // An attested-red baseline is proof of origin, never of cause: the gate still needs its own
+        // positive apparatus receipt, so the deterministic apparatus path must not trip from this.
+        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureCause.NotClassified, attribution.Cause);
+        Assert.Equal(CleanBaselineAttestation.AttestedRed, attested.Attestation);
+        Assert.StartsWith("attested-red;", summary.BaselineAttestation, StringComparison.Ordinal);
+        Assert.Same(summary, ConductorDriver.ClassifyInheritedBaselineApparatus(summary));
+        Assert.False(ConductorDriver.IsEnvironmentalApparatusAcceptanceRun(summary));
+    }
+
+    [Xunit.Fact]
     public void AttributeVerifierClassificationReceiptSuppliesCauseWithExactIdentity()
     {
         var current = GoalId.New();

@@ -209,6 +209,80 @@ internal static class CleanTestBaseline
             .ToArray();
     }
 
+    // The only authoritative baseline producer is the executed merge-base focused arm:
+    // GoalAcceptanceVerifier runs it and AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures
+    // records per-identity origins on AcceptanceCheckResult.FailingTestAttributions. Candidate-journal
+    // check-name correlation never reaches this path, so it can never produce an attested verdict.
+    public static CleanTestBaselineReceipt WithExecutedBaselineAttestation(
+        CleanTestBaselineReceipt receipt,
+        IReadOnlyList<string> failedChecks,
+        GoalId currentGoal,
+        IReadOnlyList<AcceptanceCheckResult>? failedCheckReceipts)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(failedChecks);
+        var proven = failedChecks
+            .Select(check => check.Trim())
+            .Where(check => check.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Select(check => (Check: check, Origin: ResolveProvenOriginEvidence(check, failedCheckReceipts)))
+            .ToArray();
+        if (proven.Length == 0)
+        {
+            return receipt;
+        }
+
+        var inherited = proven
+            .Where(item => item.Origin?.Origin == AcceptanceFailureOrigin.Inherited)
+            .ToArray();
+        if (inherited.Length > 0)
+        {
+            return Attested(
+                receipt,
+                currentGoal,
+                CleanBaselineAttestation.AttestedRed,
+                $"executed merge-base baseline arm reproduced {inherited.Length} failing check(s) " +
+                $"({FormatCheckScope(inherited)}) at main {Short(receipt.MainSha)}; proven only for that " +
+                $"executed focused selection; producer evidence: {FormatProducerEvidence(inherited)}");
+        }
+
+        // A green verdict needs the executed arm to cover every failing check; partial coverage stays observational.
+        return proven.All(item => item.Origin?.Origin == AcceptanceFailureOrigin.Introduced)
+            ? Attested(
+                receipt,
+                currentGoal,
+                CleanBaselineAttestation.AttestedGreen,
+                $"executed merge-base baseline arm was green for all {proven.Length} failing check(s) " +
+                $"({FormatCheckScope(proven)}); this attests only that executed focused selection, not the " +
+                $"whole baseline at main {Short(receipt.MainSha)}; producer evidence: {FormatProducerEvidence(proven)}")
+            : receipt;
+    }
+
+    private static CleanTestBaselineReceipt Attested(
+        CleanTestBaselineReceipt receipt,
+        GoalId currentGoal,
+        CleanBaselineAttestation attestation,
+        string evidence) =>
+        receipt with
+        {
+            Attestation = attestation,
+            SourceGoalId = currentGoal.Value,
+            SourceAt = null,
+            Evidence = receipt.SharedFailingChecks.Count == 0
+                ? evidence
+                : $"{evidence}; retained observation: {receipt.Evidence}"
+        };
+
+    private static string FormatCheckScope(
+        IReadOnlyList<(string Check, ProvenOriginEvidence? Origin)> scope) =>
+        string.Join(", ", scope.Select(item => item.Check));
+
+    private static string FormatProducerEvidence(
+        IReadOnlyList<(string Check, ProvenOriginEvidence? Origin)> scope) =>
+        string.Join(" | ", scope
+            .Select(item => item.Origin!.Evidence.Trim())
+            .Distinct(StringComparer.Ordinal));
+
     private static ProvenOriginEvidence? ResolveProvenOriginEvidence(
         string checkName,
         IReadOnlyList<AcceptanceCheckResult>? failedCheckReceipts)

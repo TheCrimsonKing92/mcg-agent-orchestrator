@@ -1106,6 +1106,37 @@ public sealed class TaskBriefTests
         Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_authoritative_attested_red_does_not_route_not_attributable_instruction")]
+    public void BuildTaskBriefAuthoritativeAttestedRedDoesNotRouteNotAttributableInstruction()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover executed-baseline acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["infrastructure tests"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests",
+                    AcceptanceFailureOrigin.Unattributed,
+                    "same focused method failed at merge-base base-a, but exact data-case identity was unavailable")
+            ],
+            "attested-red; executed merge-base baseline arm reproduced 1 failing check(s)");
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        // Routing reads typed Origin/Cause only; an authoritative attestation string is reported, never obeyed.
+        Assert.Contains("Clean-test baseline: main main1234 attested-red", brief, StringComparison.Ordinal);
+        Assert.Contains("One or more failure origins remain unproven", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_non_apparatus_inherited_record_does_not_suppress_fix")]
     public void BuildTaskBriefNonApparatusInheritedRecordDoesNotSuppressFix()
     {

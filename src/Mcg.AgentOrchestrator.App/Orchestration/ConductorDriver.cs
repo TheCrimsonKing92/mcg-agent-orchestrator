@@ -707,6 +707,14 @@ internal sealed partial class ConductorDriver
                         goal.Id,
                         mainHeadSha ?? string.Empty,
                         verification.Checks);
+                    // Replace the pre-gate candidate observation with the executed merge-base verdict
+                    // whenever the authoritative producer supplied one, so the retained attestation and
+                    // the emitted brief report proof rather than correlation.
+                    baselineReceipt = CleanTestBaseline.WithExecutedBaselineAttestation(
+                        baselineReceipt,
+                        failedChecks,
+                        goal.Id,
+                        verification.Checks);
                 }
                 catch
                 {
