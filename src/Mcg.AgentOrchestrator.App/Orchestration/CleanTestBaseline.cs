@@ -31,6 +31,8 @@ internal sealed record CleanTestBaselineEvidence(
 
 internal static class CleanTestBaseline
 {
+    private const int MaxNamedCorrelatedChecks = 3;
+
     public static CleanTestBaselineReceipt Resolve(
         IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> journals,
         GoalId currentGoal,
@@ -388,6 +390,34 @@ internal static class CleanTestBaseline
     public static string FormatJournalDetail(CleanTestBaselineReceipt receipt) =>
         $"main_sha={receipt.MainSha} attestation={ToWireValue(receipt.Attestation)} " +
         $"source_goal={receipt.SourceGoalId ?? "none"} shared_checks={receipt.SharedFailingChecks.Count} evidence={receipt.Evidence}";
+
+    // Only the executed merge-base arm attests a red baseline. Candidate-journal check-name agreement is a
+    // correlation, so the routing subject names the correlated check labels instead of asserting main is red.
+    // The caller supplies the already-formatted main sha so sha display policy stays with its owner.
+    public static string FormatAttentionSubject(CleanTestBaselineReceipt receipt, string displayMainSha)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        return receipt.Attestation == CleanBaselineAttestation.AttestedRed
+            ? $"Attested red clean-test baseline at {displayMainSha} from executed merge-base evidence"
+            : $"Observed clean-test failure correlation at {displayMainSha}" +
+              FormatCorrelatedCheckSuffix(receipt.SharedFailingChecks);
+    }
+
+    private static string FormatCorrelatedCheckSuffix(IReadOnlyList<string> sharedChecks)
+    {
+        var named = sharedChecks
+            .Select(check => check.Trim())
+            .Where(check => check.Length > 0)
+            .ToArray();
+        if (named.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return named.Length > MaxNamedCorrelatedChecks
+            ? $" for {string.Join(", ", named.Take(MaxNamedCorrelatedChecks))} (+{named.Length - MaxNamedCorrelatedChecks} more)"
+            : $" for {string.Join(", ", named)}";
+    }
 
     public static string FormatFailureAttestation(CleanTestBaselineReceipt receipt) =>
         $"{ToWireValue(receipt.Attestation)}; {receipt.Evidence}";
