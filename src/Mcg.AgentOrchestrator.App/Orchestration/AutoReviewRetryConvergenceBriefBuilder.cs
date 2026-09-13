@@ -36,7 +36,8 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         ArgumentNullException.ThrowIfNull(targetTask);
         ArgumentNullException.ThrowIfNull(triggeringTask);
 
-        if (triggeringTask.RequiredRole == AgentRole.Reviewer)
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
+            !UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(triggeringTask, currentFinding))
         {
             var findings = ReadStructuredReviewFindingStates(goal, triggeringTask);
             return BuildStructuredConvergenceBrief(

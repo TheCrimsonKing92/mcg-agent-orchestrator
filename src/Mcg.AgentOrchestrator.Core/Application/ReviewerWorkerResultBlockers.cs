@@ -199,19 +199,7 @@ public static class WorkerResultBlockers
             return false;
         }
 
-        string? findingsJson = null;
-        string? touchedAnchorsJson = null;
-        foreach (var line in EnumerateWorkerResultLines(verification))
-        {
-            if (TryFindField(line, "findings", out var findings))
-            {
-                findingsJson = findings;
-            }
-            else if (TryFindField(line, "touched_anchors", out var touchedAnchors))
-            {
-                touchedAnchorsJson = touchedAnchors;
-            }
-        }
+        TryReadReviewFindingFragments(verification, out var findingsJson, out var touchedAnchorsJson);
 
         if (string.IsNullOrWhiteSpace(findingsJson) || string.IsNullOrWhiteSpace(touchedAnchorsJson))
         {
@@ -238,6 +226,33 @@ public static class WorkerResultBlockers
             TouchProofDiagnostic = verification.ReviewFindingTouchProofDiagnostic
         };
         return true;
+    }
+
+    public static bool TryReadReviewFindingFragments(
+        TaskVerificationRecord? verification,
+        out string? findingsJson,
+        out string? touchedAnchorsJson)
+    {
+        findingsJson = null;
+        touchedAnchorsJson = null;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "findings", out var findings))
+            {
+                findingsJson = findings;
+            }
+            else if (TryFindField(line, "touched_anchors", out var touchedAnchors))
+            {
+                touchedAnchorsJson = touchedAnchors;
+            }
+        }
+
+        return findingsJson is not null || touchedAnchorsJson is not null;
     }
 
     public static bool TryFindCriteriaVerdicts(

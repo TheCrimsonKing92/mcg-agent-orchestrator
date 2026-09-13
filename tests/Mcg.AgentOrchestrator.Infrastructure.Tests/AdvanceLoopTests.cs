@@ -537,8 +537,8 @@ public sealed class AdvanceLoopTests
     }
 }
 
-    [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_reconciles_assigned_task_with_dead_pid_and_exit_artifact")]
-    public void SubscriptionDispatchReadyBatchReconcilesAssignedTaskWithDeadPidAndExitArtifact()
+    [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_applies_completed_result_without_redispatch")]
+    public void SubscriptionDispatchReadyBatchAppliesCompletedResultWithoutRedispatch()
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -564,7 +564,7 @@ public sealed class AdvanceLoopTests
     kernel.RecordTaskProcessStarted(
         goal.Id,
         task.Id,
-        new TaskProcessRecord(28516, "old dispatch", root, stdout, stderr, exit, clock, null, null));
+        new TaskProcessRecord(Environment.ProcessId, "old dispatch", root, stdout, stderr, exit, clock, null, null));
 
     var snapshot = kernel.ExportSnapshot();
     var goalSnapshot = snapshot.Goals.Single();
@@ -588,18 +588,17 @@ public sealed class AdvanceLoopTests
             [agent],
             profiles);
 
-        Assert.Single(batch.Dispatches);
-        Assert.Equal(task.Id, batch.Dispatches.Single().Task.Id);
+        Assert.Empty(batch.Dispatches);
         var reconciledTask = kernel.GetTask(goal.Id, task.Id);
-        Assert.Null(reconciledTask.LastProcess);
+        Assert.True(reconciledTask.LastProcess is { IsRunning: false });
         Assert.NotNull(reconciledTask.LastDispatch);
-        Assert.NotEqual("old dispatch", reconciledTask.LastDispatch!.Command);
-        Assert.Null(reconciledTask.LastVerification);
+        Assert.Equal("old dispatch", reconciledTask.LastDispatch!.Command);
+        var verification = Assert.IsType<TaskVerificationRecord>(reconciledTask.LastVerification);
+        Assert.Contains("done", verification.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(kernel.GetGoal(goal.Id).Timeline, evt =>
             evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskNote &&
-            evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal) &&
-            evt.Message.Contains("exit artifact", StringComparison.Ordinal));
+            evt.Message.Contains("Reconciled completed dispatch before preparing another dispatch", StringComparison.Ordinal));
     }
     finally
     {
