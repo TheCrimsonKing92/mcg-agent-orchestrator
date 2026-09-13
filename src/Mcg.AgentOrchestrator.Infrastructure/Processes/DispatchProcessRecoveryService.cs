@@ -243,7 +243,6 @@ internal sealed class DispatchProcessRecoveryService
                 verdict = Live(recoveryDecision, worktreeInspectionStatus);
                 return false;
             }
-
         }
         else
         {
