@@ -1349,7 +1349,24 @@ public sealed class MtpTestRunnerScriptTests
             var escapedReadyPath = readyPath.Replace("'", "''");
             var escapedReleasePath = releasePath.Replace("'", "''");
             File.WriteAllText(fakeRunnerScript, $$"""
-                param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+                # powershell.exe -File binds script parameters, which mangles MSBuild-style argument
+                # tokens: '-getResultOutputFile:<path>' arrives as two argv entries and a bare '-p'
+                # is swallowed by common-parameter prefix matching. Real dotnet.exe receives each
+                # token whole, so the stub collects $args (no param block, nothing is swallowed) and
+                # rejoins the known '-switch' + value pairs before matching them.
+                $mcgRaw = @($args)
+                $mcgArguments = [System.Collections.Generic.List[string]]::new()
+                $mcgSplitSwitches = @('-p', '-getProperty', '-getItem', '-getResultOutputFile')
+                for ($mcgIndex = 0; $mcgIndex -lt $mcgRaw.Count; $mcgIndex++) {
+                    $mcgToken = [string]$mcgRaw[$mcgIndex]
+                    if ($mcgSplitSwitches -contains $mcgToken -and ($mcgIndex + 1) -lt $mcgRaw.Count) {
+                        $mcgArguments.Add($mcgToken + ':' + [string]$mcgRaw[$mcgIndex + 1])
+                        $mcgIndex++
+                        continue
+                    }
+                    $mcgArguments.Add($mcgToken)
+                }
+                $Arguments = $mcgArguments.ToArray()
                 if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'msbuild') {
                     $targetPath = '{{Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll")}}'
                     $sourcePath = '{{Path.Combine(root, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "receipt-source.cs")}}'
