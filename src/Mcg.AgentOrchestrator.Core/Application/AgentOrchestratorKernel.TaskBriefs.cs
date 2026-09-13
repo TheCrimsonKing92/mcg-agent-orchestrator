@@ -1048,6 +1048,7 @@ public sealed partial class AgentOrchestratorKernel
                 (verification.MergedReviewFindings ?? []).Select(finding => new
                 {
                     candidate.RequiredRole,
+                    OwningTask = candidate,
                     verification.CompletedAt,
                     Finding = finding
                 })))
@@ -1083,9 +1084,19 @@ public sealed partial class AgentOrchestratorKernel
                         : outcome?.ResultReason is { } resultReason
                             ? $"; reason={FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(resultReason)}"
                             : string.Empty;
+                    // state= and candidate_sha= are the point-of-decision distinction: verdict=
+                    // alone cannot separate "no run has happened yet" from "this candidate was
+                    // measured". A missing or old-candidate run reads pending-execution, never a pass.
+                    var briefCandidateSha = string.IsNullOrWhiteSpace(targetHeadCommit)
+                        ? null
+                        : targetHeadCommit.Trim();
+                    var executionState = FindingEvidenceExecutionClassifier.Classify(
+                        item.OwningTask, item.Finding, briefCandidateSha);
                     lines.Add(
                         $"  evidence_index: selection={selection}; verdict={disposition}; " +
-                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}");
+                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}; " +
+                        $"state={FindingEvidenceExecutionClassifier.ToWireValue(executionState)}; " +
+                        $"candidate_sha={briefCandidateSha ?? FindingEvidenceExecutionClassifier.UnavailableCandidateSha}");
 
                     if (task.RequiredRole == item.RequiredRole && outcome?.ReceiptId is { } receiptId)
                     {

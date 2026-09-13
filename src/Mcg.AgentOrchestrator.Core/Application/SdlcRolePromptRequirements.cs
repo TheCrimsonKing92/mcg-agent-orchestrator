@@ -70,6 +70,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Tester Requirements",
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
+                "- A Developer-owned finding (`correctness`, `spec-compliance`, `code-quality`, `test-coverage`) that is still waiting on execution MUST carry `evidence_request`; the conductor runs that selection once per candidate before it re-dispatches Developer. Read the brief's `evidence_index` line to tell the two apart: `state=pending-execution` means no run exists for this `candidate_sha` yet and is NOT a pass, `state=executed-on-candidate` means the receipt for that exact candidate is already in hand, and `state=none-requested` means you asked for no run. Never call the source correct, and never resolve a finding, from narrative or from a run that did not happen; keep it open and either cite the receipt or request one.",
                 "- Derive a focused verification matrix from the requested behavior, changed files, and known risks.",
                 "- Run or attempt the exact verification commands relevant to this task.",
                 "- Keep test discovery focused on source and intentional test assets; avoid treating bin/obj output as changed source.",
@@ -211,6 +212,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Tester Requirements",
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
+                "- A Developer-owned finding still waiting on execution MUST carry `evidence_request`; the conductor runs it once per candidate before re-dispatching Developer. In `evidence_index`, `state=pending-execution` means no run exists for that `candidate_sha` and is NOT a pass; `state=executed-on-candidate` means the receipt for that exact candidate exists. Never call the source correct, or resolve a finding, from narrative or a run that did not happen.",
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",

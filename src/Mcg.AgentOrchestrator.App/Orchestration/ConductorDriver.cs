@@ -1995,6 +1995,12 @@ internal sealed partial class ConductorDriver
                     goal,
                     candidate.TriggeringTask,
                     candidate.TriggeringTask.LastVerification!));
+        if (trigger is not null &&
+            TryRouteTesterFindingToPendingEvidence(goal, policy, trigger, out decision))
+        {
+            return true;
+        }
+
         if (trigger is null)
         {
             foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
@@ -2861,7 +2867,7 @@ internal sealed partial class ConductorDriver
         selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
-        string.Join("|", (request.Selections ?? []).Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+        FindingEvidenceExecutionClassifier.BuildRequestIdentity(request);
 
     private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
     {
@@ -3295,7 +3301,8 @@ internal sealed partial class ConductorDriver
         string Finding,
         IReadOnlyList<string> SuppressedFindings,
         TaskSpec? TargetTask,
-        bool RequiresCommittedTarget = false);
+        bool RequiresCommittedTarget = false,
+        IReadOnlyList<ReviewFinding>? DeveloperOwnedFindings = null);
 
     private sealed record FindingEvidenceRequestGroup(
         string Identity,
