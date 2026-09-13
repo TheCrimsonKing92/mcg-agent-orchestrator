@@ -965,7 +965,9 @@ public sealed class TaskSpec
         dispatch.ContextPackageReceipt,
         dispatch.PlannerSampleCount,
         dispatch.RetryContextFingerprint,
-        dispatch.PaidRoute);
+        dispatch.PaidRoute,
+        dispatch.ClaudeCredentialSourceDirectory,
+        dispatch.ClaudeCredentialSourceIsExplicit);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -998,7 +1000,9 @@ public sealed class TaskSpec
         dispatch.ContextPackageReceipt,
         dispatch.PlannerSampleCount,
         dispatch.RetryContextFingerprint,
-        dispatch.PaidRoute);
+        dispatch.PaidRoute,
+        dispatch.ClaudeCredentialSourceDirectory,
+        dispatch.ClaudeCredentialSourceIsExplicit);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

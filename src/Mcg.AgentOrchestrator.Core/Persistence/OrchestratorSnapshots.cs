@@ -210,7 +210,11 @@ public sealed record TaskDispatchSnapshot(
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
     int PlannerSampleCount = 1,
     RetryContextFingerprint? RetryContextFingerprint = null,
-    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown);
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown,
+    // Selected and reported by this dispatch's Claude auth preflight; absent for every other provider and
+    // for dispatches recorded before the preflight-to-dispatch handoff existed. Path and source kind only.
+    string? ClaudeCredentialSourceDirectory = null,
+    bool ClaudeCredentialSourceIsExplicit = false);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

@@ -2394,8 +2394,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Contains("stale-terminal-human-wait", disposition.Blockers);
     }
 
-    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_claude_auth_diagnostic_when_api_key_missing")]
-    public void DispatchProcessHostWritesClaudeAuthDiagnosticWhenApiKeyMissing()
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_fails_claude_dispatch_when_subscription_source_is_missing")]
+    public void DispatchProcessHostFailsClaudeDispatchWhenSubscriptionSourceIsMissing()
 {
     var root = CreateTempDirectory();
     try
@@ -2404,22 +2404,28 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(
-            startInfo,
-            WorkerSandboxProvider.Claude,
-            sandboxRoot,
-            stderrPath,
-            anthropicApiKeyAccessor: () => null,
-            claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials"));
+        // Deliberate contract change: a missing subscription login source now stops dispatch before
+        // launch instead of warning and letting the worker run against whatever the destination
+        // happened to hold (which could be an older account's credentials).
+        var failure = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            DispatchProcessHost.SeedProviderEnvironment(
+                startInfo,
+                WorkerSandboxProvider.Claude,
+                sandboxRoot,
+                stderrPath,
+                anthropicApiKeyAccessor: () => null,
+                claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials")));
 
+        Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, failure.Message);
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+        Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
         Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
-        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
-        Assert.True(Directory.Exists(claudeConfigDir));
+        Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
         var stderr = File.ReadAllText(stderrPath);
-        Assert.Contains("ANTHROPIC_API_KEY is not set", stderr);
+        Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, stderr);
         Assert.Contains("Claude", stderr);
+        Assert.DoesNotContain("sk-ant-", stderr);
     }
     finally
     {
@@ -2435,7 +2441,11 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     {
         var credentialSource = Path.Combine(root, "operator-claude");
         Directory.CreateDirectory(credentialSource);
-        File.WriteAllText(Path.Combine(credentialSource, ".credentials.json"), "{\"token\":\"subscription\"}");
+        // Synthetic, knowingly invalid token in the real .credentials.json OAuth shape: this only
+        // exercises LOCAL MATERIAL presence, never live authentication.
+        File.WriteAllText(
+            Path.Combine(credentialSource, ".credentials.json"),
+            "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}");
         File.WriteAllText(Path.Combine(credentialSource, "settings.json"), "{\"theme\":\"dark\"}");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
@@ -2452,7 +2462,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
         Assert.Equal(
-            "{\"token\":\"subscription\"}",
+            "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}",
             File.ReadAllText(Path.Combine(claudeConfigDir!, ".credentials.json")));
         Assert.Equal(
             "{\"theme\":\"dark\"}",
@@ -2465,8 +2475,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
 }
 
-    [Xunit.Fact(DisplayName = "DispatchProcessHost_worker_stderr_stream_preserves_claude_auth_diagnostic")]
-    public void DispatchProcessHostWorkerStderrStreamPreservesClaudeAuthDiagnostic()
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_worker_stderr_stream_preserves_claude_auth_failure_diagnostic")]
+    public void DispatchProcessHostWorkerStderrStreamPreservesClaudeAuthFailureDiagnostic()
 {
     var root = CreateTempDirectory();
     try
@@ -2475,13 +2485,16 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(
-            startInfo,
-            WorkerSandboxProvider.Claude,
-            sandboxRoot,
-            stderrPath,
-            anthropicApiKeyAccessor: () => null,
-            claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials"));
+        // The sanitized diagnostic is still written to the dispatch stderr log before the typed
+        // preflight failure propagates, so ordering against later worker stderr is preserved.
+        Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            DispatchProcessHost.SeedProviderEnvironment(
+                startInfo,
+                WorkerSandboxProvider.Claude,
+                sandboxRoot,
+                stderrPath,
+                anthropicApiKeyAccessor: () => null,
+                claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials")));
 
         using (var stderr = DispatchProcessHost.OpenWorkerStderrStream(stderrPath))
         using (var writer = new StreamWriter(stderr))
@@ -2490,10 +2503,10 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         }
 
         var text = File.ReadAllText(stderrPath);
-        Assert.Contains("ANTHROPIC_API_KEY is not set", text);
+        Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, text);
         Assert.Contains("worker stderr", text);
         Assert.True(
-            text.IndexOf("ANTHROPIC_API_KEY is not set", StringComparison.Ordinal) <
+            text.IndexOf(ClaudeCliAuthProbe.AuthUnavailableErrorCode, StringComparison.Ordinal) <
             text.IndexOf("worker stderr", StringComparison.Ordinal),
             text);
     }

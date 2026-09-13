@@ -337,6 +337,18 @@ public sealed class BackgroundDispatchRunner
                 null));
         }
 
+        // Claude credential source: the conductor's dispatch preflight selected and reported it while
+        // preparing this dispatch, and the decision travels from the dispatch record to the detached
+        // dispatch host below. Neither this boundary nor the host selects again, which is how preflight's
+        // reported login and the login a worker actually receives are the same one. Only the selection
+        // travels - the credential bytes are read in the host at seeding time, so a CLI token refresh
+        // still reaches the worker.
+        var credentialSelection = DispatchProcessHost.TransportedClaudeCredentialSelection(
+            dispatch.ClaudeCredentialSourceDirectory,
+            dispatch.ClaudeCredentialSourceIsExplicit,
+            sandboxProvider,
+            useSandbox);
+
         var runParameters = new DispatchProcessHost.DispatchRunParameters(
             dispatchHostCommand,
             dispatch.WorkingDirectory,
@@ -369,7 +381,8 @@ public sealed class BackgroundDispatchRunner
                     section.ContractVersion,
                     task.RequiredRole,
                     section.RoleVisibility))
-                .ToArray());
+                .ToArray(),
+            ClaudeCredentialSelection: credentialSelection);
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker

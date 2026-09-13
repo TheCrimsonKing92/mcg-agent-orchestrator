@@ -872,6 +872,16 @@ public sealed class DispatchProcessHostTests
         try
         {
             Directory.CreateDirectory(worktree);
+
+            // Isolated synthetic login source. Claude seeding fails closed on an unusable source, so
+            // without an injected source this fixture would resolve the operator's REAL profile
+            // credential store and pass or fail according to host auth rather than sandbox scoping.
+            var credentialSource = Path.Combine(root, "claude-source");
+            Directory.CreateDirectory(credentialSource);
+            File.WriteAllText(
+                Path.Combine(credentialSource, ".credentials.json"),
+                "{\"claudeAiOauth\":{\"accessToken\":\"synthetic-sandbox-scoping-token\"}}");
+
             var startInfo = CreateSandboxStartInfo(worktree);
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude);
 
@@ -879,19 +889,127 @@ public sealed class DispatchProcessHostTests
                 startInfo,
                 parameters,
                 new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
-                protectWorkspaceBoundary: _ => { });
+                protectWorkspaceBoundary: _ => { },
+                providerEnvironmentReader: name => name switch
+                {
+                    "CLAUDE_CONFIG_DIR" => credentialSource,
+                    // Explicitly absent: API-key mode would bypass source seeding entirely, so a host
+                    // that happens to export a key must not change what this fixture exercises.
+                    "ANTHROPIC_API_KEY" => null,
+                    _ => null,
+                });
 
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
             Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
-            Assert.Equal(Path.Combine(sandboxRoot, "claude-config"), startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+            var claudeConfig = Path.Combine(sandboxRoot, "claude-config");
+            Assert.Equal(claudeConfig, startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+
+            // The injected source is the one that was seeded: proves the seam is actually honored,
+            // so a regression cannot silently fall back to the host store and still pass here.
+            Assert.Contains(
+                "synthetic-sandbox-scoping-token",
+                File.ReadAllText(Path.Combine(claudeConfig, ".credentials.json")),
+                StringComparison.Ordinal);
+
+            // The setup artifact reports the resolved source seeding consumed - source kind, directory
+            // and status only. It is the same resolved result, so the artifact cannot name one login
+            // while the sandbox holds another, and it carries no credential material.
+            using var setup = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            var recordedSource = setup.RootElement.GetProperty("credentialSource");
+            Assert.Equal(Path.GetFullPath(credentialSource), recordedSource.GetProperty("directory").GetString());
+            Assert.True(recordedSource.GetProperty("isExplicitSource").GetBoolean());
+            Assert.Equal("LocalMaterialPresent", recordedSource.GetProperty("status").GetString());
+            Assert.DoesNotContain(
+                "synthetic-sandbox-scoping-token",
+                setup.RootElement.GetRawText(),
+                StringComparison.Ordinal);
         }
         finally
         {
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_seeds_the_transported_selection_over_its_own_environment")]
+    public void ApplyWorkerSandboxSeedsTheTransportedSelectionOverItsOwnEnvironment()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(worktree);
+
+            // Two usable logins. The conductor selected the first; the dispatch host's own environment
+            // points at the second. The host process must seed the conductor's decision - re-selecting
+            // locally is exactly how preflight's reported login and the seeded login drifted apart.
+            var conductorSource = WriteSyntheticLogin(root, "conductor-source", "transported-selection-token");
+            var hostSource = WriteSyntheticLogin(root, "host-source", "host-local-selection-token");
+
+            var preflight = DispatchProcessHost.PreflightClaudeCredentialSource(
+                WorkerSandboxProvider.Claude,
+                sandboxLowIntegrity: true,
+                environmentReader: name => name == "CLAUDE_CONFIG_DIR" ? conductorSource : null);
+            var selection = preflight?.ToTransportedSelection();
+            Assert.Equal(Path.GetFullPath(conductorSource), selection?.DirectoryPath);
+
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude) with
+            {
+                ClaudeCredentialSelection = selection
+            };
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { },
+                providerEnvironmentReader: name => name switch
+                {
+                    "CLAUDE_CONFIG_DIR" => hostSource,
+                    // Explicitly absent: API-key mode would bypass source seeding entirely, so a host
+                    // that happens to export a key must not change what this fixture exercises.
+                    "ANTHROPIC_API_KEY" => null,
+                    _ => null,
+                });
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            var claudeConfig = Path.Combine(sandboxRoot, "claude-config");
+            var seeded = File.ReadAllText(Path.Combine(claudeConfig, ".credentials.json"));
+            Assert.Contains("transported-selection-token", seeded, StringComparison.Ordinal);
+            Assert.DoesNotContain("host-local-selection-token", seeded, StringComparison.Ordinal);
+
+            // The setup artifact an operator reads names the transported source too, so the reported
+            // login and the seeded login are one source of truth.
+            using var setup = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            Assert.Equal(
+                Path.GetFullPath(conductorSource),
+                setup.RootElement.GetProperty("credentialSource").GetProperty("directory").GetString());
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static string WriteSyntheticLogin(string root, string name, string token)
+    {
+        var directory = Path.Combine(root, name);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(
+            Path.Combine(directory, ".credentials.json"),
+            "{\"claudeAiOauth\":{\"accessToken\":\"" + token + "\"}}");
+        return directory;
     }
 
     [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_scopes_grok_home_to_grok_provider")]
