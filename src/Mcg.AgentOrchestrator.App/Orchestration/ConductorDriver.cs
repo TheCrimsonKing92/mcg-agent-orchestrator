@@ -268,6 +268,12 @@ internal sealed partial class ConductorDriver
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
             runInline: runAcceptanceAttemptsInCurrentProcess,
             buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
+        _apparatusRedGate = new ApparatusRedGate(
+            Path.Combine(
+                workspace.OrchestratorDirectory,
+                "acceptance-gate-attempts",
+                AcceptanceFailingTestIndex.FileName),
+            goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
@@ -1297,8 +1303,10 @@ internal sealed partial class ConductorDriver
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
         Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null,
-        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null)
+        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
+        ApparatusRedGate? apparatusRedGate = null)
     {
+        _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
@@ -6089,6 +6097,11 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
+        // Census the failing tests at the handler's single entry so every gate completion is recorded,
+        // including the apparatus and unattributable early returns below. Lazy keeps the changed-path
+        // git call at exactly one per advance and off gate completions that never need it.
+        var landingFileScopes = new Lazy<IReadOnlyList<string>>(() => _getLandingFileScopes(goal));
+        var apparatusRedReading = _apparatusRedGate?.RecordGateCompletion(goal, acceptance, landingFileScopes);
         if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
             var failedChecks = acceptance.FailedChecks is { Count: > 0 }
@@ -6153,7 +6166,6 @@ internal sealed partial class ConductorDriver
             }
         }
 
-        var landingFileScopes = _getLandingFileScopes(goal);
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
             var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
@@ -6190,6 +6202,11 @@ internal sealed partial class ConductorDriver
                             branchHeadSha,
                             mainHeadSha,
                             retryDisposition.ExcludedFailures)));
+            }
+
+            if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
+            {
+                return apparatusRed;
             }
 
             if (retryDisposition.ExcludedFailures.Count > 0)
@@ -6279,7 +6296,7 @@ internal sealed partial class ConductorDriver
             // Main has already advanced, so losing this receipt would permanently miss the relaunch.
             SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                 goal.Id.Value,
-                landResult.ChangedFiles ?? landingFileScopes,
+                landResult.ChangedFiles ?? landingFileScopes.Value,
                 landResult.MergeCommitSha));
 
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
