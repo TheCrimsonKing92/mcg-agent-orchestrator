@@ -21,6 +21,16 @@ public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<
 [ProcessLocalTestCollection("GitRunner and environment overrides are process-local; fixture storage roots are atomically claimed unique directories.")]
 public sealed class LandingGitRunnerCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
+// Persistent-runner and dispatch CLI fixtures overwrite process-wide environment variables
+// (worker sandbox enablement, dispatch-start suppression) that no per-operation context owns
+// yet. These classes previously took that exclusion from the GoalWorktreeCleanupHooks
+// definition; removing it left them naming a collection that no longer existed, so the guard
+// silently became grouping without exclusion. Named explicitly here until the variables have
+// owners. Every member takes a host-capacity slot as well, but that budget bounds load only.
+[Xunit.CollectionDefinition(TestCollections.CliProcessEnvironment, DisableParallelization = true)]
+[ProcessLocalTestCollection("Environment variables are process-local; each fixture owns its own repository root and build storage root.")]
+public sealed class CliProcessEnvironmentCollection;
+
 // Build-lease tests need a process-local isolated root but do not mutate cleanup-hook state.
 [Xunit.CollectionDefinition(TestCollections.IsolatedDotnetRoot, DisableParallelization = true)]
 public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;

@@ -1,6 +1,7 @@
 public static class TestCollections
 {
     public const string ChaosGateGit = "ChaosGateGit";
+    public const string CliProcessEnvironment = "CliProcessEnvironment";
     public const string DotnetBuildSlots = "DotnetBuildSlots";
     public const string EnvMutation = "EnvMutation";
     public const string GoalAcceptanceVerifier = "GoalAcceptanceVerifier";

@@ -13,7 +13,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 
-public abstract class GoalWorktreeTestBase
+public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
 {
     private static readonly Lazy<ImmutableArray<byte>> MigratedStateTemplate = new(CreateMigratedStateTemplate);
     private static readonly SeedRepositoryRootInitializer SeedRepositoryProcessRoot = new(

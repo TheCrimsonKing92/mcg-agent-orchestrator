@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 using static LandingExecutorTests;
 
-public sealed class AcceptanceVerdictCarryForwardTests
+public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBase
 {
     [Xunit.Fact]
     public void CarryForward_DisjointLanding_LandsWithoutRegateOrIntent()

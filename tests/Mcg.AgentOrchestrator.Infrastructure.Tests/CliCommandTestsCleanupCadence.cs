@@ -3,7 +3,10 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+// This class carried the same dangling GoalWorktreeCleanupHooks literal, which named a
+// collection with no definition and therefore no behavior. It mutates no process-wide
+// environment, so unlike the CliProcessEnvironment members it needs no exclusion: cadence
+// is owned by the supplied context, and CliCommandTestBase already bounds its host cost.
 public sealed class CliCommandTestsCleanupCadence : CliCommandTestBase
 {
     [Xunit.Theory]

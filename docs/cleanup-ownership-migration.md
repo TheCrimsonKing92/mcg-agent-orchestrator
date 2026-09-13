@@ -651,3 +651,60 @@ A supplied context is borrowed and its scheduler state is updated; it is not dis
 Omission remains supported for top-level operations, which load their own configured context.
 The manifest's Cli selector starts with `FullyQualifiedName~CliCommandTests`; the new class matches it
 and none of that lane's three exclusions.
+
+### Bounded overlap after the first full gate (2026-09-13)
+
+The first full gate at this candidate failed exactly one case,
+`Cli_acceptance_lands_after_transient_state_write_lock_releases`, on its own 60-second hang guard, and the
+cleanup lane's wall clock barely moved. Both facts have one cause, recorded with its measurement in
+[acceptance-gate-resource-isolation.md](acceptance-gate-resource-isolation.md) under the goal `5daaa1db`
+amendment: median per-case slowdown of 10.53x across the whole lane against 5% wall-clock gain. That is
+host oversubscription, not a contention path in the acceptance/landing CLI seam — a shared lock produces
+one outlier, not a uniform tenfold across 125 cases.
+
+Three corrections follow.
+
+**Host-capacity budget.** `HostCapacityTestBudget` (TestSupport) bounds concurrently executing
+host-capacity-bound tests inside one test process to one slot per eight logical processors, clamped to
+`[2, 4]`, overridable with `MCG_TEST_HOST_CAPACITY_SLOTS`. `HostCapacityBoundTestBase` takes a slot for
+each test body through `IAsyncLifetime`; `GoalWorktreeTestBase`, `CliCommandTestBase`,
+`AcceptanceVerdictCarryForwardTests` and `GoalsPruneTests` derive from it. The budget is a load cap, not
+a lock: it admits several tests at once, orders nothing and guards no state, so it does not restore the
+removed serialization and cannot substitute for a nonparallel collection. `HostCapacityTestBudgetTests`
+proves concurrent admission with entry signals and a release barrier rather than wall-clock pacing,
+proves an exhausted budget holds the next entrant, and carries the negative control: a fixture that
+overrides the lifetime without entering runs while the budget is exhausted, so membership must stay
+explicit and cannot be inferred from the base type.
+
+**Restored environment guard.** Deleting the `GoalWorktreeCleanupHooks` collection definition left twelve
+classes still carrying `[Collection("GoalWorktreeCleanupHooks")]`. xUnit treats an undefined name as an
+ad-hoc collection, so those classes kept grouping but silently lost `DisableParallelization` — while
+`CliCommandTestsPersistentRunnerCommands`,
+`CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement` and
+`CliCommandTestsSubscriptionDispatchCommands` still overwrite process-wide environment variables
+(`WorkerSandboxOptions.EnabledVariable`, `BackgroundDispatchRunner.DisableDispatchStartVariable`). That
+is removal-by-renaming and it is corrected: `TestCollections.CliProcessEnvironment` is a real nonparallel
+definition annotated `ProcessLocalTestCollection`, all twelve references use the constant, and every
+member selects into `Goal lifecycle commands` only, so the collection spans one lane and needs no
+cross-shard key. It carries no fixture; per-operation `DotnetBuildStorageRoot` replaced what
+`IsolatedDotnetRootFixture` used to supply. `CliCommandTestsCleanupCadence` carried the same dangling
+literal and needs no collection at all, so it was dropped there.
+
+**Pool independence in the failing case.** The case ran its acceptance command through `Task.Run`, so a
+multi-second blocking CLI call sat on a pool thread and its start depended on pool growth under whatever
+else the lane was running. It now runs on a dedicated thread. Its 100 ms minimum lock hold and its
+60-second hang guard are unchanged: no timing assertion was relaxed, and the budget above is what makes
+the guard hold.
+
+Known gap, not introduced here and not fixed here: `CliCommandTestsBacklogIntakeCommands` overwrites
+`DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable` process-wide and has never carried a
+collection. It sits in the `Cli` lane. It belongs in `CliProcessEnvironment` once someone can execute
+that lane to confirm the added serialization is acceptable.
+
+Worker-executable evidence for this round is the sanctioned build only:
+`Invoke-WorkerBuildCheck.ps1 tests/Mcg.AgentOrchestrator.Infrastructure.Tests/...csproj` returned
+`PASS build: 0 errors`. Requested from Acceptance, which owns test execution:
+`Infrastructure.Tests:HostCapacityTestBudgetTests` for the budget controls and negative control;
+`Infrastructure.Tests:AcceptanceGateEngineSettingsTests` for the collection/lane mapping contract; and
+the `Goal lifecycle commands` and `Goal worktree cleanup` lanes for the restored guard and the bounded
+overlap. Operator owns the criterion 6 before/after timing described in the amendment.

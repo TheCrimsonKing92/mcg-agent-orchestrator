@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class GoalsPruneTests
+public sealed class GoalsPruneTests : HostCapacityBoundTestBase
 {
     private static GoalWorktreeCleanupHooks CreateCleanupHooks(string repo) =>
         WorktreeCleanupContext.Load(

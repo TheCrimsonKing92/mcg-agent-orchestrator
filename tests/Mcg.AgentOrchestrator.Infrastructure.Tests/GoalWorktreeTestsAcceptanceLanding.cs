@@ -164,14 +164,36 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                 AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
             };
 
-            var acceptanceTask = Task.Run(() => CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context)));
-            Assert.False(ReferenceEquals(acceptanceTask, await Task.WhenAny(acceptanceTask, Task.Delay(TimeSpan.FromMilliseconds(100)))));
+            // A dedicated thread, not the pool: the command blocks synchronously for as long
+            // as this test holds the write lock, so on the pool its start would depend on
+            // pool growth under whatever else the lane happens to be running.
+            var acceptanceTask = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var acceptanceThread = new Thread(() =>
+            {
+                try
+                {
+                    acceptanceTask.SetResult(CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context)));
+                }
+                catch (Exception exception)
+                {
+                    acceptanceTask.SetException(exception);
+                }
+            })
+            { IsBackground = true };
+            acceptanceThread.Start();
+
+            // Minimum hold, not a timeout: claiming the acceptance lease is the command's
+            // first state write, so holding the lock past this point is what makes the
+            // release path under test actually execute.
+            Assert.False(ReferenceEquals(
+                acceptanceTask.Task,
+                await Task.WhenAny(acceptanceTask.Task, Task.Delay(TimeSpan.FromMilliseconds(100)))));
 
             using var releaseCommand = lockConnection.CreateCommand();
             releaseCommand.CommandText = "COMMIT";
             releaseCommand.ExecuteNonQuery();
 
-            var output = await acceptanceTask.WaitAsync(TimeSpan.FromSeconds(60));
+            var output = await acceptanceTask.Task.WaitAsync(TimeSpan.FromSeconds(60));
             Assert.Contains("Acceptance evidence bundle: passed", output);
             Assert.Contains("Fast-forwarded", output);
             Assert.True(File.Exists(Path.Combine(repo, "transient-lock.txt")));

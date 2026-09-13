@@ -9,7 +9,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-public abstract class CliCommandTestBase
+public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 {
     private protected static WorktreeCleanupContext CreateIsolatedCleanupContext(
         OrchestratorWorkspace workspace,
