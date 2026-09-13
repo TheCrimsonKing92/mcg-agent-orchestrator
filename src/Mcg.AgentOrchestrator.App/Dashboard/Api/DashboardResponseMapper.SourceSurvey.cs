@@ -14,6 +14,9 @@ public static SourceSurveyDto ToSourceSurveyDto(SourceSurveyReport report)
         report.Files,
         report.Groups.Select(group => new SourceSurveyGroupDto(group.Directory, group.Count)).ToList(),
         report.ExcludedDirectoryNames,
-        report.RecommendedCommand);
+        report.RecommendedCommand,
+        report.InventorySource,
+        report.TraversalComplete,
+        report.IncompleteReasons ?? []);
 }
 }

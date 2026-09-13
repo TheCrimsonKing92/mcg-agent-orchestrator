@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.Core;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -9,6 +10,9 @@ internal static class HermesAcpCliCommand
         "Usage: hermes-acp-trial --confirm-live-hermes-start [--prompt <path>] [--prompt-sha256 <sha256>] " +
         "[--workspace <path>] [--sandbox <path>] --provider <provider> --model <model> --role <role> [--receipt <path>]. " +
         "Trial-compare may supply prompt path/hash through MCG_TRIAL_BRIEF_PATH/MCG_TRIAL_BRIEF_SHA256.";
+    public const string IdentityUsage =
+        "Usage: hermes-acp-verify-identity --executable <absolute-path> " +
+        "[--working-directory <path>] [--hermes-home <path>] [--receipt <path>].";
 
     internal static async Task<HermesAcpTerminalReceipt> ExecuteAsync(
         IReadOnlyList<string> parts,
@@ -75,6 +79,61 @@ internal static class HermesAcpCliCommand
         await error.WriteLineAsync($"[hermes-acp] terminal receipt: {receiptPath}").ConfigureAwait(false);
         await error.FlushAsync(cancellationToken).ConfigureAwait(false);
         return receipt;
+    }
+
+    internal static async Task<HermesExecutableIdentityReceipt> ExecuteIdentityVerificationAsync(
+        IReadOnlyList<string> parts,
+        TextWriter output,
+        Func<string, string, string, CancellationToken, Task<HermesExecutableIdentityReceipt>>? verify = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentNullException.ThrowIfNull(output);
+        var executableValue = ValueAfter(parts, "--executable");
+        if (string.IsNullOrWhiteSpace(executableValue) || !Path.IsPathFullyQualified(executableValue))
+            throw new ArgumentException(IdentityUsage);
+
+        var executablePath = Path.GetFullPath(executableValue);
+        var workingDirectory = Path.GetFullPath(
+            ValueAfter(parts, "--working-directory") ?? Path.GetDirectoryName(executablePath)!);
+        if (!Directory.Exists(workingDirectory))
+            throw new DirectoryNotFoundException($"Hermes identity working directory does not exist: '{workingDirectory}'.");
+
+        var temporaryHome = string.IsNullOrWhiteSpace(ValueAfter(parts, "--hermes-home"));
+        var hermesHome = Path.GetFullPath(
+            ValueAfter(parts, "--hermes-home") ??
+            Path.Combine(Path.GetTempPath(), "mcg-hermes-identity", Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(hermesHome);
+        verify ??= (image, directory, home, token) =>
+            new HermesAcpLifecycle().VerifyExecutableIdentityAsync(image, directory, home, token);
+
+        try
+        {
+            var receipt = await verify(executablePath, workingDirectory, hermesHome, cancellationToken).ConfigureAwait(false);
+            var json = JsonSerializer.Serialize(
+                receipt,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+            var receiptValue = ValueAfter(parts, "--receipt");
+            if (!string.IsNullOrWhiteSpace(receiptValue))
+            {
+                var receiptPath = Path.GetFullPath(receiptValue);
+                Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+                var temporaryPath = receiptPath + $".{Guid.NewGuid():N}.tmp";
+                File.WriteAllText(temporaryPath, json + Environment.NewLine);
+                File.Move(temporaryPath, receiptPath, overwrite: true);
+            }
+
+            await output.WriteLineAsync(json).ConfigureAwait(false);
+            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            return receipt;
+        }
+        finally
+        {
+            if (temporaryHome && Directory.Exists(hermesHome))
+            {
+                try { Directory.Delete(hermesHome, recursive: true); } catch { }
+            }
+        }
     }
 
     private static void RequireContainedTrialRoot(

@@ -408,11 +408,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         }
     }
 
-    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_explains_missing_or_empty_trx")]
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_explains_missing_or_green_trx")]
     [Xunit.InlineData(false, "failed — no TRX produced (shard was killed or crashed before reporter flushed)")]
-    [Xunit.InlineData(true, "failed — TRX found but contained no failure records (process may have exited before tests ran)")]
-    public async Task GoalAcceptanceVerifierFailedMtpShardExplainsMissingOrEmptyTrx(
-        bool writeEmptyTrx,
+    [Xunit.InlineData(true, "failed — 1 of 1 tests executed and every TRX record is green (outcome=Completed)")]
+    public async Task GoalAcceptanceVerifierFailedMtpShardExplainsMissingOrGreenTrx(
+        bool writeGreenTrx,
         string expectedEvidence)
     {
         var root = CreateManifestWorkspace("""
@@ -429,12 +429,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         {
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, "TestResults", writeEmptyTrx ? "empty-trx" : "missing-trx"));
+                Path.Combine(root, "TestResults", writeGreenTrx ? "green-trx" : "missing-trx"));
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (writeEmptyTrx)
+                    if (writeGreenTrx)
                     {
                         WriteMtpTrx(args);
                     }

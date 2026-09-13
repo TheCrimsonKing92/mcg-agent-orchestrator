@@ -136,7 +136,21 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
-        var version = goal.ReviseBrief(newBrief, reason, _clock.UtcNow);
+        var recordedAt = _clock.UtcNow;
+        var version = goal.ReviseBrief(newBrief, reason, recordedAt);
+        var refinedCriteriaCount = default(int?);
+        var refinedCriteriaReDerived = false;
+        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(newBrief);
+        if (declaredCriteria.Count > 0 &&
+            goal.RefinedSpec is { } currentSpec &&
+            !currentSpec.AcceptanceCriteria.SequenceEqual(declaredCriteria, StringComparer.Ordinal))
+        {
+            goal.RecordRefinedSpec(
+                currentSpec with { AcceptanceCriteria = declaredCriteria.ToArray() },
+                recordedAt);
+            refinedCriteriaCount = declaredCriteria.Count;
+            refinedCriteriaReDerived = true;
+        }
         foreach (var supersession in supersessions)
         {
             SupersedeHumanInput(
@@ -165,7 +179,14 @@ public sealed partial class AgentOrchestratorKernel
             ProgressKind.GoalBriefRevised,
             $"Goal brief revised: v{version.Version - 1} superseded by v{version.Version}; " +
             $"notYetStarted={notYetStarted.Length}; inFlight={inFlight.Length}; completed={completed.Length}.{reasonSuffix}");
-        return new GoalBriefRevisionResult(goal.Id, version, notYetStarted, inFlight, completed);
+        return new GoalBriefRevisionResult(
+            goal.Id,
+            version,
+            notYetStarted,
+            inFlight,
+            completed,
+            refinedCriteriaCount,
+            refinedCriteriaReDerived);
     }
 
     public TaskSpec AddTask(
@@ -483,6 +504,16 @@ public sealed partial class AgentOrchestratorKernel
         RetryRoundKind? retryRoundKind = null) =>
         RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: true);
 
+    public TaskSpec RetryTaskAutomatically(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        RetryCause retryCause,
+        bool invalidateDownstream = true,
+        RetryRoundKind? retryRoundKind = null) =>
+        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind,
+            authoritativeRetryFeedback: false, preserveEquivalentPendingRetry: true);
+
     private TaskSpec RetryTaskCore(
         GoalId goalId,
         TaskId taskId,
@@ -490,7 +521,8 @@ public sealed partial class AgentOrchestratorKernel
         RetryCause retryCause,
         bool invalidateDownstream,
         RetryRoundKind? retryRoundKind,
-        bool authoritativeRetryFeedback)
+        bool authoritativeRetryFeedback,
+        bool preserveEquivalentPendingRetry = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -518,14 +550,32 @@ public sealed partial class AgentOrchestratorKernel
 
         var retryAt = _clock.UtcNow;
         var priorCandidate = task.LastDispatch?.ResultCommit;
-        ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
-        if (authoritativeRetryFeedback)
+        var reusePendingRetry = preserveEquivalentPendingRetry && !authoritativeRetryFeedback && retryCause != RetryCause.Unknown &&
+            task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned && task.LatestRetryAt is not null &&
+            task.LastDispatch is null && task.LastProcess is null && task.LastVerification is null &&
+            task.LastExecution is null && task.PendingRetryCause == retryCause && task.PendingRetryRoundKind == retryRoundKind;
+        if (reusePendingRetry)
         {
-            task.RecordCriterionRetryFeedback([retryMessage]);
-            task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+            // Accrue feedback without replacing an untouched retry's identity. Downstream
+            // results may have arrived since admission, so invalidation below still runs.
+            if (!goal.Timeline.Any(evt => evt.TaskId == taskId && evt.OccurredAt >= task.LatestRetryAt!.Value &&
+                evt.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRetryFeedbackUpdated && evt.Message == retryMessage))
+            {
+                RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetryFeedbackUpdated, retryMessage);
+                Append(goal, taskId, ProgressKind.TaskRetryFeedbackUpdated, retryMessage);
+            }
         }
-        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
-        Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+        else
+        {
+            ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
+            if (authoritativeRetryFeedback)
+            {
+                task.RecordCriterionRetryFeedback([retryMessage]);
+                task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+            }
+            RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+            Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+        }
         if (invalidateDownstream)
         {
             InvalidateDownstreamTasks(goal, task, retryAt, priorCandidate, retryCause);
@@ -1062,6 +1112,15 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verifying or Verified goals can be completed.");
         }
 
+        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
+        if (outstandingObligations.Count > 0)
+        {
+            var detail = string.Join(", ", outstandingObligations.Select(item =>
+                $"{item.Id}:{item.Owner}:{item.State}"));
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' cannot complete while criterion evidence obligations remain outstanding: {detail}.");
+        }
+
         if (goal.Status == GoalStatus.Verifying &&
             !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
         {
@@ -1101,6 +1160,15 @@ public sealed partial class AgentOrchestratorKernel
         {
             throw new InvalidOperationException(
                 $"Goal '{goalId}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.");
+        }
+
+        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
+        if (outstandingObligations.Count > 0)
+        {
+            var detail = string.Join(", ", outstandingObligations.Select(item =>
+                $"{item.Id}:{item.Owner}:{item.State}"));
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' cannot complete from merge evidence while criterion evidence obligations remain outstanding: {detail}.");
         }
 
         if (goal.Tasks.Any(task =>
@@ -2209,6 +2277,52 @@ public sealed partial class AgentOrchestratorKernel
     {
         GetGoal(goalId).SetRefinedSpec(spec, _clock.UtcNow);
     }
+
+    public CriterionEvidenceObligation MapCriterionEvidenceOwner(
+        GoalId goalId,
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null) =>
+        GetGoal(goalId).MapCriterionEvidenceOwner(
+            criterionIndex,
+            criterionVersion,
+            owner,
+            actor,
+            _clock.UtcNow,
+            requiredScope,
+            findingStableId,
+            expectedCandidateSha);
+
+    public CriterionEvidenceObligation RecordCriterionEvidence(
+        GoalId goalId,
+        string obligationId,
+        CriterionEvidenceOwner owner,
+        string candidateSha,
+        string receiptId,
+        string scope,
+        bool passed,
+        string detail) =>
+        GetGoal(goalId).RecordCriterionEvidence(
+            obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow);
+
+    public CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
+        GoalId goalId,
+        string malformedObligationId,
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        string reason,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null) =>
+        GetGoal(goalId).RepairMalformedCriterionEvidenceObligation(
+            malformedObligationId, criterionIndex, criterionVersion, owner, actor, reason, _clock.UtcNow,
+            requiredScope, findingStableId, expectedCandidateSha);
 
     public RefinedSpecVersion RecordGoalRefinement(GoalId goalId, RefinedSpec spec)
     {

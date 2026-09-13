@@ -341,6 +341,9 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
     EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
     goal = kernel.GetGoal(goal.Id);
+    var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
+        .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
+        .ToDictionary(task => new TaskId(task.Id));
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -354,16 +357,57 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
         sandboxOptions: sandboxOptions,
         plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
+    // Validate recovery authority before admission can hydrate a whole durable snapshot.
+    // The runner repeats this guard immediately before launch to cover later state changes.
+    var rejectedRecoveryIds = batch.Dispatches
+        .Where(dispatch => BackgroundDispatchRunner.TryRejectInterruptedDispatchRecovery(
+            kernel, goal.Id, dispatch.Task.Id, readCurrentInterruptedDispatchState))
+        .Select(dispatch => dispatch.Task.Id)
+        .ToHashSet();
+    goal = kernel.GetGoal(goal.Id);
+    var terminalRecoveryBlocks = goal.Status == GoalStatus.Active
+        ? []
+        : batch.Dispatches.Where(dispatch => !rejectedRecoveryIds.Contains(dispatch.Task.Id))
+            .Select(dispatch => BuildReadyBlockedDiagnostic(goal, dispatch.Task, agents,
+                "goal-not-active-after-recovery", [$"authoritative goal status is {goal.Status}"]))
+            .ToArray();
+    batch = batch with
+    {
+        Dispatches = batch.Dispatches.Where(dispatch =>
+            !rejectedRecoveryIds.Contains(dispatch.Task.Id) && goal.Status == GoalStatus.Active).ToList(),
+        Blocked = batch.Blocked.Concat(terminalRecoveryBlocks).ToArray()
+    };
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
+
     var admittedTaskIds = new HashSet<TaskId>();
     foreach (var prepared in batch.Dispatches)
     {
+        var currentTask = kernel.GetTask(goal.Id, prepared.Task.Id);
+        if (currentTask.LastDispatch?.DispatchedAt != prepared.Task.LastDispatch?.DispatchedAt)
+        {
+            continue;
+        }
+
+        // Each paid reservation hydrates a whole goal. Preserve earlier admissions as well
+        // as the mutations already accumulated before this batch.
+        if (RequiresDurableAdmissionSnapshotReplacement(currentTask))
+        {
+            if (checkpointBeforeWorkerStart is null)
+                throw new InvalidOperationException(
+                    $"Paid retry start requires a durable process checkpoint for task '{currentTask.Id}'.");
+            checkpointBeforeWorkerStart(kernel, goal.Id, currentTask.Id, DispatchRecordCheckpointPhase.BeforeRetryAdmission);
+            goal = kernel.GetGoal(goal.Id);
+            currentTask = kernel.GetTask(goal.Id, prepared.Task.Id);
+            if (currentTask.LastDispatch?.DispatchedAt != prepared.Task.LastDispatch?.DispatchedAt)
+                continue;
+        }
         var admission = EnsurePreparedRetryAdmission(
             kernel,
             workspace,
             goal.Id,
-            prepared.Task,
+            currentTask,
+            retryReplayTask: retryReplayTasks.GetValueOrDefault(prepared.Task.Id),
             recordDurableGoalBaseline: recordDurableGoalBaseline);
         if (admission.AllowsProcessStart)
             admittedTaskIds.Add(prepared.Task.Id);
@@ -397,7 +441,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         recordDurableGoalBaseline: recordDurableGoalBaseline);
     return new SubscriptionStartResult(
         batch.Dispatches,
-        processes,
+        processes with { RequeueSkippedCount = processes.RequeueSkippedCount + rejectedRecoveryIds.Count },
         safeBatch.Plan,
         safeBatch.Blocked.Concat(batch.Blocked).ToList());
 }
@@ -763,49 +807,25 @@ private static string ResolveReadyBlockedProvider(TaskSpec task, IReadOnlyList<A
 
 private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKernel kernel, Goal goal)
 {
-    foreach (var task in goal.Tasks)
-    {
-        if (task.Status != WorkTaskStatus.Assigned ||
-            task.LastProcess is not { IsRunning: true } process ||
-            !DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) ||
-            exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic ||
-            HasLiveTrackedProcess(process))
-        {
-            continue;
-        }
-
-        var completed = process with
-        {
-            CompletedAt = DateTimeOffset.UtcNow,
-            ExitCode = exitArtifact.ExitCode,
-            ExitArtifactOrigin = exitArtifact.Origin,
-            ExitArtifactReason = exitArtifact.Reason
-        };
-        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification: null);
-        kernel.RecordTaskNote(
-            goal.Id,
-            task.Id,
-            $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitArtifact.ExitCode}.");
-    }
+    var runner = new BackgroundDispatchRunner(
+        isStillRunning: IsTrackedProcessRunningForReadyBatch,
+        readProcessIdentity: processId => ReadTrackedProcessIdentityForReadyBatch(processId) is { } identity
+            ? (identity.StartedAt, identity.ImagePath)
+            : null);
+    StaleDispatchProcessReconciler.Reconcile(
+        kernel,
+        runner,
+        goal,
+        StaleDispatchProcessReconciler.AssignedOnly,
+        IsTrackedProcessRunningForReadyBatch,
+        ReadTrackedProcessIdentityForReadyBatch);
 }
 
 private static bool HasLiveTrackedProcess(TaskProcessRecord process)
-{
-    var heartbeat = ProcessLogReader.ReadHeartbeat(process);
-    if (!heartbeat.IsAvailable)
-    {
-        return false;
-    }
-
-    var candidates = heartbeat.OwnedProcessIds
-        .Concat(heartbeat.ChildProcessId is > 0 ? [heartbeat.ChildProcessId.Value] : [])
-        .Concat(heartbeat.ProcessId > 0 ? [heartbeat.ProcessId] : []);
-    return DispatchProcessIdentityEvidence.GetLiveRecordedOwnerProcessIds(
-        candidates,
-        heartbeat.OwnedProcessIdentities,
+    => StaleDispatchProcessReconciler.HasLiveOrUnknownTrackedProcess(
+        process,
         IsTrackedProcessRunningForReadyBatch,
-        ReadTrackedProcessIdentityForReadyBatch).Count > 0;
-}
+        ReadTrackedProcessIdentityForReadyBatch);
 
 private static bool IsProcessRunning(int processId)
 {
@@ -930,6 +950,7 @@ private static ProcessBatchExecutionResult StartDispatches(
     var started = new List<TaskSpec>();
     var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
     var startFailures = new List<DispatchProcessStartFailure>();
+    var startRefusals = new List<DispatchProcessStartRefusal>();
     var requeueSkippedCount = 0;
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
@@ -938,6 +959,13 @@ private static ProcessBatchExecutionResult StartDispatches(
         item.Status == ProcessBatchItemStatus.Ready &&
         (taskIdsToStart is null || taskIdsToStart.Contains(item.TaskId))))
     {
+        goal = kernel.GetGoal(goal.Id);
+        if (goal.Status != GoalStatus.Active)
+        {
+            startRefusals.Add(new DispatchProcessStartRefusal(item.TaskId,
+                $"Goal is {goal.Status}; no further dispatch may start."));
+            continue;
+        }
         var task = goal.Tasks.Single(task => task.Id == item.TaskId);
         var recoveringPreparedReservation = HasRecoverablePreparedReservation(task);
         if (ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart))
@@ -960,17 +988,38 @@ private static ProcessBatchExecutionResult StartDispatches(
         RetryAdmissionResult? admission = null;
         if (admittedTaskIds is null || !admittedTaskIds.Contains(task.Id))
         {
+            if (BackgroundDispatchRunner.TryRejectInterruptedDispatchRecovery(
+                kernel, goal.Id, task.Id, readCurrentInterruptedDispatchState))
+            {
+                requeueSkippedCount++;
+                goal = kernel.GetGoal(goal.Id);
+                continue;
+            }
+            if (RequiresDurableAdmissionSnapshotReplacement(task))
+            {
+                if (checkpointBeforeWorkerStart is null)
+                    throw new InvalidOperationException(
+                        $"Paid retry start requires a durable process checkpoint for task '{task.Id}'.");
+                checkpointBeforeWorkerStart(kernel, goal.Id, task.Id, DispatchRecordCheckpointPhase.BeforeRetryAdmission);
+                goal = kernel.GetGoal(goal.Id);
+                task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
+            }
             admission = EnsurePreparedRetryAdmission(
                 kernel,
                 workspace,
                 goal.Id,
                 task,
                 recoveringPreparedReservation,
-                recordDurableGoalBaseline);
+                recordDurableGoalBaseline: recordDurableGoalBaseline);
             goal = kernel.GetGoal(goal.Id);
             task = goal.Tasks.Single(candidate => candidate.Id == item.TaskId);
             if (!admission.AllowsProcessStart)
+            {
+                var reason = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches).Items
+                    .Single(candidate => candidate.TaskId == task.Id).Reason;
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id, reason));
                 continue;
+            }
         }
 
 
@@ -1073,7 +1122,13 @@ private static ProcessBatchExecutionResult StartDispatches(
         started.Add(kernel.GetTask(goal.Id, task.Id));
     }
 
-    return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
+    return new ProcessBatchExecutionResult(
+        plan,
+        started,
+        recoveryActions,
+        requeueSkippedCount,
+        startFailures,
+        StartRefusals: startRefusals);
 }
 
 private static RetryAdmissionResult EnsurePreparedRetryAdmission(
@@ -1082,6 +1137,7 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     GoalId goalId,
     TaskSpec task,
     bool reservationRecoveryConfirmed = false,
+    TaskSnapshot? retryReplayTask = null,
     Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
     var dispatch = task.LastDispatch ??
@@ -1091,12 +1147,13 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     var recordedAt = DateTimeOffset.UtcNow;
     var reservationOwnerId = Guid.NewGuid().ToString("n");
     var reservationLeaseExpiresAt = recordedAt.AddMinutes(1);
+    var retryMarkerAt = task.LatestRetryAt;
     if (task.LatestRetryAt is not null && dispatch.PaidRoute == PaidRouteClassification.Unknown)
     {
         throw new InvalidOperationException(
             $"Retry dispatch for task '{task.Id}' is missing an explicit paid-route classification.");
     }
-    if (dispatch.PaidRoute != PaidRouteClassification.Paid || task.LatestRetryAt is null)
+    if (!RequiresDurableAdmissionSnapshotReplacement(task))
     {
         return kernel.RecordPreparedRetryAdmission(
             goalId,
@@ -1110,6 +1167,13 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             reservationRecoveryConfirmed);
     }
 
+    var retryMessage = kernel.GetGoal(goalId).Timeline.LastOrDefault(evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.OccurredAt >= retryMarkerAt!.Value)?.Message ??
+        throw new InvalidOperationException(
+            $"Retry admission cannot persist task '{task.Id}' because its retry marker has no matching TaskRetried event.");
+
     var persisted = RetryAdmissionReservationStore.TryReserveAsync(
             workspace.SqliteStatePath,
             goalId,
@@ -1121,7 +1185,11 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
             recordedAt,
             reservationOwnerId,
             reservationLeaseExpiresAt,
-            reservationRecoveryConfirmed)
+            reservationRecoveryConfirmed,
+            retryMarkerAt: retryMarkerAt,
+            retryRoundKind: task.PendingRetryRoundKind,
+            retryMessage: retryMessage,
+            retryReplayTask: retryReplayTask)
         .GetAwaiter()
         .GetResult();
     if (persisted is not null)
@@ -1134,6 +1202,9 @@ private static RetryAdmissionResult EnsurePreparedRetryAdmission(
     throw new InvalidOperationException(
         $"Durable retry-admission reservation could not be created for goal '{goalId}' and task '{task.Id}'.");
 }
+
+private static bool RequiresDurableAdmissionSnapshotReplacement(TaskSpec task) =>
+    task.LastDispatch is { PaidRoute: PaidRouteClassification.Paid } && task.LatestRetryAt is not null;
 
 private static bool HasRecoverablePreparedReservation(TaskSpec task)
 {

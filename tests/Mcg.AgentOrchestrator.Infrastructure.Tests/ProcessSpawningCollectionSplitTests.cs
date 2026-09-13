@@ -29,10 +29,12 @@ public sealed class ProcessSpawningCollectionSplitTests
         typeof(ConductorSuccessorSelfCheckTests),
         typeof(DispatchProcessHostTests),
         typeof(GoalWorktreeIsolatedDotnetTests),
+        typeof(IcaclsIntegrityLabelerTests),
         typeof(LauncherScriptTests),
         typeof(MtpTestRunnerScriptTests),
         typeof(OwnedProcessExitObservationTests),
-        typeof(ProcessTreeGuiSuppressionTests)
+        typeof(ProcessTreeGuiSuppressionTests),
+        typeof(ConsoleIoPreservationTests)
     ];
 
     [Xunit.Fact(DisplayName = "ProcessSpawning_collection_split_preserves_serial_hazards_and_removes_exclusive_overlap")]

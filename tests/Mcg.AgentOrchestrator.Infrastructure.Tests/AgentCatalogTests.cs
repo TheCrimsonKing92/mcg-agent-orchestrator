@@ -24,7 +24,7 @@ public sealed class AgentCatalogTests
         Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
         var expectedSubscriptionModel = role == AgentRole.Ideation
             ? AgentCatalog.OpenAiSubscriptionModelAlias
-            : AgentCatalog.OpenAiSolSubscriptionModelAlias;
+            : AgentCatalog.OpenAiTerraSubscriptionModelAlias;
         Assert.Equal(expectedSubscriptionModel, agent.Subscription.ModelAlias);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
         Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName); // Deliberate paid API complex-model name from OpenAiComplex(), independent of the subscription alias.
@@ -35,8 +35,8 @@ public sealed class AgentCatalogTests
     {
         var agent = catalog.GetRequired(role);
         Assert.Equal(AgentCatalog.RoutineReasoningEffort, agent.Model.ReasoningEffort);
-        Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, agent.Subscription!.ReasoningEffort);
-        Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel!.ReasoningEffort);
+        Assert.Equal(role == AgentRole.Ideation ? "low" : "medium", agent.Subscription!.ReasoningEffort);
+        Assert.Equal(role == AgentRole.Tester ? "medium" : AgentCatalog.ComplexReasoningEffort, agent.ComplexModel!.ReasoningEffort);
     }
 }
     [Xunit.Fact(DisplayName = "Output_caps_resolve_from_single_policy_source")]
@@ -355,13 +355,13 @@ public sealed class AgentCatalogTests
 
     var restored = AgentCatalogStore.Load(path);
 
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
     Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, restored.GetRequired(AgentRole.Reviewer).Subscription!.ModelAlias);
 }
 
     [Xunit.Fact]
-    public void AgentCatalogStoreLoadMigratesPersistedFiveRoleGpt55AliasesToSol()
+    public void AgentCatalogStoreLoadPreservesPersistedFiveRoleGpt55Aliases()
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, "agents.json");
@@ -385,7 +385,7 @@ public sealed class AgentCatalogTests
         var restored = AgentCatalogStore.Load(path);
 
         Assert.All(roles, role =>
-            Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, restored.GetRequired(role).Subscription!.ModelAlias));
+            Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(role).Subscription!.ModelAlias));
     }
     [Xunit.Fact(DisplayName = "AgentCatalogStore_load_preserves_new_and_unknown_subscription_aliases")]
     public void AgentCatalogStoreLoadPreservesNewAndUnknownSubscriptionAliases()

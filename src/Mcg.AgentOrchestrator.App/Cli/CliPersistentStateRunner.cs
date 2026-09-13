@@ -78,9 +78,10 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
-        OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli)
+        OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli,
+        WorktreeCleanupContext? acceptanceCleanupContext = null)
     {
-        if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, out var readOnlyResult))
+        if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
 
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
@@ -100,7 +101,7 @@ internal static partial class CliPersistentStateRunner
 
         if (IsOperatorIntentStatusCommand(args))
         {
-            PrintOperatorIntentStatus(args, workspace);
+            CliCriterionEvidenceIntents.PrintStatus(args, workspace);
             return false;
         }
 
@@ -146,7 +147,11 @@ internal static partial class CliPersistentStateRunner
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
             ConsoleViews.PrintGoals(summaries);
-            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(workspace.ExecutionDirectory));
+            // Cleanup-debt reads use this command's owner: the injected context, else a configured one.
+            var debtHooks = (acceptanceCleanupContext ?? WorktreeCleanupContext.Load(
+                attentionStoreDirectory: workspace.OrchestratorDirectory)).Hooks;
+            ConsoleViews.PrintCleanupDebtWarning(
+                GoalWorktrees.ListCleanupDebt(workspace.ExecutionDirectory, debtHooks));
             return false;
         }
 
@@ -161,7 +166,7 @@ internal static partial class CliPersistentStateRunner
         // dispatch it started — the goal then re-dispatches the same stage forever and can't advance.
         if (IsConductLoop(args))
         {
-            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceCleanupContext);
         }
 
         if (IsSingleGoalConductCommand(args))
@@ -176,7 +181,8 @@ internal static partial class CliPersistentStateRunner
                 ref currentGoal,
                 channel,
                 acceptanceVerifier,
-                persistOnlyCurrentGoal: true);
+                persistOnlyCurrentGoal: true,
+                cleanupContext: acceptanceCleanupContext);
         }
 
         if (IsAcceptanceCommand(args))
@@ -190,12 +196,13 @@ internal static partial class CliPersistentStateRunner
                 ref workerProfiles,
                 ref currentGoal,
                 channel,
-                acceptanceVerifier);
+                acceptanceVerifier,
+                cleanupContext: acceptanceCleanupContext);
         }
 
         if (IsProcessRefreshCommand(args))
         {
-            return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
+            return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, acceptanceCleanupContext);
         }
 
         if (IsBacklogIntakeGoalCreationCommand(args) && HasRequestKey(args))
@@ -263,9 +270,19 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsCriterionEvidenceMutationCommand(args))
+        {
+            return SubmitCriterionEvidenceOperatorIntent(
+                args,
+                stateRepository,
+                workspace,
+                ref currentGoal,
+                operatorIntentSubmissionSource);
+        }
+
         if (IsGoalLifecycleDispositionCommand(args))
         {
-            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteGoalLifecycleDispositionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
@@ -554,7 +571,7 @@ internal static partial class CliPersistentStateRunner
             "gate-status" or "acceptance-engine" or "run-event" or
             "project" => true,
             "trial-compare" => !TrialCompareCliCommand.RequiresHistoricalState(args),
-            "hermes-acp-trial" => true,
+            "hermes-acp-trial" or "hermes-acp-verify-identity" => true,
             _ => false,
         };
     }
@@ -616,6 +633,12 @@ internal static partial class CliPersistentStateRunner
             OperatorIntentVerbs.Progress or
             OperatorIntentVerbs.Retry or
             OperatorIntentVerbs.VerifyManual;
+
+    internal static bool IsCriterionEvidenceMutationCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 && args[0].ToLowerInvariant() is
+            OperatorIntentVerbs.CriterionEvidenceMap or
+            OperatorIntentVerbs.CriterionEvidenceRecord or
+            OperatorIntentVerbs.CriterionEvidenceRepair;
 
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
@@ -909,8 +932,10 @@ internal static partial class CliPersistentStateRunner
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel = null)
+        IOperatorChannel? channel = null,
+        WorktreeCleanupContext? cleanupContext = null)
     {
+        cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
         using var conductLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
         var operatorIntentStore = SqliteOperatorIntentStore.ForDirectories(
             workspace.OrchestratorDirectory,
@@ -950,12 +975,17 @@ internal static partial class CliPersistentStateRunner
             try
             {
                 var watchGoalId = ResolveConductWatchGoalId(args, startupKernel, currentGoalAtStartup, stateRepository);
-                var sweepKernel = LoadConductLoopSweepKernel(stateRepository, startupKernel, workspace.ExecutionDirectory, watchGoalId);
-                var sweep = TerminalGoalSweep.Run(sweepKernel, workspace.ExecutionDirectory, watchGoalId, orchestratorDirectory: workspace.OrchestratorDirectory);
-                var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
-                    stateRepository,
+                // Startup and loop share the operation scheduler and its cadence.
+                var sweepKernel = LoadConductLoopSweepKernel(
+                    stateRepository, startupKernel, workspace.ExecutionDirectory, watchGoalId, cleanupContext.Hooks);
+                var sweep = TerminalGoalSweep.Run(
+                    sweepKernel,
                     workspace.ExecutionDirectory,
-                    watchGoalId);
+                    watchGoalId,
+                    cleanupHooks: cleanupContext.Hooks,
+                    orchestratorDirectory: workspace.OrchestratorDirectory);
+                var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
+                    stateRepository, workspace.ExecutionDirectory, watchGoalId, cleanupContext.Hooks);
                 if (metadataOnlyExcludedGoalCount > 0)
                 {
                     sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
@@ -970,7 +1000,7 @@ internal static partial class CliPersistentStateRunner
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 }
 
-                GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
+                cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
                 RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
             }
             catch (Exception ex)
@@ -1113,7 +1143,8 @@ internal static partial class CliPersistentStateRunner
             checkpointGoalKernel: CheckpointGoals,
             initialConductLoopLoadHold: initialConductLoopLoadHold,
             persistCriticalGoalKernel: PersistCriticalGoals,
-            recordDurableGoalBaseline: snapshot => tickBaselines[snapshot.Id] = snapshot);
+            recordDurableGoalBaseline: snapshot => tickBaselines[snapshot.Id] = snapshot,
+            cleanupContext: cleanupContext);
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
@@ -1558,9 +1589,10 @@ internal static partial class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository,
         AgentOrchestratorKernel workingSetKernel,
         string executionDirectory,
-        GoalId? onlyGoalId)
+        GoalId? onlyGoalId,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
-        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, onlyGoalId)
+        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, onlyGoalId, cleanupHooks)
             .Where(id => workingSetKernel.Goals.FirstOrDefault(goal => goal.Id == id) is not { IsMetadataOnly: false })
             .ToArray();
         if (candidates.Length == 0)
@@ -1575,7 +1607,8 @@ internal static partial class CliPersistentStateRunner
     private static IReadOnlyList<GoalId> ResolveTerminalSweepCandidateIds(
         ITransactionalOrchestratorStateRepository stateRepository,
         string executionDirectory,
-        GoalId? onlyGoalId)
+        GoalId? onlyGoalId,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
         if (onlyGoalId is not null)
         {
@@ -1583,13 +1616,14 @@ internal static partial class CliPersistentStateRunner
         }
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
-        return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId);
+        return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId, cleanupHooks);
     }
 
     private static IReadOnlyList<GoalId> ResolveTerminalSweepCandidateIds(
         IReadOnlyList<GoalSummary> summaries,
         string executionDirectory,
-        GoalId? onlyGoalId)
+        GoalId? onlyGoalId,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
         if (onlyGoalId is not null)
         {
@@ -1600,10 +1634,11 @@ internal static partial class CliPersistentStateRunner
         return summaries
             .Where(summary => IsConductLoopTerminalStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id))
+            // Presence-only test: the owner changes no selection, but owns the backoff-read warning.
             .Where(id =>
                 gitFacts.HasGoalBranch(GoalWorktrees.BranchName(id)) ||
                 GoalWorktrees.TryResolve(executionDirectory, id) is not null ||
-                GoalWorktrees.TryGetCleanupBackoff(executionDirectory, id) is not null)
+                GoalWorktrees.TryGetCleanupBackoff(executionDirectory, id, cleanupHooks) is not null)
             .Distinct()
             .ToArray();
     }
@@ -1611,7 +1646,8 @@ internal static partial class CliPersistentStateRunner
     private static int CountMetadataOnlyTerminalSweepExclusions(
         ITransactionalOrchestratorStateRepository stateRepository,
         string executionDirectory,
-        GoalId? onlyGoalId)
+        GoalId? onlyGoalId,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
         if (onlyGoalId is not null)
         {
@@ -1619,7 +1655,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
-        var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId)
+        var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId, cleanupHooks)
             .Select(id => id.Value)
             .ToHashSet(StringComparer.Ordinal);
         return summaries
@@ -1826,9 +1862,12 @@ internal static partial class CliPersistentStateRunner
                 preparedCommand.Text
                     ?? throw new InvalidOperationException("Prepared progress command is missing text.")),
             OperatorIntentVerbs.Retry => BuildRetryPayload(preparedCommand),
-            OperatorIntentVerbs.VerifyManual => new ManualVerificationOperatorIntentPayload(
-                preparedCommand.ManualVerification
-                    ?? throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence.")),
+            OperatorIntentVerbs.VerifyManual => preparedCommand.ManualVerification is { } manual
+                ? new ManualVerificationOperatorIntentPayload(Request: new ManualVerificationRequest(
+                    manual.ExitCode == 0,
+                    manual.ExitCode == 0 ? manual.AuthoritativeStandardOutput : manual.AuthoritativeStandardError,
+                    manual.WorkingDirectory))
+                : throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence."),
             _ => throw new InvalidOperationException(
                 $"Goal-scoped mutation '{preparedCommand.Command}' is not backed by the operator intent inbox.")
         };
@@ -1869,6 +1908,25 @@ internal static partial class CliPersistentStateRunner
         return false;
     }
 
+    private static bool SubmitCriterionEvidenceOperatorIntent(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref Goal? currentGoal,
+        OperatorIntentSubmissionSource submissionSource)
+    {
+        var goalSelector = ResolveFlagValue(args, "--goal")
+            ?? throw new ArgumentException($"{args[0]} requires --goal <goal-prefix>.");
+        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, goalSelector);
+        var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+            ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        var kernel = KernelFromGoalSnapshot(snapshot, []);
+        var goal = kernel.GetGoal(goalId);
+        CliCriterionEvidenceIntents.Submit(args, workspace, goal.Id, ResolveOperatorIntentAttribution(args, submissionSource));
+        currentGoal = goal;
+        return false;
+    }
+
     internal static OperatorIntentAttribution ResolveOperatorIntentAttribution(
         IReadOnlyList<string> args,
         OperatorIntentSubmissionSource submissionSource)
@@ -1903,55 +1961,8 @@ internal static partial class CliPersistentStateRunner
             command.RetryCause);
     }
 
-    private static void PrintOperatorIntentStatus(
-        IReadOnlyList<string> args,
-        OrchestratorWorkspace workspace)
-    {
-        if (args.Count != 2)
-        {
-            throw new ArgumentException("Usage: operator-intent-status <intent-id>");
-        }
-
-        var databasePath = Path.Combine(
-            workspace.OrchestratorDirectory,
-            SqliteOperatorIntentStore.DatabaseFileName);
-        if (!File.Exists(databasePath))
-        {
-            throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
-        }
-
-        var intent = SqliteOperatorIntentStore
-            .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
-            .GetAsync(args[1])
-            .GetAwaiter()
-            .GetResult()
-            ?? throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
-        Console.WriteLine(
-            $"Operator intent {intent.Id}: verb={intent.Verb} goal={intent.GoalId[..Math.Min(8, intent.GoalId.Length)]} " +
-            $"task={(intent.TaskId is null ? "none" : intent.TaskId[..Math.Min(8, intent.TaskId.Length)])} " +
-            $"status={intent.Status} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance} " +
-            $"outcome={intent.Outcome ?? "pending"}");
-    }
-
-    private static string? ResolveFlagValue(IReadOnlyList<string> args, string flag)
-    {
-        for (var index = 0; index < args.Count; index++)
-        {
-            if (!args[index].Equals(flag, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (index + 1 >= args.Count || args[index + 1].StartsWith("--", StringComparison.Ordinal))
-            {
-                throw new ArgumentException($"{flag} requires a value.");
-            }
-
-            return args[index + 1];
-        }
-
-        return null;
-    }
+    private static string? ResolveFlagValue(IReadOnlyList<string> args, string flag) =>
+        CliCriterionEvidenceIntents.ResolveFlagValue(args, flag);
 
     private static bool ExecuteGoalScopedTaskMutationCommand(
         IReadOnlyList<string> args,
@@ -3817,7 +3828,8 @@ internal static partial class CliPersistentStateRunner
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         var command = args[0].ToLowerInvariant();
         CliCommandHelp.ThrowIfInvalidFlags(args);
@@ -3828,7 +3840,7 @@ internal static partial class CliPersistentStateRunner
         var commandArgs = refreshOptions?.TargetParts ?? args;
         if (command.Equals("reconcile", StringComparison.OrdinalIgnoreCase))
         {
-            return ExecuteGlobalProcessReconcile(args, stateRepository, workspace, ref currentGoal);
+            return ExecuteGlobalProcessReconcile(args, stateRepository, workspace, ref currentGoal, cleanupContext);
         }
 
         var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveProcessRefreshGoalPrefix(commandArgs));
@@ -3892,7 +3904,8 @@ internal static partial class CliPersistentStateRunner
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -3900,7 +3913,8 @@ internal static partial class CliPersistentStateRunner
         var candidates = CaptureRunningProcessIdentities(kernel);
         var runner = new BackgroundDispatchRunner();
         var reconciled = runner.SweepExitedProcesses(kernel);
-        GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+        cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
+        cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
         RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory);
         Console.WriteLine($"Reconciled dispatches: {reconciled}");
 
@@ -3933,11 +3947,12 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
-        bool persistOnlyCurrentGoal = false)
+        bool persistOnlyCurrentGoal = false,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         if (args.Count > 0 && args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase))
         {
-            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier);
+            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier, cleanupContext);
         }
 
         var phaseTimings = new CliPhaseTimingRecorder("acceptance");
@@ -3966,7 +3981,13 @@ internal static partial class CliPersistentStateRunner
         };
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
-        var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId, orchestratorDirectory: workspace.OrchestratorDirectory);
+        cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
+        var targetSweep = TerminalGoalSweep.Run(
+            kernel,
+            workspace.ExecutionDirectory,
+            goalId,
+            cleanupHooks: cleanupContext.Hooks,
+            orchestratorDirectory: workspace.OrchestratorDirectory);
         reconcileStarted.Stop();
         ConsoleViews.PrintTerminalGoalSweep(targetSweep);
         TerminalGoalSweepAttention.Surface(kernel, targetSweep, workspace.OrchestratorDirectory, goalId);
@@ -4067,6 +4088,23 @@ internal static partial class CliPersistentStateRunner
                                 (false, snapshot, (guardedResult, snapshot)));
                         }
 
+                        var outstandingEvidence = transactionKernel.GetGoal(request.GoalId)
+                            .GetOutstandingCriterionEvidenceObligations(request.TestedWorktreeHead);
+                        if (outstandingEvidence.Count > 0)
+                        {
+                            var evidenceMismatch = new AcceptanceMergeGuardMismatch(
+                                AcceptanceMergeGuardMismatchKind.CriterionEvidence,
+                                "Outstanding criterion evidence",
+                                "none",
+                                string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                            var guardedResult = GuardedAcceptanceAbort(
+                                request.GoalId,
+                                evidenceMismatch,
+                                request.PassingGateReceiptRecorded);
+                            return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
+                                (false, snapshot, (guardedResult, snapshot)));
+                        }
+
                         var result = request.Merge();
                         if (result.FastForwarded)
                         {
@@ -4107,7 +4145,8 @@ internal static partial class CliPersistentStateRunner
             registerAcceptanceGuardAbort: () => acceptanceGuardAborted = true,
             prepareAcceptanceMergeGuard: PrepareAcceptanceMergeGuard,
             persistCriticalGoalKernel: PersistCriticalCurrentGoal,
-            recordDurableGoalBaseline: snapshot => conductTickBaselines[snapshot.Id] = snapshot);
+            recordDurableGoalBaseline: snapshot => conductTickBaselines[snapshot.Id] = snapshot,
+            cleanupContext: cleanupContext);
 
         currentGoal = updatedCurrentGoal;
 
@@ -4226,7 +4265,8 @@ internal static partial class CliPersistentStateRunner
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
-        IGoalAcceptanceVerifier? acceptanceVerifier = null)
+        IGoalAcceptanceVerifier? acceptanceVerifier = null,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
@@ -4251,7 +4291,8 @@ internal static partial class CliPersistentStateRunner
                 stateRepository,
                 initialGoalSnapshots[request.GoalId.Value],
                 kernel,
-                request));
+                request),
+            cleanupContext: cleanupContext);
 
         if (shouldSave)
         {
@@ -4691,21 +4732,6 @@ internal static partial class CliPersistentStateRunner
         IReadOnlyList<HumanInputRequestSnapshot>? humanInputRequests = null) =>
         AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], humanInputRequests ?? []));
 
-    private static GoalSnapshot ExportGoalSnapshot(AgentOrchestratorKernel kernel, GoalId goalId) =>
-        kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
-            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
-
-    private static GoalStateSnapshot ExportGoalStateSnapshot(AgentOrchestratorKernel kernel, GoalId goalId)
-    {
-        var snapshot = kernel.ExportSnapshot();
-        var goal = snapshot.Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
-            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
-        var humanInputRequests = snapshot.HumanInputRequests
-            .Where(request => string.Equals(request.GoalId, goalId.Value, StringComparison.Ordinal))
-            .ToArray();
-        return new GoalStateSnapshot(goal, humanInputRequests);
-    }
-
     internal static void PersistSingleGoalSnapshot(
         ITransactionalOrchestratorStateRepository stateRepository,
         AgentOrchestratorKernel kernel,
@@ -4730,24 +4756,6 @@ internal static partial class CliPersistentStateRunner
                 cancellationToken)
             .GetAwaiter()
             .GetResult();
-    }
-
-    private static GoalStateSnapshot MergeHumanInputCheckpoint(
-        GoalStateSnapshot stored,
-        GoalStateSnapshot current)
-    {
-        var requests = stored.HumanInputRequests
-            .ToDictionary(request => request.Id, StringComparer.Ordinal);
-        foreach (var request in current.HumanInputRequests)
-        {
-            if (!requests.TryGetValue(request.Id, out var existing) ||
-                request.IsCompleted && !existing.IsCompleted)
-            {
-                requests[request.Id] = request;
-            }
-        }
-
-        return new GoalStateSnapshot(current.Goal, requests.Values.ToArray());
     }
 
     private static GoalId? ResolveConductWatchGoalId(

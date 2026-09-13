@@ -11,6 +11,7 @@ public sealed class SourceSurveyTests
         Write(root, "src/bin/Debug/generated.cs");
         Write(root, "src/obj/Debug/generated.cs");
         Write(root, ".scratch/browser-profile/file.json");
+        Write(root, ".mcg-sandbox/grok-home/bundled/skills/pptx/templates/deck.json");
         Write(root, ".orchestrator-prototype/workspace/.orchestrator/state.db");
 
         var report = SourceSurvey.Build(root);
@@ -20,11 +21,16 @@ public sealed class SourceSurveyTests
         Assert.False(report.Files.Any(file => file.Contains("/bin/", StringComparison.OrdinalIgnoreCase)));
         Assert.False(report.Files.Any(file => file.Contains("/obj/", StringComparison.OrdinalIgnoreCase)));
         Assert.False(report.Files.Any(file => file.StartsWith(".scratch/", StringComparison.OrdinalIgnoreCase)));
+        Assert.False(report.Files.Any(file => file.StartsWith(".mcg-sandbox/", StringComparison.OrdinalIgnoreCase)));
         Assert.False(report.Files.Any(file => file.StartsWith(".orchestrator-prototype/", StringComparison.OrdinalIgnoreCase)));
         Assert.True(report.ExcludedDirectoryNames.Contains("bin"));
         Assert.True(report.ExcludedDirectoryNames.Contains("obj"));
         Assert.True(report.ExcludedDirectoryNames.Contains(".scratch"));
+        Assert.True(report.ExcludedDirectoryNames.Contains(".mcg-sandbox"));
         Assert.Contains("!**/.scratch/**", report.RecommendedCommand, StringComparison.Ordinal);
+        Assert.Contains("!**/.mcg-sandbox/**", report.RecommendedCommand, StringComparison.Ordinal);
+        Assert.Equal("filesystem-fallback", report.InventorySource);
+        Assert.True(report.TraversalComplete);
     }
 
     [Xunit.Fact(DisplayName = "SourceSurvey_limits_returned_files_but_reports_total_matches")]

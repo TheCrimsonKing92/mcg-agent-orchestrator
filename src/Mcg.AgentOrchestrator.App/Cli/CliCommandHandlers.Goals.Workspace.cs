@@ -55,6 +55,24 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
+            var candidateHead = GitCli.Run(executionDirectory, "rev-parse", branch);
+            if (!candidateHead.Succeeded || string.IsNullOrWhiteSpace(candidateHead.Output))
+            {
+                Console.WriteLine(
+                    $"Workspace merge blocked: cannot resolve candidate head for {branch}: " +
+                    (string.IsNullOrWhiteSpace(candidateHead.Error) ? "git rev-parse failed." : candidateHead.Error.Trim()));
+                return false;
+            }
+
+            var outstandingEvidence = context.Kernel.GetGoal(goal.Id)
+                .GetOutstandingCriterionEvidenceObligations(candidateHead.Output.Trim());
+            if (outstandingEvidence.Count > 0)
+            {
+                Console.WriteLine(
+                    "Workspace merge blocked by outstanding criterion evidence: " +
+                    string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                return false;
+            }
             var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
             var engineDecision = AcceptanceEngineAcceptanceGate.Decide(
                 engineHealth.Health,
@@ -320,22 +338,20 @@ private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
     }
 }
 
-private static void RecordDeferredGoalCleanup(string executionDirectory, GoalId goalId, string reason)
-{
-    var backoff = GoalWorktrees.RecordGoalCleanupNeeded(executionDirectory, goalId, reason);
-    if (backoff is not null)
-    {
-        Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(backoff)}");
-    }
-}
-
 private static void RecordDeferredGoalCleanup(CliExecutionContext context, Goal goal, string reason, string source)
 {
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "conductor:cleanup", $"Deferred cleanup after {source}.");
     GoalWorktreeCleanupBackoff? backoff;
     try
     {
-        backoff = GoalWorktrees.RecordGoalCleanupNeeded(context.Workspace.ExecutionDirectory, goal.Id, reason);
+        // The cleanup-debt write applies the owner's escalation threshold, escalated retry
+        // interval, clock and attention-store directory; falling back to record defaults here
+        // would silently replace configured policy with literals.
+        backoff = GoalWorktrees.RecordGoalCleanupNeeded(
+            context.Workspace.ExecutionDirectory,
+            goal.Id,
+            reason,
+            context.CleanupContext.Hooks);
     }
     catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
     {
@@ -354,9 +370,12 @@ private static void RecordDeferredGoalCleanup(CliExecutionContext context, Goal 
     }
 }
 
-private static void PrintGoalCleanupBackoffStatus(string executionDirectory, GoalId goalId)
+private static void PrintGoalCleanupBackoffStatus(
+    string executionDirectory,
+    GoalId goalId,
+    GoalWorktreeCleanupHooks hooks)
 {
-    var backoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId);
+    var backoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId, hooks);
     if (backoff is null)
         return;
 
@@ -381,6 +400,17 @@ private static string FormatWorkspaceRebase(GoalWorktreeRebaseResult rebase)
         {
             text += $"{Environment.NewLine}  {file}";
         }
+    }
+
+    if (rebase.RematerializedFiles is { Count: > 0 })
+    {
+        text += $"{Environment.NewLine}Rematerialization receipt (owner: GoalWorktrees):";
+        foreach (var file in rebase.RematerializedFiles)
+        {
+            text += $"{Environment.NewLine}  {file}";
+        }
+
+        text += $"{Environment.NewLine}Preimages: {rebase.PreimageDirectory}";
     }
 
     if (!string.IsNullOrWhiteSpace(rebase.SuggestedCommand))

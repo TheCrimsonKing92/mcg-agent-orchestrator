@@ -153,9 +153,11 @@ public sealed class ProvenanceReportTests
             goal,
             worktreePath: null,
             verification: null,
-            verificationSkipped: true);
+            verificationSkipped: true,
+            buildStorageRoot: null);
 
         Assert.False(bundle.Passed);
+        Assert.Equal(DotnetBuildEnvironmentManager.GoalRoot(goal.Id), bundle.BuildEnvironment.RootPath);
         var provenanceBlocker = bundle.Blockers.FirstOrDefault(b =>
             b.Kind.Equals("provenance-check-failed", StringComparison.Ordinal));
         Xunit.Assert.NotNull(provenanceBlocker);

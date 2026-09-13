@@ -512,16 +512,49 @@ private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int 
         return args;
     }
 
-    var target = ParseGoalScopedTaskTargetArgs(args);
+    var (commandArgs, metadata) = ExtractOperatorIntentMetadataArgs(args);
+    var target = ParseGoalScopedTaskTargetArgs(commandArgs);
     if (allowTextFile && target.Parts.Any(arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase)))
     {
-        return target.Parts;
+        return [.. target.Parts, .. metadata];
     }
 
     var remainder = string.Join(' ', target.Parts.Skip(1));
-    return allowTextFile
+    var normalized = allowTextFile
         ? SplitTaskTargetCommandWithTextFileFlag(target.Parts[0], remainder, trailingArgumentCount)
         : SplitTaskTargetCommand(target.Parts[0], remainder, trailingArgumentCount);
+    return [.. normalized, .. metadata];
+}
+
+private static (IReadOnlyList<string> CommandArgs, IReadOnlyList<string> Metadata) ExtractOperatorIntentMetadataArgs(string[] args)
+{
+    if (!args[0].Equals("progress", StringComparison.OrdinalIgnoreCase) &&
+        !args[0].Equals("retry", StringComparison.OrdinalIgnoreCase) &&
+        !args[0].Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
+        return (args, []);
+
+    var commandArgs = new List<string> { args[0] };
+    var metadata = new List<string>();
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    for (var index = 1; index < args.Length; index++)
+    {
+        var token = args[index];
+        var separator = token.IndexOf('=');
+        var option = separator > 0 ? token[..separator] : token;
+        if (!option.Equals("--idempotency-key", StringComparison.OrdinalIgnoreCase) &&
+            !option.Equals("--operator-actor", StringComparison.OrdinalIgnoreCase))
+        {
+            commandArgs.Add(token);
+            continue;
+        }
+        if (!seen.Add(option)) throw new ArgumentException($"Provide {option} only once.");
+        var value = separator > 0 ? token[(separator + 1)..] : ++index < args.Length ? args[index] : null;
+        if (string.IsNullOrWhiteSpace(value) || value.StartsWith("--", StringComparison.Ordinal))
+            throw new ArgumentException($"{option} requires a value.");
+        metadata.Add(option.ToLowerInvariant());
+        metadata.Add(value);
+    }
+    return (commandArgs, metadata);
 }
 
 private static IReadOnlyList<string> NormalizeRetryTaskTargetArgs(IReadOnlyList<string> args)

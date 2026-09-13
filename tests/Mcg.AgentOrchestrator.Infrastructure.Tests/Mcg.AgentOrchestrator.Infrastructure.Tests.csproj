@@ -18,6 +18,7 @@
     <ProjectReference Include="..\Mcg.AgentOrchestrator.TestSupport\Mcg.AgentOrchestrator.TestSupport.csproj" />
     <ProjectReference Include="Fixtures\IsolatedDotnetProbe\Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\RealProcessShardProbe\Mcg.AgentOrchestrator.RealProcessShardProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Fixtures\ConsoleIoProbe\Mcg.AgentOrchestrator.ConsoleIoProbe.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
     <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
@@ -27,9 +28,12 @@
     <Compile Remove="Fixtures\IsolatedDotnetProbe\**\*.cs" />
     <Compile Remove="ProviderEnvironment\**\*.cs" />
     <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />
+    <Compile Remove="Fixtures\ConsoleIoProbe\**\*.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\ReviewerFindingsParse\*.out.txt" CopyToOutputDirectory="Always" />
     <Content Include="Fixtures\CodexJsonl\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\WorkerOutput\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\config\trials\hermes-acp-v2026.8.27.json"
              Link="config\trials\hermes-acp-v2026.8.27.json"
              CopyToOutputDirectory="PreserveNewest" />

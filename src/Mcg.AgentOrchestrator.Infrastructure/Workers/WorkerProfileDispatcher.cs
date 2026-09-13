@@ -48,7 +48,11 @@ public sealed record WorkerSubscriptionPreflightResult(
     int? ReviewerScopeTotalChangedFileCount = null,
     bool? ReviewerMergeTreeClean = null,
     IReadOnlyList<string>? ReviewerMergeTreeConflictPaths = null,
-    int? ReviewerMergeTreeTotalConflictPathCount = null);
+    int? ReviewerMergeTreeTotalConflictPathCount = null,
+    // The Claude credential source this preflight selected and reported in its auth finding. It is
+    // recorded on the dispatch so the dispatch start boundary transports THIS decision to the worker
+    // sandbox; null whenever no Claude login was inspected (other providers, sandbox disabled, blocked).
+    ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null);
 
 public sealed class WorkerSubscriptionPreflightException : InvalidOperationException
 {
@@ -62,74 +66,6 @@ public sealed class WorkerSubscriptionPreflightException : InvalidOperationExcep
     public string? ErrorCode { get; }
 
     public IReadOnlyList<string> Findings { get; }
-}
-
-public sealed record ClaudeCliAuthState(
-    bool HasAnthropicApiKey,
-    bool HasCliCredentialArtifact,
-    string? CredentialArtifactPath);
-
-public static class ClaudeCliAuthProbe
-{
-    public const string AuthUnavailableErrorCode = "ERR_CLAUDE_AUTH_UNAVAILABLE";
-
-    public static ClaudeCliAuthState FromEnvironment()
-    {
-        var hasApiKey = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
-        var artifactPath = FindCredentialArtifactPath();
-        return new ClaudeCliAuthState(hasApiKey, artifactPath is not null, artifactPath);
-    }
-
-    private static string? FindCredentialArtifactPath()
-    {
-        foreach (var path in EnumerateCandidateCredentialPaths())
-        {
-            if (File.Exists(path))
-            {
-                return path;
-            }
-
-            if (Directory.Exists(path) &&
-                Directory.EnumerateFileSystemEntries(path).Any(IsClaudeCredentialArtifact))
-            {
-                return path;
-            }
-        }
-
-        return null;
-    }
-
-    private static IEnumerable<string> EnumerateCandidateCredentialPaths()
-    {
-        var configured = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            yield return configured;
-        }
-
-        var userProfile = Environment.GetEnvironmentVariable("USERPROFILE");
-        if (!string.IsNullOrWhiteSpace(userProfile))
-        {
-            yield return Path.Combine(userProfile, ".claude.json");
-            yield return Path.Combine(userProfile, ".claude");
-        }
-
-        var home = Environment.GetEnvironmentVariable("HOME");
-        if (!string.IsNullOrWhiteSpace(home))
-        {
-            yield return Path.Combine(home, ".claude.json");
-            yield return Path.Combine(home, ".claude");
-        }
-    }
-
-    private static bool IsClaudeCredentialArtifact(string path)
-    {
-        var fileName = Path.GetFileName(path);
-        return fileName.Equals(".credentials.json", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Equals("credentials.json", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Equals("config.json", StringComparison.OrdinalIgnoreCase) ||
-            fileName.Equals("settings.json", StringComparison.OrdinalIgnoreCase);
-    }
 }
 
 public sealed record DispatchModelOverride(string? ProfileName, string? ModelName, string? ReasoningEffort);
@@ -151,6 +87,7 @@ public static class WorkerProfileDispatcher
     public const string MissingResearchArtifactErrorCode = "missing-research-artifact";
     public const string MissingPlannerArtifactErrorCode = "missing-planner-artifact";
     public const string ArtifactTooLargeErrorCode = "artifact-too-large";
+    public const string UnsupportedClaudeReasoningEffortErrorCode = "unsupported-claude-reasoning-effort";
     private const string HighRiskReviewerReasoningEffort = "xhigh";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
@@ -213,7 +150,10 @@ public static class WorkerProfileDispatcher
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
         int plannerSampleCount = 1,
-        PaidRouteClassification paidRoute = PaidRouteClassification.Unknown)
+        PaidRouteClassification paidRoute = PaidRouteClassification.Unknown,
+        // The credential source this dispatch's Claude auth preflight selected and reported. Recorded on
+        // the dispatch so the start boundary transports that one decision instead of selecting again.
+        ClaudeCredentialSourceSelection? claudeCredentialSelection = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -380,7 +320,9 @@ public static class WorkerProfileDispatcher
             ContextPackageReceipt: contextPackageReceipt,
             PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount),
             RetryContextFingerprint: retryContextFingerprint,
-            PaidRoute: paidRoute),
+            PaidRoute: paidRoute,
+            ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
+            ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -537,6 +479,9 @@ public static class WorkerProfileDispatcher
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
 
+        // ONE resolution for this whole preparation, shared with the preflight below, so the Claude
+        // credential source recorded on the dispatch is the source the preflight finding reports.
+        claudeAuthProbe ??= ClaudeCliAuthProbe.ForOneDispatchPreflight();
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
         var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists);
         roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
@@ -603,7 +548,8 @@ public static class WorkerProfileDispatcher
             citedPriorEvidenceResolver: citedPriorEvidenceResolver,
             sandboxOptions: sandbox,
             plannerSampleCount: plannerSampleCount,
-            paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode));
+            paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
+            claudeCredentialSelection: preflight.ClaudeCredentialSelection);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -622,7 +568,13 @@ public static class WorkerProfileDispatcher
         var findings = new List<string>();
         ReviewerChangedFileScope? reviewerScope = null;
         ReviewerMergeTreeStatus? reviewerMergeTree = null;
+        ClaudeCredentialSourceSelection? claudeCredentialSelection = null;
         string profileName;
+
+        // ONE resolution for this whole preflight: model-lane selection and the auth finding below share
+        // it, so the source this preflight reports - and records for dispatch - cannot be one of several
+        // independently resolved answers.
+        claudeAuthProbe ??= ClaudeCliAuthProbe.ForOneDispatchPreflight();
         try
         {
             EnsureTaskNeedsExecution(task);
@@ -637,7 +589,7 @@ public static class WorkerProfileDispatcher
             findings.Add($"profile: {profile.Name}");
             findings.Add($"dispatch-lane: {roleSelection.DispatchLane ?? profile.Name}");
             findings.Add($"model-selection: {roleSelection.Reason}");
-            AddClaudeLowIntegrityAuthFinding(findings, task.RequiredRole, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
+            claudeCredentialSelection = AddClaudeLowIntegrityAuthFinding(findings, task.RequiredRole, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
                 : ResolveEffectiveSubscriptionModelName(agent, roleSelection);
@@ -675,6 +627,8 @@ public static class WorkerProfileDispatcher
                     !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate),
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
+            ClaudeCliEffortPolicy.AddPreflightFindings(
+                findings, DefaultProviders.ResolveProfile(profile.Name).Identity.Kind, profile, reasoningEffort);
 
             var capability = WorkerSandboxCapabilityPlanner.Evaluate(
                 goal,
@@ -736,7 +690,8 @@ public static class WorkerProfileDispatcher
                 reviewerScope?.TotalChangedFileCount,
                 reviewerMergeTree?.IsClean,
                 reviewerMergeTree?.ConflictPaths,
-                reviewerMergeTree?.TotalConflictPathCount);
+                reviewerMergeTree?.TotalConflictPathCount,
+                claudeCredentialSelection);
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {
@@ -746,7 +701,13 @@ public static class WorkerProfileDispatcher
         }
     }
 
-    private static void AddClaudeLowIntegrityAuthFinding(
+    /// <summary>
+    /// Adds the Claude auth preflight finding and returns the credential source that finding reports, so
+    /// the caller can record it on the dispatch and the dispatch start boundary can transport THAT
+    /// selection into the worker sandbox. Returns null when no Claude login was inspected, which is the
+    /// only case where dispatch start may resolve a source for itself.
+    /// </summary>
+    private static ClaudeCredentialSourceSelection? AddClaudeLowIntegrityAuthFinding(
         List<string> findings,
         AgentRole role,
         IWorkerProvider provider,
@@ -756,26 +717,34 @@ public static class WorkerProfileDispatcher
         if (provider.Identity.Kind != ProviderKind.AnthropicClaudeCli)
         {
             findings.Add("auth: Claude CLI Low-IL auth preflight not applicable for this worker profile");
-            return;
+            return null;
         }
 
         if (!sandbox.Enabled)
         {
             findings.Add("auth: Claude CLI Low-IL auth preflight not required because worker sandbox is disabled");
-            return;
+            return null;
         }
 
         var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
+
+        // Derived from the reported state, never computed beside it - including in API-key mode and for a
+        // rejected source, so the pre-launch failure a worker hits names the source reported right here.
+        var selection = authState.ToTransportedSelection();
         if (authState.HasAnthropicApiKey)
         {
             findings.Add("ok: Claude CLI Low-IL auth preflight found ANTHROPIC_API_KEY");
-            return;
+            return selection;
         }
 
         if (!authState.HasCliCredentialArtifact)
         {
-            findings.Add("auth: Claude CLI Low-IL auth preflight found no API key and no CLI credential artifact");
-            return;
+            // Stays an `auth:` observation on purpose: admission policy is unchanged, and the hard
+            // stop for an unusable login is the pre-launch seeding failure in ClaudeCredentialSource.
+            findings.Add(
+                "auth: Claude CLI Low-IL auth preflight found no API key and no CLI credential artifact; " +
+                (authState.UnavailableReason ?? "no credential source was inspected"));
+            return selection;
         }
 
         var artifact = string.IsNullOrWhiteSpace(authState.CredentialArtifactPath)
@@ -783,6 +752,7 @@ public static class WorkerProfileDispatcher
             : authState.CredentialArtifactPath;
         findings.Add(
             $"ok: Claude CLI Low-IL auth preflight will seed CLI credentials from {artifact} into the sandbox CLAUDE_CONFIG_DIR (subscription auth, proven at Low IL by live probe 2026-07-24)");
+        return selection;
     }
 
     private static string? ResolvePreflightErrorCode(IReadOnlyList<string> findings)
@@ -800,6 +770,11 @@ public static class WorkerProfileDispatcher
         if (findings.Any(finding => finding.Contains(ArtifactTooLargeErrorCode, StringComparison.Ordinal)))
         {
             return ArtifactTooLargeErrorCode;
+        }
+
+        if (findings.Any(finding => finding.Contains(UnsupportedClaudeReasoningEffortErrorCode, StringComparison.Ordinal)))
+        {
+            return UnsupportedClaudeReasoningEffortErrorCode;
         }
 
         if (findings.Any(finding => finding.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, StringComparison.Ordinal)))
@@ -1186,7 +1161,11 @@ public static class WorkerProfileDispatcher
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int plannerSampleCount = 1)
+        int plannerSampleCount = 1,
+        // Shared Claude auth probe, so a test can supply fixture credential sources instead of this
+        // batch reading the operator's real credential store. Production leaves it null and each
+        // prepared task below gets its own single resolution.
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1210,11 +1189,15 @@ public static class WorkerProfileDispatcher
         var blocked = new List<ReadyBlockedDiagnostic>();
         foreach (var selection in selections)
         {
+            // ONE resolution per prepared task, shared by model-lane selection, the preflight auth
+            // finding, and the credential source recorded for the dispatch start boundary to transport.
+            var taskClaudeAuthProbe = claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight();
             var roleSelection = ResolveEffectiveSubscriptionModelSelection(
                 selection.Agent,
                 goal,
                 selection.Task,
                 profiles: profiles,
+                claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists);
             roleSelection = ApplyReasoningEffortPolicy(selection.Agent, goal, selection.Task, roleSelection);
@@ -1226,6 +1209,7 @@ public static class WorkerProfileDispatcher
             var preflight = PreflightSubscriptionTask(
                 goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
                 allowGitReference: sandboxConfinesWrites,
+                claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists);
             if (!preflight.Allowed)
@@ -1274,7 +1258,8 @@ public static class WorkerProfileDispatcher
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
                 sandboxOptions: sandbox,
                 plannerSampleCount: plannerSampleCount,
-                paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode)));
+                paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
+                claudeCredentialSelection: preflight.ClaudeCredentialSelection));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
@@ -3188,14 +3173,20 @@ public static class WorkerProfileDispatcher
     internal static string BuildDispatchCommandTemplate(
         WorkerProfile profile,
         ProviderKind providerKind,
-        IReadOnlyDictionary<string, string?> dispatchVariables)
+        IReadOnlyDictionary<string, string?> dispatchVariables,
+        Action<string>? diagnosticSink = null)
     {
-        if (!ShouldUseTypedBuiltInCommand(profile, providerKind) ||
+        // Superseded built-in claude-cli commands are repaired at invocation time and in memory only: the
+        // resolved profile drives this one command construction and is never handed to the profile store.
+        // A custom template comes back unchanged and keeps taking the legacy path below.
+        var resolved = ClaudeCliEffortPolicy.ResolveInvocationProfile(profile, providerKind, diagnosticSink);
+
+        if (!ShouldUseTypedBuiltInCommand(resolved, providerKind) ||
             !HasRequiredBuiltInVariables(providerKind, dispatchVariables))
         {
             // Missing variables must remain as placeholders so the legacy preparation path
             // reports them before it writes the prompt or mutates dispatch state.
-            return profile.CommandTemplate;
+            return resolved.CommandTemplate;
         }
 
         return string.Join(
@@ -3210,7 +3201,7 @@ public static class WorkerProfileDispatcher
                 openaiBaseUrl: GetDispatchVariable(dispatchVariables, "openaiBaseUrl"),
                 openaiApiKey: GetDispatchVariable(dispatchVariables, "openaiApiKey"),
                 approvalMode: GetDispatchVariable(dispatchVariables, "approvalMode"),
-                repositoryPolicyMaxBytes: profile.RepositoryPolicyMaxBytes));
+                repositoryPolicyMaxBytes: resolved.RepositoryPolicyMaxBytes));
     }
 
     private static bool HasRequiredBuiltInVariables(

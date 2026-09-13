@@ -10,7 +10,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public enum DispatchRecordCheckpointPhase
 {
     BeforeProcessStart,
-    ProcessMayHaveStarted
+    ProcessMayHaveStarted,
+    BeforeRetryAdmission
 }
 
 public sealed record DispatchRefreshOutcome(
@@ -115,12 +116,10 @@ public sealed class BackgroundDispatchRunner
     private readonly WorkerDispatchCompletionClassifier _completionClassifier;
     private readonly DispatchProcessRecoveryService _recoveryService;
     private readonly DispatchWorktreeCommitter _worktreeCommitter;
-    private readonly Func<string, Stream> _openLogReadStream;
+    private readonly ProcessLogReader _processLogReader;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> _runOrchestratorBuildCheck;
     private readonly Func<ProcessCommandLineSnapshot> _processCommandLineSnapshotFactory;
-    private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
-    private readonly object _processLogCacheGate = new();
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -154,13 +153,12 @@ public sealed class BackgroundDispatchRunner
         _diagnosticWriter = diagnosticWriter ?? new FileDiagnosticWriter();
         _recoveryPolicy = recoveryPolicy ?? new DispatchRecoveryPolicy(_clock);
         _workerProviders = workerProviders ?? WorkerProviderCatalog.Default();
+        _processLogReader = new ProcessLogReader(openLogReadStream);
         _completionClassifier = new WorkerDispatchCompletionClassifier(
             ResolveWorkerProvider,
             _clock,
             File.Exists,
-            ReadDecisionBestEffort);
-        _openLogReadStream = openLogReadStream ??
-            (path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+            ProcessLogReader.ReadDecisionBestEffort);
         _recoveryService = new DispatchProcessRecoveryService(
             _clock,
             _postOutputIdleTimeout,
@@ -339,6 +337,18 @@ public sealed class BackgroundDispatchRunner
                 null));
         }
 
+        // Claude credential source: the conductor's dispatch preflight selected and reported it while
+        // preparing this dispatch, and the decision travels from the dispatch record to the detached
+        // dispatch host below. Neither this boundary nor the host selects again, which is how preflight's
+        // reported login and the login a worker actually receives are the same one. Only the selection
+        // travels - the credential bytes are read in the host at seeding time, so a CLI token refresh
+        // still reaches the worker.
+        var credentialSelection = DispatchProcessHost.TransportedClaudeCredentialSelection(
+            dispatch.ClaudeCredentialSourceDirectory,
+            dispatch.ClaudeCredentialSourceIsExplicit,
+            sandboxProvider,
+            useSandbox);
+
         var runParameters = new DispatchProcessHost.DispatchRunParameters(
             dispatchHostCommand,
             dispatch.WorkingDirectory,
@@ -371,7 +381,8 @@ public sealed class BackgroundDispatchRunner
                     section.ContractVersion,
                     task.RequiredRole,
                     section.RoleVisibility))
-                .ToArray());
+                .ToArray(),
+            ClaudeCredentialSelection: credentialSelection);
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
@@ -401,26 +412,8 @@ public sealed class BackgroundDispatchRunner
         if (spawnReceipt.WorktreeHeadSha is not null)
             kernel.RecordDispatchBaseCommit(goalId, taskId, spawnReceipt.WorktreeHeadSha);
 
-        var currentTask = kernel.GetTask(goalId, taskId);
-        if (currentTask.InterruptedDispatchRecoveryId is { } interruptedDispatchId &&
-            TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
+        if (TryRejectInterruptedDispatchRecovery(kernel, goalId, taskId, readCurrentState))
         {
-            kernel.RecordTaskRequeueSkipped(
-                goalId,
-                taskId,
-                interruptedDispatchId,
-                blocker.BlockingEntity,
-                blocker.TerminalState,
-                blocker.Reason,
-                blocker.Detail);
-            if (blocker.Reason == "terminal-state")
-            {
-                kernel.ConcludeInterruptedDispatchRecovery(
-                    goalId,
-                    taskId,
-                    blocker.GoalStatus,
-                    blocker.TaskStatus);
-            }
             return DispatchProcessStartResult.Skipped();
         }
 
@@ -769,8 +762,8 @@ public sealed class BackgroundDispatchRunner
             inspectWorktree: () => BuildRecoveryWorktreeInspectionStatus(task, processRecord, goalId),
             hasCodexFinalOutput: () =>
             {
-                var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
-                var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
+                var standardOutput = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath);
+                var standardError = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath);
                 return standardOutput.FinalOutputSeen || standardError.FinalOutputSeen;
             },
             hasWorktreeProgress: () => HasRecoveryWorktreeProgress(task, processRecord, goalId),
@@ -1169,10 +1162,10 @@ public sealed class BackgroundDispatchRunner
         disposition = default!;
         diagnostic = string.Empty;
         var heartbeat = ProcessLogReader.ReadHeartbeat(processRecord, _clock.UtcNow);
-        var stdoutFileBytes = SafeFileLength(processRecord.StandardOutputPath);
-        var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
-        var stdout = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
-        var stderr = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
+        var stdoutFileBytes = ProcessLogReader.SafeFileLength(processRecord.StandardOutputPath);
+        var stderrFileBytes = ProcessLogReader.SafeFileLength(processRecord.StandardErrorPath);
+        var stdout = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
+        var stderr = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
         var workerResultPresent = _completionClassifier.HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout);
         var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
@@ -1264,10 +1257,32 @@ public sealed class BackgroundDispatchRunner
             ? null
             : dispatchAttempt.DispatchedAt;
         var jsonl = NormalizeStructuredCodexOutput(dispatchAttempt, processRecord.StandardOutputPath);
-        var outputSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
-        var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
+        var outputSnapshot = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath);
+        var errorSnapshot = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;
         var decisionStandardError = errorSnapshot.DecisionText;
+        var fullStandardOutput = _processLogReader.ReadComplete(processRecord.StandardOutputPath);
+        var authoritativeStandardOutput = fullStandardOutput.Content is { } initialAuthoritativeContent
+            ? ProcessLogReader.NormalizeCompleteDecisionText(initialAuthoritativeContent)
+            : decisionStandardOutput;
+        if (outputSnapshot.DecisionTruncatedChars > 0)
+        {
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                $"decision-text-truncated source=stdout dropped_chars={outputSnapshot.DecisionTruncatedChars} " +
+                $"dropped_scope=selected-decision-content retained_chars={outputSnapshot.DecisionText.Length} " +
+                $"cap={VerificationTextBounds.MaxRetainedChars} " +
+                $"complete_artifact='{processRecord.StandardOutputPath}'");
+        }
+        if (errorSnapshot.DecisionTruncatedChars > 0)
+        {
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                $"decision-text-truncated source=stderr dropped_chars={errorSnapshot.DecisionTruncatedChars} " +
+                $"dropped_scope=selected-decision-content retained_chars={errorSnapshot.DecisionText.Length} " +
+                $"cap={VerificationTextBounds.MaxRetainedChars} " +
+                $"complete_artifact='{processRecord.StandardErrorPath}'");
+        }
         string? finalPlannerRejectionDiagnostic = null;
         var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var wrapperExitReconciled = false;
@@ -1279,11 +1294,11 @@ public sealed class BackgroundDispatchRunner
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var goal = kernel.GetGoal(goalId);
-        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
+        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         var completeNonBlockedWorkerResult = hasRoleCapability && _completionClassifier.HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
-            decisionStandardOutput,
+            authoritativeStandardOutput,
             decisionStandardError,
             allowNoChangedFiles: true,
             requireNoBlockers: true,
@@ -1338,7 +1353,7 @@ public sealed class BackgroundDispatchRunner
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
                 : null;
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
-            var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, AgentRole.Planner);
+            var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, AgentRole.Planner);
             PlannerOutputContractResult plannerContract;
             if (evidenceRequest.IsMalformed)
             {
@@ -1407,10 +1422,17 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        // Refresh after role-specific contracts may have appended durable receipts, then reuse this same
+        // complete artifact for presence and the stored verification record. Normalize only bare carriage
+        // returns for parsing; the authoritative stored content remains byte-complete and unchanged.
+        fullStandardOutput = _processLogReader.ReadComplete(processRecord.StandardOutputPath);
+        authoritativeStandardOutput = fullStandardOutput.Content is { } authoritativeContent
+            ? ProcessLogReader.NormalizeCompleteDecisionText(authoritativeContent)
+            : authoritativeStandardOutput;
         var providerFailureKind = _completionClassifier.ParseProviderFailureKind(task.LastDispatch, observedExitCode, decisionStandardOutput, decisionStandardError);
         var workerResultPresent = _completionClassifier.HasWorkerResultArtifact(
             processRecord.WorkingDirectory,
-            decisionStandardOutput);
+            authoritativeStandardOutput);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1718,8 +1740,7 @@ public sealed class BackgroundDispatchRunner
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
-        var fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
-        var fullStandardError = ReadCompleteLog(processRecord.StandardErrorPath);
+        var fullStandardError = _processLogReader.ReadComplete(processRecord.StandardErrorPath);
         var standardOutput = outputSnapshot.BoundedText;
         var standardError = AppendDiagnostic(
             AppendDiagnostic(errorSnapshot.BoundedText, standardErrorDiagnostic),
@@ -1755,6 +1776,14 @@ public sealed class BackgroundDispatchRunner
         var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
             ? completionHeartbeat.StandardOutputBytes
             : (long?)null;
+        // The bounded snapshot is diagnostic evidence only. A scope declaration can steer a
+        // Developer into a bounded revision, so it must come from the authoritative artifact.
+        bool assignedScopeComplete = false;
+        var hasAssignedScopeComplete = fullStandardOutput.Content is { } assignedScopeOutput &&
+            WorkerResultBlockers.TryGetAssignedScopeComplete(
+                assignedScopeOutput,
+                out assignedScopeComplete,
+                out _);
 
         var verification = new TaskVerificationRecord(
             processRecord.Command,
@@ -1783,7 +1812,8 @@ public sealed class BackgroundDispatchRunner
             FullStandardError: fullStandardError.Content,
             FullStandardOutputUnavailableReason: fullStandardOutput.UnavailableReason,
             FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason,
-            PlannerCandidateDivergence: plannerCandidateDivergence);
+            PlannerCandidateDivergence: plannerCandidateDivergence,
+            AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
@@ -1796,7 +1826,7 @@ public sealed class BackgroundDispatchRunner
             ProviderUsage: jsonl?.Usage,
             ProviderUsageUnavailableReason: jsonl?.UsageUnavailableReason ?? "unsupported",
             DispatchAttemptAt: contextReceiptAttemptAt);
-        EvictProcessLogCache(processRecord);
+        _processLogReader.Evict(processRecord);
         return outcome;
     }
 
@@ -1989,10 +2019,10 @@ public sealed class BackgroundDispatchRunner
         rescueNote = string.Empty;
         deniedNote = string.Empty;
 
-        var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
-        var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
+        var standardOutput = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
+        var standardError = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
         var hasPopulatedStandardOutput =
-            SafeFileLength(processRecord.StandardOutputPath) > 0L ||
+            ProcessLogReader.SafeFileLength(processRecord.StandardOutputPath) > 0L ||
             (_recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat) &&
              heartbeat.StandardOutputBytes > 0L);
         var hasSuccessfulWorkerResult = _completionClassifier.HasSuccessfulWorkerResult(
@@ -2176,7 +2206,7 @@ public sealed class BackgroundDispatchRunner
         }
         finally
         {
-            EvictProcessLogCache(processRecord);
+            _processLogReader.Evict(processRecord);
         }
 
         return cancelled;
@@ -2205,7 +2235,7 @@ public sealed class BackgroundDispatchRunner
         GracefulDispatchDetacher.DetachRunningProcessesForGoal(
             kernel,
             goalId,
-            EvictProcessLogCache,
+            _processLogReader.Evict,
             taskId => CancelLatestProcess(
                 kernel,
                 goalId,
@@ -2228,7 +2258,7 @@ public sealed class BackgroundDispatchRunner
                 {
                     if (task.LastProcess is { } cancelledProcess)
                     {
-                        EvictProcessLogCache(cancelledProcess);
+                        _processLogReader.Evict(cancelledProcess);
                     }
 
                     recovered += TryAutoRequeue(
@@ -2258,7 +2288,7 @@ public sealed class BackgroundDispatchRunner
                     task.LastVerification?.WorkerResultPresent != true &&
                     !_recoveryService.AnyTrackedProcessStillRunning(detachedFailure))
                 {
-                    EvictProcessLogCache(detachedFailure);
+                    _processLogReader.Evict(detachedFailure);
                     recovered += TryAutoRequeue(
                         kernel,
                         goal.Id,
@@ -2279,7 +2309,7 @@ public sealed class BackgroundDispatchRunner
                     continue;
                 }
 
-                EvictProcessLogCache(process);
+                _processLogReader.Evict(process);
                 recovered += TryAutoRequeue(
                     kernel,
                     goal.Id,
@@ -2352,6 +2382,23 @@ public sealed class BackgroundDispatchRunner
             message,
             RetryCause.ProviderInterruption,
             dispatchId);
+        return true;
+    }
+
+    internal static bool TryRejectInterruptedDispatchRecovery(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState)
+    {
+        if (kernel.GetTask(goalId, taskId).InterruptedDispatchRecoveryId is not { } dispatchId ||
+            !TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
+            return false;
+
+        kernel.RecordTaskRequeueSkipped(goalId, taskId, dispatchId, blocker.BlockingEntity,
+            blocker.TerminalState, blocker.Reason, blocker.Detail);
+        if (blocker.Reason == "terminal-state")
+            kernel.ConcludeInterruptedDispatchRecovery(goalId, taskId, blocker.GoalStatus, blocker.TaskStatus);
         return true;
     }
 
@@ -2542,525 +2589,11 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private ProcessLogSnapshot ReadProcessLogBestEffort(TaskProcessRecord processRecord, string path)
-    {
-        var key = new ProcessLogCacheKey(processRecord.ExitCodePath, path);
-        var length = SafeFileLength(path);
-        lock (_processLogCacheGate)
-        {
-            if (_processLogCache.TryGetValue(key, out var cached) && cached.Length == length)
-            {
-                return cached;
-            }
-        }
-
-        var snapshot = ReadProcessLogFileBestEffort(path, length);
-        if (snapshot.ReadSucceeded)
-        {
-            lock (_processLogCacheGate)
-            {
-                _processLogCache[key] = snapshot;
-            }
-        }
-
-        return snapshot;
-    }
-
     internal static CodexJsonlParseResult? NormalizeStructuredCodexOutput(
         TaskDispatchRecord? dispatch,
         string standardOutputPath,
         Func<string, string>? readAllText = null)
         => StructuredCodexOutputNormalizer.Normalize(dispatch, standardOutputPath, readAllText).Parsed;
-
-    private static CompleteLogReadResult ReadCompleteLog(string path)
-    {
-        try
-        {
-            return File.Exists(path)
-                ? new CompleteLogReadResult(File.ReadAllText(path), null)
-                : new CompleteLogReadResult(null, "missing");
-        }
-        catch (IOException)
-        {
-            return new CompleteLogReadResult(null, "unreadable");
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return new CompleteLogReadResult(null, "unreadable");
-        }
-    }
-
-    private sealed record CompleteLogReadResult(string? Content, string? UnavailableReason);
-
-    private ProcessLogSnapshot ReadProcessLogFileBestEffort(string path, long length)
-    {
-        if (!File.Exists(path))
-        {
-            return new ProcessLogSnapshot(length, false, string.Empty, string.Empty, ReadSucceeded: true);
-        }
-
-        try
-        {
-            using var stream = _openLogReadStream(path);
-            using var reader = new StreamReader(stream);
-            return ReadProcessLogSnapshot(reader, path, length);
-        }
-        catch (IOException)
-        {
-            var message = $"[log locked at refresh — see {path}]";
-            return new ProcessLogSnapshot(length, false, message, message, ReadSucceeded: false);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            var message = $"[log unreadable at refresh — see {path}]";
-            return new ProcessLogSnapshot(length, false, message, message, ReadSucceeded: false);
-        }
-    }
-
-    private void EvictProcessLogCache(TaskProcessRecord processRecord)
-    {
-        lock (_processLogCacheGate)
-        {
-            _processLogCache.Remove(new ProcessLogCacheKey(processRecord.ExitCodePath, processRecord.StandardOutputPath));
-            _processLogCache.Remove(new ProcessLogCacheKey(processRecord.ExitCodePath, processRecord.StandardErrorPath));
-        }
-    }
-
-    private static string ReadDecisionBestEffort(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return string.Empty;
-        }
-
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            return ReadDecisionText(reader);
-        }
-        catch (IOException)
-        {
-            return $"[log locked at refresh — see {path}]";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return $"[log unreadable at refresh — see {path}]";
-        }
-    }
-
-    private static string ReadDecisionText(TextReader reader)
-    {
-        const int MaxDecisionChars = VerificationTextBounds.MaxRetainedChars;
-        var retained = new StringBuilder(Math.Min(MaxDecisionChars, VerificationTextBounds.BoundThreshold));
-        var prefixRemaining = VerificationTextBounds.PreviewHeadChars;
-        var inWorkerResult = false;
-
-        while (true)
-        {
-            var line = reader.ReadLine();
-            if (line is null)
-            {
-                break;
-            }
-
-            // Same single-charge rule as ProcessDecisionLine; see the comment there for the measured failure
-            // this prevents.
-            var normalized = NormalizeWorkerResultMarker(line);
-            var isOpener = IsWorkerResultOpener(normalized);
-            var isEndMarker = !isOpener && IsWorkerResultEndMarker(normalized);
-            var isDecisionContent = isOpener || isEndMarker || inWorkerResult || IsDecisionSignificantLine(line);
-
-            if (prefixRemaining > 0)
-            {
-                var take = Math.Min(prefixRemaining, line.Length);
-                if (!isDecisionContent)
-                {
-                    AppendDecisionLine(retained, line[..take], MaxDecisionChars);
-                }
-
-                prefixRemaining -= take;
-            }
-
-            if (isOpener)
-            {
-                inWorkerResult = true;
-            }
-
-            if (isDecisionContent)
-            {
-                AppendDecisionLine(retained, line, MaxDecisionChars);
-            }
-
-            if (isEndMarker)
-            {
-                inWorkerResult = false;
-            }
-        }
-
-        return retained.ToString().TrimEnd();
-    }
-
-    private static ProcessLogSnapshot ReadProcessLogSnapshot(TextReader reader, string path, long length)
-    {
-        const int MaxDecisionChars = VerificationTextBounds.MaxRetainedChars;
-        var decision = new StringBuilder(Math.Min(MaxDecisionChars, VerificationTextBounds.BoundThreshold));
-        var prefixRemaining = VerificationTextBounds.PreviewHeadChars;
-        var inWorkerResult = false;
-        var lineBuffer = new StringBuilder();
-        var retainedPrefix = new StringBuilder(VerificationTextBounds.BoundThreshold);
-        var tail = new char[VerificationTextBounds.PreviewTailChars];
-        var tailStart = 0;
-        var tailCount = 0;
-        var totalChars = 0L;
-        var buffer = new char[4096];
-        var previousWasCarriageReturn = false;
-
-        void ProcessDecisionLine()
-        {
-            var line = lineBuffer.ToString();
-            lineBuffer.Clear();
-            var containsFinalOutput = ContainsCodexFinalOutput(line);
-
-            // A line must be charged to the retention budget ONCE. The head preview and the decision content
-            // used to both append the same line when a WORKER_RESULT block began inside the first
-            // PreviewHeadChars, spending that prefix twice against one MaxDecisionChars budget.
-            //
-            // Measured on goal 0b81147a: the block opened at byte 3,153 of a 16,690-char reviewer log, so
-            // 8,192 of prefix plus a ~12,912-char block came to ~21,104 against the 20,000 cap. The overflow
-            // fell on the END of the block - where model_fit, skills and confidence live - and those are
-            // REQUIRED fields. Losing them made WorkerResultParser report the block absent, which set
-            // WorkerResultPresent=false, which made PrepareReviewFindingRecord early-return without ever
-            // setting MergedReviewFindings, which made the convergence brief report "merged finding state was
-            // EMPTY" while twelve valid findings sat in the log. The reviewer was blamed for submitting
-            // nothing.
-            var normalized = NormalizeWorkerResultMarker(line);
-            var isOpener = IsWorkerResultOpener(normalized);
-            var isEndMarker = !isOpener && IsWorkerResultEndMarker(normalized);
-            var isDecisionContent =
-                isOpener || isEndMarker || inWorkerResult || IsDecisionSignificantLine(line, containsFinalOutput);
-
-            if (prefixRemaining > 0)
-            {
-                var take = Math.Min(prefixRemaining, line.Length);
-                if (!isDecisionContent)
-                {
-                    AppendDecisionLine(decision, line[..take], MaxDecisionChars);
-                }
-
-                // Consume the head budget either way: it measures how far into the log we are, not how much
-                // of it we chose to retain.
-                prefixRemaining -= take;
-            }
-
-            if (isOpener)
-            {
-                inWorkerResult = true;
-            }
-
-            if (isDecisionContent)
-            {
-                AppendDecisionLine(decision, line, MaxDecisionChars);
-            }
-
-            if (isEndMarker)
-            {
-                inWorkerResult = false;
-            }
-        }
-
-        while (true)
-        {
-            var read = reader.Read(buffer, 0, buffer.Length);
-            if (read == 0)
-            {
-                break;
-            }
-
-            if (retainedPrefix.Length < VerificationTextBounds.BoundThreshold)
-            {
-                retainedPrefix.Append(buffer, 0, Math.Min(read, VerificationTextBounds.BoundThreshold - retainedPrefix.Length));
-            }
-
-            for (var index = 0; index < read; index++)
-            {
-                var ch = buffer[index];
-                if (tailCount < tail.Length)
-                {
-                    tail[(tailStart + tailCount) % tail.Length] = ch;
-                    tailCount++;
-                }
-                else
-                {
-                    tail[tailStart] = ch;
-                    tailStart = (tailStart + 1) % tail.Length;
-                }
-
-                if (ch == '\r')
-                {
-                    ProcessDecisionLine();
-                    previousWasCarriageReturn = true;
-                }
-                else if (ch == '\n')
-                {
-                    if (!previousWasCarriageReturn)
-                    {
-                        ProcessDecisionLine();
-                    }
-
-                    previousWasCarriageReturn = false;
-                }
-                else
-                {
-                    lineBuffer.Append(ch);
-                    previousWasCarriageReturn = false;
-                }
-            }
-
-            totalChars += read;
-        }
-
-        if (lineBuffer.Length > 0)
-        {
-            ProcessDecisionLine();
-        }
-
-        var bounded = BuildBoundedText(retainedPrefix, tail, tailStart, tailCount, totalChars, path);
-        var decisionText = decision.ToString().TrimEnd();
-        return new ProcessLogSnapshot(
-            length,
-            ContainsCodexFinalOutput(decisionText),
-            decisionText,
-            bounded);
-    }
-
-    private static string BuildBoundedText(
-        StringBuilder retainedPrefix,
-        char[] tail,
-        int tailStart,
-        int tailCount,
-        long totalChars,
-        string path)
-    {
-        if (totalChars <= VerificationTextBounds.BoundThreshold)
-        {
-            return retainedPrefix.ToString();
-        }
-
-        var head = retainedPrefix.ToString(0, VerificationTextBounds.PreviewHeadChars);
-        var boundedTail = BuildTailText(tail, tailStart, tailCount);
-        return VerificationTextBounds.BuildBoundedText(head, boundedTail, totalChars, path);
-    }
-
-    private sealed record ProcessLogCacheKey(string ProcessRecordKey, string Path);
-    private sealed record ProcessLogSnapshot(
-        long Length,
-        bool FinalOutputSeen,
-        string DecisionText,
-        string BoundedText,
-        bool ReadSucceeded = true);
-
-    private static void AppendDecisionLine(StringBuilder target, string line, int maxChars)
-    {
-        if (string.IsNullOrEmpty(line) || target.Length >= maxChars)
-        {
-            return;
-        }
-
-        if (target.Length > 0)
-        {
-            if (target.Length + Environment.NewLine.Length >= maxChars)
-            {
-                return;
-            }
-
-            target.AppendLine();
-        }
-
-        var remaining = maxChars - target.Length;
-        target.Append(line, 0, Math.Min(line.Length, remaining));
-    }
-
-    private static bool IsDecisionSignificantLine(string line) =>
-        IsDecisionSignificantLine(line, ContainsCodexFinalOutput(line));
-
-    private static bool IsDecisionSignificantLine(string line, bool containsCodexFinalOutput)
-    {
-        return DispatchFailureClassifier.HasVerificationEvidenceInOutput(line, string.Empty) ||
-            line.Contains("PLANNER_EVIDENCE_REQUEST:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("HUMAN_INPUT:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("HUMAN INPUT:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("NO_CHANGE:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("No-change rationale:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("No changes needed:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("CreateProcessAsUserW", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("1312", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("specified logon session does not exist", StringComparison.OrdinalIgnoreCase) ||
-            (line.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
-             line.Contains("Permission denied", StringComparison.OrdinalIgnoreCase)) ||
-            line.Contains("sandbox-prep", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("[dispatch-host] terminating worker tree:", StringComparison.Ordinal) ||
-            containsCodexFinalOutput ||
-            IsProviderDecisionLine(line) ||
-            line.Contains("Model fit:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("Changed files:", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("Files changed:", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsProviderDecisionLine(string line)
-    {
-        return line.Contains("usage limit", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("429", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("websocket", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("connection refused", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("ECONNREFUSED", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("Unable to connect", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("could not resolve host", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("temporary failure in name resolution", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("Forbidden", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("access token", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("invalid model", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("unknown model", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("model_not_found", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("not supported", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("unsupported", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("400", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsWorkerResultOpener(string normalizedLine) =>
-        string.Equals(normalizedLine.TrimEnd(':').Trim(), "WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsWorkerResultEndMarker(string normalizedLine) =>
-        string.Equals(normalizedLine.Trim(), "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
-
-    private static string NormalizeWorkerResultMarker(string text)
-    {
-        var trimmed = text.Trim();
-        var buffer = new char[trimmed.Length];
-        var length = 0;
-        foreach (var ch in trimmed)
-        {
-            if (ch is not ('#' or '*' or '`'))
-            {
-                buffer[length++] = ch;
-            }
-        }
-
-        return new string(buffer, 0, length).Trim();
-    }
-
-    internal static string ReadBoundedBestEffort(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return string.Empty;
-        }
-
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            return ReadBoundedText(reader, path);
-        }
-        catch (IOException)
-        {
-            return $"[log locked at refresh — see {path}]";
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return $"[log unreadable at refresh — see {path}]";
-        }
-    }
-
-    private static string ReadBoundedText(TextReader reader, string path)
-    {
-        var retainedPrefix = new StringBuilder(VerificationTextBounds.BoundThreshold);
-        var tail = new char[VerificationTextBounds.PreviewTailChars];
-        var tailStart = 0;
-        var tailCount = 0;
-        var totalChars = 0L;
-        var buffer = new char[4096];
-
-        while (true)
-        {
-            var read = reader.Read(buffer, 0, buffer.Length);
-            if (read == 0)
-            {
-                break;
-            }
-
-            if (retainedPrefix.Length < VerificationTextBounds.BoundThreshold)
-            {
-                retainedPrefix.Append(buffer, 0, Math.Min(read, VerificationTextBounds.BoundThreshold - retainedPrefix.Length));
-            }
-
-            for (var index = 0; index < read; index++)
-            {
-                if (tailCount < tail.Length)
-                {
-                    tail[(tailStart + tailCount) % tail.Length] = buffer[index];
-                    tailCount++;
-                }
-                else
-                {
-                    tail[tailStart] = buffer[index];
-                    tailStart = (tailStart + 1) % tail.Length;
-                }
-            }
-
-            totalChars += read;
-        }
-
-        if (totalChars <= VerificationTextBounds.BoundThreshold)
-        {
-            return retainedPrefix.ToString();
-        }
-
-        var head = retainedPrefix.ToString(0, VerificationTextBounds.PreviewHeadChars);
-        var tailText = BuildTailText(tail, tailStart, tailCount);
-        return VerificationTextBounds.BuildBoundedText(head, tailText, totalChars, path);
-    }
-
-    private static string BuildTailText(char[] tail, int tailStart, int tailCount)
-    {
-        if (tailCount == 0)
-        {
-            return string.Empty;
-        }
-
-        if (tailStart + tailCount <= tail.Length)
-        {
-            return new string(tail, tailStart, tailCount);
-        }
-
-        var suffixLength = tail.Length - tailStart;
-        var builder = new StringBuilder(tailCount);
-        builder.Append(tail, tailStart, suffixLength);
-        builder.Append(tail, 0, tailCount - suffixLength);
-        return builder.ToString();
-    }
-
-    private static long SafeFileLength(string path)
-    {
-        try
-        {
-            return File.Exists(path) ? new FileInfo(path).Length : 0L;
-        }
-        catch (IOException)
-        {
-            return 0L;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return 0L;
-        }
-    }
 
     private static bool HasTaskOutputCommittedForDispatch(Goal goal, TaskId taskId, TaskDispatchRecord? dispatch)
     {
@@ -3099,12 +2632,6 @@ public sealed class BackgroundDispatchRunner
         }
 
         return provider;
-    }
-
-    private static bool ContainsCodexFinalOutput(string value)
-    {
-        return value.Contains("tokens used", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("token usage", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string AppendDiagnostic(string standardError, string? diagnostic)

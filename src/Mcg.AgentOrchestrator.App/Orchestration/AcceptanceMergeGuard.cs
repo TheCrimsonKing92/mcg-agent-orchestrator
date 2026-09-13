@@ -8,7 +8,8 @@ internal enum AcceptanceMergeGuardMismatchKind
     TaskSet,
     TaskRequiredRole,
     TaskStatus,
-    WorktreeHead
+    WorktreeHead,
+    CriterionEvidence
 }
 
 internal sealed record AcceptanceMergeGuardTask(

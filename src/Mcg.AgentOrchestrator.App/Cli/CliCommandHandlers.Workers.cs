@@ -305,6 +305,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.Kernel,
                 context.Workspace.ExecutionDirectory,
                 context.CurrentGoal.Id,
+                cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(startReadySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, startReadySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);

@@ -34,7 +34,7 @@ internal sealed partial class ConductorDriver
             .TakeWhile(candidate => candidate.Id != task.Id)
             .LastOrDefault(candidate =>
                 candidate.RequiredRole == AgentRole.Developer &&
-                HasCommittedOutput(candidate));
+                HasEverCommittedOutput(candidate));
         var finding = string.Join(
             "; ",
             developerOwnedFindings.Select(item =>
@@ -94,42 +94,149 @@ internal sealed partial class ConductorDriver
 
     private static bool TryGetReusableGreenFindingEvidenceReceipt(
         TaskSpec requestingTask,
-        ReviewFinding finding,
         FindingEvidenceRequest request,
         string candidateSha,
+        out FindingEvidenceOutcome? reusableOutcome,
         out FindingEvidenceReceipt? reusableReceipt)
     {
+        reusableOutcome = null;
         reusableReceipt = null;
-        var outcome = finding.EvidenceOutcome;
-        var receiptId = outcome?.ReceiptId;
-        if (outcome is not { Honoured: true, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence } ||
-            string.IsNullOrWhiteSpace(receiptId) ||
-            candidateSha == "unavailable")
+        if (string.IsNullOrWhiteSpace(candidateSha) || candidateSha == "unavailable" || request.Selections is not { Count: > 0 })
         {
             return false;
         }
 
         var identity = BuildFindingEvidenceIdentity(request);
-        reusableReceipt = requestingTask.VerificationHistory
+        var validOutcomesByReceiptId = requestingTask.VerificationHistory
+            .SelectMany(verification => verification.MergedReviewFindings ?? [])
+            .Select(finding => finding.EvidenceOutcome)
+            .OfType<FindingEvidenceOutcome>()
+            .Where(outcome =>
+                outcome is { Honoured: true, ReceiptId.Length: > 0, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence })
+            .GroupBy(outcome => outcome.ReceiptId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
+        var currentCandidateReceipts = requestingTask.VerificationHistory
             .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .LastOrDefault(receipt =>
-                string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                receipt is { Accepted: true, Passed: true } &&
-                (receipt.Arms ?? []).Any(arm =>
-                    arm is
-                    {
-                        Arm: FindingEvidenceArm.Candidate,
-                        Disposition: FindingEvidenceArmDisposition.Green,
-                        Accepted: true,
-                        Passed: true
-                    } &&
-                    string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase)) &&
-                (receipt.RequestDispositions ?? []).Any(disposition =>
-                    string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
-                    string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal) &&
-                    disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal)));
-        return reusableReceipt is not null;
+            .Where(receipt => string.Equals(
+                receipt.CandidateSha,
+                candidateSha,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (currentCandidateReceipts.Length == 0)
+        {
+            return false;
+        }
+
+        // The newest receipt covering a selection is authoritative. Do not let an earlier green
+        // result hide a later candidate-red, incomplete, or rejected receipt at the same SHA.
+        var latestReceipts = request.Selections
+            .Select(selection => currentCandidateReceipts.LastOrDefault(receipt =>
+                (receipt.Request.Selections ?? []).Contains(selection)))
+            .ToArray();
+        if (latestReceipts.Any(item => item is null) ||
+            latestReceipts.Any(item => !IsReusableGreenReceipt(
+                item!,
+                candidateSha,
+                validOutcomesByReceiptId)))
+        {
+            return false;
+        }
+
+        var greenReceipts = latestReceipts
+            .Select(item => item!)
+            .DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToArray();
+        reusableReceipt = greenReceipts.LastOrDefault(receipt =>
+            HasReusableRequestIdentity(receipt, identity));
+        if (reusableReceipt is not null)
+        {
+            reusableOutcome = validOutcomesByReceiptId[reusableReceipt.ReceiptId];
+            return true;
+        }
+
+        var constituentReceipts = greenReceipts;
+        var receiptId = CreateConstituentReuseReceiptId(candidateSha, identity, constituentReceipts);
+        var armsByIdentity = constituentReceipts
+            .SelectMany(receipt => receipt.Arms ?? [])
+            .GroupBy(arm => new { arm.Arm, arm.Sha });
+        if (armsByIdentity.Any(group => group
+                .Select(arm => new { arm.Disposition, arm.Accepted, arm.Passed })
+                .Distinct()
+                .Skip(1)
+                .Any()))
+        {
+            return false;
+        }
+
+        reusableReceipt = new FindingEvidenceReceipt(
+            receiptId,
+            candidateSha,
+            request,
+            Accepted: true,
+            Passed: true,
+            Summary: "Reused green focused evidence from constituent receipts: " +
+                string.Join(", ", constituentReceipts.Select(receipt => receipt.ReceiptId)),
+            Arms: armsByIdentity
+                .Select(group => group.Last())
+                .ToArray(),
+            RequestDispositions: constituentReceipts.SelectMany(receipt => receipt.RequestDispositions ?? [])
+                .Distinct().ToArray());
+        reusableOutcome = new FindingEvidenceOutcome(
+            Honoured: true,
+            ReceiptId: receiptId,
+            ResultReason: FindingEvidenceOutcomeReason.ValidEvidence);
+        return true;
+    }
+
+    private static bool IsReusableGreenReceipt(
+        FindingEvidenceReceipt receipt,
+        string candidateSha,
+        IReadOnlyDictionary<string, FindingEvidenceOutcome> validOutcomesByReceiptId) =>
+        validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) &&
+        receipt is { Accepted: true, Passed: true } &&
+        (receipt.RequestDispositions ?? []).All(disposition =>
+            disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal)) &&
+        (receipt.Arms ?? []).Any(arm =>
+            arm is
+            {
+                Arm: FindingEvidenceArm.Candidate,
+                Disposition: FindingEvidenceArmDisposition.Green,
+                Accepted: true,
+                Passed: true
+            } &&
+            string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasReusableRequestIdentity(FindingEvidenceReceipt receipt, string identity) =>
+        (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
+        (receipt.RequestDispositions ?? []).Any(disposition =>
+            string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal) &&
+            disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal))) &&
+        (receipt.RequestDispositions ?? []).All(disposition =>
+            !string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal) ||
+            disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal));
+
+    private static bool HasEverCommittedOutput(TaskSpec task) =>
+        task.VerificationHistory.Any(verification => verification.HasCommittedChanges) ||
+        task.DispatchHistory.Any(dispatch =>
+            !string.IsNullOrWhiteSpace(dispatch.ResultCommit) &&
+            (string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
+             !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase)));
+
+    private static string CreateConstituentReuseReceiptId(
+        string candidateSha,
+        string requestIdentity,
+        IReadOnlyList<FindingEvidenceReceipt> constituents)
+    {
+        var payload = string.Join(
+            "\u001f",
+            candidateSha,
+            requestIdentity,
+            string.Join("\u001e", constituents
+                .Select(receipt => receipt.ReceiptId)
+                .OrderBy(receiptId => receiptId, StringComparer.Ordinal)));
+        return "finding-evidence-reuse-" + Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(payload)))
+            .ToLowerInvariant()[..24];
     }
 
     private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome)

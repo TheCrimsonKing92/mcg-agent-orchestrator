@@ -1,4 +1,4 @@
-﻿using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -10,7 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_excludes_terminal_goals_from_hydration")]
@@ -580,7 +580,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
 
             var storedKernel = await repository.LoadAsync();
             var storedGoal = storedKernel.GetGoal(goal.Id);
-            var stopPlan = GoalAbandonPlanner.Build(storedKernel, storedGoal, workspace, "operator stop");
+            var stopPlan = GoalAbandonPlanner.Build(storedKernel, storedGoal, workspace, "operator stop", new());
             Xunit.Assert.Equal(storedStatus, stopPlan.GoalStatus);
             Xunit.Assert.Contains(stopPlan.Steps, step =>
                 step.Kind == GoalAbandonStepKind.GoalStatus &&

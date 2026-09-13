@@ -17,7 +17,9 @@ public sealed record GoalBriefRevisionResult(
     GoalBriefVersion AuthoritativeVersion,
     IReadOnlyList<TaskId> NotYetStartedTaskIds,
     IReadOnlyList<TaskId> InFlightTaskIds,
-    IReadOnlyList<TaskId> CompletedTaskIds);
+    IReadOnlyList<TaskId> CompletedTaskIds,
+    int? RefinedCriteriaCount,
+    bool RefinedCriteriaReDerived);
 
 public sealed record GoalBriefAnswerSupersession(
     HumanInputRequestId RequestId,

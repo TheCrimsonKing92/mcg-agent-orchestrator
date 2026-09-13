@@ -205,6 +205,12 @@ public sealed partial class AgentOrchestratorKernel
             task.RequiredRole == AgentRole.Planner &&
             File.Exists(Path.Combine(contextDirectory!, "research-notes.md")) &&
             new FileInfo(Path.Combine(contextDirectory!, "research-notes.md")).Length > 0;
+        var hasAuthoritativePlannerCriteria =
+            task.RequiredRole == AgentRole.Planner &&
+            goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 };
+        var renderedObjective = hasAuthoritativePlannerCriteria
+            ? AcceptanceCriteriaParser.RemoveDeclaredSection(goal.Objective)
+            : goal.Objective;
         var headerLines = new List<string>
         {
             "# Agent Task Brief",
@@ -214,7 +220,7 @@ public sealed partial class AgentOrchestratorKernel
         headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
-            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}",
+            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(renderedObjective, complexity)}",
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
             "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach dashboard APIs or orchestrator state.",
@@ -282,12 +288,15 @@ public sealed partial class AgentOrchestratorKernel
             var specLines = new List<string>
             {
                 "## Refined Spec",
-                $"Behavioral contract: {refinedSpec.BehavioralContract}",
+                $"Behavioral contract: {(hasAuthoritativePlannerCriteria ? AcceptanceCriteriaParser.RemoveDeclaredSection(refinedSpec.BehavioralContract) : refinedSpec.BehavioralContract)}",
                 string.Empty,
-                "Acceptance criteria:"
+                hasAuthoritativePlannerCriteria
+                    ? "Acceptance criteria (authoritative list validated by PlannerOutputContract):"
+                    : "Acceptance criteria:"
             };
-            foreach (var criterion in refinedSpec.AcceptanceCriteria)
+            for (var criterionIndex = 0; criterionIndex < refinedSpec.AcceptanceCriteria.Count; criterionIndex++)
             {
+                var criterion = refinedSpec.AcceptanceCriteria[criterionIndex];
                 var normalizedCriterion = criterion.Trim();
                 var waiver = goal.EffectiveAcceptanceCriteriaCorrections
                     .Where(correction =>
@@ -297,11 +306,15 @@ public sealed partial class AgentOrchestratorKernel
                     .FirstOrDefault();
                 if (waiver is null)
                 {
-                    specLines.Add($"- {criterion}");
+                    specLines.Add(hasAuthoritativePlannerCriteria
+                        ? $"{criterionIndex + 1}. {criterion}"
+                        : $"- {criterion}");
                     continue;
                 }
 
-                specLines.Add($"- [WAIVED] {normalizedCriterion}");
+                specLines.Add(hasAuthoritativePlannerCriteria
+                    ? $"{criterionIndex + 1}. [WAIVED] {normalizedCriterion}"
+                    : $"- [WAIVED] {normalizedCriterion}");
                 specLines.Add($"  Reason: {PromptContextFormatter.TrimPromptBlock(waiver.WaiverReason!)}");
                 specLines.Add($"  Waived by {PromptContextFormatter.TrimPromptBlock(waiver.Actor)} at {waiver.RecordedAt:u}.");
             }
@@ -1512,8 +1525,9 @@ public sealed partial class AgentOrchestratorKernel
                    ProgressKind.ReviewerEvidenceRequestReceived or
                    ProgressKind.ReviewerEvidenceRunRecorded or
                    ProgressKind.FindingEvidenceRequestRecorded or
-                   ProgressKind.FindingEvidenceRunRecorded or
-                   ProgressKind.FindingEvidenceSuppressed) ||
+                    ProgressKind.FindingEvidenceRunRecorded or
+                    ProgressKind.TaskRetryFeedbackUpdated or
+                    ProgressKind.FindingEvidenceSuppressed) ||
                (evt.Kind is ProgressKind.TaskNote or ProgressKind.OperatorTaskNote &&
                    IsAccumulatedRetryFeedbackTaskNote(evt.Message));
     }

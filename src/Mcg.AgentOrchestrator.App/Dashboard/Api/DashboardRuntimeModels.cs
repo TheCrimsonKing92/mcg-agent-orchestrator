@@ -16,6 +16,7 @@ internal sealed record DashboardHostArgs(
 internal sealed record GoalOperationPath(string GoalIdPrefix, string Operation, string? TaskIdPrefix, string? TaskOperation);
 
 internal sealed record DispatchProcessStartFailure(TaskId TaskId, string Reason);
+internal sealed record DispatchProcessStartRefusal(TaskId TaskId, string Reason);
 
 internal sealed record ProcessBatchExecutionResult(
     ProcessBatchPlan Plan,
@@ -23,7 +24,8 @@ internal sealed record ProcessBatchExecutionResult(
     IReadOnlyList<WorkerSandboxPrepRecoverableAction>? RecoveryActions = null,
     int RequeueSkippedCount = 0,
     IReadOnlyList<DispatchProcessStartFailure>? StartFailures = null,
-    IReadOnlyList<DispatchRefreshOutcome>? RefreshOutcomes = null);
+    IReadOnlyList<DispatchRefreshOutcome>? RefreshOutcomes = null,
+    IReadOnlyList<DispatchProcessStartRefusal>? StartRefusals = null);
 
 internal sealed record SubscriptionStartResult(
     IReadOnlyList<WorkerProfileDispatchResult> Dispatches,

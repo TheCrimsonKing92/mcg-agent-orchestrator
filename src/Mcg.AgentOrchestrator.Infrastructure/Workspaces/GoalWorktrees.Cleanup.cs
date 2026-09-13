@@ -19,7 +19,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
@@ -35,7 +35,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminalNow(
         string executionDirectory,
@@ -51,7 +51,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: true,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveSupersededTerminal(
         string executionDirectory,
@@ -76,7 +76,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default,
+            hooks ?? new GoalWorktreeCleanupHooks(),
             expectedSupersededBranchTip: expectedBranchTip);
     }
 
@@ -96,7 +96,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
@@ -114,7 +114,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -132,7 +132,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     private static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -406,7 +406,7 @@ public static partial class GoalWorktrees
         AgentOrchestratorKernel? kernel = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         if (!IsGitWorkTree(executionDirectory))
         {
             return new GoalWorktreeSweepResult(0, []);
@@ -449,7 +449,7 @@ public static partial class GoalWorktrees
         AgentOrchestratorKernel? kernel = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         var root = Path.GetFullPath(executionDirectory);
         var removed = 0;
         var leftovers = new List<string>();
@@ -478,7 +478,8 @@ public static partial class GoalWorktrees
         GoalOwnedEphemeralSweepResult ownedEphemeralCleanup,
         GoalWorktreeCleanupHooks hooks)
     {
-        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId);
+        var storageRoot = hooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
+        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId, storageRoot);
         if (!Directory.Exists(root))
         {
             ClearCleanupNeeded(root, executionDirectory, hooks);
@@ -503,7 +504,7 @@ public static partial class GoalWorktrees
             ClearCleanupNeeded(root, executionDirectory, hooks);
         }
 
-        if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId))
+        if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storageRoot))
         {
             ClearCleanupNeeded(root, executionDirectory, hooks);
             return ownedEphemeralCleanup with { RemovedCount = ownedEphemeralCleanup.RemovedCount + 1 };
@@ -1075,11 +1076,12 @@ public static partial class GoalWorktrees
         }
     }
 
-    internal static List<WorktreeLockHolder> FindLockHolders(string path)
+    internal static List<WorktreeLockHolder> FindLockHolders(
+        string path,
+        Func<IEnumerable<string>, ProcessCommandLineSnapshot>? processCommandLineSnapshot = null)
     {
         var normalizedPath = NormalizePath(path);
-        var snapshot = ProcessCommandLineSnapshotForCleanupTests?.Invoke(LockHolderCandidates) ??
-            ProcessCommandLines.SnapshotByNames(LockHolderCandidates);
+        var snapshot = (processCommandLineSnapshot ?? ProcessCommandLines.SnapshotByNames)(LockHolderCandidates);
         var holders = new List<WorktreeLockHolder>();
         if (snapshot.Failure is { } failure)
         {

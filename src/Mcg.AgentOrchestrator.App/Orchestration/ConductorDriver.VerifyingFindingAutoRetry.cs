@@ -7,11 +7,13 @@ internal sealed partial class ConductorDriver
     private static bool TryBuildMissingFindingResultRetry(
         Goal goal,
         TaskSpec triggeringTask,
+        string blockersText,
         int round,
         out VerifyingFindingAutoRetryDecision decision)
     {
         decision = VerifyingFindingAutoRetryDecision.None;
-        if (triggeringTask.RequiredRole != AgentRole.Reviewer ||
+        if (UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(triggeringTask, blockersText) ||
+            triggeringTask.RequiredRole != AgentRole.Reviewer ||
             triggeringTask.LastVerification is not { MergedReviewFindings: null } latestVerification ||
             VerifyingFindingCurrency.HasCurrentOpenBlockingFinding(goal, AgentRole.Reviewer, latestVerification.CompletedAt) ||
             VerifyingFindingCurrency.HasCurrentOpenBlockingFinding(goal, AgentRole.Tester, latestVerification.CompletedAt))

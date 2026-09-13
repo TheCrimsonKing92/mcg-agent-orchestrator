@@ -1,0 +1,156 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
+
+[Collection("IsolatedProcessSpawning")]
+public sealed class RepositorySourceInventoryTests
+{
+    [Fact]
+    public void GitInventoryIncludesTrackedAndUntrackedSource()
+    {
+        var root = CreateTempDirectory();
+        Assert.True(GitCli.Run(root, "init").Succeeded);
+        Write(root, ".gitignore", ".orchestrator/" + Environment.NewLine);
+        Write(root, "AGENTS.md", "guidance");
+        Write(root, "CLAUDE.md", "guidance");
+        Write(root, ".agents/skills/example/SKILL.md", "skill");
+        Write(root, "src/Feature/FeatureService.cs", "internal sealed class FeatureService { }");
+        Write(root, "tests/Feature.Tests/FeatureServiceTests.cs", "internal sealed class FeatureServiceTests { }");
+        Assert.True(GitCli.Run(root, "add", ".gitignore", "AGENTS.md", "CLAUDE.md", ".agents", "src", "tests").Succeeded);
+        Write(root, "src/Feature/NewSeam.cs", "internal sealed class NewSeam { }");
+        Write(root, ".mcg-sandbox/grok-home/bundled/skills/pptx/templates/deck.json", "generated");
+        Write(root, ".orchestrator/state.db", "runtime");
+        File.AppendAllText(Path.Combine(root, ".git", "info", "exclude"), ".mcg-sandbox/" + Environment.NewLine);
+
+        var inventory = RepositorySourceInventory.Build(root);
+
+        Assert.Equal("git", inventory.Origin);
+        Assert.True(inventory.Complete);
+        Assert.Contains("AGENTS.md", inventory.Files);
+        Assert.Contains("CLAUDE.md", inventory.Files);
+        Assert.Contains(".agents/skills/example/SKILL.md", inventory.Files);
+        Assert.Contains("src/Feature/FeatureService.cs", inventory.Files);
+        Assert.Contains("src/Feature/NewSeam.cs", inventory.Files);
+        Assert.Contains("tests/Feature.Tests/FeatureServiceTests.cs", inventory.Files);
+        Assert.DoesNotContain(inventory.Files, RepositorySourceInventory.IsExcludedRelativePath);
+    }
+
+    [Fact]
+    public void FallbackPrunesGeneratedTreesAndKeepsGuidance()
+    {
+        var root = CreateTempDirectory();
+        Write(root, "AGENTS.md", "guidance");
+        Write(root, "CLAUDE.md", "guidance");
+        Write(root, ".agents/skills/example/SKILL.md", "skill");
+        Write(root, "src/Feature/FeatureService.cs", "source");
+        Write(root, "tests/Feature.Tests/FeatureServiceTests.cs", "test");
+        Write(root, ".MCG-SANDBOX/codex-home/plugins/cache/tool.cs", "generated");
+        Write(root, ".orchestrator/state.db", "runtime");
+
+        var inventory = RepositorySourceInventory.Build(root);
+
+        Assert.Equal("filesystem-fallback", inventory.Origin);
+        Assert.True(inventory.Complete);
+        Assert.Equal(5, inventory.Files.Count);
+        Assert.Contains("AGENTS.md", inventory.Files);
+        Assert.Contains("CLAUDE.md", inventory.Files);
+        Assert.Contains(".agents/skills/example/SKILL.md", inventory.Files);
+        Assert.DoesNotContain(inventory.Files, RepositorySourceInventory.IsExcludedRelativePath);
+    }
+
+    [Fact]
+    public void FallbackSkipsLinkOutsideRoot()
+    {
+        var root = CreateTempDirectory();
+        var outside = CreateTempDirectory();
+        Write(root, "src/App.cs", "source");
+        Write(outside, "External.cs", "external");
+        try
+        {
+            Directory.CreateSymbolicLink(Path.Combine(root, "linked-source"), outside);
+            File.CreateSymbolicLink(Path.Combine(root, "linked-file.cs"), Path.Combine(outside, "External.cs"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Assert.Skip($"Directory symbolic links are unavailable: {ex.Message}");
+        }
+
+        var inventory = RepositorySourceInventory.Build(root);
+
+        Assert.Equal("filesystem-fallback", inventory.Origin);
+        Assert.False(inventory.Complete);
+        Assert.Equal(2, inventory.SkippedLinkBoundaryCount);
+        Assert.Contains(inventory.IncompleteReasons, reason => reason.Contains("link boundary", StringComparison.Ordinal));
+        Assert.Contains("src/App.cs", inventory.Files);
+        Assert.DoesNotContain(inventory.Files, path => path.Contains("External.cs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GitInventorySkipsTrackedFileThroughOutsideJunction()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Directory junctions are a Windows-specific fixture.");
+        }
+
+        var root = CreateTempDirectory();
+        var outside = CreateTempDirectory();
+        var junctionPath = Path.Combine(root, "linked-source");
+        try
+        {
+            Assert.True(GitCli.Run(root, "init").Succeeded);
+            Write(outside, "External.cs", "internal sealed class External { }");
+            CreateDirectoryJunction(junctionPath, outside);
+            Assert.True(GitCli.Run(root, "add", "linked-source/External.cs").Succeeded);
+
+            var inventory = RepositorySourceInventory.Build(root);
+
+            Assert.Equal("git", inventory.Origin);
+            Assert.False(inventory.Complete);
+            Assert.Equal(1, inventory.SkippedLinkBoundaryCount);
+            Assert.Contains(inventory.IncompleteReasons, reason => reason.Contains("link boundary", StringComparison.Ordinal));
+            Assert.DoesNotContain("linked-source/External.cs", inventory.Files);
+        }
+        finally
+        {
+            if (Directory.Exists(junctionPath))
+            {
+                Directory.Delete(junctionPath);
+            }
+
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    private static void CreateDirectoryJunction(string junctionPath, string targetPath)
+    {
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "/d", "/c", "mklink", "/J", junctionPath, targetPath }
+        }) ?? throw new InvalidOperationException("Could not start the directory-junction fixture process.");
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Directory-junction fixture did not exit within 10 seconds.");
+        }
+
+        Task.WhenAll(outputTask, errorTask).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Directory-junction fixture failed with exit {process.ExitCode}. stdout: {outputTask.Result} stderr: {errorTask.Result}");
+        Assert.True((File.GetAttributes(junctionPath) & FileAttributes.ReparsePoint) != 0);
+    }
+
+    private static void Write(string root, string relativePath, string content)
+    {
+        var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+    }
+}

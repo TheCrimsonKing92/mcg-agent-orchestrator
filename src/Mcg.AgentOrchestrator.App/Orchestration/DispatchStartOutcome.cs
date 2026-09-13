@@ -1,15 +1,23 @@
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal enum DispatchStartOutcomeCategory { Started, EmptyBatch, Deferred, SpawnFailed, RecoverableSandboxPrep }
 
+internal sealed record DispatchedTaskIdentity(TaskId TaskId, AgentRole Role);
+
 internal sealed record DispatchStartOutcome(
     DispatchStartOutcomeCategory Category,
     string? Reason,
-    WorkerSandboxPrepRecoverableAction? SandboxPrepRecoveryAction = null)
+    WorkerSandboxPrepRecoverableAction? SandboxPrepRecoveryAction = null,
+    IReadOnlyList<DispatchedTaskIdentity>? DispatchedTasks = null)
 {
-    internal static DispatchStartOutcome Started() => new(DispatchStartOutcomeCategory.Started, null);
+    internal static DispatchStartOutcome Started(IReadOnlyList<TaskSpec>? tasks = null) =>
+        new(
+            DispatchStartOutcomeCategory.Started,
+            null,
+            DispatchedTasks: tasks?.Select(task => new DispatchedTaskIdentity(task.Id, task.RequiredRole)).ToArray() ?? []);
     internal static DispatchStartOutcome EmptyBatch(string reason) => new(DispatchStartOutcomeCategory.EmptyBatch, reason);
     internal static DispatchStartOutcome Deferred(string reason) => new(DispatchStartOutcomeCategory.Deferred, reason);
     internal static DispatchStartOutcome SpawnFailed(string reason) => new(DispatchStartOutcomeCategory.SpawnFailed, reason);

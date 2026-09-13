@@ -87,6 +87,54 @@ public static void PrintGoal(
         }
     }
 
+    if (!tasksOnly && goal.CriterionEvidenceObligations.Count > 0)
+    {
+        Console.WriteLine("Criterion evidence obligations:");
+        foreach (var obligation in goal.CriterionEvidenceObligations.OrderBy(item => item.CriterionVersion).ThenBy(item => item.CriterionIndex))
+        {
+            Console.WriteLine($"  - {obligation.Id}: owner={obligation.Owner.ToString().ToLowerInvariant()} state={obligation.State.ToString().ToLowerInvariant()} next_action={obligation.RequiredScope} provenance={obligation.Provenance}");
+            Console.WriteLine(
+                $"    mapped_candidate={obligation.ExpectedCandidateSha ?? "unbound"} " +
+                $"receipt={obligation.ReceiptId ?? "pending"} receipt_candidate={obligation.CandidateSha ?? "pending"} " +
+                $"finding={obligation.FindingStableId ?? "none"}");
+            if (!string.IsNullOrWhiteSpace(obligation.Detail))
+                Console.WriteLine($"    evidence_detail={OutputTextPreview.CreateSummary(obligation.Detail).Text}");
+        }
+    }
+
+    if (!tasksOnly)
+    {
+        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(goal.Objective);
+        if (declaredCriteria.Count > 0 || goal.RefinedSpec is not null)
+        {
+            Console.WriteLine($"Brief acceptance criteria ({declaredCriteria.Count}):");
+            for (var index = 0; index < declaredCriteria.Count; index++)
+            {
+                Console.WriteLine($"  {index + 1}. {declaredCriteria[index].Trim().ReplaceLineEndings(" ")}");
+            }
+
+            if (goal.RefinedSpec is not { } refinedSpec)
+            {
+                Console.WriteLine($"Refined acceptance criteria: pending refinement (brief declares {declaredCriteria.Count})");
+            }
+            else
+            {
+                Console.WriteLine($"Refined acceptance criteria ({refinedSpec.AcceptanceCriteria.Count}):");
+                for (var index = 0; index < refinedSpec.AcceptanceCriteria.Count; index++)
+                {
+                    Console.WriteLine($"  {index + 1}. {refinedSpec.AcceptanceCriteria[index].Trim().ReplaceLineEndings(" ")}");
+                }
+
+                if (declaredCriteria.Count > 0 && declaredCriteria.Count != refinedSpec.AcceptanceCriteria.Count)
+                {
+                    Console.WriteLine(
+                        $"WARNING: refined acceptance criteria count {refinedSpec.AcceptanceCriteria.Count} " +
+                        $"differs from brief declared count {declaredCriteria.Count}.");
+                }
+            }
+        }
+    }
+
     Console.WriteLine("Tasks:");
 
     for (var index = 0; index < goal.Tasks.Count; index++)

@@ -15,7 +15,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var root = CreateTempDirectory();
         using var holderAcquired = new ManualResetEventSlim();
         using var holderRelease = new ManualResetEventSlim();
-        var holder = Task.Run(() =>
+        var holder = Task.Factory.StartNew(() =>
         {
             using var mutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(root));
             mutex.WaitOne();
@@ -28,13 +28,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             {
                 mutex.ReleaseMutex();
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
-        Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
         string? receipt = null;
-        var started = Stopwatch.StartNew();
         try
         {
+            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+            var started = Stopwatch.StartNew();
             var exception = Assert.Throws<TimeoutException>(() =>
                 StorageRetentionMaintenance.AcquireAttemptWriterLease(
                     root,
@@ -289,6 +289,446 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             Directory.Delete(root, recursive: true);
         }
         Assert.Null(holderException);
+    }
+
+    [Fact]
+    public void PassedResult_WhenCompletionLogAppendFaults_RetainsPublishedExitReceipt()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Retain a passed exit receipt after result publication");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "branch-passed",
+                mainHeadSha: "main-passed");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null);
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+            using var ownedStdout = new FileStream(
+                attempt.StdoutPath,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.ReadWrite);
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            using var result = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
+            Assert.True(result.RootElement.GetProperty("acceptance").GetProperty("passed").GetBoolean());
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            var persisted = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(attempt.MetadataPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, persisted?.Outcome);
+            var stderr = File.ReadAllText(attempt.StderrPath);
+            Assert.Contains("terminal outcome ignored", stderr, StringComparison.Ordinal);
+            Assert.Contains("CorruptArtifacts:", stderr, StringComparison.Ordinal);
+            Assert.Equal(
+                GoalTerminalReconciliationEvidenceState.Present,
+                GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PassedResult_WhenParentAlreadyClaimedTerminal_WritesOwnedProcessExitWithoutChangingParentDecision()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep process exit distinct from a lost terminal claim");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "branch-lost-claim",
+                mainHeadSha: "main-lost-claim");
+            ConductorParallelAcceptanceAttemptCoordinator coordinator = null!;
+            coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null,
+                resultPublishedForTests: publishedAttempt =>
+                {
+                    Assert.False(File.Exists(publishedAttempt.ExitCodePath));
+                    Assert.True(coordinator.InvalidateCurrent(
+                        goal.Id.Value,
+                        "parent retained its terminal decision"));
+                });
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            using var result = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
+            Assert.True(result.RootElement.GetProperty("acceptance").GetProperty("passed").GetBoolean());
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            var persisted = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(attempt.MetadataPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, persisted?.Outcome);
+            Assert.NotNull(persisted?.ReconciledAt);
+            Assert.Equal("parent retained its terminal decision", persisted?.Detail);
+            Assert.Equal(
+                GoalTerminalReconciliationEvidenceState.Present,
+                GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PassedResult_WhenTerminalMetadataIdentityIsInvalid_WritesOwnedExitButDoesNotManufacturePass()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Keep invalid terminal metadata distinct from process exit");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "branch-invalid-claim",
+                mainHeadSha: "main-invalid-claim");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null,
+                resultPublishedForTests: publishedAttempt =>
+                {
+                    Assert.False(File.Exists(publishedAttempt.ExitCodePath));
+                    var current = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                        File.ReadAllText(publishedAttempt.MetadataPath),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    Assert.NotNull(current);
+                    File.WriteAllText(
+                        publishedAttempt.MetadataPath,
+                        JsonSerializer.Serialize(current with { AttemptId = "replacement-attempt" }));
+                });
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            using var result = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
+            Assert.True(result.RootElement.GetProperty("acceptance").GetProperty("passed").GetBoolean());
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            var evidence = GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath);
+            Assert.Equal(GoalTerminalReconciliationEvidenceState.Invalid, evidence.State);
+            Assert.Contains("identity does not match", evidence.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AppendAllText_AgainstOwnedSharedWriteHandle_ThrowsSharingViolation()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "owned.stdout.log");
+            using var ownedWriter = new FileStream(
+                path,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.ReadWrite);
+
+            Assert.Throws<IOException>(() => File.AppendAllText(path, "second writer"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OrdinarySuccess_UsesOwnedLogWritersAndPublishesConsistentEvidence()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Publish consistent ordinary acceptance success");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-success", "main-success");
+            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var attempt = creator.CreateAttemptForTests(candidate);
+            using var logs = new AttemptLogWriterFixture(attempt);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null,
+                attemptLogWriters: logs.Writers);
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            Assert.Contains(
+                $"{attempt.Kind} attempt {attempt.AttemptId} completed outcome=Passed",
+                ReadAllTextShared(attempt.StdoutPath),
+                StringComparison.Ordinal);
+            Assert.Equal(string.Empty, ReadAllTextShared(attempt.StderrPath));
+            Assert.Equal(
+                GoalTerminalReconciliationEvidenceState.Present,
+                GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FailureBeforeResult_PublishesFailureReceiptAndDiagnostic()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Publish distinct pre-result acceptance failure");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-failure", "main-failure");
+            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var attempt = creator.CreateAttemptForTests(candidate);
+            using var logs = new AttemptLogWriterFixture(attempt);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null,
+                attemptLogWriters: logs.Writers);
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (_, _) => throw new IOException("failure before result publication"));
+
+            Assert.False(File.Exists(attempt.ResultPath));
+            Assert.Equal("1", File.ReadAllText(attempt.ExitCodePath));
+            var persisted = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(attempt.MetadataPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts, persisted?.Outcome);
+            Assert.Contains("failure before result publication", ReadAllTextShared(attempt.StderrPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FailureAfterResult_RetainsPublishedVerdictAndRecordsCleanupEvidence()
+    {
+        var root = CreateTempDirectory();
+        using var cleanupReached = new ManualResetEventSlim();
+        using var allowCleanupFailure = new ManualResetEventSlim();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Retain acceptance result across cleanup failure");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-cleanup", "main-cleanup");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                cleanupObservedForTests: (_, phase) =>
+                {
+                    if (!string.Equals(phase, "artifact-custody-released", StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    cleanupReached.Set();
+                    Assert.True(allowCleanupFailure.Wait(TimeSpan.FromSeconds(10)));
+                    throw new IOException("cleanup failed after result publication");
+                },
+                acquireStableSlotLease: (_, _) => CreateFakeStableSlotLease(root));
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+            var runTask = Task.Factory.StartNew(
+                () => coordinator.RunAttemptForTests(
+                    attempt,
+                    candidate,
+                    ConductorAutonomyPolicy.Permissive,
+                    (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                        attemptCandidate,
+                        AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+
+            Assert.True(cleanupReached.Wait(TimeSpan.FromSeconds(10)));
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            Assert.Equal(
+                GoalTerminalReconciliationEvidenceState.Present,
+                GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+            allowCleanupFailure.Set();
+
+            var exception = await Assert.ThrowsAsync<IOException>(async () => await runTask);
+            coordinator.CompleteOwnedProcessFailureForTests(attempt, exception);
+
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            Assert.Contains("cleanup failed after result publication", File.ReadAllText(attempt.StderrPath), StringComparison.Ordinal);
+            Assert.Equal(
+                GoalTerminalReconciliationEvidenceState.Present,
+                GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+        }
+        finally
+        {
+            allowCleanupFailure.Set();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void LaunchFailureAfterPublishedResult_DoesNotReplaceTerminalReceipts()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Retain acceptance result across late launch failure");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-launch", "main-launch");
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null);
+            var attempt = coordinator.CreateAttemptForTests(candidate);
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            var completed = coordinator.CompleteLaunchFailureForTests(
+                attempt,
+                new IOException("parent publication read failed after result"));
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, completed.Outcome);
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            Assert.True(JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
+                File.ReadAllText(attempt.ResultPath),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })?.Acceptance?.Passed);
+            Assert.Contains("parent publication read failed after result", File.ReadAllText(attempt.StderrPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResultReaderOverlap_ObservesImmutablePublishedResultWithoutChangingVerdict()
+    {
+        var root = CreateTempDirectory();
+        using var readerReady = new ManualResetEventSlim();
+        using var releaseReader = new ManualResetEventSlim();
+        Thread? readerThread = null;
+        Exception? readerException = null;
+        var readerJoined = false;
+        var readerOnPoolThread = true;
+        bool? observedPassed = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Read acceptance result while publication completes");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-reader", "main-reader");
+            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var attempt = creator.CreateAttemptForTests(candidate);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                acquireStableSlotLease: (_, _) => null,
+                resultPublishedForTests: publishedAttempt =>
+                {
+                    readerThread = new Thread(() =>
+                    {
+                        try
+                        {
+                            readerOnPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+                            using var reader = new FileStream(
+                                publishedAttempt.ResultPath,
+                                FileMode.Open,
+                                FileAccess.Read,
+                                FileShare.Read);
+                            using var published = JsonDocument.Parse(reader);
+                            observedPassed = published.RootElement
+                                .GetProperty("acceptance")
+                                .GetProperty("passed")
+                                .GetBoolean();
+                            readerReady.Set();
+                            Assert.True(releaseReader.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                        catch (Exception ex)
+                        {
+                            readerException = ex;
+                        }
+                        finally
+                        {
+                            readerReady.Set();
+                        }
+                    });
+                    readerThread.IsBackground = true;
+                    readerThread.Start();
+                    Assert.True(readerReady.Wait(TimeSpan.FromSeconds(10)));
+                    Assert.Null(readerException);
+                });
+
+            coordinator.RunAttemptForTests(
+                attempt,
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    attemptCandidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
+
+            Assert.Null(readerException);
+            Assert.Equal("0", File.ReadAllText(attempt.ExitCodePath));
+            Assert.True(observedPassed);
+            Assert.Equal(
+                GoalTerminalReconciliationEvidenceState.Present,
+                GoalTerminalReconciliationEvidenceResolver.Resolve(attempt.MetadataPath).State);
+        }
+        finally
+        {
+            releaseReader.Set();
+            readerJoined = readerThread?.Join(TimeSpan.FromSeconds(10)) ?? true;
+            if (readerJoined)
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+        Assert.True(readerJoined, "Result reader did not stop after its release signal.");
+        Assert.Null(readerException);
+        Assert.False(readerOnPoolThread);
     }
 
     [Fact]
@@ -669,7 +1109,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var sequenceBefore = File.ReadAllText(sequencePath);
             using var holderAcquired = new ManualResetEventSlim();
             using var holderRelease = new ManualResetEventSlim();
-            var holder = Task.Run(() =>
+            var holder = Task.Factory.StartNew(() =>
             {
                 using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
                 holderAcquired.Set();
@@ -677,7 +1117,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 {
                     throw new TimeoutException("Acceptance writer lease release signal was not observed.");
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(30)), "Acceptance writer lease was not acquired.");
 
             using var replacementAtLeaseBoundary = new ManualResetEventSlim();
@@ -688,11 +1128,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 acquireStableSlotLease: (_, _) => null,
                 attemptWriterLeaseAcquiringForTests: replacementAtLeaseBoundary.Set);
             var replacementCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-2", "main-1");
-            var replacementTask = Task.Run(() => replacementCoordinator.EvaluateFocusedEvidence(
+            var replacementTask = Task.Factory.StartNew(() => replacementCoordinator.EvaluateFocusedEvidence(
                 replacementCandidate,
                 ConductorAutonomyPolicy.Permissive,
                 "run focused tests",
-                PassingEvidence));
+                PassingEvidence), CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
             string sequenceWhileLeaseHeld;
             AcceptanceArtifactWriterLeaseBusyException leaseBusy;
@@ -985,6 +1425,30 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .ToList();
 
+    private static DotnetBuildEnvironmentLease CreateFakeStableSlotLease(string root)
+    {
+        var leaseRoot = Path.Combine(root, ".fake-build-slot", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(leaseRoot);
+        var lockPath = Path.Combine(leaseRoot, "build.lock");
+        var stream = new FileStream(lockPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        var environment = new DotnetBuildEnvironment(
+            "fake-acceptance-lifecycle-slot",
+            leaseRoot,
+            Path.Combine(leaseRoot, "artifacts"),
+            lockPath,
+            [],
+            "build-0",
+            BuildPermitIndex: 0);
+        return new DotnetBuildEnvironmentLease(environment, stream);
+    }
+
+    private static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     private static string TrxCounters(int passed, int failed, int notExecuted) =>
         $"<TestRun><ResultSummary><Counters total=\"{passed + failed + notExecuted}\" " +
         $"executed=\"{passed + failed}\" passed=\"{passed}\" failed=\"{failed}\" " +
@@ -995,6 +1459,37 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var path = Path.Combine(Path.GetTempPath(), "mcg-evidence-lifecycle-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private sealed class AttemptLogWriterFixture : IDisposable
+    {
+        private readonly StreamWriter _stdout;
+        private readonly StreamWriter _stderr;
+
+        internal AttemptLogWriterFixture(ConductorParallelAcceptanceAttempt attempt)
+        {
+            _stdout = Open(attempt.StdoutPath);
+            _stderr = Open(attempt.StderrPath);
+            Writers = new Dictionary<string, TextWriter>(StringComparer.OrdinalIgnoreCase)
+            {
+                [Path.GetFullPath(attempt.StdoutPath)] = _stdout,
+                [Path.GetFullPath(attempt.StderrPath)] = _stderr
+            };
+        }
+
+        internal IReadOnlyDictionary<string, TextWriter> Writers { get; }
+
+        public void Dispose()
+        {
+            _stderr.Dispose();
+            _stdout.Dispose();
+        }
+
+        private static StreamWriter Open(string path) =>
+            new(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            {
+                AutoFlush = true
+            };
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider

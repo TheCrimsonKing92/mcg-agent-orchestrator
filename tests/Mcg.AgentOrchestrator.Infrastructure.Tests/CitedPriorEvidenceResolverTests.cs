@@ -295,7 +295,7 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(root);
+            _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
         }
     }
 

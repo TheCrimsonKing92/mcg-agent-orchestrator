@@ -24,7 +24,12 @@ public static class AgentOutputDirectives
     public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role)
     {
         var lines = new List<string>();
-        if (role == AgentRole.Planner)
+        if (role == AgentRole.Developer)
+        {
+            lines.Add(
+                "Developer: set `assigned_scope_complete` to `true` only when your assigned implementation is complete; `false` requests bounded revision and excludes later Acceptance/operator evidence.");
+        }
+        else if (role == AgentRole.Planner)
         {
             lines.Add(
                 "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; stdout is authoritative, and a summary or private model-home file path alone is invalid. " +
@@ -85,6 +90,10 @@ public static class AgentOutputDirectives
         if (role == AgentRole.Researcher)
         {
             lines.Add("citations: <repository files, docs, or evidence sources used>");
+        }
+        else if (role == AgentRole.Developer)
+        {
+            lines.Add("assigned_scope_complete: <true|false>");
         }
         else if (role is AgentRole.Reviewer or AgentRole.Tester)
         {

@@ -1,0 +1,33 @@
+{
+  "sourceRepositoryPath": ".",
+  "baseCommit": "HEAD",
+  "workload": {
+    "briefIdentity": "evidence-retention-control-v1",
+    "briefContent": "fixed non-model evidence retention control",
+    "briefDigest": "50391a0163fef6ba2fe68633d754d3d3f37a584de3134273246f95dffe8e5740",
+    "modelIdentity": "non-model/fixed-output",
+    "sourceProvenance": "operator-control:config/trials/evidence-retention-control.json"
+  },
+  "harnesses": [
+    {
+      "name": "control-a",
+      "fileName": "powershell.exe",
+      "arguments": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::Out.WriteLine('control-a stdout'); [Console]::Error.WriteLine('control-a stderr'); [Console]::Out.WriteLine('WORKER_RESULT:'); [Console]::Out.WriteLine('files: none'); [Console]::Out.WriteLine('commands: fixed-control-a'); [Console]::Out.WriteLine('tests: pass - non-model child emitted fixed output'); [Console]::Out.WriteLine('commit: none'); [Console]::Out.WriteLine('blockers: none'); [Console]::Out.WriteLine('model_fit: non-model/fixed-output - adequate - evidence control - no model invoked'); [Console]::Out.WriteLine('skills: none'); [Console]::Out.WriteLine('confidence: high'); [Console]::Out.WriteLine('END_WORKER_RESULT'); exit 0"
+      ]
+    },
+    {
+      "name": "control-b",
+      "fileName": "powershell.exe",
+      "arguments": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::Out.WriteLine('control-b stdout'); [Console]::Error.WriteLine('control-b stderr'); [Console]::Out.WriteLine('WORKER_RESULT:'); [Console]::Out.WriteLine('files: none'); [Console]::Out.WriteLine('commands: fixed-control-b'); [Console]::Out.WriteLine('tests: pass - non-model child emitted fixed output'); [Console]::Out.WriteLine('commit: none'); [Console]::Out.WriteLine('blockers: none'); [Console]::Out.WriteLine('model_fit: non-model/fixed-output - adequate - evidence control - no model invoked'); [Console]::Out.WriteLine('skills: none'); [Console]::Out.WriteLine('confidence: high'); [Console]::Out.WriteLine('END_WORKER_RESULT'); exit 0"
+      ]
+    }
+  ]
+}
