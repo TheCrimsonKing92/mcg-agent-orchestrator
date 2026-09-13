@@ -1042,17 +1042,19 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             Assert.Contains(firstDurableBaseline.Timeline, item =>
                 item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
             var persistedSibling = Assert.Single(firstDurableBaseline.Tasks, task => task.Id == completedSibling.Id.Value);
-            Assert.Equal(WorkTaskStatus.Assigned, persistedSibling.Status);
+            Assert.Equal(WorkTaskStatus.Completed, persistedSibling.Status);
             Assert.Equal(0, persistedSibling.LastProcess?.ExitCode);
             Assert.NotNull(persistedSibling.LastProcess?.CompletedAt);
             Assert.NotNull(persistedSibling.LastVerification);
             Assert.Contains(firstDurableBaseline.Timeline, item =>
                 item.Kind == ProgressKind.TaskNote &&
-                item.Message.StartsWith("Auto-cleared stale LastProcess.IsRunning", StringComparison.Ordinal));
+                item.Message.StartsWith(
+                    "Reconciled completed dispatch before preparing another dispatch",
+                    StringComparison.Ordinal));
             Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
                 item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
             var sibling = kernel.GetTask(goal.Id, completedSibling.Id);
-            Assert.Equal(WorkTaskStatus.Assigned, sibling.Status);
+            Assert.Equal(WorkTaskStatus.Completed, sibling.Status);
             Assert.Equal(0, sibling.LastProcess?.ExitCode);
             Assert.NotNull(sibling.LastProcess?.CompletedAt);
             Assert.NotNull(sibling.LastVerification);
@@ -1060,7 +1062,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             Assert.Contains(restoredGoal.Timeline, item =>
                 item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
             var restoredSibling = restoredGoal.Tasks.Single(task => task.Id == completedSibling.Id);
-            Assert.Equal(WorkTaskStatus.Assigned, restoredSibling.Status);
+            Assert.Equal(WorkTaskStatus.Completed, restoredSibling.Status);
             Assert.Equal(0, restoredSibling.LastProcess?.ExitCode);
             Assert.NotNull(restoredSibling.LastProcess?.CompletedAt);
             Assert.NotNull(restoredSibling.LastVerification);
