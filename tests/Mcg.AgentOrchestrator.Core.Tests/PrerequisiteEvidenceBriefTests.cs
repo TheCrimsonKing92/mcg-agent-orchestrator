@@ -105,10 +105,36 @@ public sealed class PrerequisiteEvidenceBriefTests
         var context = CreatePlannerAndDeveloper();
         var dismissed = RaiseEvidenceRequest(context, "dismissed-receipts");
         context.Kernel.DismissHumanInput(dismissed.Id);
+        var superseded = RaiseEvidenceRequest(context, "superseded-receipts", criterionIndex: 2);
+        context.Kernel.SubmitHumanInput(superseded.Id, AnswerWithReceipts);
+        var retained = RaiseEvidenceRequest(context, "retained-receipts", criterionIndex: 3);
+        context.Kernel.SubmitHumanInput(retained.Id, "Use the cheaper lane for every retry.");
 
-        var brief = context.Kernel.BuildTaskBrief(context.Goal.Id, context.Developer.Id).Content;
+        // Duplicate suppression means a live kernel never holds two open requests sharing a
+        // fingerprint, so the sibling-supersede transition cannot be driven in process. Round-trip
+        // the durable records with the supersede mark set, which is also how such a request reaches
+        // a later dispatch in production: decoded from persisted state.
+        var snapshot = context.Kernel.ExportSnapshot();
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            snapshot with
+            {
+                HumanInputRequests = snapshot.HumanInputRequests
+                    .Select(request => string.Equals(request.Id, superseded.Id.Value, StringComparison.Ordinal)
+                        ? request with { SupersededByRequestId = retained.Id.Value }
+                        : request)
+                    .ToList()
+            },
+            new FakeClock());
+
+        var brief = restored.BuildTaskBrief(context.Goal.Id, context.Developer.Id).Content;
 
         Assert.DoesNotContain(dismissed.Id.Value, brief, StringComparison.Ordinal);
+        Assert.DoesNotContain(superseded.Id.Value, brief, StringComparison.Ordinal);
+        Assert.DoesNotContain(ReceiptPath, brief, StringComparison.Ordinal);
+
+        // The supersede and dismiss clauses must exclude those two answers only; an unrelated
+        // answered request on the same goal still reaches the later role.
+        Assert.Contains(retained.Id.Value, brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "PrerequisiteEvidence_over_cap_answers_trim_oldest_first_with_a_visible_budget_note")]
@@ -219,8 +245,10 @@ public sealed class PrerequisiteEvidenceBriefTests
             propagatedBrief.Contains(sentinel, StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "PrerequisiteEvidence_absent_answers_leave_the_brief_byte_identical")]
-    public void AbsentAnswersLeaveTheBriefByteIdentical()
+    // Named for what it proves: with nothing answered there is no section and no trim list. It is not
+    // a byte-identity control against a pre-change baseline, which this suite cannot construct.
+    [Xunit.Fact(DisplayName = "PrerequisiteEvidence_no_answered_request_adds_no_section_and_no_trim_list")]
+    public void NoAnsweredRequestAddsNoSectionAndNoTrimList()
     {
         var context = CreatePlannerAndDeveloper();
         var before = context.Kernel.BuildTaskBrief(context.Goal.Id, context.Developer.Id);

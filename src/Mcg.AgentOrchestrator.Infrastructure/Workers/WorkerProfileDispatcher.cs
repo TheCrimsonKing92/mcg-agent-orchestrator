@@ -323,18 +323,7 @@ public static class WorkerProfileDispatcher
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false),
             allowPendingRecordedDispatchRefresh);
-        if (brief.TrimmedPrerequisiteEvidenceRequestIds is { Count: > 0 } trimmedEvidenceRequestIds)
-        {
-            // The brief already carries the budget note in-prompt; the timeline records the same
-            // trim so a dropped answer is never silently lost. BuildTaskBrief cannot record this
-            // itself because CLI and dashboard previews call it on every refresh.
-            kernel.RecordTaskNote(
-                goal.Id,
-                task.Id,
-                "kind=prerequisite-evidence-trimmed " +
-                $"request_ids={string.Join(",", trimmedEvidenceRequestIds)}");
-        }
-
+        PrerequisiteEvidenceTrimNote.RecordIfTrimmed(kernel, goal.Id, task.Id, brief);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 

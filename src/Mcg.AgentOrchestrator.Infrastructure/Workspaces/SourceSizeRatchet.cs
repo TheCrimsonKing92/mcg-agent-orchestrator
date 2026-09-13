@@ -116,7 +116,13 @@ internal static class SourceSizeRatchet
             // be transported from the dispatch record at the single process-start boundary that already
             // owns the dispatch parameters; selection, validation, and seeding remain in
             // ClaudeCredentialSource. 2682 is the measured size of that call site.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
+            // Raised by one line for goal bb2d2d5a: the completion state carries the typed
+            // HumanWaitKind the worker's human-input directive declared, so the kind the planner
+            // raised survives to the recording boundary that decides whether an answer is
+            // prerequisite evidence. There is nothing to extract - it is a single named argument on
+            // the existing DispatchProcessCompletionState construction, and moving the construction
+            // itself would split the completion contract the runner owns.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2683),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -132,7 +138,13 @@ internal static class SourceSizeRatchet
             // credential source carried out of preflight onto the dispatch record so the dispatch start
             // boundary transports it instead of resolving a second source. Selection, validation, and
             // seeding all remain in ClaudeCredentialSource.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3241),
+            // Raised by one line for goal bb2d2d5a: when the bounded prerequisite-evidence section
+            // trims an answered request, the same ids must reach the task timeline as well as the
+            // prompt. The note itself was extracted to PrerequisiteEvidenceTrimNote in Core, beside
+            // the digest that produces the ids, because the manual worker-dispatch CLI verb owes the
+            // identical note; the dispatcher keeps only the call at the boundary that already writes
+            // the dispatch record. 3242 is the measured size of that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3242),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

@@ -29,7 +29,19 @@ internal static partial class PrerequisiteEvidenceDigest
     internal const string Heading = "## Answered Prerequisite Evidence";
     internal const string BudgetNotePrefix = "Budget note: prerequisite evidence trimmed for request ids: ";
     internal const string OmittedTokenSuffixFormat = " (+{0} more not shown)";
+    internal const string TrimmedIdOverflowSuffixFormat = " (+{0} more trimmed ids on the task timeline)";
     internal const int SectionCharacterCap = 1_500;
+
+    /// <summary>
+    /// Upper bound on the trimmed ids the in-prompt budget note names. Stage 2 can only ever reduce
+    /// the section to a single retained entry, so an unbounded note is the one way this section can
+    /// exceed its own cap: at roughly a hundred answered requests in one goal the note alone passes
+    /// <see cref="SectionCharacterCap"/>, and the segment is Fixed, so it would never be collapsed.
+    /// Nothing is dropped silently by this bound - the complete trimmed list still leaves on
+    /// <see cref="PrerequisiteEvidenceSection.TrimmedRequestIds"/> and reaches the task timeline
+    /// through <see cref="PrerequisiteEvidenceTrimNote"/>, which the suffix points the reader at.
+    /// </summary>
+    internal const int MaxNamedTrimmedIds = 12;
     internal const int InlineVerbatimMaxChars = 600;
     internal const int SummaryMaxChars = 160;
     internal const int MaxEvidenceTokens = 4;
@@ -206,7 +218,16 @@ internal static partial class PrerequisiteEvidenceDigest
             floored.Contains(entry.RequestId) ? entry.FloorForm : entry.FullForm));
         if (trimmed.Count > 0)
         {
-            lines.Add(BudgetNotePrefix + string.Join(", ", trimmed) + ".");
+            var named = trimmed.Count <= MaxNamedTrimmedIds ? trimmed : trimmed.Take(MaxNamedTrimmedIds).ToList();
+            var overflow = trimmed.Count - named.Count;
+            lines.Add(
+                BudgetNotePrefix + string.Join(", ", named) + "." +
+                (overflow == 0
+                    ? string.Empty
+                    : string.Format(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        TrimmedIdOverflowSuffixFormat,
+                        overflow)));
         }
 
         lines.Add(string.Empty);
@@ -223,11 +244,19 @@ internal static partial class PrerequisiteEvidenceDigest
     // relative paths, and hash-like ids that carry both a digit and a hex letter (so ordinary words
     // never match). The path alternatives are named so the per-entry cap can prefer openable
     // references over bare ids.
+    //
+    // The relative-path alternative additionally requires a '.', '-' or '_' followed by a word
+    // character somewhere in the same run of path characters. A separator alone does not make a
+    // path: without that requirement "use and/or the cheaper lane" yields "and/or" and
+    // "Recorded 2026/09/13 during the round" yields "2026/09/13", and because the alternative is
+    // the named path group such a false positive is treated as openable and wins the per-entry cap
+    // over a real hash or run id. Rejecting it in the pattern rather than after matching also keeps
+    // the inner id reachable: "goal/bb2d2d5a" now yields "bb2d2d5a" instead of being consumed whole.
     [GeneratedRegex(
         @"(?<path>[A-Za-z]:[\\/][^\s,;""'()<>\[\]]+)" +
         @"|\b(?:run|lane|request|goal|task)[ _-]?ids?\s*[:=]\s*[^\s,;]+" +
         @"|\b[0-9]{8}T[0-9]{4,6}Z\b(?:-[\w.\-]+)?" +
-        @"|(?<path>(?<![\w:./\\])[\w.\-]+(?:[\\/][\w.\-]+)+)" +
+        @"|(?<path>(?<![\w:./\\])(?=[\w.\-/\\]*[.\-_]\w)[\w.\-]+(?:[\\/][\w.\-]+)+)" +
         @"|\b(?:sha\d*:)?(?=[0-9a-fA-F]*[0-9])(?=[0-9a-fA-F]*[a-fA-F])[0-9a-fA-F]{7,64}\b",
         RegexOptions.CultureInvariant)]
     private static partial Regex EvidenceTokenPattern();

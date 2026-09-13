@@ -13,6 +13,9 @@ public sealed class PrerequisiteEvidenceDigestTests
     [Xunit.InlineData(
         "Runs 20260906T1200Z and 20260906T1830Z covered the window.",
         "20260906T1200Z|20260906T1830Z")]
+    [Xunit.InlineData("Artifacts under artifacts/run-123/trx settle it.", "artifacts/run-123/trx")]
+    // A separator-bearing token that is not a path must not swallow the real id inside it.
+    [Xunit.InlineData("Branch goal/bb2d2d5a carried the answer.", "bb2d2d5a")]
     public void ExtractsPathsAndIds(string answer, string expected)
     {
         Assert.Equal(
@@ -24,8 +27,34 @@ public sealed class PrerequisiteEvidenceDigestTests
     [Xunit.InlineData("The operator confirmed the decision and defaced nothing.")]
     [Xunit.InlineData("Recorded at 20260906 during the second round.")]
     [Xunit.InlineData("Proceed with the cheaper lane.")]
+    // Separator-bearing prose: a '/' alone never makes a token an openable path. Treating one as a
+    // path both fabricates evidence and, because paths win the per-entry cap, displaces a real
+    // receipt or hash that the answer also named.
+    [Xunit.InlineData("Use and/or the cheaper lane.")]
+    [Xunit.InlineData("Recorded 2026/09/13 during the round.")]
+    [Xunit.InlineData("Recorded 2026/09/13.")]
+    [Xunit.InlineData("Input/output drains were both observed.")]
     public void DoesNotMistakeProseForEvidence(string answer) =>
         Assert.Empty(PrerequisiteEvidenceDigest.ExtractEvidenceTokens(answer));
+
+    [Xunit.Fact(DisplayName = "PrerequisiteEvidenceDigest_keeps_a_real_reference_when_the_answer_also_carries_separator_prose")]
+    public void KeepsARealReferenceWhenTheAnswerAlsoCarriesSeparatorProse()
+    {
+        // Regex.Matches is leftmost-first, so a prose token matched as a path would be preferred by
+        // the cap over the receipt the later role can actually open, and would also flip the answer
+        // out of verbatim inlining. Both consequences are pinned here.
+        const string answer =
+            "Use and/or the cheaper lane; the receipt is at .orchestrator/evidence/lane.json.";
+
+        var evidence = PrerequisiteEvidenceDigest.ExtractEvidence(answer);
+
+        Assert.Equal([".orchestrator/evidence/lane.json"], evidence.Shown);
+        Assert.Equal(0, evidence.OmittedCount);
+        Assert.False(PrerequisiteEvidenceDigest.ShouldInlineVerbatim(answer, evidence.Shown));
+        Assert.True(PrerequisiteEvidenceDigest.ShouldInlineVerbatim(
+            "Use and/or the cheaper lane.",
+            PrerequisiteEvidenceDigest.ExtractEvidenceTokens("Use and/or the cheaper lane.")));
+    }
 
     [Xunit.Fact(DisplayName = "PrerequisiteEvidenceDigest_inlines_only_short_answers_that_name_nothing_openable")]
     public void InlinesOnlyShortAnswersThatNameNothingOpenable()
@@ -110,6 +139,49 @@ public sealed class PrerequisiteEvidenceDigestTests
         foreach (var entryLine in entryLines)
         {
             Assert.Contains("| evidence: C:\\repo\\evidence\\batch-", entryLine, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "PrerequisiteEvidenceDigest_bounds_the_budget_note_so_the_section_cannot_exceed_its_own_cap")]
+    public void BoundsTheBudgetNoteSoTheSectionCannotExceedItsOwnCap()
+    {
+        // Trimming can only ever reduce the section to one retained entry, so an unbounded note is
+        // the one way this section can outgrow its cap - and because the brief segment is Fixed, an
+        // oversized section is never collapsed and enters every later-role prompt in full.
+        var entries = Enumerable.Range(0, 120)
+            .Select(index => new PrerequisiteEvidenceEntry(
+                $"request-{index:D3}",
+                $"Which receipts settle criterion {index}? The planner could not reach the main checkout store.",
+                $"Receipts at C:\\repo\\evidence\\batch-{index}-run.json " +
+                $"and C:\\repo\\evidence\\batch-{index}-lane.json recorded by the operator.",
+                index + 1))
+            .ToArray();
+
+        var section = PrerequisiteEvidenceDigest.RenderSection(entries, currentBriefVersion: 120);
+        var rendered = string.Join(Environment.NewLine, section.Lines);
+        var note = Assert.Single(
+            section.Lines,
+            line => line.StartsWith(PrerequisiteEvidenceDigest.BudgetNotePrefix, StringComparison.Ordinal));
+
+        Assert.True(
+            section.TrimmedRequestIds.Count > PrerequisiteEvidenceDigest.MaxNamedTrimmedIds,
+            $"the fixture must trim more ids than the note may name; it trimmed {section.TrimmedRequestIds.Count}");
+        Assert.True(
+            rendered.Length <= PrerequisiteEvidenceDigest.SectionCharacterCap,
+            $"section was {rendered.Length} chars, which is over the cap: {rendered}");
+
+        // Bounded, but nothing is lost: the oldest ids are named, the rest are counted, and the
+        // complete list still leaves on TrimmedRequestIds for the task timeline.
+        Assert.Contains("request-000", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("request-119", note, StringComparison.Ordinal);
+        Assert.Contains("request-119", rendered, StringComparison.Ordinal);
+        Assert.Contains(
+            $"(+{section.TrimmedRequestIds.Count - PrerequisiteEvidenceDigest.MaxNamedTrimmedIds} more trimmed ids on the task timeline)",
+            note,
+            StringComparison.Ordinal);
+        foreach (var trimmedId in section.TrimmedRequestIds.Take(PrerequisiteEvidenceDigest.MaxNamedTrimmedIds))
+        {
+            Assert.Contains(trimmedId, note, StringComparison.Ordinal);
         }
     }
 

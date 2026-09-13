@@ -4450,8 +4450,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains(new string('d', 400), brief.Content, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "ProfileDispatch_emits_answered_prerequisite_evidence_to_a_later_role_without_starting_a_worker")]
-    public void ProfileDispatchEmitsAnsweredPrerequisiteEvidenceToLaterRoleWithoutStartingAWorker()
+    // Both model aliases are exercised because they select different assembly paths:
+    // WorkerContextHelpers.UsesTypedContextPackage is true only for the Sol/Terra aliases, and that
+    // path re-renders the brief through WorkerContextPackageBuilder. The evidence section must
+    // survive the typed projection as well as the plain brief.
+    [Xunit.Theory(DisplayName = "ProfileDispatch_emits_answered_prerequisite_evidence_to_a_later_role_without_starting_a_worker")]
+    [Xunit.InlineData(AgentCatalog.OpenAiSubscriptionModelAlias)]
+    [Xunit.InlineData(AgentCatalog.OpenAiSolSubscriptionModelAlias)]
+    public void ProfileDispatchEmitsAnsweredPrerequisiteEvidenceToLaterRoleWithoutStartingAWorker(string modelAlias)
     {
         const string receiptPath = "C:\\repo\\.orchestrator\\operator-evidence\\run-goal-timeout-historical-receipts.json";
         var root = CreateTempDirectory();
@@ -4473,12 +4479,12 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 new AgentId("planner"),
                 "Planner",
                 AgentRole.Planner,
-                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey)),
+                new ModelProfile("OpenAI", modelAlias, ModelCapability.Text, SubscriptionMode.ApiKey)),
             new AgentDefinition(
                 new AgentId("developer"),
                 "Developer",
                 AgentRole.Developer,
-                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))
+                new ModelProfile("OpenAI", modelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))
         };
         kernel.ActivateGoal(goal.Id, agents);
         var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(1, "historical-trx-receipts");
@@ -4512,6 +4518,86 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Kind == ProgressKind.TaskNote &&
             evt.Message.StartsWith("kind=prerequisite-evidence-trimmed", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ProfileDispatch_records_a_task_note_naming_every_trimmed_prerequisite_evidence_request")]
+    public void ProfileDispatchRecordsTaskNoteNamingEveryTrimmedPrerequisiteEvidenceRequest()
+    {
+        // The in-prompt budget note is only half of the budget-overflow decision; the other half is
+        // that the same ids reach the timeline. This drives a genuinely over-cap dispatch, which the
+        // single-answer control above cannot.
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-09-13T03:00:00Z")));
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation.", AgentRole.Planner);
+        var developer = new TaskSpec(TaskId.New(), "Implement the scoped slice.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve answered prerequisite evidence under budget pressure.", [planner, developer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Answered prerequisite evidence reaches later same-goal roles.",
+            ["A later role's emitted prompt carries the answered request id and its evidence reference."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agents = new[]
+        {
+            new AgentDefinition(
+                new AgentId("planner"),
+                "Planner",
+                AgentRole.Planner,
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))
+        };
+        kernel.ActivateGoal(goal.Id, agents);
+        for (var index = 0; index < 8; index++)
+        {
+            var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(index + 1, $"receipt-batch-{index}");
+            var request = kernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                planner.Id,
+                $"Planner evidence request for criterion {index + 1}: historical receipts for batch {index}.",
+                kind: HumanWaitKind.PlannerPrerequisiteEvidence,
+                questionFingerprint: fingerprint,
+                blockerFingerprint: fingerprint).Request;
+            kernel.SubmitHumanInput(
+                request.Id,
+                $"Batch {index} runs 2026090{index}T1200Z through lane interval 1{index}:00-1{index}:45. " +
+                $"Receipts at C:\\repo\\.orchestrator\\operator-evidence\\batch-{index}-receipts.json " +
+                $"and C:\\repo\\.orchestrator\\operator-evidence\\batch-{index}-lane.json " +
+                $"with sha256:{index}f9a1c2b4d5e6f7089ab{index} recorded by the operator for later roles.");
+        }
+
+        var trimmedRequestIds = kernel.BuildTaskBrief(goal.Id, developer.Id).TrimmedPrerequisiteEvidenceRequestIds;
+        Assert.NotEmpty(trimmedRequestIds ?? []);
+
+        var dispatch = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            new WorkerProfile("echo", "echo {promptPath}"),
+            agents,
+            sandboxOptions: DisabledSandbox);
+
+        var note = Assert.Single(goal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.StartsWith($"kind={PrerequisiteEvidenceTrimNote.NoteKind}", StringComparison.Ordinal)));
+        foreach (var trimmedRequestId in trimmedRequestIds!)
+        {
+            Assert.Contains(trimmedRequestId, note.Message, StringComparison.Ordinal);
+        }
+
+        // Still a preflight-only path: the note is written at dispatch, not by starting a worker.
+        Assert.Contains(
+            "Budget note: prerequisite evidence trimmed for request ids:",
+            File.ReadAllText(dispatch.PromptPath),
+            StringComparison.Ordinal);
+        Assert.Null(developer.LastProcess);
+        Assert.Null(planner.LastProcess);
     }
 
 }
