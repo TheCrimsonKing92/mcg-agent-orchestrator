@@ -135,8 +135,7 @@ internal static class SubscriptionPlanBuilder
         Func<string, bool>? commandExists = null)
     {
         var validations = OrchestratorHealthInspector
-            .InspectCurrentEnvironment(new AgentCatalog(agents), profiles, commandExists)
-            .WorkerProfiles
+            .InspectWorkerProfiles(profiles, commandExists)
             .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 
         var scorecardLookup = BuildScorecardLookup(scorecard);

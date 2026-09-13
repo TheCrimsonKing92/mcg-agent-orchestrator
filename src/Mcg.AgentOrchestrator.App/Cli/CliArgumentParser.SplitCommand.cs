@@ -15,16 +15,14 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
-        var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
-        string[] commandArgs = [command, .. TokenizeQuotedArguments(commandRemainder)];
-        return [.. NormalizeTaskTargetArgs(commandArgs, trailingArgumentCount: 2, allowTextFile: true), .. metadataFlags];
+        string[] commandArgs = [command, .. TokenizeQuotedArguments(remainder)];
+        return NormalizeTaskTargetArgs(commandArgs, trailingArgumentCount: 2, allowTextFile: true);
     }
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
     {
-        var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
-        string[] commandArgs = [command, .. TokenizeQuotedArguments(commandRemainder)];
-        return [.. NormalizeRetryTaskTargetArgs(commandArgs), .. metadataFlags];
+        string[] commandArgs = [command, .. TokenizeQuotedArguments(remainder)];
+        return NormalizeRetryTaskTargetArgs(commandArgs);
     }
 
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase))
@@ -135,9 +133,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
-        var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
-        string[] commandArgs = [command, .. TokenizeQuotedArguments(commandRemainder)];
-        return [.. NormalizeTaskTargetArgs(commandArgs, trailingArgumentCount: 2, allowTextFile: true), .. metadataFlags];
+        string[] commandArgs = [command, .. TokenizeQuotedArguments(remainder)];
+        return NormalizeTaskTargetArgs(commandArgs, trailingArgumentCount: 2, allowTextFile: true);
     }
 
     if (command.Equals("dispatch", StringComparison.OrdinalIgnoreCase) ||
@@ -425,34 +422,6 @@ private static IReadOnlyList<string> SplitRetryCommand(string command, string re
         : string.Join(' ', [beforeFlag, afterFlag]).Trim();
     normalized.Add("--mechanical");
     return normalized.Where(part => !string.IsNullOrWhiteSpace(part)).ToArray();
-}
-
-private static (string CommandRemainder, IReadOnlyList<string> MetadataFlags) ExtractOperatorIntentMetadataFlags(
-    string remainder)
-{
-    const string idempotencyFlag = "--idempotency-key";
-    var flagIndex = remainder.LastIndexOf($" {idempotencyFlag} ", StringComparison.OrdinalIgnoreCase);
-    if (flagIndex < 0 && remainder.StartsWith($"{idempotencyFlag} ", StringComparison.OrdinalIgnoreCase))
-    {
-        flagIndex = 0;
-    }
-
-    if (flagIndex < 0)
-    {
-        return (remainder, []);
-    }
-
-    var commandRemainder = remainder[..flagIndex].Trim();
-    var metadata = TokenizeQuotedArguments(remainder[flagIndex..].Trim());
-    if (metadata.Count != 4 ||
-        !metadata[0].Equals(idempotencyFlag, StringComparison.OrdinalIgnoreCase) ||
-        !metadata[2].Equals("--operator-actor", StringComparison.OrdinalIgnoreCase))
-    {
-        throw new ArgumentException(
-            "Operator intent metadata must be '--idempotency-key <key> --operator-actor <actor>'.");
-    }
-
-    return (commandRemainder, metadata);
 }
 
 private static IReadOnlyList<string> TokenizeQuotedArguments(string value)

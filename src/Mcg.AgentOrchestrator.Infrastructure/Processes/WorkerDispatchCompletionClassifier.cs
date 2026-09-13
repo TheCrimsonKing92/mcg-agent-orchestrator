@@ -420,7 +420,13 @@ internal sealed class WorkerDispatchCompletionClassifier
             ChildExitCode: childExitRecord.ExitCode,
             ObservedRootExitCode: observedRootExitCode,
             FullStandardOutput: standardOutput,
-            FullStandardError: diagnosticStandardError);
+            FullStandardError: diagnosticStandardError,
+            AssignedScopeComplete: WorkerResultBlockers.TryGetAssignedScopeComplete(
+                standardOutput,
+                out var assignedScopeComplete,
+                out _)
+                ? assignedScopeComplete
+                : null);
         var origin = DispatchFailureClassifier.Classify(
             task,
             verification,

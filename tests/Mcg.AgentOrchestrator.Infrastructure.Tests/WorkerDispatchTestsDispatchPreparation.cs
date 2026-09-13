@@ -729,7 +729,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 sandboxOptions: DisabledSandbox));
 
         Assert.Contains("Durable retry-admission reservation", ex.Message, StringComparison.Ordinal);
-        Assert.Equal(0, checkpointCalls);
+        // Paid retries flush current-tick state before the durable reservation read. The
+        // reservation still fails closed and never starts a worker when no durable goal exists.
+        Assert.Equal(1, checkpointCalls);
         Assert.Null(planner.LastProcess);
     }
 
@@ -829,7 +831,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             sandboxOptions: DisabledSandbox);
 
         Assert.Empty(result.Processes.Tasks);
-        Assert.Equal(0, checkpointCalls);
+        // The pre-admission checkpoint preserves current-tick state even when the reservation
+        // later prevents an unchanged retry. Prevention still starts no worker.
+        Assert.Equal(1, checkpointCalls);
         var persistedGoal = kernel.GetGoal(goal.Id);
         var persistedPlanner = persistedGoal.Tasks.Single(candidate => candidate.Id == planner.Id);
         Assert.Null(persistedPlanner.LastProcess);
@@ -864,7 +868,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             [],
             []));
         var agent = SubscriptionPlannerAgent("planner", "Planner");
-        var agents = new[] { agent };
+        var testerAgent = new AgentDefinition(
+            new AgentId("tester"),
+            "Tester",
+            AgentRole.Tester,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
+        var agents = new[] { agent, testerAgent };
         var profiles = DispatchTestProfiles();
         kernel.ActivateGoal(goal.Id, agents);
         kernel.RetryTask(
@@ -897,12 +908,74 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             planner.Id,
             "Changed actionable retry context.",
             retryCause: RetryCause.ContractClarification);
-        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
-            .SaveAsync(kernel)
-            .GetAwaiter()
-            .GetResult();
+        var completedSibling = kernel.AddTask(
+            goal.Id,
+            AgentRole.Tester,
+            "Preserve reconciled tester evidence during retry admission.",
+            agents);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            completedSibling.Id,
+            new TaskDispatchRecord("tester", "tester", workingDirectory, firstAt));
+        var siblingProcess = new TaskProcessRecord(
+            4201,
+            "tester",
+            workingDirectory,
+            Path.Combine(root, "sibling.out.log"),
+            Path.Combine(root, "sibling.err.log"),
+            Path.Combine(root, "sibling.exit"),
+            firstAt,
+            null,
+            null);
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            completedSibling.Id,
+            siblingProcess);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            completedSibling.Id,
+            new TaskVerificationRecord(
+                "tester",
+                workingDirectory,
+                0,
+                "sibling complete",
+                string.Empty,
+                firstAt.AddSeconds(1)));
+        var beforeReconcile = kernel.ExportGoalSnapshot(goal.Id);
+        var staleTester = beforeReconcile.Tasks.Single(task => task.Id == completedSibling.Id.Value) with
+        {
+            Status = WorkTaskStatus.Assigned,
+            LastProcess = new TaskProcessSnapshot(
+                siblingProcess.ProcessId,
+                siblingProcess.Command,
+                siblingProcess.WorkingDirectory,
+                siblingProcess.StandardOutputPath,
+                siblingProcess.StandardErrorPath,
+                siblingProcess.ExitCodePath,
+                siblingProcess.StartedAt,
+                siblingProcess.CompletedAt,
+                siblingProcess.ExitCode)
+        };
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = [beforeReconcile with
+            {
+                Tasks = beforeReconcile.Tasks
+                    .Select(task => task.Id == completedSibling.Id.Value ? staleTester : task)
+                    .ToArray()
+            }]
+        });
+        goal = kernel.GetGoal(goal.Id);
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        DispatchExitArtifacts.Write(
+            siblingProcess.ExitCodePath,
+            DispatchExitArtifacts.Native(0, "tester exited", firstAt.AddSeconds(1)));
+        const string unsavedNote = "unsaved-note-under-test";
+        kernel.RecordTaskNote(goal.Id, planner.Id, unsavedNote);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
+            item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
         var recordedDurableBaselines = new List<GoalSnapshot>();
         var checkpointCalls = 0;
         var processStartCalls = 0;
@@ -912,63 +985,514 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             startProcess: startInfo =>
             {
                 processStartCalls++;
+                return Process.Start(new ProcessStartInfo
+                {
+                    FileName = WorkerShell.Executable,
+                    WorkingDirectory = startInfo.WorkingDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 30"])));
+            });
+
+        try
+        {
+            var exception = Record.Exception(() =>
+                GoalManagementCommandService.StartSubscriptionReadyTasks(
+                    kernel,
+                    workspace,
+                    goal,
+                    agents,
+                    profiles,
+                    checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, checkpointPhase) =>
+                    {
+                        checkpointCalls++;
+                        checkpointPhases.Add(checkpointPhase);
+                        startedDispatchIdentities.Add(Assert.IsType<DateTimeOffset>(
+                            checkpointKernel.GetTask(checkpointGoalId, checkpointTaskId).LastDispatch?.DispatchedAt));
+                        CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                            repository,
+                            checkpointKernel,
+                            [checkpointGoalId],
+                            tickBaselines,
+                            workspace.SqliteStatePath,
+                            results =>
+                            {
+                                foreach (var result in results)
+                                {
+                                    _ = CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(checkpointKernel, result);
+                                    if (result.PersistedSnapshot is not null)
+                                        tickBaselines[result.GoalId] = result.PersistedSnapshot;
+                                }
+                            });
+                    },
+                    runner: runner,
+                    sandboxOptions: DisabledSandbox,
+                    recordDurableGoalBaseline: snapshot =>
+                    {
+                        recordedDurableBaselines.Add(snapshot);
+                        tickBaselines[snapshot.Id] = snapshot;
+                    }));
+
+            Assert.Null(exception);
+            Assert.Equal(1, processStartCalls);
+            Assert.True(checkpointCalls > 0);
+            Assert.NotEmpty(recordedDurableBaselines);
+            Assert.All(recordedDurableBaselines, snapshot => Assert.Equal(goal.Id.Value, snapshot.Id));
+            var firstDurableBaseline = recordedDurableBaselines[0];
+            Assert.Contains(firstDurableBaseline.Timeline, item =>
+                item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
+            var persistedSibling = Assert.Single(firstDurableBaseline.Tasks, task => task.Id == completedSibling.Id.Value);
+            Assert.Equal(WorkTaskStatus.Assigned, persistedSibling.Status);
+            Assert.Equal(0, persistedSibling.LastProcess?.ExitCode);
+            Assert.NotNull(persistedSibling.LastProcess?.CompletedAt);
+            Assert.NotNull(persistedSibling.LastVerification);
+            Assert.Contains(firstDurableBaseline.Timeline, item =>
+                item.Kind == ProgressKind.TaskNote &&
+                item.Message.StartsWith("Auto-cleared stale LastProcess.IsRunning", StringComparison.Ordinal));
+            Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
+                item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
+            var sibling = kernel.GetTask(goal.Id, completedSibling.Id);
+            Assert.Equal(WorkTaskStatus.Assigned, sibling.Status);
+            Assert.Equal(0, sibling.LastProcess?.ExitCode);
+            Assert.NotNull(sibling.LastProcess?.CompletedAt);
+            Assert.NotNull(sibling.LastVerification);
+            var restoredGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+            Assert.Contains(restoredGoal.Timeline, item =>
+                item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
+            var restoredSibling = restoredGoal.Tasks.Single(task => task.Id == completedSibling.Id);
+            Assert.Equal(WorkTaskStatus.Assigned, restoredSibling.Status);
+            Assert.Equal(0, restoredSibling.LastProcess?.ExitCode);
+            Assert.NotNull(restoredSibling.LastProcess?.CompletedAt);
+            Assert.NotNull(restoredSibling.LastVerification);
+            Assert.Equal(
+                1,
+                checkpointPhases.Count(phase => phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
+            Assert.Equal(
+                1,
+                checkpointPhases.Count(phase => phase == DispatchRecordCheckpointPhase.BeforeRetryAdmission));
+            var persistedTask = kernel.GetTask(goal.Id, planner.Id);
+            var latestDispatchAt = Assert.IsType<DateTimeOffset>(persistedTask.LastDispatch?.DispatchedAt);
+            Assert.All(startedDispatchIdentities, identity => Assert.Equal(latestDispatchAt, identity));
+            Assert.NotNull(persistedTask.LastProcess);
+            Assert.Contains(
+                persistedTask.RetryAdmissionHistory,
+                receipt =>
+                    receipt.LinkedDispatchAt == latestDispatchAt &&
+                    receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        }
+        finally
+        {
+            if (kernel.GetTask(goal.Id, planner.Id).LastProcess is not null)
+                runner.CancelLatestProcess(kernel, goal.Id, planner.Id);
+        }
+    }
+
+    [Xunit.Fact]
+    public void TerminalRecoveryAccountsForOtherPreparedDispatchesWithoutStartingThem()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        WriteSkill(root, "orchestrator-dogfood");
+        var kernel = new AgentOrchestratorKernel();
+        var first = new TaskSpec(TaskId.New(), "Inspect first recovery without file changes.", AgentRole.Planner);
+        var second = new TaskSpec(TaskId.New(), "Inspect second recovery without file changes.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Observe terminal recovery before other starts", [first, second]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(goal.Objective,
+            ["A terminal goal blocks and accounts for every remaining prepared task."], VerificationClass.TestVerifiable, [], []));
+        var primary = SubscriptionPlannerAgent("first", "First");
+        var alternate = primary with
+        {
+            Id = new AgentId("second"),
+            Model = primary.Model with { ProviderName = "Anthropic", ModelName = "claude-opus-5" },
+            Subscription = new SubscriptionLaunchProfile("claude-cli", "claude-opus-5", "high")
+        };
+        var agents = new[] { primary, alternate };
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RequeueInterruptedDispatch(goal.Id, first.Id, "Recover interrupted work.",
+            RetryCause.ProviderInterruption, Guid.NewGuid().ToString("N"));
+        kernel.ReassignTaskAgent(goal.Id, first.Id, primary);
+        kernel.ReassignTaskAgent(goal.Id, second.Id, alternate);
+        var starts = 0;
+        var checkpoints = 0;
+        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, kernel.GetGoal(goal.Id),
+            agents, DispatchTestProfiles(), checkpointBeforeWorkerStart: (_, _, _, _) => checkpoints++,
+            readCurrentInterruptedDispatchState: (_, _) => new InterruptedDispatchStateRead(GoalStatus.Cancelled, WorkTaskStatus.Cancelled),
+            runner: new BackgroundDispatchRunner(startProcess: _ => { starts++; return null; }), sandboxOptions: DisabledSandbox);
+        Assert.Equal(0, starts);
+        Assert.Equal(0, checkpoints);
+        Assert.Equal(1, result.Processes.RequeueSkippedCount);
+        Assert.Contains(result.BlockedDiagnostics,
+            blocked => blocked.TaskId == second.Id.Value && blocked.Reason == "goal-not-active-after-recovery");
+        Assert.Empty(result.Dispatches);
+        Assert.Equal(GoalStatus.Cancelled, kernel.GetGoal(goal.Id).Status);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void BatchPaidReservationsPreserveEarlierAdmissions(bool firstIsRetry)
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var kernel = new AgentOrchestratorKernel();
+        var first = new TaskSpec(TaskId.New(), "Plan the first change without writing files.", AgentRole.Planner);
+        var second = new TaskSpec(TaskId.New(), "Plan the second change without writing files.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Preserve every admission in a parallel batch", [first, second]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(goal.Objective,
+            ["Each task retains its admission receipt and evidence recorded between reservations."],
+            VerificationClass.TestVerifiable, [], []));
+        var openAi = SubscriptionPlannerAgent("planner-a", "Planner A");
+        var anthropic = openAi with
+        {
+            Id = new AgentId("planner-b"),
+            Model = openAi.Model with { ProviderName = "Anthropic", ModelName = "claude-opus-5" },
+            Subscription = new SubscriptionLaunchProfile("claude-cli", "claude-opus-5", "high")
+        };
+        var agents = new[] { openAi, anthropic };
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.ReassignTaskAgent(goal.Id, second.Id, anthropic);
+        if (firstIsRetry)
+            kernel.RetryTask(goal.Id, first.Id, "First new retry evidence.", retryCause: RetryCause.ProviderInterruption, invalidateDownstream: false);
+        kernel.RetryTask(goal.Id, second.Id, "Second new retry evidence.", retryCause: RetryCause.ProviderInterruption, invalidateDownstream: false);
+        kernel.ReassignTaskAgent(goal.Id, first.Id, openAi);
+        kernel.ReassignTaskAgent(goal.Id, second.Id, anthropic);
+        goal = kernel.GetGoal(goal.Id);
+        var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+        Assert.True(parallelPlan.Batches.Count == 1, JsonSerializer.Serialize(parallelPlan));
+        Assert.Equal(2, parallelPlan.Batches[0].IntentIds.Count);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var reservations = 0;
+        var checkpoints = 0;
+        const string between = "evidence-recorded-between-paid-reservations";
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, DispatchTestProfiles(),
+                checkpointBeforeWorkerStart: (current, id, _, phase) =>
+                {
+                    if (phase == DispatchRecordCheckpointPhase.BeforeRetryAdmission)
+                        checkpoints++;
+                    CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(repository, current, [id], baselines,
+                        workspace.SqliteStatePath, results =>
+                        {
+                            foreach (var result in results)
+                            {
+                                CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(current, result);
+                                if (result.PersistedSnapshot is not null)
+                                    baselines[result.GoalId] = result.PersistedSnapshot;
+                            }
+                        });
+                },
+                recordDurableGoalBaseline: snapshot =>
+                {
+                    baselines[snapshot.Id] = snapshot;
+                    if (++reservations == 1 && firstIsRetry)
+                        kernel.RecordTaskNote(goal.Id, first.Id, between);
+                },
+                runner: new BackgroundDispatchRunner(disableProcessStart: true), sandboxOptions: DisabledSandbox));
+        Assert.Contains("process start is disabled", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(firstIsRetry ? 2 : 1, reservations);
+        Assert.Equal(reservations, checkpoints);
+        foreach (var taskId in new[] { first.Id, second.Id })
+            Assert.Contains(kernel.GetTask(goal.Id, taskId).RetryAdmissionHistory,
+                receipt => receipt.LinkedDispatchAt == kernel.GetTask(goal.Id, taskId).LastDispatch!.DispatchedAt);
+        if (firstIsRetry)
+            Assert.Contains(kernel.GetGoal(goal.Id).Timeline, entry => entry.Kind == ProgressKind.TaskNote && entry.Message == between);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, true)]
+    public void PaidRetryChecksCheckpointBeforeReplacingTickEvidence(bool hasCheckpoint, bool readyBatch)
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Inspect manual admission evidence.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Reject missing checkpoint before reserving", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(goal.Objective,
+            ["A missing checkpoint leaves durable admission and current tick unchanged."],
+            VerificationClass.TestVerifiable, [], []));
+        var agents = new[] { SubscriptionPlannerAgent("planner", "Planner") };
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RetryTask(goal.Id, planner.Id, "Retry with new evidence.",
+            retryCause: RetryCause.ProviderInterruption);
+        if (!readyBatch)
+            _ = GoalManagementCommandService.ProfileDispatchTask(kernel, workspace, goal, planner,
+                DispatchTestProfiles().GetRequired("codex-cli"), agents, sandboxOptions: DisabledSandbox);
+        Assert.NotNull(kernel.GetTask(goal.Id, planner.Id).LatestRetryAt);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        const string note = "manual-admission-current-tick-evidence";
+        kernel.RecordTaskNote(goal.Id, planner.Id, note);
+        goal = kernel.GetGoal(goal.Id);
+        if (!readyBatch)
+            Assert.Equal(PaidRouteClassification.Paid, kernel.GetTask(goal.Id, planner.Id).LastDispatch!.PaidRoute);
+        var starts = 0;
+        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpoint = hasCheckpoint
+            ? (current, id, _, _) => CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                repository, current, [id], baselines, workspace.SqliteStatePath, results =>
+                {
+                    foreach (var result in results)
+                    {
+                        CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(current, result);
+                        if (result.PersistedSnapshot is not null)
+                            baselines[result.GoalId] = result.PersistedSnapshot;
+                    }
+                }) : null;
+        var runner = new BackgroundDispatchRunner(disableProcessStart: hasCheckpoint,
+            startProcess: _ => { starts++; return null; });
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+        {
+            if (readyBatch)
+                GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, DispatchTestProfiles(),
+                    checkpointBeforeWorkerStart: checkpoint, runner: runner, sandboxOptions: DisabledSandbox,
+                    recordDurableGoalBaseline: snapshot => baselines[snapshot.Id] = snapshot);
+            else
+                GoalManagementCommandService.StartDispatches(kernel, workspace, goal, refreshBeforeStart: false,
+                    checkpointBeforeWorkerStart: checkpoint, runner: runner, sandboxOptions: DisabledSandbox,
+                    recordDurableGoalBaseline: snapshot => baselines[snapshot.Id] = snapshot);
+        });
+        var observed = kernel.GetTask(goal.Id, planner.Id);
+        Assert.True(exception.Message.Contains(hasCheckpoint ? "process start is disabled" : "durable process checkpoint", StringComparison.OrdinalIgnoreCase),
+            $"{exception.Message}; starts={starts}; retry={observed.LatestRetryAt:o}; " +
+            $"route={observed.LastDispatch?.PaidRoute}; receipts={observed.RetryAdmissionHistory.Count}");
+        Assert.Equal(0, starts);
+        if (!hasCheckpoint)
+            Assert.Empty(repository.LoadAsync().GetAwaiter().GetResult()
+                .GetTask(goal.Id, planner.Id).RetryAdmissionHistory);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline,
+            entry => entry.Kind == ProgressKind.TaskNote && entry.Message == note);
+    }
+
+    [Xunit.Fact]
+    public void InterruptedPaidRetryPreservesTickEvidenceWhenRecoveryIsRefused()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Inspect interrupted retry evidence.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep current-tick evidence on refused recovery", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            goal.Objective,
+            ["Refusing interrupted recovery must not discard unrelated current-tick evidence."],
+            VerificationClass.TestVerifiable, [], []));
+        var agents = new[] { SubscriptionPlannerAgent("planner", "Planner") };
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RequeueInterruptedDispatch(goal.Id, planner.Id, "Recover the interrupted attempt.",
+            RetryCause.ProviderInterruption, Guid.NewGuid().ToString("N"));
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var baselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        const string note = "current-tick-evidence-before-recovery-refusal";
+        kernel.RecordTaskNote(goal.Id, planner.Id, note);
+        var checkpoints = 0;
+        var starts = 0;
+        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel, workspace, goal, agents, DispatchTestProfiles(),
+            checkpointBeforeWorkerStart: (current, id, _, _) =>
+            {
+                checkpoints++;
+                CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                    repository, current, [id], baselines, workspace.SqliteStatePath, _ => { });
+            },
+            readCurrentInterruptedDispatchState: (_, _) =>
+                new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Cancelled),
+            runner: new BackgroundDispatchRunner(startProcess: _ => { starts++; return null; }),
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Equal(0, starts);
+        Assert.Equal(0, checkpoints);
+        Assert.Equal(1, result.Processes.RequeueSkippedCount);
+        Assert.Empty(repository.LoadAsync().GetAwaiter().GetResult()
+            .GetTask(goal.Id, planner.Id).RetryAdmissionHistory);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline,
+            entry => entry.Kind == ProgressKind.TaskNote && entry.Message == note);
+    }
+
+    [Xunit.Fact]
+    public void ConcurrentDurableChangeAbortsPaidAdmissionBeforeReservation()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var at = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(at));
+        var planner = new TaskSpec(TaskId.New(), "Retry only from an authoritative snapshot.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Abort paid admission on concurrent operator state", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Abort paid admission on concurrent operator state",
+            ["A stale pre-admission checkpoint starts no worker and preserves operator state."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RetryTask(goal.Id, planner.Id, "Retry with a fresh source finding.", RetryCause.NewSourceFinding);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.SaveAsync(kernel).GetAwaiter().GetResult();
+        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        var checkpointCalls = 0;
+        var processStartCalls = 0;
+        const string operatorNote = "operator-change-after-tick-baseline";
+        var runner = new BackgroundDispatchRunner(
+            startProcess: startInfo =>
+            {
+                processStartCalls++;
                 return Process.Start(startInfo);
             });
 
-        var exception = Record.Exception(() =>
+        var conflict = Assert.Throws<DispatchCheckpointConflictException>(() =>
             GoalManagementCommandService.StartSubscriptionReadyTasks(
                 kernel,
                 workspace,
                 goal,
                 agents,
                 profiles,
-                checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, checkpointPhase) =>
+                checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, _, phase) =>
                 {
+                    Assert.Equal(DispatchRecordCheckpointPhase.BeforeRetryAdmission, phase);
                     checkpointCalls++;
-                    checkpointPhases.Add(checkpointPhase);
-                    startedDispatchIdentities.Add(Assert.IsType<DateTimeOffset>(
-                        checkpointKernel.GetTask(checkpointGoalId, checkpointTaskId).LastDispatch?.DispatchedAt));
+                    var operatorKernel = repository.LoadAsync().GetAwaiter().GetResult();
+                    operatorKernel.RecordTaskNote(checkpointGoalId, planner.Id, operatorNote);
+                    repository.SaveAsync(operatorKernel).GetAwaiter().GetResult();
                     CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
                         repository,
                         checkpointKernel,
                         [checkpointGoalId],
                         tickBaselines,
                         workspace.SqliteStatePath,
-                        results =>
-                        {
-                            foreach (var result in results)
-                            {
-                                _ = CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(checkpointKernel, result);
-                                if (result.PersistedSnapshot is not null)
-                                    tickBaselines[result.GoalId] = result.PersistedSnapshot;
-                            }
-                        });
+                        _ => { });
                 },
                 runner: runner,
-                sandboxOptions: DisabledSandbox,
-                recordDurableGoalBaseline: snapshot =>
-                {
-                    recordedDurableBaselines.Add(snapshot);
-                    tickBaselines[snapshot.Id] = snapshot;
-                }));
+                sandboxOptions: DisabledSandbox));
 
-        Assert.Null(exception);
-        Assert.Equal(1, processStartCalls);
-        Assert.True(checkpointCalls > 0);
-        Assert.NotEmpty(recordedDurableBaselines);
-        Assert.All(recordedDurableBaselines, snapshot => Assert.Equal(goal.Id.Value, snapshot.Id));
-        Assert.Equal(
-            1,
-            checkpointPhases.Count(phase => phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
-        var persistedTask = kernel.GetTask(goal.Id, planner.Id);
-        var latestDispatchAt = Assert.IsType<DateTimeOffset>(persistedTask.LastDispatch?.DispatchedAt);
-        Assert.All(startedDispatchIdentities, identity => Assert.Equal(latestDispatchAt, identity));
-        Assert.NotNull(persistedTask.LastProcess);
-        Assert.Contains(
-            persistedTask.RetryAdmissionHistory,
-            receipt =>
-                receipt.LinkedDispatchAt == latestDispatchAt &&
-                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        Assert.Contains("rejected stale state", conflict.Message, StringComparison.Ordinal);
+        Assert.Equal(1, checkpointCalls);
+        Assert.Equal(0, processStartCalls);
+        Assert.Null(kernel.GetTask(goal.Id, planner.Id).LastProcess);
+        Assert.Empty(kernel.GetTask(goal.Id, planner.Id).RetryAdmissionHistory);
+        var restoredGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+        Assert.Contains(restoredGoal.Timeline, item =>
+            item.Kind == ProgressKind.TaskNote && item.Message == operatorNote);
+        Assert.Empty(restoredGoal.Tasks.Single(task => task.Id == planner.Id).RetryAdmissionHistory);
+    }
+
+    [Xunit.Fact]
+    public void FirstSubscriptionAdmissionKeepsUnsavedCurrentTickEvidenceWithoutSnapshotReplacement()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WriteSkill(workingDirectory, "orchestrator-dogfood");
+        var at = DateTimeOffset.Parse("2026-07-07T12:00:00Z");
+        var kernel = new AgentOrchestratorKernel(new TestClock(at));
+        var planner = new TaskSpec(TaskId.New(), "Plan the first subscription start.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Start without retry snapshot replacement", [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Start without retry snapshot replacement",
+            ["A first admission preserves current-tick evidence."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        var agents = new[] { agent };
+        var profiles = DispatchTestProfiles();
+        kernel.ActivateGoal(goal.Id, agents);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .SaveAsync(kernel)
+            .GetAwaiter()
+            .GetResult();
+
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
+        const string unsavedNote = "first-admission-unsaved-note-under-test";
+        kernel.RecordTaskNote(goal.Id, planner.Id, unsavedNote);
+        var checkpointPhases = new List<DispatchRecordCheckpointPhase>();
+        var durableBaselines = new List<GoalSnapshot>();
+        var processStartCalls = 0;
+        var runner = new BackgroundDispatchRunner(
+            startProcess: startInfo =>
+            {
+                processStartCalls++;
+                return Process.Start(new ProcessStartInfo
+                {
+                    FileName = WorkerShell.Executable,
+                    WorkingDirectory = startInfo.WorkingDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 30"])));
+            });
+
+        try
+        {
+            var exception = Record.Exception(() =>
+                GoalManagementCommandService.StartSubscriptionReadyTasks(
+                    kernel,
+                    workspace,
+                    goal,
+                    agents,
+                    profiles,
+                    checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, phase) =>
+                    {
+                        checkpointPhases.Add(phase);
+                        CliPersistentStateRunner.PersistCriticalGoalSnapshotsOrThrow(
+                            repository,
+                            checkpointKernel,
+                            [checkpointGoalId],
+                            tickBaselines,
+                            workspace.SqliteStatePath,
+                            results =>
+                            {
+                                foreach (var result in results)
+                                {
+                                    _ = CliPersistentStateRunner.RebaseCheckpointAfterDurableSave(checkpointKernel, result);
+                                    if (result.PersistedSnapshot is not null)
+                                        tickBaselines[result.GoalId] = result.PersistedSnapshot;
+                                }
+                            });
+                    },
+                    runner: runner,
+                    sandboxOptions: DisabledSandbox,
+                    recordDurableGoalBaseline: durableBaselines.Add));
+
+            Assert.Null(exception);
+            Assert.Equal(1, processStartCalls);
+            Assert.DoesNotContain(DispatchRecordCheckpointPhase.BeforeRetryAdmission, checkpointPhases);
+            Assert.Empty(durableBaselines);
+            Assert.Contains(kernel.GetGoal(goal.Id).Timeline, item =>
+                item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
+            var restoredGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+            Assert.Contains(restoredGoal.Timeline, item =>
+                item.Kind == ProgressKind.TaskNote && item.Message == unsavedNote);
+        }
+        finally
+        {
+            if (kernel.GetTask(goal.Id, planner.Id).LastProcess is not null)
+                runner.CancelLatestProcess(kernel, goal.Id, planner.Id);
+        }
     }
 
     [Xunit.Fact]
@@ -1870,8 +2394,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Contains("stale-terminal-human-wait", disposition.Blockers);
     }
 
-    [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_claude_auth_diagnostic_when_api_key_missing")]
-    public void DispatchProcessHostWritesClaudeAuthDiagnosticWhenApiKeyMissing()
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_fails_claude_dispatch_when_subscription_source_is_missing")]
+    public void DispatchProcessHostFailsClaudeDispatchWhenSubscriptionSourceIsMissing()
 {
     var root = CreateTempDirectory();
     try
@@ -1880,22 +2404,28 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(
-            startInfo,
-            WorkerSandboxProvider.Claude,
-            sandboxRoot,
-            stderrPath,
-            anthropicApiKeyAccessor: () => null,
-            claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials"));
+        // Deliberate contract change: a missing subscription login source now stops dispatch before
+        // launch instead of warning and letting the worker run against whatever the destination
+        // happened to hold (which could be an older account's credentials).
+        var failure = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            DispatchProcessHost.SeedProviderEnvironment(
+                startInfo,
+                WorkerSandboxProvider.Claude,
+                sandboxRoot,
+                stderrPath,
+                anthropicApiKeyAccessor: () => null,
+                claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials")));
 
+        Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, failure.Message);
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
+        Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
         Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
-        Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
-        Assert.True(Directory.Exists(claudeConfigDir));
+        Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
         var stderr = File.ReadAllText(stderrPath);
-        Assert.Contains("ANTHROPIC_API_KEY is not set", stderr);
+        Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, stderr);
         Assert.Contains("Claude", stderr);
+        Assert.DoesNotContain("sk-ant-", stderr);
     }
     finally
     {
@@ -1911,7 +2441,11 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     {
         var credentialSource = Path.Combine(root, "operator-claude");
         Directory.CreateDirectory(credentialSource);
-        File.WriteAllText(Path.Combine(credentialSource, ".credentials.json"), "{\"token\":\"subscription\"}");
+        // Synthetic, knowingly invalid token in the real .credentials.json OAuth shape: this only
+        // exercises LOCAL MATERIAL presence, never live authentication.
+        File.WriteAllText(
+            Path.Combine(credentialSource, ".credentials.json"),
+            "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}");
         File.WriteAllText(Path.Combine(credentialSource, "settings.json"), "{\"theme\":\"dark\"}");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
@@ -1928,7 +2462,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
         Assert.Equal(
-            "{\"token\":\"subscription\"}",
+            "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}",
             File.ReadAllText(Path.Combine(claudeConfigDir!, ".credentials.json")));
         Assert.Equal(
             "{\"theme\":\"dark\"}",
@@ -1941,8 +2475,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
 }
 
-    [Xunit.Fact(DisplayName = "DispatchProcessHost_worker_stderr_stream_preserves_claude_auth_diagnostic")]
-    public void DispatchProcessHostWorkerStderrStreamPreservesClaudeAuthDiagnostic()
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_worker_stderr_stream_preserves_claude_auth_failure_diagnostic")]
+    public void DispatchProcessHostWorkerStderrStreamPreservesClaudeAuthFailureDiagnostic()
 {
     var root = CreateTempDirectory();
     try
@@ -1951,13 +2485,16 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(
-            startInfo,
-            WorkerSandboxProvider.Claude,
-            sandboxRoot,
-            stderrPath,
-            anthropicApiKeyAccessor: () => null,
-            claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials"));
+        // The sanitized diagnostic is still written to the dispatch stderr log before the typed
+        // preflight failure propagates, so ordering against later worker stderr is preserved.
+        Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            DispatchProcessHost.SeedProviderEnvironment(
+                startInfo,
+                WorkerSandboxProvider.Claude,
+                sandboxRoot,
+                stderrPath,
+                anthropicApiKeyAccessor: () => null,
+                claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials")));
 
         using (var stderr = DispatchProcessHost.OpenWorkerStderrStream(stderrPath))
         using (var writer = new StreamWriter(stderr))
@@ -1966,10 +2503,10 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         }
 
         var text = File.ReadAllText(stderrPath);
-        Assert.Contains("ANTHROPIC_API_KEY is not set", text);
+        Assert.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, text);
         Assert.Contains("worker stderr", text);
         Assert.True(
-            text.IndexOf("ANTHROPIC_API_KEY is not set", StringComparison.Ordinal) <
+            text.IndexOf(ClaudeCliAuthProbe.AuthUnavailableErrorCode, StringComparison.Ordinal) <
             text.IndexOf("worker stderr", StringComparison.Ordinal),
             text);
     }

@@ -41,12 +41,14 @@ public sealed class GoalIntakeRequestStoreTests
         using var ready = new CountdownEvent(2);
         using var release = new ManualResetEventSlim(false);
 
-        Task<GoalIntakeReservation> Start() => Task.Run(() =>
+        // Both contenders block at the barrier; give them dedicated threads so the
+        // database race does not depend on two shared thread-pool workers being free.
+        Task<GoalIntakeReservation> Start() => Task.Factory.StartNew(() =>
         {
             ready.Signal();
             release.Wait();
             return new GoalIntakeRequestStore(path).Reserve("concurrent-key", "same-fingerprint");
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         var first = Start();
         var second = Start();

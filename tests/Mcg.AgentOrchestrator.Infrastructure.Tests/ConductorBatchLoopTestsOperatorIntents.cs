@@ -751,6 +751,86 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
         }
     }
 
+    [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_applies_attributed_criterion_mapping_then_operator_receipt")]
+    public async Task OperatorIntentCoordinatorAppliesAttributedCriterionMappingThenOperatorReceipt()
+    {
+        var root = CreateTempDirectory("mcg-loop-criterion-evidence");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Apply a criterion evidence intent");
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+                "Require a live operator observation.",
+                ["Operator evidence is attached to the current candidate."],
+                VerificationClass.RealWorldDependent,
+                [],
+                []));
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var mappingIntent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "criterion-map-1",
+                OperatorIntentVerbs.CriterionEvidenceMap,
+                goal.Id.Value,
+                TaskId: null,
+                JsonSerializer.Serialize(new CriterionEvidenceMappingOperatorIntentPayload(
+                    0,
+                    1,
+                    CriterionEvidenceOwner.Operator,
+                    "operator:controlled-replay",
+                    "manual-replay-observation",
+                    "candidate-abc"), new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator@example",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(mappingIntent);
+
+            var coordinator = new OperatorIntentCoordinator(store);
+            var mappingResult = coordinator.ExecutePending(kernel, goal);
+            coordinator.CompletePersisted([goal.Id]);
+            var mapped = Assert.Single(goal.CriterionEvidenceObligations);
+            Assert.True(mappingResult.MutatedGoalState);
+            Assert.Equal(CriterionEvidenceOwner.Operator, mapped.Owner);
+            Assert.Equal("candidate-abc", mapped.ExpectedCandidateSha);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(mappingIntent.Id))!.Status);
+
+            var receiptIntent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "criterion-receipt-1",
+                OperatorIntentVerbs.CriterionEvidenceRecord,
+                goal.Id.Value,
+                TaskId: null,
+                JsonSerializer.Serialize(new CriterionEvidenceReceiptOperatorIntentPayload(
+                    mapped.Id,
+                    CriterionEvidenceOwner.Operator,
+                    "candidate-abc",
+                    "operator-receipt-1",
+                    "operator:controlled-replay",
+                    Passed: true,
+                    "Disposable replay observed the required behavior."), new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator@example",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(receiptIntent);
+
+            var receiptResult = coordinator.ExecutePending(kernel, goal);
+            coordinator.CompletePersisted([goal.Id]);
+
+            Assert.True(receiptResult.MutatedGoalState);
+            Assert.Equal(CriterionEvidenceState.Satisfied, Assert.Single(goal.CriterionEvidenceObligations).State);
+            Assert.Equal("operator-receipt-1", goal.CriterionEvidenceObligations.Single().ReceiptId);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(receiptIntent.Id))!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     private static void CompleteCandidateDispatch(
         AgentOrchestratorKernel kernel,
         Goal goal,

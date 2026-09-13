@@ -1,0 +1,22 @@
+I’ll inspect the supplied planning/research artifacts and the existing refinement path first, then make the smallest evidence-backed repair. I’m using the repository’s .NET build hygiene and verification guidance because this changes persistence and needs managed-test evidence.
+The prior evidence confirms the baseline defect is coverage-free rather than an existing red test: invalid refinement fabricates a fallback spec and the coordinator completes its work. I’ll add a focused regression test first, capture its failure, then implement the repair path.
+I found the concrete regression seam: `GoalRefinementGateIsIdempotentForRefinedGoal` currently feeds `{}` and asserts `Ready` at [GoalRefinementTests.cs:2107](C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\f57758c8\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\GoalRefinementTests.cs:2107). The repair must instead leave the goal unrefined and terminally failed in the outbox, so it cannot relaunch.
+The narrow repair is now in place: invalid output no longer attaches a spec, and the durable row is finalized as `Failed` rather than deleted or relaunched. I’m running the sanctioned build-only check now; the acceptance runner owns test execution.
+The isolated build is still running without output; I’m allowing the managed build slot to finish rather than starting a competing build.
+The bundled build check hit the repository’s 124-second worker cap without producing a result, so it is inconclusive rather than a product failure. I’m narrowing to the App project, which compiles the changed orchestration and persistence dependencies.
+The narrowed check reached compilation but hit a CS2012 lock on its isolated App DLL, not a code error. Following the repository hygiene procedure, I’ll shut down build servers and retry that exact narrow check once.
+The App build is clean after the lock recovery. The test-project build is still running in its isolated slot; I’m waiting for its explicit result, then I’ll inspect the final diff for scope and whitespace.
+The test-project build identified one retained fallback expectation in the subscription-timeout test; I updated it to the new explicit failure contract. I’ll rebuild that one project once to verify the correction.
+The corrected test project is still building under the managed worker slot. I’m waiting for that final compilation receipt; no test suite is being run from this Developer lane.
+WORKER_RESULT:
+files: src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementService.cs, src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementWorkCoordinator.cs, src/Mcg.AgentOrchestrator.Infrastructure/Persistence/OrchestratorStateRepository.cs, src/Mcg.AgentOrchestrator.Infrastructure/Persistence/SqliteOrchestratorStateRepository.cs, tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalRefinementTests.cs
+commands: Invoke-WorkerBuildCheck App (pass after `dotnet build-server shutdown`); Invoke-WorkerBuildCheck test project (initially found and corrected stale `RefinementDisposition.Fallback`; rerun timed out at worker cap); git diff --check
+tests: deferred - App build passed; acceptance owns test execution. Requested tests: GoalRefinementServiceInvalidOutputDoesNotFabricateARefinedSpec and GoalRefinementGateRecordsTerminalFailureWithoutRefinedSpec.
+commit: none
+blockers: exact-blocker - sequence/versioned retry/revision and legacy-repair portions remain outside this narrow failure-contract slice; test-project rebuild was inconclusive after the correction due the 120-second worker cap.
+model_fit: OpenAI/gpt-5.6-terra - adequate - focused service/outbox failure-contract repair.
+skills: dotnet-windows-build-hygiene, orchestrator-dogfood, orchestrator-worker-verification, verification-before-completion
+confidence: medium
+END_WORKER_RESULT
+
+Model fit: OpenAI/gpt-5.6-terra - adequate - focused service/outbox failure-contract repair.

@@ -1,0 +1,2 @@
+# Historical dispatch bytes are the regression input; preserve their recorded hash.
+f57758c8-partial.out.txt -text

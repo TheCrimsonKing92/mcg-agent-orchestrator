@@ -70,7 +70,8 @@ internal static class SourceSizeRatchet
             // brought this file to the measured post-merge size.
             // Raised for goal 8263a08c: exited-dispatch reconciliation must precede the existing failure
             // retry ladder and guard the shared dispatch-start boundary before LastProcess is replaced.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6805),
+            // Goal 1592104a extracted acceptance-owned evidence recording and outstanding-obligation diagnostics.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6774),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -83,8 +84,8 @@ internal static class SourceSizeRatchet
             // the goal's state/run-event maintenance leases remain scoped to the active conductor loop.
             // Raised for goal ae54b5eb: set-aside fingerprints retain lifecycle rechecks while comparing
             // retry/candidate task state independently of the kernel goal instance reloaded by admission.
-            // Tightened after set-aside fingerprint helpers moved to their partial-class collaborator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5111),
+            // Goal 1592104a moved unloaded-intent disposition to a collaborator that retains reload evidence.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5193),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -105,21 +106,41 @@ internal static class SourceSizeRatchet
             // decision; both checks belong at this dispatch boundary and add five measured lines.
             // Goal 3b9d6b12 moved complete-log authority, decision selection, normalization, caching, and
             // bounded snapshots to ProcessLogReader; the runner now retains only completion sequencing.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2660),
+            // Goal b3cba804 adds the authoritative-output-only scope-completion observation at the
+            // existing dispatch-completion boundary; the runner retains output-artifact authority
+            // and verification persistence while parsing stays with WorkerResultBlockers.
+            // Goal 0d92976e adds the BeforeRetryAdmission checkpoint phase to preserve
+            // current-tick evidence before retry admission replaces the goal snapshot; 2669 is
+            // the measured post-change size of the existing dispatch-state contract.
+            // Raised for goal df9ddb05: the Claude credential source the dispatch preflight selected must
+            // be transported from the dispatch record at the single process-start boundary that already
+            // owns the dispatch parameters; selection, validation, and seeding remain in
+            // ClaudeCredentialSource. 2682 is the measured size of that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
             // repository identities; 3229 is the measured combined post-rebase size.
             // Goal 52049d08 adds profile-aware policy selection, immutable receipt reuse, and compact
             // retry-projection wiring at this package-assembly boundary; each behavior remains extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3270),
+            // Goal df9ddb05 LOWERED this from 3234: ClaudeCliAuthState and ClaudeCliAuthProbe moved out
+            // to ClaudeCredentialSource.cs so the Claude credential selection rule and both consumers'
+            // views of it live in one file and cannot drift apart again. The dispatcher keeps only the
+            // preflight finding call site. 3200 is the measured post-extraction size, and 3241 is that
+            // size plus the preflight-to-dispatch handoff at both preparation paths: one shared auth probe
+            // per prepared task, its injection seam for fixture credential sources, and the reported
+            // credential source carried out of preflight onto the dispatch record so the dispatch start
+            // boundary transports it instead of resolving a second source. Selection, validation, and
+            // seeding all remain in ClaudeCredentialSource.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3241),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
             // Reconciled after integrating main e1f6f11c at its measured post-merge size.
             // Goal 9fe7200e journals LOOP_READY at the existing pre-loop orchestration boundary;
             // 4855 is the measured post-merge size after that required readiness signal was wired.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4855),
+            // Goal 1592104a extracted evidence intent submission, status output, and metadata flag parsing.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4845),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
@@ -133,11 +154,9 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at the measured shared-fixture size.
             // Raised for goal 8263a08c: the shared fixture forwards the exited-dispatch reconciler used by
             // the focused failure-state and dispatch-start invariant tests.
-            // Raised for goal ae54b5eb: the existing driver owner proves a refused prepared start writes
-            // exactly one retry and one dispatch across two conductor ticks before stable set-aside.
-            // Raised for goal ae54b5eb: the additional 64 lines prove the round-2 refused-start reporting
-            // and admission snapshot reload behavior in the existing driver test owner.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1672),
+            // Lowered after extracting admission-refusal regressions and their fixture to
+            // ConductorDriverTestsAdmissionRefusal; the original assertions and collection are preserved.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1508),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause

@@ -1903,7 +1903,8 @@ public static class WorkerProcessJobs
                     record.ParentProcessId == parentProcessId &&
                     record.Status == ProcessInspectionStatus.Available &&
                     record.StartedAt is not null &&
-                    !string.IsNullOrWhiteSpace(record.ExecutablePath))
+                    !string.IsNullOrWhiteSpace(record.ExecutablePath) &&
+                    !ProcessObservationRoles.IsWindowsConsoleInfrastructure(record.ExecutablePath))
                 .OrderBy(record => record.StartedAt)
                 .ThenBy(record => record.ProcessId)
                 .FirstOrDefault();
