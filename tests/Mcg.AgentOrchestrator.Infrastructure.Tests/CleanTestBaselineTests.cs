@@ -931,9 +931,76 @@ public sealed class CleanTestBaselineTests
 
             var item = Assert.Single(await store.ListAsync());
             Assert.Equal("clean-baseline-red:main-a", item.CorrelationKey);
-            Assert.Equal("Observed clean-test failure correlation at main-a", item.Subject);
+            // Name-only correlation must be titled as a correlation over the named checks, never as an
+            // attested red baseline; the attested wording belongs to the executed merge-base arm alone.
+            Assert.Equal("Observed clean-test failure correlation at main-a for core tests", item.Subject);
+            Assert.DoesNotContain("Attested red", item.Subject, StringComparison.Ordinal);
             Assert.Equal(CollaborationItemStatus.Resolved, item.Status);
             Assert.Contains("main-b", item.Resolution, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ReconcileAttentionTitlesExecutedBaselineEvidenceAsAttestedRed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-clean-baseline-attested-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = CollaborationItemStore.ForDirectory(Path.Combine(root, ".orchestrator"));
+            var goal = TestGoal("Baseline attention");
+            var attested = new CleanTestBaselineReceipt(
+                "main-a",
+                "base-a",
+                CleanBaselineAttestation.AttestedRed,
+                goal.Id.Value,
+                null,
+                ["core tests"],
+                "executed merge-base baseline arm reproduced 1 failing check(s)");
+
+            ConductorDriver.ReconcileCleanBaselineAttention(store, goal, "main-a", attested);
+
+            var item = Assert.Single(await store.ListAsync());
+            Assert.Equal("clean-baseline-red:main-a", item.CorrelationKey);
+            Assert.Equal(
+                "Attested red clean-test baseline at main-a from executed merge-base evidence",
+                item.Subject);
+            Assert.DoesNotContain("Observed", item.Subject, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ReconcileAttentionTruncatesManyCorrelatedCheckNames()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-clean-baseline-many-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = CollaborationItemStore.ForDirectory(Path.Combine(root, ".orchestrator"));
+            var goal = TestGoal("Baseline attention");
+            var correlated = new CleanTestBaselineReceipt(
+                "main-a",
+                null,
+                CleanBaselineAttestation.ObservedRedCorrelation,
+                goal.Id.Value,
+                DateTimeOffset.UtcNow,
+                ["a tests", "b tests", "c tests", "d tests"],
+                "observed 4 shared check label(s)");
+
+            ConductorDriver.ReconcileCleanBaselineAttention(store, goal, "main-a", correlated);
+
+            var item = Assert.Single(await store.ListAsync());
+            Assert.Equal(
+                "Observed clean-test failure correlation at main-a for a tests, b tests, c tests (+1 more)",
+                item.Subject);
         }
         finally
         {

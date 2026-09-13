@@ -73,6 +73,7 @@ internal sealed partial class ConductorDriver
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
     private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
+    private const int MaxNamedCorrelatedChecks = 3;
 
     // Finding evidence retries deliver a Conductor-owned receipt or typed refusal to the role that
     // requested it. Reviewer round accounting treats that mechanical delivery as part of the same
@@ -4525,7 +4526,7 @@ internal sealed partial class ConductorDriver
             store.RaiseAsync(
                 CollaborationItemType.Decision,
                 goal.Id.Value,
-                $"Observed clean-test failure correlation at {FormatShortSha(mainHeadSha)}",
+                FormatCleanBaselineAttentionSubject(mainHeadSha, receipt),
                 CleanTestBaseline.FormatJournalDetail(receipt),
                 activeCorrelationKey,
                 CancellationToken.None).GetAwaiter().GetResult();
@@ -4548,6 +4549,32 @@ internal sealed partial class ConductorDriver
                 $"clean-test failure correlation no longer active at main {FormatShortSha(mainHeadSha)}",
                 CancellationToken.None).GetAwaiter().GetResult();
         }
+    }
+
+    // Only the executed merge-base arm attests a red baseline. Candidate-journal check-name agreement is a
+    // correlation, so the routing surface names the correlated check labels instead of asserting main is red.
+    private static string FormatCleanBaselineAttentionSubject(
+        string? mainHeadSha,
+        CleanTestBaselineReceipt receipt) =>
+        receipt.Attestation == CleanBaselineAttestation.AttestedRed
+            ? $"Attested red clean-test baseline at {FormatShortSha(mainHeadSha)} from executed merge-base evidence"
+            : $"Observed clean-test failure correlation at {FormatShortSha(mainHeadSha)}" +
+              FormatCorrelatedCheckSuffix(receipt.SharedFailingChecks);
+
+    private static string FormatCorrelatedCheckSuffix(IReadOnlyList<string> sharedChecks)
+    {
+        var named = sharedChecks
+            .Select(check => check.Trim())
+            .Where(check => check.Length > 0)
+            .ToArray();
+        if (named.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        return named.Length > MaxNamedCorrelatedChecks
+            ? $" for {string.Join(", ", named.Take(MaxNamedCorrelatedChecks))} (+{named.Length - MaxNamedCorrelatedChecks} more)"
+            : $" for {string.Join(", ", named)}";
     }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
