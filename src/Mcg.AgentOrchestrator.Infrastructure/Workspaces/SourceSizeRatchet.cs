@@ -116,11 +116,13 @@ internal static class SourceSizeRatchet
             // be transported from the dispatch record at the single process-start boundary that already
             // owns the dispatch parameters; selection, validation, and seeding remain in
             // ClaudeCredentialSource. 2682 is the measured size of that call site.
-            // Goal 99f7b1f1 LOWERED this from 2682: the exited-process sweep's status/guard predicate and
-            // its terminal-status requeue fence moved to DispatchExitSweepEligibility.cs, so the single
-            // rule about which tasks may have an exit applied lives in one file and cannot drift from the
-            // sweep that consults it. The runner keeps only the call sites. 2678 is the measured size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2678),
+            // Raised by one line for goal bb2d2d5a: the completion state carries the typed
+            // HumanWaitKind the worker's human-input directive declared, so the kind the planner
+            // raised survives to the recording boundary that decides whether an answer is
+            // prerequisite evidence. There is nothing to extract - it is a single named argument on
+            // the existing DispatchProcessCompletionState construction, and moving the construction
+            // itself would split the completion contract the runner owns.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2683),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -145,7 +147,14 @@ internal static class SourceSizeRatchet
             // the preflight error-code priority order, and the one-line resolved-profile call plus its
             // diagnostic sink at the single command-construction boundary. 3255 is the measured size of
             // those call sites after that extraction.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3255),
+            // Raised by one line for goal bb2d2d5a: when the prerequisite-evidence section was trimmed to fit
+            // the prompt budget, the trimmed request ids must be recorded as a TaskNote against the task that
+            // was actually dispatched. Detection, id selection, note text, and idempotence all live in
+            // PrerequisiteEvidenceTrimNote; the dispatcher keeps only the call site, because this is the one
+            // point that holds the assembled brief, the kernel, and the dispatched goal/task identity
+            // together after the dispatch record is written. The CLI worker-dispatch path is a separate
+            // entry point and carries its own call site. 3256 is the measured size with that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3256),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

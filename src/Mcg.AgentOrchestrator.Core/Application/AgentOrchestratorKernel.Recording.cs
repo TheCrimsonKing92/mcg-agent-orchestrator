@@ -144,6 +144,9 @@ public sealed partial class AgentOrchestratorKernel
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
+                kind: verification.HumanInputKind
+                    ?? parsedHumanInput.Directive?.Kind
+                    ?? HumanWaitKind.SpecClarification,
                 questionFingerprint: verification.HumanInputQuestionFingerprint
                     ?? parsedHumanInput.Directive?.QuestionFingerprint
                     ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion),

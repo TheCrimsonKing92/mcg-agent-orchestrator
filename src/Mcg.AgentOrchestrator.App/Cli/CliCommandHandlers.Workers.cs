@@ -75,6 +75,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     workerExecutionDirectory,
                     DateTimeOffset.UtcNow,
                     PromptCharacterCount: preparation.PromptCharacterCount));
+            PrerequisiteEvidenceTrimNote.RecordIfTrimmed(
+                context.Kernel,
+                context.CurrentGoal.Id,
+                workerTask.Id,
+                brief);
             Console.WriteLine($"Prompt: {preparation.PromptPath}");
             ConsoleViews.PrintTask(context.CurrentGoal, workerTask);
             return true;

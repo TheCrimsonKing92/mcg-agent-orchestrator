@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record HumanInputDirective(
     string Question,
     string QuestionFingerprint,
-    string? BlockerFingerprint = null);
+    string? BlockerFingerprint = null,
+    HumanWaitKind Kind = HumanWaitKind.SpecClarification);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {
@@ -211,7 +212,7 @@ public static class AgentOutputDirectives
                 $"Availability: {availabilityText}. Reason: {reason}";
             var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(criterionIndex, evidenceKey);
             return new HumanInputDirectiveParseResult(
-                new HumanInputDirective(question, fingerprint, fingerprint),
+                new HumanInputDirective(question, fingerprint, fingerprint, HumanWaitKind.PlannerPrerequisiteEvidence),
                 null);
         }
         catch (JsonException error)

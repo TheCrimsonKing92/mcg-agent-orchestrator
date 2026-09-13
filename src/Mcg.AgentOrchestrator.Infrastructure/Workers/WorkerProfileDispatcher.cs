@@ -324,6 +324,7 @@ public static class WorkerProfileDispatcher
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false),
             allowPendingRecordedDispatchRefresh);
+        PrerequisiteEvidenceTrimNote.RecordIfTrimmed(kernel, goal.Id, task.Id, brief);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 

@@ -65,6 +65,51 @@ public sealed class PlannerEvidenceDispatchTests
         Assert.Equal(expectedFingerprint, planner.LastVerification!.HumanInputQuestionFingerprint);
         Assert.Equal(expectedFingerprint, planner.LastVerification.HumanInputBlockerFingerprint);
         Assert.DoesNotContain("PLANNER_EVIDENCE_REQUEST:", planner.LastVerification.StandardOutput, StringComparison.Ordinal);
+        // The directive text is stripped from the recorded stdout above, so the kernel reparse cannot
+        // recover the classification. It must ride on the verification record or the typed kind is
+        // lost on exactly this path.
+        Assert.Equal(HumanWaitKind.PlannerPrerequisiteEvidence, planner.LastVerification.HumanInputKind);
+        Assert.Equal(HumanWaitKind.PlannerPrerequisiteEvidence, request.Kind);
+    }
+
+    [Xunit.Fact]
+    public void RefreshLatestProcessLeavesPlainHumanInputTaskPrivate()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Planner clarification", [planner]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-planner-clarification-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var stdout = Path.Combine(root, "planner.out.log");
+        var stderr = Path.Combine(root, "planner.err.log");
+        var exit = Path.Combine(root, "planner.exit.txt");
+        File.WriteAllText(stdout, string.Join(Environment.NewLine,
+            "HUMAN_INPUT: Should the planner assume the cheaper lane?",
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: none",
+            "tests: not-run - planning requires an operator decision",
+            "commit: none",
+            "blockers: operator decision required",
+            "model_fit: OpenAI/gpt-5.5 - adequate - planning", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT"));
+        File.WriteAllText(stderr, string.Empty);
+        File.WriteAllText(exit, "0");
+        var now = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, planner.Id, new TaskDispatchRecord("planner-worker", "planner.exe", root, now));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            planner.Id,
+            new TaskProcessRecord(4243, "planner.exe", root, stdout, stderr, exit, now, null, null));
+
+        new BackgroundDispatchRunner(isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, planner.Id);
+
+        var request = kernel.GetPendingHumanInput(goal.Id).Single();
+        Assert.Equal(HumanWaitKind.SpecClarification, request.Kind);
     }
 
     [Xunit.Fact]
