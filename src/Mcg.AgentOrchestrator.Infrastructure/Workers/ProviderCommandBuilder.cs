@@ -42,6 +42,7 @@ public static class ProviderCommandBuilder
                 workingDirectory),
             ProviderKind.AnthropicClaudeCli => BuildClaude(
                 modelAlias,
+                reasoningEffort,
                 resolvedPermissionMode,
                 sessionId),
             ProviderKind.OllamaQwenCodeCli => BuildQwen(modelAlias, workingDirectory, openaiBaseUrl, openaiApiKey, approvalMode),
@@ -112,6 +113,7 @@ public static class ProviderCommandBuilder
 
     private static IReadOnlyList<string> BuildClaude(
         string modelAlias,
+        string? reasoningEffort,
         string resolvedPermissionMode,
         string? sessionId)
     {
@@ -125,6 +127,14 @@ public static class ProviderCommandBuilder
             "--permission-mode",
             Expand(isReadOnly ? ClaudeReadOnlyPermissionMode : resolvedPermissionMode)
         };
+        // Same position the built-in template puts it in, so this stays byte-identical to the legacy
+        // substitution path. An unset effort adds no tokens at all - never an empty operand.
+        if (!string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            command.Add(ClaudeCliEffortPolicy.EffortFlag);
+            command.Add(Expand(reasoningEffort));
+        }
+
         if (isReadOnly)
         {
             command.Add("--restricted");

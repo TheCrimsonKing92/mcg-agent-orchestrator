@@ -87,6 +87,7 @@ public static class WorkerProfileDispatcher
     public const string MissingResearchArtifactErrorCode = "missing-research-artifact";
     public const string MissingPlannerArtifactErrorCode = "missing-planner-artifact";
     public const string ArtifactTooLargeErrorCode = "artifact-too-large";
+    public const string UnsupportedClaudeReasoningEffortErrorCode = "unsupported-claude-reasoning-effort";
     private const string HighRiskReviewerReasoningEffort = "xhigh";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
@@ -627,6 +628,8 @@ public static class WorkerProfileDispatcher
                     !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate),
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
+            ClaudeCliEffortPolicy.AddPreflightFindings(
+                findings, DefaultProviders.ResolveProfile(profile.Name).Identity.Kind, profile, reasoningEffort);
 
             var capability = WorkerSandboxCapabilityPlanner.Evaluate(
                 goal,
@@ -768,6 +771,11 @@ public static class WorkerProfileDispatcher
         if (findings.Any(finding => finding.Contains(ArtifactTooLargeErrorCode, StringComparison.Ordinal)))
         {
             return ArtifactTooLargeErrorCode;
+        }
+
+        if (findings.Any(finding => finding.Contains(UnsupportedClaudeReasoningEffortErrorCode, StringComparison.Ordinal)))
+        {
+            return UnsupportedClaudeReasoningEffortErrorCode;
         }
 
         if (findings.Any(finding => finding.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, StringComparison.Ordinal)))
@@ -3166,14 +3174,20 @@ public static class WorkerProfileDispatcher
     internal static string BuildDispatchCommandTemplate(
         WorkerProfile profile,
         ProviderKind providerKind,
-        IReadOnlyDictionary<string, string?> dispatchVariables)
+        IReadOnlyDictionary<string, string?> dispatchVariables,
+        Action<string>? diagnosticSink = null)
     {
-        if (!ShouldUseTypedBuiltInCommand(profile, providerKind) ||
+        // Superseded built-in claude-cli commands are repaired at invocation time and in memory only: the
+        // resolved profile drives this one command construction and is never handed to the profile store.
+        // A custom template comes back unchanged and keeps taking the legacy path below.
+        var resolved = ClaudeCliEffortPolicy.ResolveInvocationProfile(profile, providerKind, diagnosticSink);
+
+        if (!ShouldUseTypedBuiltInCommand(resolved, providerKind) ||
             !HasRequiredBuiltInVariables(providerKind, dispatchVariables))
         {
             // Missing variables must remain as placeholders so the legacy preparation path
             // reports them before it writes the prompt or mutates dispatch state.
-            return profile.CommandTemplate;
+            return resolved.CommandTemplate;
         }
 
         return string.Join(
@@ -3188,7 +3202,7 @@ public static class WorkerProfileDispatcher
                 openaiBaseUrl: GetDispatchVariable(dispatchVariables, "openaiBaseUrl"),
                 openaiApiKey: GetDispatchVariable(dispatchVariables, "openaiApiKey"),
                 approvalMode: GetDispatchVariable(dispatchVariables, "approvalMode"),
-                repositoryPolicyMaxBytes: profile.RepositoryPolicyMaxBytes));
+                repositoryPolicyMaxBytes: resolved.RepositoryPolicyMaxBytes));
     }
 
     private static bool HasRequiredBuiltInVariables(
