@@ -144,7 +144,8 @@ public sealed class AgentTaskRunner
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
-                questionFingerprint: humanInputDirective.Directive!.QuestionFingerprint,
+                kind: humanInputDirective.Directive!.Kind,
+                questionFingerprint: humanInputDirective.Directive.QuestionFingerprint,
                 blockerFingerprint: humanInputDirective.Directive.BlockerFingerprint ??
                     HumanInputRequest.BuildWorkerResultBlockerFingerprint(
                         task.Id,

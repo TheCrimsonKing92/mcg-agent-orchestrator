@@ -194,6 +194,33 @@ public sealed partial class AgentOrchestratorKernel
             .Take(8)
             .OrderBy(request => request.AnsweredAt)
             .ToList();
+        // Answered prerequisite evidence reaches later same-goal roles. This is a sibling query, not
+        // a widening of resolvedInput: widening would also change the originating task's own brief
+        // and the dedup/retraction surfaces. Goal isolation is the first clause and is not optional;
+        // requests the Planner raised for itself stay task-private unless typed as evidence, so
+        // historical records that predate the classification decode to SpecClarification and do not
+        // propagate.
+        var prerequisiteEvidence = HumanInputRequests
+            .Where(request =>
+                request.GoalId == goalId &&
+                request.Kind == HumanWaitKind.PlannerPrerequisiteEvidence &&
+                request.TaskId is not null &&
+                request.TaskId != taskId &&
+                request.IsCompleted &&
+                !request.WasDismissed &&
+                !request.IsSyntheticParkedHumanWaitCompletion &&
+                request.SupersededByRequestId is null &&
+                !string.IsNullOrWhiteSpace(request.Answer))
+            .OrderBy(request => request.AnsweredAt)
+            .Select(request => new PrerequisiteEvidenceEntry(
+                request.Id.Value,
+                request.Question,
+                request.AuthoritativeAnswer!.Text,
+                request.AuthoritativeAnswer.BriefVersion))
+            .ToList();
+        var prerequisiteEvidenceSection = PrerequisiteEvidenceDigest.RenderSection(
+            prerequisiteEvidence,
+            goal.AuthoritativeBrief.Version);
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
         var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
             goal.Timeline.Where(evt => (evt.TaskId == taskId || evt.TaskId is null) && !IsRedundantBriefTimelineEvent(task, evt)),
@@ -475,6 +502,15 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(resolvedInputLines));
         }
 
+        if (prerequisiteEvidenceSection.Lines.Count > 0)
+        {
+            // Fixed, never Projected: a collapsed pointer would drop below the required floor of
+            // request id, summary, and evidence paths. Fixed segments are also never collapsed by
+            // ApplyTaskBriefBudget, so this section can neither displace nor be displaced by a
+            // required section.
+            segments.Add(TaskBriefSegment.Fixed(prerequisiteEvidenceSection.Lines));
+        }
+
         if (task.LastExecution is not null)
         {
             segments.Add(TaskBriefSegment.Projected(
@@ -628,7 +664,8 @@ public sealed partial class AgentOrchestratorKernel
             task.Id,
             task.RequiredRole,
             $"{task.RequiredRole}: {PromptContextFormatter.TrimPromptTitle(task.Description)}",
-            content);
+            content,
+            prerequisiteEvidenceSection.TrimmedRequestIds);
     }
 
     private static IReadOnlyList<ReviewFinding> ApplyHumanInputSupersedeFindingResolutions(

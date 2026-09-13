@@ -4450,4 +4450,68 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains(new string('d', 400), brief.Content, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "ProfileDispatch_emits_answered_prerequisite_evidence_to_a_later_role_without_starting_a_worker")]
+    public void ProfileDispatchEmitsAnsweredPrerequisiteEvidenceToLaterRoleWithoutStartingAWorker()
+    {
+        const string receiptPath = "C:\\repo\\.orchestrator\\operator-evidence\\run-goal-timeout-historical-receipts.json";
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-09-13T03:00:00Z")));
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation.", AgentRole.Planner);
+        var developer = new TaskSpec(TaskId.New(), "Implement the scoped slice.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve answered prerequisite evidence.", [planner, developer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Answered prerequisite evidence reaches later same-goal roles.",
+            ["A later role's emitted prompt carries the answered request id and its evidence reference."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var agents = new[]
+        {
+            new AgentDefinition(
+                new AgentId("planner"),
+                "Planner",
+                AgentRole.Planner,
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))
+        };
+        kernel.ActivateGoal(goal.Id, agents);
+        var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(1, "historical-trx-receipts");
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            planner.Id,
+            "Planner evidence request for criterion 1: historical TRX and lane receipts. " +
+            "Availability: retrievable from store 'main checkout', which the worker cannot reach.",
+            kind: HumanWaitKind.PlannerPrerequisiteEvidence,
+            questionFingerprint: fingerprint,
+            blockerFingerprint: fingerprint).Request;
+        kernel.SubmitHumanInput(
+            request.Id,
+            $"Runs 20260906T1200Z and 20260906T1830Z. Receipts at {receiptPath} with sha256:3f9a1c2b4d5e6f70.");
+
+        var dispatch = GoalManagementCommandService.ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            new WorkerProfile("echo", "echo {promptPath}"),
+            agents,
+            sandboxOptions: DisabledSandbox);
+
+        var prompt = File.ReadAllText(dispatch.PromptPath);
+        Assert.Contains("## Answered Prerequisite Evidence", prompt, StringComparison.Ordinal);
+        Assert.Contains(request.Id.Value, prompt, StringComparison.Ordinal);
+        Assert.Contains(receiptPath, prompt, StringComparison.Ordinal);
+        Assert.Null(developer.LastProcess);
+        Assert.Null(planner.LastProcess);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.StartsWith("kind=prerequisite-evidence-trimmed", StringComparison.Ordinal));
+    }
+
 }
