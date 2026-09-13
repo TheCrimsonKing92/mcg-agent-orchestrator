@@ -474,10 +474,10 @@ function ConvertTo-MtpFilterArguments {
             [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if ($fullyQualifiedName.Success) {
             if ($fullyQualifiedName.Groups['op'].Value -eq '!~') {
-                $arguments.Add('--filter-not-method')
+                $arguments.Add('--filter-not-class')
             }
             else {
-                $arguments.Add('--filter-method')
+                $arguments.Add('--filter-class')
             }
             $arguments.Add("*$($fullyQualifiedName.Groups['value'].Value)*")
             continue

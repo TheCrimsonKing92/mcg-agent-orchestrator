@@ -197,7 +197,7 @@ public sealed class MtpTestRunnerScriptTests
         using var document = JsonDocument.Parse(result.Stdout.Trim());
         var arguments = document.RootElement.GetProperty("args").EnumerateArray().Select(value => value.GetString()).ToArray();
         Xunit.Assert.Equal(
-            ["--filter-method", "*GoalWorktreeTests*", "--filter-not-method", "*Cleanup*", "--filter-not-trait", "Category=HostIntegration"],
+            ["--filter-class", "*GoalWorktreeTests*", "--filter-not-class", "*Cleanup*", "--filter-not-trait", "Category=HostIntegration"],
             arguments);
         var fileName = document.RootElement.GetProperty("name").GetString();
         Xunit.Assert.NotNull(fileName);
