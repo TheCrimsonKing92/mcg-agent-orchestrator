@@ -147,7 +147,14 @@ internal static class SourceSizeRatchet
             // the preflight error-code priority order, and the one-line resolved-profile call plus its
             // diagnostic sink at the single command-construction boundary. 3255 is the measured size of
             // those call sites after that extraction.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3255),
+            // Raised by one line for goal bb2d2d5a: when the prerequisite-evidence section was trimmed to fit
+            // the prompt budget, the trimmed request ids must be recorded as a TaskNote against the task that
+            // was actually dispatched. Detection, id selection, note text, and idempotence all live in
+            // PrerequisiteEvidenceTrimNote; the dispatcher keeps only the call site, because this is the one
+            // point that holds the assembled brief, the kernel, and the dispatched goal/task identity
+            // together after the dispatch record is written. The CLI worker-dispatch path is a separate
+            // entry point and carries its own call site. 3256 is the measured size with that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3256),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
