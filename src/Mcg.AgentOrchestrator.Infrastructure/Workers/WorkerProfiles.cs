@@ -376,6 +376,16 @@ public sealed record WorkerProfileLauncherValidation(bool IsRealLauncher, string
 /// effort flag: nothing appends <c>--effort</c> to an already-resolved command, so an operator-authored
 /// command template is never rewritten and can never end up with two effort flags.
 /// </summary>
+/// <remarks>
+/// Change record for the observation that motivated this seam: on the same frozen-runtime
+/// SubscriptionCliCompleter control and the same 7921-character refinement prompt, the unchanged saved
+/// profile timed out at 180499ms while a copy with only <c>--effort high</c> added exited 0 at 158526ms.
+/// That pair demonstrates command-policy mismatch only - the configured reasoning-effort policy never
+/// reached the CLI - and it is asserted for nothing else. It is a single paired observation and supports no
+/// throughput, latency, or timeout-resolution claim; any such claim requires operator-run multi-run timing
+/// and is out of scope for this slice. Accordingly this slice changes no timeout value, adds no model role
+/// or parallel effort config key, and writes nothing to user-level Claude settings.
+/// </remarks>
 public static class ClaudeCliEffortPolicy
 {
     public const string EffortFlag = "--effort";
@@ -395,7 +405,7 @@ public static class ClaudeCliEffortPolicy
     /// <summary>
     /// Versioned allowlist of prior built-in claude-cli command templates. Matching is exact (after
     /// whitespace normalization only) so a saved profile that merely resembles a built-in - an operator
-    /// customization - is never clobbered. Repair is in-memory per load and is never persisted.
+    /// customization - is never clobbered. Repair happens per invocation, in memory, and is never persisted.
     /// </summary>
     public static readonly IReadOnlyList<string> StaleBuiltInCommandTemplates =
     [
@@ -418,6 +428,78 @@ public static class ClaudeCliEffortPolicy
     public static bool MatchesStaleBuiltInCommandTemplate(string commandTemplate) =>
         StaleBuiltInCommandTemplates.Any(stale =>
             NormalizeWhitespace(commandTemplate).Equals(NormalizeWhitespace(stale), StringComparison.Ordinal));
+
+    /// <summary>The current built-in claude-cli command template: the only repair target.</summary>
+    public static string CurrentBuiltInCommandTemplate =>
+        WorkerProfileCatalog.Default()
+            .GetRequired(WorkerProfileDispatcher.AnthropicSubscriptionProfileName)
+            .CommandTemplate;
+
+    /// <summary>
+    /// Invocation-time, in-memory repair. A saved command that matches a recognized stale built-in renders
+    /// from the current built-in for this one invocation; the returned string is handed to command
+    /// construction and never to <see cref="WorkerProfileStore.Save"/>. Nothing is written back to the
+    /// profile store - not on load, not on migration, not on the next write - so an unrelated profile edit
+    /// saved afterwards keeps the operator's bytes and persisting the repair stays a separate explicit
+    /// operator migration. A command that is not an exact stale built-in is returned unchanged.
+    /// </summary>
+    public static string ResolveInvocationCommandTemplate(
+        string profileName,
+        string commandTemplate,
+        Action<string>? diagnosticSink = null)
+    {
+        if (!MatchesStaleBuiltInCommandTemplate(commandTemplate))
+        {
+            return commandTemplate;
+        }
+
+        var repaired = CurrentBuiltInCommandTemplate;
+        WarnStaleBuiltInRepair(profileName, commandTemplate, repaired, diagnosticSink);
+        return repaired;
+    }
+
+    /// <summary>
+    /// True when the invocation built from this template materializes a configured effort - either the
+    /// template carries the effort variable, or it is a stale built-in repaired at invocation time. Findings
+    /// that describe the invocation must agree with what <see cref="ResolveInvocationCommandTemplate"/>
+    /// actually constructs, not with the saved bytes alone.
+    /// </summary>
+    public static bool MaterializesConfiguredEffort(string commandTemplate) =>
+        WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(commandTemplate) ||
+        MatchesStaleBuiltInCommandTemplate(commandTemplate);
+
+    // One diagnostic per profile per process: the repair is re-derived on every invocation, so repeating the
+    // line on each dispatch would bury it. A supplied sink bypasses the guard so a caller observing
+    // diagnostics never depends on which invocation happened to be first.
+    private static readonly HashSet<string> _staleBuiltInRepairWarnings = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void WarnStaleBuiltInRepair(
+        string profileName,
+        string staleTemplate,
+        string repairedTemplate,
+        Action<string>? diagnosticSink)
+    {
+        var message =
+            $"[ClaudeCliEffortPolicy] WARNING: saved worker profile '{profileName}' command '{staleTemplate}' is a " +
+            $"superseded built-in; this invocation was rendered in memory from the current built-in " +
+            $"'{repairedTemplate}' so configured reasoning effort is materialized as {EffortFlag}. The saved " +
+            "profile store was not modified; persisting the repair is a separate explicit operator migration.";
+        if (diagnosticSink is not null)
+        {
+            diagnosticSink(message);
+            return;
+        }
+
+        lock (_staleBuiltInRepairWarnings)
+        {
+            if (!_staleBuiltInRepairWarnings.Add(profileName))
+            {
+                return;
+            }
+        }
+
+        Console.Error.WriteLine(message);
+    }
 
     /// <summary>
     /// Removes the effort segment, together with its preceding whitespace run, when no effort is
@@ -508,7 +590,6 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 public static class WorkerProfileStore
 {
     private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
-    private static readonly HashSet<string> _staleBuiltInRepairWarnings = new(StringComparer.OrdinalIgnoreCase);
 
     public static WorkerProfileCatalog Load(string path)
     {
@@ -609,34 +690,11 @@ public static class WorkerProfileStore
             var current = repaired.GetRequired(profileName);
             if (ShouldRepairBuiltInSubscriptionProfile(current, providers.ResolveProfile(profileName)))
             {
-                if (ClaudeCliEffortPolicy.MatchesStaleBuiltInCommandTemplate(current.CommandTemplate))
-                {
-                    WarnStaleBuiltInRepairOnce(profileName);
-                }
-
                 repaired = repaired.Upsert(defaults.GetRequired(profileName));
             }
         }
 
         return repaired;
-    }
-
-    // Repair is in-memory for the life of this catalog only; Load never calls Save, so the saved profile
-    // file keeps its bytes and persisting a repaired template stays a separate explicit operator migration.
-    private static void WarnStaleBuiltInRepairOnce(string profileName)
-    {
-        lock (_staleBuiltInRepairWarnings)
-        {
-            if (!_staleBuiltInRepairWarnings.Add(profileName))
-            {
-                return;
-            }
-        }
-
-        Console.Error.WriteLine(
-            $"[WorkerProfileStore] WARNING: saved worker profile '{profileName}' matches a superseded built-in command template; " +
-            $"using the current built-in in memory so configured reasoning effort is materialized as {ClaudeCliEffortPolicy.EffortFlag}. " +
-            "The saved profile file was not modified.");
     }
 
     private static bool ShouldRepairBuiltInSubscriptionProfile(WorkerProfile profile, IWorkerProvider provider)
@@ -689,12 +747,13 @@ public static class WorkerProfileStore
                 profile.CommandTemplate.Contains("-p (Get-Content", StringComparison.OrdinalIgnoreCase);
         }
 
+        // A superseded built-in claude-cli command is deliberately NOT repaired here. The effort repair is
+        // invocation-time and in-memory only (ClaudeCliEffortPolicy.ResolveInvocationCommandTemplate): the
+        // catalog this returns is what the dashboard and CLI hand back to Save, so repairing it on load
+        // would persist the rewritten template on the next unrelated profile edit.
         return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&
             (!profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("{permissionMode}", StringComparison.OrdinalIgnoreCase) ||
-                // Exact match against the historical built-in list only. A Contains-style test on the
-                // effort segment would rewrite an operator's custom template that legitimately omits it.
-                ClaudeCliEffortPolicy.MatchesStaleBuiltInCommandTemplate(profile.CommandTemplate) ||
                 !WorkerProfileDiagnostics.EvaluatePatchCapability(profile, provider).IsPatchCapable);
     }
 }

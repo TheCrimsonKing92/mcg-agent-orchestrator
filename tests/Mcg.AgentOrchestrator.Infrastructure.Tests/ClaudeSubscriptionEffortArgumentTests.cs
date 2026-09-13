@@ -80,8 +80,8 @@ public sealed class ClaudeSubscriptionEffortArgumentTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ClaudeEffort_stale_builtin_profile_is_repaired_in_memory_without_touching_the_saved_file")]
-    public void StaleBuiltInProfileIsRepairedInMemoryWithoutTouchingTheSavedFile()
+    [Xunit.Fact(DisplayName = "ClaudeEffort_stale_builtin_is_repaired_at_invocation_time_and_never_persisted")]
+    public void StaleBuiltInIsRepairedAtInvocationTimeAndNeverPersisted()
     {
         var root = InfrastructureTestSupport.CreateTempDirectory();
         var path = Path.Combine(root, "workers.json");
@@ -93,16 +93,80 @@ public sealed class ClaudeSubscriptionEffortArgumentTests
 
         var restored = WorkerProfileStore.Load(path);
 
-        Assert.Equal(CurrentBuiltInTemplate, restored.GetRequired("claude-cli").CommandTemplate);
-        // Repair is in-memory only; persisting it stays a separate explicit operator migration.
+        // Load must not repair: the catalog it returns is exactly what the dashboard profile editor and the
+        // CLI worker-profile/export/import verbs hand back to Save, so a repair here would be written to the
+        // operator's file by the next unrelated profile edit.
+        Assert.Equal(ObservedStaleBuiltInTemplate, restored.GetRequired("claude-cli").CommandTemplate);
         Assert.Equal(savedBytes, File.ReadAllBytes(path));
-        Assert.Contains(ObservedStaleBuiltInTemplate, File.ReadAllText(path), StringComparison.Ordinal);
 
-        var repairedCommand = WorkerProfileDispatcher.BuildDispatchCommandTemplate(
+        // An unrelated profile edit, saved from the loaded catalog, still carries the operator's bytes.
+        WorkerProfileStore.Save(path, restored.Upsert(new WorkerProfile("local-echo", "Write-Host {promptPath}")));
+        Assert.Equal(
+            ObservedStaleBuiltInTemplate,
+            WorkerProfileStore.LoadRequired(path).GetRequired("claude-cli").CommandTemplate);
+        Assert.DoesNotContain(ClaudeCliEffortPolicy.EffortSegment, File.ReadAllText(path), StringComparison.Ordinal);
+
+        // Repair happens at invocation time instead, on both construction seams, from the saved bytes.
+        var dispatchDiagnostics = new List<string>();
+        var dispatchCommand = WorkerProfileDispatcher.BuildDispatchCommandTemplate(
             restored.GetRequired("claude-cli"),
             ProviderKind.AnthropicClaudeCli,
-            ClaudeDispatchVariables("high"));
-        Assert.Contains("--effort 'high'", repairedCommand, StringComparison.Ordinal);
+            ClaudeDispatchVariables("high"),
+            dispatchDiagnostics.Add);
+        var completerDiagnostics = new List<string>();
+        var completerCommand = SubscriptionCliCompleter.SubstitutePlaceholders(
+            restored.GetRequired("claude-cli").CommandTemplate,
+            "claude-cli",
+            "prompt.md",
+            "claude-opus-5",
+            "high",
+            @"C:\work",
+            completerDiagnostics.Add);
+
+        Assert.Equal(
+            "claude -p --model 'claude-opus-5' --permission-mode 'bypassPermissions' --effort 'high'",
+            dispatchCommand);
+        Assert.Contains("--effort 'high'", completerCommand, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(dispatchCommand, "--effort"));
+        Assert.Equal(1, CountOccurrences(completerCommand, "--effort"));
+        // One diagnostic per seam, naming the profile and the repair.
+        foreach (var diagnostic in new[] { Assert.Single(dispatchDiagnostics), Assert.Single(completerDiagnostics) })
+        {
+            Assert.Contains("claude-cli", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("superseded built-in", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("not modified", diagnostic, StringComparison.Ordinal);
+        }
+
+        // Constructing those invocations wrote nothing back to the store.
+        Assert.Equal(
+            ObservedStaleBuiltInTemplate,
+            WorkerProfileStore.LoadRequired(path).GetRequired("claude-cli").CommandTemplate);
+    }
+
+    [Xunit.Fact(DisplayName = "ClaudeEffort_stale_builtin_repair_is_recomputed_per_invocation_not_cached_or_persisted")]
+    public void StaleBuiltInRepairIsRecomputedPerInvocationNotCachedOrPersisted()
+    {
+        // Repeated invocations from the same saved bytes each materialize the effort, and the profile record
+        // handed in is never mutated: the repair lives only in the string this seam returns. The per-process
+        // console de-duplication of the repair line is deliberately not asserted here - the guard is
+        // process-global static state shared with every other test in this assembly, so an assertion on it
+        // would be order-dependent. Diagnostic content is asserted through the sink instead.
+        var profile = new WorkerProfile("claude-cli", ObservedStaleBuiltInTemplate);
+
+        for (var invocation = 0; invocation < 3; invocation++)
+        {
+            var diagnostics = new List<string>();
+            var command = WorkerProfileDispatcher.BuildDispatchCommandTemplate(
+                profile,
+                ProviderKind.AnthropicClaudeCli,
+                ClaudeDispatchVariables("high"),
+                diagnostics.Add);
+
+            Assert.Equal(1, CountOccurrences(command, "--effort"));
+            Assert.Contains("--effort 'high'", command, StringComparison.Ordinal);
+            Assert.Single(diagnostics);
+            Assert.Equal(ObservedStaleBuiltInTemplate, profile.CommandTemplate);
+        }
     }
 
     [Xunit.Theory(DisplayName = "ClaudeEffort_custom_command_template_is_preserved_byte_for_byte")]
@@ -207,11 +271,15 @@ public sealed class ClaudeSubscriptionEffortArgumentTests
     public void CustomTemplateWithoutTheEffortVariableWarnsAndStillRuns()
     {
         var diagnostics = new List<string>();
+        // Not the observed stale built-in: that one is repaired at invocation time. A template the operator
+        // authored is preserved instead, so the effort has nowhere to land.
+        const string customTemplate =
+            "claude -p --model {subscriptionModelName} --permission-mode {permissionMode} --verbose";
 
         // Supported value, preserved custom template: the invocation must still be constructed, and the
         // unmaterialized policy must be named rather than silently dropped.
         var command = SubscriptionCliCompleter.SubstitutePlaceholders(
-            ObservedStaleBuiltInTemplate,
+            customTemplate,
             "claude-cli",
             "prompt.md",
             "claude-opus-5",
@@ -219,7 +287,8 @@ public sealed class ClaudeSubscriptionEffortArgumentTests
             @"C:\work",
             diagnostics.Add);
 
-        Assert.Equal("claude -p --model 'claude-opus-5' --permission-mode 'default'", command);
+        Assert.Equal("claude -p --model 'claude-opus-5' --permission-mode 'default' --verbose", command);
+        Assert.DoesNotContain("--effort", command, StringComparison.OrdinalIgnoreCase);
         var diagnostic = Assert.Single(diagnostics);
         Assert.Contains("claude-cli", diagnostic, StringComparison.Ordinal);
         Assert.Contains("'xhigh'", diagnostic, StringComparison.Ordinal);

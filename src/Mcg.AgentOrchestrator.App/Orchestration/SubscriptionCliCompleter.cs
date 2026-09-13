@@ -165,7 +165,11 @@ internal sealed class SubscriptionCliCompleter
             return ClaudeCliEffortPolicy.ElideEffortSegment(template);
         }
 
-        if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(template))
+        // Invocation-time, in-memory repair of a superseded built-in: this call renders from the current
+        // built-in so the configured policy reaches the CLI. The profile store is untouched - this completer
+        // never writes profiles - so persisting the repair stays a separate explicit operator migration.
+        var resolved = ClaudeCliEffortPolicy.ResolveInvocationCommandTemplate(profileName, template, diagnosticSink);
+        if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(resolved))
         {
             Warn(
                 diagnosticSink,
@@ -175,7 +179,7 @@ internal sealed class SubscriptionCliCompleter
                 $"'{reasoningEffort}' was not materialized. The saved command template was left unchanged.");
         }
 
-        return template;
+        return resolved;
     }
 
     // The completer runs on every refinement, glance, and acceptance pass; without the guard a single

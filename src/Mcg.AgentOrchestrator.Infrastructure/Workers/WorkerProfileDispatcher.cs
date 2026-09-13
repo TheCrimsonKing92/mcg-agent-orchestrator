@@ -1044,7 +1044,10 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
+        // Judged against what the invocation will actually be, not the saved bytes alone: a superseded
+        // built-in has no effort variable on disk yet materializes one after the in-memory repair, so
+        // testing the saved template here would report a drop that does not happen.
+        if (!ClaudeCliEffortPolicy.MaterializesConfiguredEffort(profile.CommandTemplate))
         {
             findings.Add(
                 $"warn: worker profile '{profile.Name}' has no {{subscriptionReasoningEffort}} template variable; " +
@@ -1052,9 +1055,12 @@ public static class WorkerProfileDispatcher
             return;
         }
 
+        var repairNote = WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate)
+            ? string.Empty
+            : " (superseded built-in command template repaired in memory for this invocation; saved profile unchanged)";
         findings.Add(
             $"ok: worker profile '{profile.Name}' materializes reasoning effort '{reasoningEffort}' " +
-            $"as {ClaudeCliEffortPolicy.EffortFlag}");
+            $"as {ClaudeCliEffortPolicy.EffortFlag}{repairNote}");
     }
 
     private static void AddSkillAvailabilityFindings(List<string> findings, Goal goal, TaskSpec task, string workingDirectory)
@@ -3217,14 +3223,28 @@ public static class WorkerProfileDispatcher
     internal static string BuildDispatchCommandTemplate(
         WorkerProfile profile,
         ProviderKind providerKind,
-        IReadOnlyDictionary<string, string?> dispatchVariables)
+        IReadOnlyDictionary<string, string?> dispatchVariables,
+        Action<string>? diagnosticSink = null)
     {
-        if (!ShouldUseTypedBuiltInCommand(profile, providerKind) ||
+        // Superseded built-in claude-cli commands are repaired here, at invocation time, and in memory only:
+        // the resolved template drives this one command construction and is never handed to the profile
+        // store. A custom template comes back unchanged and keeps taking the legacy path below.
+        var resolved = providerKind == ProviderKind.AnthropicClaudeCli
+            ? profile with
+            {
+                CommandTemplate = ClaudeCliEffortPolicy.ResolveInvocationCommandTemplate(
+                    profile.Name,
+                    profile.CommandTemplate,
+                    diagnosticSink)
+            }
+            : profile;
+
+        if (!ShouldUseTypedBuiltInCommand(resolved, providerKind) ||
             !HasRequiredBuiltInVariables(providerKind, dispatchVariables))
         {
             // Missing variables must remain as placeholders so the legacy preparation path
             // reports them before it writes the prompt or mutates dispatch state.
-            return profile.CommandTemplate;
+            return resolved.CommandTemplate;
         }
 
         return string.Join(
@@ -3239,7 +3259,7 @@ public static class WorkerProfileDispatcher
                 openaiBaseUrl: GetDispatchVariable(dispatchVariables, "openaiBaseUrl"),
                 openaiApiKey: GetDispatchVariable(dispatchVariables, "openaiApiKey"),
                 approvalMode: GetDispatchVariable(dispatchVariables, "approvalMode"),
-                repositoryPolicyMaxBytes: profile.RepositoryPolicyMaxBytes));
+                repositoryPolicyMaxBytes: resolved.RepositoryPolicyMaxBytes));
     }
 
     private static bool HasRequiredBuiltInVariables(
