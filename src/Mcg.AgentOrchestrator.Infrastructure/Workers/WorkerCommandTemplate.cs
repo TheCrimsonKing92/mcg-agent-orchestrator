@@ -84,7 +84,12 @@ public static partial class WorkerCommandTemplate
         var stamp = (dispatchedAt ?? DateTimeOffset.UtcNow).UtcDateTime.ToString("yyyyMMddHHmmssfffffff");
         var nonce = Guid.NewGuid().ToString("N")[..8];
         var promptPath = Path.Combine(promptRoot, $"{brief.GoalId.Value[..8]}-{brief.TaskId.Value[..8]}-{stamp}-{nonce}-{Sanitize(workerName)}.md");
-        var command = commandTemplate
+        // Elide the whole effort segment before any variable substitution: a blank variable renders as
+        // string.Empty below, which would otherwise leave a dangling `--effort` with no operand and put
+        // this path out of parity with ProviderCommandBuilder. An absent key and an unset value are
+        // deliberately indistinguishable - both mean "no configured effort".
+        var command = ClaudeCliEffortPolicy
+            .ElideUnsetEffortSegment(commandTemplate, ResolveReasoningEffortVariable(variables))
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{goalId}", brief.GoalId.Value, StringComparison.OrdinalIgnoreCase)
             .Replace("{taskId}", brief.TaskId.Value, StringComparison.OrdinalIgnoreCase)
@@ -107,6 +112,14 @@ public static partial class WorkerCommandTemplate
 
         return new WorkerDispatchPreparation(promptPath, command, brief.Content.Length);
     }
+
+    // Matches the case-insensitive substitution below, so an effort supplied under different casing is
+    // still seen as configured rather than silently eliding the flag.
+    private static string? ResolveReasoningEffortVariable(IReadOnlyDictionary<string, string?>? variables) =>
+        variables?
+            .Where(entry => entry.Key.Equals("subscriptionReasoningEffort", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.Value)
+            .FirstOrDefault();
 
     private static void ThrowIfUnresolvedTemplateVariables(string workerName, string command)
     {

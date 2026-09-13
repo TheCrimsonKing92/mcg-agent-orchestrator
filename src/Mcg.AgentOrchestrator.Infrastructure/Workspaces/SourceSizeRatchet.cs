@@ -132,7 +132,16 @@ internal static class SourceSizeRatchet
             // credential source carried out of preflight onto the dispatch record so the dispatch start
             // boundary transports it instead of resolving a second source. Selection, validation, and
             // seeding all remain in ClaudeCredentialSource.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3241),
+            // Raised for goal 7fb91813 by 14 lines: the Claude reasoning-effort vocabulary, the refusal and
+            // warning text, the invocation-time stale-built-in repair, and the decision of whether an
+            // invocation materializes a configured effort all live in ClaudeCliEffortPolicy, beside the
+            // template segment they govern, so a finding cannot drift from the command actually built. The
+            // dispatcher keeps only what it alone holds: the preflight finding call site (the profile,
+            // resolved provider kind, and configured effort meet nowhere else), the refusal code's row in
+            // the preflight error-code priority order, and the one-line resolved-profile call plus its
+            // diagnostic sink at the single command-construction boundary. 3255 is the measured size of
+            // those call sites after that extraction.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3255),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
