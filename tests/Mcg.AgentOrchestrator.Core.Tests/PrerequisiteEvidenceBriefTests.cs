@@ -22,6 +22,23 @@ public sealed class PrerequisiteEvidenceBriefTests
         Assert.Contains("## Answered Prerequisite Evidence", brief, StringComparison.Ordinal);
         Assert.Contains(request.Id.Value, brief, StringComparison.Ordinal);
         Assert.Contains(ReceiptPath, brief, StringComparison.Ordinal);
+
+        // The motivating incident lost the run ids and the receipt paths. Assert them in the entry's
+        // evidence list rather than anywhere in the brief: the 160-char summary would otherwise carry
+        // the run ids by accident and the assertion would not detect them being dropped as evidence.
+        var entry = Assert.Single(
+            ExtractSection(brief, "## Answered Prerequisite Evidence").Split(Environment.NewLine),
+            line => line.StartsWith($"- {request.Id.Value}:", StringComparison.Ordinal));
+        var evidenceStart = entry.IndexOf("| evidence: ", StringComparison.Ordinal);
+        Assert.True(evidenceStart >= 0, $"entry named no evidence: {entry}");
+        var evidence = entry[(evidenceStart + 2)..];
+        Assert.Contains("20260906T1200Z", evidence, StringComparison.Ordinal);
+        Assert.Contains("20260906T1830Z", evidence, StringComparison.Ordinal);
+        Assert.Contains(ReceiptPath, evidence, StringComparison.Ordinal);
+        Assert.Contains(
+            "C:\\repo\\.orchestrator\\operator-evidence\\run-goal-timeout-answered-state.json",
+            evidence,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "PrerequisiteEvidence_task_private_spec_clarification_stays_out_of_later_briefs")]

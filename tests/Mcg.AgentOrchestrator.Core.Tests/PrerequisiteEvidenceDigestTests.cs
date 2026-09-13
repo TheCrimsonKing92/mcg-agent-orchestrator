@@ -10,6 +10,9 @@ public sealed class PrerequisiteEvidenceDigestTests
         "See .orchestrator/operator-evidence/lane.json for the interval.",
         ".orchestrator/operator-evidence/lane.json")]
     [Xunit.InlineData("run id: 20260906T1200Z-lane-a covered the window.", "run id: 20260906T1200Z-lane-a")]
+    [Xunit.InlineData(
+        "Runs 20260906T1200Z and 20260906T1830Z covered the window.",
+        "20260906T1200Z|20260906T1830Z")]
     public void ExtractsPathsAndIds(string answer, string expected)
     {
         Assert.Equal(
@@ -108,6 +111,74 @@ public sealed class PrerequisiteEvidenceDigestTests
         {
             Assert.Contains("| evidence: C:\\repo\\evidence\\batch-", entryLine, StringComparison.Ordinal);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "PrerequisiteEvidenceDigest_keeps_every_short_answer_in_full_when_the_section_fits_the_cap")]
+    public void KeepsEveryShortAnswerInFullWhenTheSectionFitsTheCap()
+    {
+        // No budget pressure: six short answers are far under the character cap, so no answer may be
+        // reduced to a bare id in the budget note. The character cap is the only trim authority.
+        var entries = Enumerable.Range(0, 6)
+            .Select(index => new PrerequisiteEvidenceEntry(
+                $"request-{index:D2}",
+                $"Which lane settles criterion {index}?",
+                $"Use the cheaper lane for criterion {index}.",
+                index + 1))
+            .ToArray();
+
+        var section = PrerequisiteEvidenceDigest.RenderSection(entries, currentBriefVersion: 7);
+        var rendered = string.Join(Environment.NewLine, section.Lines);
+
+        Assert.Empty(section.TrimmedRequestIds);
+        Assert.DoesNotContain(
+            section.Lines,
+            line => line.StartsWith(PrerequisiteEvidenceDigest.BudgetNotePrefix, StringComparison.Ordinal));
+        Assert.True(
+            rendered.Length <= PrerequisiteEvidenceDigest.SectionCharacterCap,
+            $"section was {rendered.Length} chars, which is not under the cap: {rendered}");
+        foreach (var entry in entries)
+        {
+            var line = Assert.Single(
+                section.Lines,
+                candidate => candidate.StartsWith($"- {entry.RequestId}:", StringComparison.Ordinal));
+
+            // Full form, not the floor form: the question and the answered-under suffix both survive.
+            Assert.Contains(entry.Question, line, StringComparison.Ordinal);
+            Assert.Contains(
+                $"(answered under brief v{entry.AnsweredBriefVersion}; current brief v7)",
+                line,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "PrerequisiteEvidenceDigest_prefers_openable_paths_and_names_what_it_could_not_show")]
+    public void PrefersOpenablePathsAndNamesWhatItCouldNotShow()
+    {
+        // Leftmost-first matching puts four ids ahead of both receipt paths. Neither path may be
+        // displaced by an id, and nothing may be dropped without a visible count.
+        const string answer =
+            "Runs 20260906T1200Z and 20260906T1830Z with sha256:3f9a1c2b4d5e and sha256:9c8b7a6d5e4f. " +
+            "Receipts at C:\\repo\\evidence\\run.json and C:\\repo\\evidence\\lane.json.";
+
+        var evidence = PrerequisiteEvidenceDigest.ExtractEvidence(answer);
+
+        Assert.Equal(PrerequisiteEvidenceDigest.MaxEvidenceTokens, evidence.Shown.Count);
+        Assert.Contains("C:\\repo\\evidence\\run.json", evidence.Shown);
+        Assert.Contains("C:\\repo\\evidence\\lane.json", evidence.Shown);
+        Assert.Equal(2, evidence.OmittedCount);
+
+        var line = PrerequisiteEvidenceDigest.RenderEntry(
+            new PrerequisiteEvidenceEntry("request-omitted", "Which receipts settle criterion 1?", answer, 1),
+            floorFormOnly: false,
+            currentBriefVersion: 2);
+        var floor = PrerequisiteEvidenceDigest.RenderEntry(
+            new PrerequisiteEvidenceEntry("request-omitted", "Which receipts settle criterion 1?", answer, 1),
+            floorFormOnly: true,
+            currentBriefVersion: 2);
+
+        Assert.Contains("(+2 more not shown)", line, StringComparison.Ordinal);
+        Assert.Contains("(+2 more not shown)", floor, StringComparison.Ordinal);
+        Assert.Contains("C:\\repo\\evidence\\lane.json", floor, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "PrerequisiteEvidenceDigest_retains_one_answer_even_when_a_single_entry_exceeds_the_cap")]
