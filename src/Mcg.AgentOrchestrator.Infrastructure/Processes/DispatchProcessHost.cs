@@ -507,6 +507,43 @@ public static class DispatchProcessHost
             : null;
 
     /// <summary>
+    /// The selection a dispatch start hands to the detached host. The conductor's dispatch preflight
+    /// already chose it while preparing this dispatch and recorded it on the dispatch record, so the
+    /// recorded decision is consumed VERBATIM here: no candidate is evaluated, no credential store is
+    /// read, and the login the recorded preflight finding names is the login the host seeds.
+    /// <paramref name="recordedSourceDirectory"/> is blank only for a dispatch that never ran a Claude
+    /// auth preflight - one prepared before this handoff existed, or one whose worker sandbox was
+    /// disabled when it was prepared and enabled by the time it started. Such a dispatch has no reported
+    /// source to honor, so this boundary performs the single resolution itself rather than transporting
+    /// nothing and failing a launch whose preflight never claimed a source.
+    /// Returns null for non-Claude or non-sandbox dispatches, which seed no Claude login at all and must
+    /// not touch a credential store.
+    /// </summary>
+    internal static ClaudeCredentialSourceSelection? TransportedClaudeCredentialSelection(
+        string? recordedSourceDirectory,
+        bool recordedSourceIsExplicit,
+        WorkerSandboxProvider provider,
+        bool sandboxLowIntegrity,
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null)
+    {
+        if (provider != WorkerSandboxProvider.Claude || !sandboxLowIntegrity)
+        {
+            return null;
+        }
+
+        return ClaudeCredentialSourceSelection.FromRecordedSelection(
+                recordedSourceDirectory,
+                recordedSourceIsExplicit)
+            ?? PreflightClaudeCredentialSource(
+                provider,
+                sandboxLowIntegrity,
+                environmentReader: environmentReader,
+                defaultHomeProvider: defaultHomeProvider)
+                ?.ToTransportedSelection();
+    }
+
+    /// <summary>
     /// Builds the ONE resolver this dispatch host uses for the Claude credential source. The conductor's
     /// transported selection wins whenever it is present; the injected environment reader is a test-only
     /// fallback for host tests that construct their own synthetic source. With neither, the resolver

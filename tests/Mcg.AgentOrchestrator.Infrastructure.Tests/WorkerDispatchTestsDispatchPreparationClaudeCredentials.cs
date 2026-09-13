@@ -945,6 +945,182 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             environmentReader: _ => throw new InvalidOperationException("selection input was read")));
     }
 
+    [Xunit.Fact(DisplayName = "Claude_one_dispatch_preflight_probe_resolves_once_for_all_of_its_consumers")]
+    public void ClaudeOneDispatchPreflightProbeResolvesOnceForAllOfItsConsumers()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            var explicitDir = WriteProfile(root, "operator-config", ValidSyntheticCredentials);
+            var inputs = new CountingSelectionInputs(configDirectory: explicitDir, defaultHome: root);
+
+            // The probe a dispatch preparation hands to every consumer of its auth answer: subscription
+            // model-lane selection, the auth finding, and the selection recorded for the dispatch start
+            // boundary. Each consumer calling the probe must receive the FIRST resolution, not its own.
+            var probe = ClaudeCliAuthProbe.ForOneDispatchPreflight(
+                inputs.EnvironmentReader,
+                inputs.DefaultHomeProvider);
+
+            var laneSelectionView = probe();
+            var authFindingView = probe();
+            var recordedView = probe();
+
+            Assert.Same(laneSelectionView, authFindingView);
+            Assert.Same(laneSelectionView, recordedView);
+            Assert.Same(laneSelectionView.Resolution, recordedView.Resolution);
+            Assert.Equal(1, inputs.ConfigDirectoryReads);
+            Assert.Equal(0, inputs.DefaultHomeReads);
+
+            // And the selection every consumer carries away is that one resolution's source.
+            Assert.Equal(Path.GetFullPath(explicitDir), recordedView.SelectedSourceDirectory);
+            Assert.Equal(
+                laneSelectionView.ToTransportedSelection(),
+                recordedView.ToTransportedSelection());
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_dispatch_start_transports_the_recorded_preflight_selection_without_reselecting")]
+    public void ClaudeDispatchStartTransportsTheRecordedPreflightSelectionWithoutReselecting()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            // What the dispatch preflight selected, reported, and recorded on the dispatch record while
+            // preparing it - possibly in an earlier tick, or an earlier process.
+            var recordedDir = WriteProfile(root, "preflight-selected", ValidSyntheticCredentials);
+
+            // A different, perfectly usable login that the start boundary's own environment would pick.
+            // Selecting it here is the preflight/seeding drift this handoff exists to remove.
+            var startBoundaryVisibleDir = WriteProfile(root, "start-boundary-config", WrongProfileSentinelCredentials);
+
+            var selection = DispatchProcessHost.TransportedClaudeCredentialSelection(
+                recordedSourceDirectory: recordedDir,
+                recordedSourceIsExplicit: true,
+                WorkerSandboxProvider.Claude,
+                sandboxLowIntegrity: true,
+                environmentReader: ClaudeEnvironment(configDirectory: startBoundaryVisibleDir),
+                defaultHomeProvider: () => root);
+
+            // Consumed verbatim: the recorded decision is transported, not re-derived from anything the
+            // start boundary can see.
+            Assert.Equal(new ClaudeCredentialSourceSelection(recordedDir, true), selection);
+
+            // The whole chain, to the sandbox: recorded selection to dispatch parameters to the detached
+            // host's resolver to the seeded config root. No worker process is started.
+            var parametersPath = Path.Combine(root, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, CreateClaudeDispatchParameters(root, selection));
+            var hostInputs = new CountingSelectionInputs(
+                configDirectory: startBoundaryVisibleDir,
+                defaultHome: root);
+            var hostResolver = DispatchProcessHost.CreateClaudeCredentialResolver(
+                DispatchProcessHost.ReadParameters(parametersPath),
+                hostInputs.EnvironmentReader);
+
+            var startInfo = CreateStartInfo(root);
+            var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+            var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+            var seededSource = DispatchProcessHost.SeedProviderEnvironment(
+                startInfo,
+                WorkerSandboxProvider.Claude,
+                sandboxRoot,
+                stderrPath,
+                anthropicApiKeyAccessor: null,
+                claudeCredentialDirectoryAccessor: null,
+                claudeCredentialResolver: hostResolver);
+
+            Assert.NotNull(seededSource);
+            Assert.Equal(Path.GetFullPath(recordedDir), seededSource!.Inspection.DirectoryPath);
+            Assert.True(seededSource.Inspection.IsExplicitSource);
+            Assert.Equal(0, hostInputs.ConfigDirectoryReads);
+            Assert.Equal(0, hostInputs.DefaultHomeReads);
+
+            Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var seededDir));
+            var seeded = File.ReadAllText(Path.Combine(seededDir!, ".credentials.json"));
+            Assert.Equal(ValidSyntheticCredentials, seeded);
+            Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", seeded);
+            Assert.Equal(string.Empty, ReadDiagnostics(stderrPath));
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_dispatch_start_resolves_once_when_the_dispatch_recorded_no_preflight_selection")]
+    public void ClaudeDispatchStartResolvesOnceWhenTheDispatchRecordedNoPreflightSelection()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            // A dispatch recorded before this handoff existed, or one prepared while the worker sandbox
+            // was disabled: no preflight ever reported a source, so there is no reported source to
+            // contradict and this boundary makes the single selection itself.
+            var visibleDir = WriteProfile(root, "start-boundary-config", ValidSyntheticCredentials);
+            var inputs = new CountingSelectionInputs(configDirectory: visibleDir, defaultHome: root);
+
+            var selection = DispatchProcessHost.TransportedClaudeCredentialSelection(
+                recordedSourceDirectory: null,
+                recordedSourceIsExplicit: false,
+                WorkerSandboxProvider.Claude,
+                sandboxLowIntegrity: true,
+                environmentReader: inputs.EnvironmentReader,
+                defaultHomeProvider: inputs.DefaultHomeProvider);
+
+            Assert.Equal(
+                new ClaudeCredentialSourceSelection(Path.GetFullPath(visibleDir), true),
+                selection);
+
+            // Once. A fallback that resolved per consumer would be the original defect wearing a
+            // different name.
+            Assert.Equal(1, inputs.ConfigDirectoryReads);
+            Assert.Equal(0, inputs.DefaultHomeReads);
+
+            // A blank recorded directory is the same "nothing was recorded" case, not a selected source.
+            Assert.Equal(
+                selection,
+                DispatchProcessHost.TransportedClaudeCredentialSelection(
+                    recordedSourceDirectory: "   ",
+                    recordedSourceIsExplicit: true,
+                    WorkerSandboxProvider.Claude,
+                    sandboxLowIntegrity: true,
+                    environmentReader: ClaudeEnvironment(configDirectory: visibleDir),
+                    defaultHomeProvider: () => root));
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_dispatch_start_transports_nothing_for_non_claude_and_unsandboxed_dispatches")]
+    public void ClaudeDispatchStartTransportsNothingForNonClaudeAndUnsandboxedDispatches()
+    {
+        // Nothing to seed, so nothing may be read OR carried: a recorded selection from an earlier
+        // preparation must not resurrect Claude seeding for a dispatch that seeds no Claude login, and a
+        // stray resolution here would touch the operator's real credential store.
+        Func<string, string?> refuseSelectionInput =
+            _ => throw new InvalidOperationException("selection input was read");
+
+        Assert.Null(DispatchProcessHost.TransportedClaudeCredentialSelection(
+            recordedSourceDirectory: "C:\\recorded-claude-config",
+            recordedSourceIsExplicit: true,
+            WorkerSandboxProvider.Codex,
+            sandboxLowIntegrity: true,
+            environmentReader: refuseSelectionInput));
+
+        Assert.Null(DispatchProcessHost.TransportedClaudeCredentialSelection(
+            recordedSourceDirectory: "C:\\recorded-claude-config",
+            recordedSourceIsExplicit: true,
+            WorkerSandboxProvider.Claude,
+            sandboxLowIntegrity: false,
+            environmentReader: refuseSelectionInput));
+    }
+
     private static DispatchProcessHost.DispatchRunParameters CreateClaudeDispatchParameters(
         string root,
         ClaudeCredentialSourceSelection? selection) =>

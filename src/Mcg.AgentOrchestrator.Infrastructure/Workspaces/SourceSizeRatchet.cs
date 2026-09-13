@@ -112,7 +112,11 @@ internal static class SourceSizeRatchet
             // Goal 0d92976e adds the BeforeRetryAdmission checkpoint phase to preserve
             // current-tick evidence before retry admission replaces the goal snapshot; 2669 is
             // the measured post-change size of the existing dispatch-state contract.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2669),
+            // Raised for goal df9ddb05: the Claude credential source the dispatch preflight selected must
+            // be transported from the dispatch record at the single process-start boundary that already
+            // owns the dispatch parameters; selection, validation, and seeding remain in
+            // ClaudeCredentialSource. 2682 is the measured size of that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -122,8 +126,13 @@ internal static class SourceSizeRatchet
             // Goal df9ddb05 LOWERED this from 3234: ClaudeCliAuthState and ClaudeCliAuthProbe moved out
             // to ClaudeCredentialSource.cs so the Claude credential selection rule and both consumers'
             // views of it live in one file and cannot drift apart again. The dispatcher keeps only the
-            // preflight finding call site. 3200 is the measured post-extraction size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3200),
+            // preflight finding call site. 3200 is the measured post-extraction size, and 3241 is that
+            // size plus the preflight-to-dispatch handoff at both preparation paths: one shared auth probe
+            // per prepared task, its injection seam for fixture credential sources, and the reported
+            // credential source carried out of preflight onto the dispatch record so the dispatch start
+            // boundary transports it instead of resolving a second source. Selection, validation, and
+            // seeding all remain in ClaudeCredentialSource.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3241),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

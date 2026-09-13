@@ -54,7 +54,22 @@ internal sealed record ClaudeCredentialInspection(
 /// token refresh between preflight and launch reaches the worker. The decision travels; the secret does
 /// not.
 /// </summary>
-public sealed record ClaudeCredentialSourceSelection(string DirectoryPath, bool IsExplicitSource);
+public sealed record ClaudeCredentialSourceSelection(string DirectoryPath, bool IsExplicitSource)
+{
+    /// <summary>
+    /// Rehydrates the selection a dispatch preflight recorded on its dispatch record, so the dispatch
+    /// start boundary transports THAT decision instead of making a second one of its own. Returns null
+    /// only when the record carries no selection, which is the single case where the start boundary is
+    /// allowed to resolve for itself (see
+    /// <c>DispatchProcessHost.TransportedClaudeCredentialSelection</c>).
+    /// </summary>
+    public static ClaudeCredentialSourceSelection? FromRecordedSelection(
+        string? directoryPath,
+        bool isExplicitSource) =>
+        string.IsNullOrWhiteSpace(directoryPath)
+            ? null
+            : new ClaudeCredentialSourceSelection(directoryPath, isExplicitSource);
+}
 
 /// <summary>
 /// Preflight's view of the ONE credential source <see cref="ClaudeCredentialResolver"/> selected.
@@ -102,6 +117,27 @@ public static class ClaudeCliAuthProbe
 
     public static ClaudeCliAuthState FromEnvironment() =>
         From(environmentReader: null, defaultHomeProvider: null);
+
+    /// <summary>
+    /// ONE dispatch preflight, ONE resolution: returns a probe that resolves on its first call and hands
+    /// every later consumer of the same preflight - subscription model-lane selection, the auth finding,
+    /// and the selection recorded on the dispatch record for the dispatch start boundary to transport -
+    /// that identical state. Each consumer calling <see cref="FromEnvironment"/> for itself is exactly how
+    /// the login preflight reported and the login a worker was seeded with drifted apart.
+    /// </summary>
+    public static Func<ClaudeCliAuthState> ForOneDispatchPreflight() =>
+        ForOneDispatchPreflight(environmentReader: null, defaultHomeProvider: null);
+
+    /// <param name="environmentReader">Reads CLAUDE_CONFIG_DIR and ANTHROPIC_API_KEY; process env by default.</param>
+    /// <param name="defaultHomeProvider">Supplies the home root for the default profile candidate.</param>
+    internal static Func<ClaudeCliAuthState> ForOneDispatchPreflight(
+        Func<string, string?>? environmentReader,
+        Func<string?>? defaultHomeProvider)
+    {
+        var resolver = new ClaudeCredentialResolver(environmentReader, defaultHomeProvider);
+        var state = new Lazy<ClaudeCliAuthState>(() => From(resolver));
+        return () => state.Value;
+    }
 
     /// <summary>
     /// Convenience overload for a caller that owns no resolver yet: it creates one, which means this

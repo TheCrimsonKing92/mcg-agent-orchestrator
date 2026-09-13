@@ -122,6 +122,170 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Null(task.LastProcess);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_records_the_preflight_selected_claude_login_for_dispatch_start")]
+    public void WorkerProfileDispatcherRecordsThePreflightSelectedClaudeLoginForDispatchStart()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+
+    // Synthetic fixture logins outside the repository: the operator-set CLAUDE_CONFIG_DIR source, and a
+    // different usable source at the simulated default profile that must never be selected or recorded.
+    // Both tokens are knowingly invalid; this exercises source selection, never authentication.
+    var credentialRoot = CreateTempDirectory();
+    var explicitDir = Path.Combine(credentialRoot, "operator-config");
+    Directory.CreateDirectory(explicitDir);
+    File.WriteAllText(
+        Path.Combine(explicitDir, ".credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}");
+    var defaultHome = Path.Combine(credentialRoot, "default-home");
+    Directory.CreateDirectory(Path.Combine(defaultHome, ".claude"));
+    File.WriteAllText(
+        Path.Combine(defaultHome, ".claude", ".credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-WRONG-PROFILE-SENTINEL\"}}");
+
+    var configDirectoryReads = 0;
+    Func<string, string?> environmentReader = name =>
+    {
+        if (!string.Equals(name, "CLAUDE_CONFIG_DIR", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        configDirectoryReads++;
+        return explicitDir;
+    };
+
+    // ONE resolver for this preparation, exactly as the production default probe provides.
+    var resolver = new ClaudeCredentialResolver(environmentReader, () => defaultHome);
+    var authProbe = () => ClaudeCliAuthProbe.From(resolver);
+
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude credential source handoff", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var dispatchedAt = DateTimeOffset.Parse("2026-09-12T16:00:00Z");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        dispatchedAt,
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        dispatchedAt,
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    // The source the auth finding an operator reads names, and the source carried out of preflight, are
+    // one resolution - not two computations that happen to agree on this machine.
+    var authFinding = preflight.Findings.Single(finding =>
+        finding.StartsWith("ok: Claude CLI Low-IL auth preflight will seed", StringComparison.Ordinal));
+    Assert.Contains(Path.GetFullPath(explicitDir), authFinding);
+    Assert.Equal(Path.GetFullPath(explicitDir), preflight.ClaudeCredentialSelection!.DirectoryPath);
+    Assert.True(preflight.ClaudeCredentialSelection.IsExplicitSource);
+
+    // Recorded on the dispatch, because the dispatch start boundary can be a later tick - or a later
+    // process, after a conductor restart - that cannot share an object with this preparation. The
+    // snapshot round trip is that boundary.
+    var reloaded = AgentOrchestratorKernel
+        .FromSnapshot(kernel.ExportSnapshot())
+        .GetTask(goal.Id, task.Id)
+        .LastDispatch;
+    Assert.NotNull(reloaded);
+    Assert.Equal(preflight.ClaudeCredentialSelection.DirectoryPath, reloaded!.ClaudeCredentialSourceDirectory);
+    Assert.True(reloaded.ClaudeCredentialSourceIsExplicit);
+
+    // And dispatch start transports exactly that, without consulting an environment of its own - which
+    // here would resolve to the other login.
+    Assert.Equal(
+        preflight.ClaudeCredentialSelection,
+        DispatchProcessHost.TransportedClaudeCredentialSelection(
+            reloaded.ClaudeCredentialSourceDirectory,
+            reloaded.ClaudeCredentialSourceIsExplicit,
+            WorkerSandboxProvider.Claude,
+            sandboxLowIntegrity: true,
+            environmentReader: _ => throw new InvalidOperationException("selection input was read")));
+
+    // One resolution served model-lane selection, the auth finding, and the recorded selection across
+    // both the preflight and the preparation call.
+    Assert.Equal(1, resolver.ResolutionCount);
+    Assert.Equal(1, configDirectoryReads);
+    Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", string.Join("\n", preflight.Findings));
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_records_the_preflight_selected_claude_login")]
+    public void WorkerProfileDispatcherReadyBatchRecordsThePreflightSelectedClaudeLogin()
+{
+    // The conductor's own preparation path. Its dispatches are the ones a worker is launched from, so
+    // the recorded credential source has to travel from here, not from whatever the start boundary's
+    // environment happens to resolve later.
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var credentialRoot = CreateTempDirectory();
+    var selectedDir = Path.Combine(credentialRoot, "operator-config");
+    Directory.CreateDirectory(selectedDir);
+    File.WriteAllText(
+        Path.Combine(selectedDir, ".credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}");
+
+    var resolver = new ClaudeCredentialResolver(
+        name => string.Equals(name, "CLAUDE_CONFIG_DIR", StringComparison.Ordinal) ? selectedDir : null,
+        () => Path.Combine(credentialRoot, "unused-home"));
+    var authProbe = () => ClaudeCliAuthProbe.From(resolver);
+
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify ready batch credential handoff", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+        kernel,
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-09-12T16:00:00Z"),
+        sandboxOptions: sandbox,
+        claudeAuthProbe: authProbe);
+
+    Assert.Single(batch.Dispatches);
+    var dispatch = task.LastDispatch!;
+    Assert.Equal(Path.GetFullPath(selectedDir), dispatch.ClaudeCredentialSourceDirectory);
+    Assert.True(dispatch.ClaudeCredentialSourceIsExplicit);
+    Assert.Equal(1, resolver.ResolutionCount);
+    Assert.Null(task.LastProcess);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_light_role_claude_auth_via_sandbox_credential_seeding")]
     public void WorkerProfileDispatcherPreflightAllowsLightRoleClaudeAuthViaSandboxCredentialSeeding()
 {
