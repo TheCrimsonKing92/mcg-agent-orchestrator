@@ -67,7 +67,10 @@ public enum HumanWaitKind
     ExternalCredential,
     ProviderAuth,
     RecoveryChoice,
-    Other
+    Other,
+    // Prerequisite evidence a Planner could not reach, answered by the operator and required by
+    // later same-goal roles. Serialized as a string, so appending here is persistence-safe.
+    PlannerPrerequisiteEvidence
 }
 
 public enum ProgressKind

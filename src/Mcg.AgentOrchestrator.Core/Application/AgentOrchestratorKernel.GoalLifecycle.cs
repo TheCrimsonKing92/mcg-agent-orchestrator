@@ -2122,7 +2122,7 @@ public sealed partial class AgentOrchestratorKernel
             .ToList())
         {
             var age = _clock.UtcNow - request.CreatedAt;
-            if (request.Kind != HumanWaitKind.SpecClarification || age < specClarificationStaleAfter)
+            if (!HumanWaitPolicyDefaults.IsSpecClarificationClass(request.Kind) || age < specClarificationStaleAfter)
             {
                 continue;
             }
