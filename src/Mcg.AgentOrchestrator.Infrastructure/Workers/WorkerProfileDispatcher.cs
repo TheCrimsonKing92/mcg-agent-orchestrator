@@ -627,11 +627,8 @@ public static class WorkerProfileDispatcher
                     !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate),
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
-            AddClaudeReasoningEffortFindings(
-                findings,
-                DefaultProviders.ResolveProfile(profile.Name),
-                profile,
-                reasoningEffort);
+            ClaudeCliEffortPolicy.AddPreflightFindings(
+                findings, DefaultProviders.ResolveProfile(profile.Name).Identity.Kind, profile, reasoningEffort);
 
             var capability = WorkerSandboxCapabilityPlanner.Evaluate(
                 goal,
@@ -1014,53 +1011,6 @@ public static class WorkerProfileDispatcher
     private static void AddProfileFinding(List<string> findings, bool blocked, string blockedMessage, string okMessage)
     {
         findings.Add(blocked ? $"blocked: {blockedMessage}" : $"ok: {okMessage}");
-    }
-
-    /// <summary>
-    /// Claude-scoped reasoning-effort findings. An unsupported value refuses the dispatch before any
-    /// worker process starts, so a config typo costs no paid start and is never clamped or remapped.
-    /// A preserved custom template that cannot materialize a supported value is a `warn:` finding on
-    /// purpose: the invocation must still proceed, so this must not go through AddProfileFinding, whose
-    /// `blocked:` prefix ThrowIfPreflightBlocked turns into a refusal.
-    /// </summary>
-    private static void AddClaudeReasoningEffortFindings(
-        List<string> findings,
-        IWorkerProvider provider,
-        WorkerProfile profile,
-        string? reasoningEffort)
-    {
-        if (provider.Identity.Kind != ProviderKind.AnthropicClaudeCli ||
-            string.IsNullOrWhiteSpace(reasoningEffort))
-        {
-            return;
-        }
-
-        if (!ClaudeCliEffortPolicy.IsSupported(reasoningEffort))
-        {
-            findings.Add(
-                $"blocked: {UnsupportedClaudeReasoningEffortErrorCode}: worker profile '{profile.Name}' configured " +
-                $"reasoning effort '{reasoningEffort}' is not supported by the Claude CLI; supported values: " +
-                $"{ClaudeCliEffortPolicy.SupportedValuesDisplay}");
-            return;
-        }
-
-        // Judged against what the invocation will actually be, not the saved bytes alone: a superseded
-        // built-in has no effort variable on disk yet materializes one after the in-memory repair, so
-        // testing the saved template here would report a drop that does not happen.
-        if (!ClaudeCliEffortPolicy.MaterializesConfiguredEffort(profile.CommandTemplate))
-        {
-            findings.Add(
-                $"warn: worker profile '{profile.Name}' has no {{subscriptionReasoningEffort}} template variable; " +
-                $"configured reasoning effort '{reasoningEffort}' was not materialized");
-            return;
-        }
-
-        var repairNote = WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate)
-            ? string.Empty
-            : " (superseded built-in command template repaired in memory for this invocation; saved profile unchanged)";
-        findings.Add(
-            $"ok: worker profile '{profile.Name}' materializes reasoning effort '{reasoningEffort}' " +
-            $"as {ClaudeCliEffortPolicy.EffortFlag}{repairNote}");
     }
 
     private static void AddSkillAvailabilityFindings(List<string> findings, Goal goal, TaskSpec task, string workingDirectory)
@@ -3226,18 +3176,10 @@ public static class WorkerProfileDispatcher
         IReadOnlyDictionary<string, string?> dispatchVariables,
         Action<string>? diagnosticSink = null)
     {
-        // Superseded built-in claude-cli commands are repaired here, at invocation time, and in memory only:
-        // the resolved template drives this one command construction and is never handed to the profile
-        // store. A custom template comes back unchanged and keeps taking the legacy path below.
-        var resolved = providerKind == ProviderKind.AnthropicClaudeCli
-            ? profile with
-            {
-                CommandTemplate = ClaudeCliEffortPolicy.ResolveInvocationCommandTemplate(
-                    profile.Name,
-                    profile.CommandTemplate,
-                    diagnosticSink)
-            }
-            : profile;
+        // Superseded built-in claude-cli commands are repaired at invocation time and in memory only: the
+        // resolved profile drives this one command construction and is never handed to the profile store.
+        // A custom template comes back unchanged and keeps taking the legacy path below.
+        var resolved = ClaudeCliEffortPolicy.ResolveInvocationProfile(profile, providerKind, diagnosticSink);
 
         if (!ShouldUseTypedBuiltInCommand(resolved, providerKind) ||
             !HasRequiredBuiltInVariables(providerKind, dispatchVariables))

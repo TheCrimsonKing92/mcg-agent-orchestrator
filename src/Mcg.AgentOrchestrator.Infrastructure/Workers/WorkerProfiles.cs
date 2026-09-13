@@ -459,6 +459,25 @@ public static class ClaudeCliEffortPolicy
     }
 
     /// <summary>
+    /// The profile this one invocation renders from. A saved claude-cli command that matches a recognized
+    /// stale built-in is repaired in memory here; every other profile - including every non-Claude provider -
+    /// comes back unchanged, so the caller holds the resolved profile without restating the Claude rule.
+    /// </summary>
+    public static WorkerProfile ResolveInvocationProfile(
+        WorkerProfile profile,
+        ProviderKind providerKind,
+        Action<string>? diagnosticSink = null) =>
+        providerKind == ProviderKind.AnthropicClaudeCli
+            ? profile with
+            {
+                CommandTemplate = ResolveInvocationCommandTemplate(
+                    profile.Name,
+                    profile.CommandTemplate,
+                    diagnosticSink)
+            }
+            : profile;
+
+    /// <summary>
     /// True when the invocation built from this template materializes a configured effort - either the
     /// template carries the effort variable, or it is a stale built-in repaired at invocation time. Findings
     /// that describe the invocation must agree with what <see cref="ResolveInvocationCommandTemplate"/>
@@ -467,6 +486,53 @@ public static class ClaudeCliEffortPolicy
     public static bool MaterializesConfiguredEffort(string commandTemplate) =>
         WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(commandTemplate) ||
         MatchesStaleBuiltInCommandTemplate(commandTemplate);
+
+    /// <summary>
+    /// Claude-scoped reasoning-effort preflight findings, produced beside the vocabulary and the repair rule
+    /// they describe so a finding can never disagree with the invocation actually constructed. An unsupported
+    /// value refuses the dispatch before any worker process starts, so a config typo costs no paid start and
+    /// is never clamped or remapped. A preserved custom template that cannot materialize a supported value is
+    /// a <c>warn:</c> finding on purpose: the invocation must still proceed, so this must not use the
+    /// <c>blocked:</c> prefix that the dispatcher's preflight turns into a refusal.
+    /// </summary>
+    public static void AddPreflightFindings(
+        List<string> findings,
+        ProviderKind providerKind,
+        WorkerProfile profile,
+        string? reasoningEffort)
+    {
+        if (providerKind != ProviderKind.AnthropicClaudeCli || string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            return;
+        }
+
+        if (!IsSupported(reasoningEffort))
+        {
+            findings.Add(
+                $"blocked: {WorkerProfileDispatcher.UnsupportedClaudeReasoningEffortErrorCode}: worker profile " +
+                $"'{profile.Name}' configured reasoning effort '{reasoningEffort}' is not supported by the Claude " +
+                $"CLI; supported values: {SupportedValuesDisplay}");
+            return;
+        }
+
+        // Judged against what the invocation will actually be, not the saved bytes alone: a superseded
+        // built-in has no effort variable on disk yet materializes one after the in-memory repair, so
+        // testing the saved template here would report a drop that does not happen.
+        if (!MaterializesConfiguredEffort(profile.CommandTemplate))
+        {
+            findings.Add(
+                $"warn: worker profile '{profile.Name}' has no {EffortPlaceholder} template variable; " +
+                $"configured reasoning effort '{reasoningEffort}' was not materialized");
+            return;
+        }
+
+        var repairNote = WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate)
+            ? string.Empty
+            : " (superseded built-in command template repaired in memory for this invocation; saved profile unchanged)";
+        findings.Add(
+            $"ok: worker profile '{profile.Name}' materializes reasoning effort '{reasoningEffort}' " +
+            $"as {EffortFlag}{repairNote}");
+    }
 
     // One diagnostic per profile per process: the repair is re-derived on every invocation, so repeating the
     // line on each dispatch would bury it. A supplied sink bypasses the guard so a caller observing
