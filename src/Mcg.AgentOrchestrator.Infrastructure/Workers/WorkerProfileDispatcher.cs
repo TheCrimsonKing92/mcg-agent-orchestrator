@@ -87,6 +87,7 @@ public static class WorkerProfileDispatcher
     public const string MissingResearchArtifactErrorCode = "missing-research-artifact";
     public const string MissingPlannerArtifactErrorCode = "missing-planner-artifact";
     public const string ArtifactTooLargeErrorCode = "artifact-too-large";
+    public const string UnsupportedClaudeReasoningEffortErrorCode = "unsupported-claude-reasoning-effort";
     private const string HighRiskReviewerReasoningEffort = "xhigh";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
@@ -626,6 +627,11 @@ public static class WorkerProfileDispatcher
                     !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate),
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
+            AddClaudeReasoningEffortFindings(
+                findings,
+                DefaultProviders.ResolveProfile(profile.Name),
+                profile,
+                reasoningEffort);
 
             var capability = WorkerSandboxCapabilityPlanner.Evaluate(
                 goal,
@@ -767,6 +773,11 @@ public static class WorkerProfileDispatcher
         if (findings.Any(finding => finding.Contains(ArtifactTooLargeErrorCode, StringComparison.Ordinal)))
         {
             return ArtifactTooLargeErrorCode;
+        }
+
+        if (findings.Any(finding => finding.Contains(UnsupportedClaudeReasoningEffortErrorCode, StringComparison.Ordinal)))
+        {
+            return UnsupportedClaudeReasoningEffortErrorCode;
         }
 
         if (findings.Any(finding => finding.Contains(ClaudeCliAuthProbe.AuthUnavailableErrorCode, StringComparison.Ordinal)))
@@ -1003,6 +1014,47 @@ public static class WorkerProfileDispatcher
     private static void AddProfileFinding(List<string> findings, bool blocked, string blockedMessage, string okMessage)
     {
         findings.Add(blocked ? $"blocked: {blockedMessage}" : $"ok: {okMessage}");
+    }
+
+    /// <summary>
+    /// Claude-scoped reasoning-effort findings. An unsupported value refuses the dispatch before any
+    /// worker process starts, so a config typo costs no paid start and is never clamped or remapped.
+    /// A preserved custom template that cannot materialize a supported value is a `warn:` finding on
+    /// purpose: the invocation must still proceed, so this must not go through AddProfileFinding, whose
+    /// `blocked:` prefix ThrowIfPreflightBlocked turns into a refusal.
+    /// </summary>
+    private static void AddClaudeReasoningEffortFindings(
+        List<string> findings,
+        IWorkerProvider provider,
+        WorkerProfile profile,
+        string? reasoningEffort)
+    {
+        if (provider.Identity.Kind != ProviderKind.AnthropicClaudeCli ||
+            string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            return;
+        }
+
+        if (!ClaudeCliEffortPolicy.IsSupported(reasoningEffort))
+        {
+            findings.Add(
+                $"blocked: {UnsupportedClaudeReasoningEffortErrorCode}: worker profile '{profile.Name}' configured " +
+                $"reasoning effort '{reasoningEffort}' is not supported by the Claude CLI; supported values: " +
+                $"{ClaudeCliEffortPolicy.SupportedValuesDisplay}");
+            return;
+        }
+
+        if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
+        {
+            findings.Add(
+                $"warn: worker profile '{profile.Name}' has no {{subscriptionReasoningEffort}} template variable; " +
+                $"configured reasoning effort '{reasoningEffort}' was not materialized");
+            return;
+        }
+
+        findings.Add(
+            $"ok: worker profile '{profile.Name}' materializes reasoning effort '{reasoningEffort}' " +
+            $"as {ClaudeCliEffortPolicy.EffortFlag}");
     }
 
     private static void AddSkillAvailabilityFindings(List<string> findings, Goal goal, TaskSpec task, string workingDirectory)

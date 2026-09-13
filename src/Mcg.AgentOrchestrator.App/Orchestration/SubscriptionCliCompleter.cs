@@ -117,17 +117,89 @@ internal sealed class SubscriptionCliCompleter
         string promptPath,
         string modelAlias,
         string? reasoningEffort,
-        string workingDirectory)
+        string workingDirectory,
+        Action<string>? diagnosticSink = null)
     {
         var provider = WorkerProviderCatalog.Default().ResolveProfile(profileName);
         var permissionMode = provider.Identity.Kind == ProviderKind.AnthropicClaudeCli ? "default" : "plan";
-        return template
+        var resolvedTemplate = provider.Identity.Kind == ProviderKind.AnthropicClaudeCli
+            ? ResolveClaudeEffortSegment(template, profileName, reasoningEffort, diagnosticSink)
+            : template;
+        return resolvedTemplate
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionModelName}", Quote(modelAlias), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionReasoningEffort}", Quote(string.IsNullOrWhiteSpace(reasoningEffort) ? AgentCatalog.ComplexReasoningEffort : reasoningEffort), StringComparison.OrdinalIgnoreCase)
             .Replace("{sandboxMode}", Quote("read-only"), StringComparison.OrdinalIgnoreCase)
             .Replace("{permissionMode}", Quote(permissionMode), StringComparison.OrdinalIgnoreCase)
             .Replace("{workingDirectory}", Quote(workingDirectory), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Resolves the Claude effort segment for the orchestrator-internal path, which has no dispatch
+    /// preflight to refuse at. A configured value the CLI does not accept elides the flag and names
+    /// itself in a diagnostic rather than hard-failing: refinement, review glance, and acceptance
+    /// evaluation must keep running, and criterion 7 forbids turning this into a failed invocation.
+    /// A custom template with no effort segment is left byte-for-byte alone and only warned about.
+    /// </summary>
+    private static string ResolveClaudeEffortSegment(
+        string template,
+        string profileName,
+        string? reasoningEffort,
+        Action<string>? diagnosticSink)
+    {
+        if (string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            // No configured policy: emit no flag so user-level Claude settings govern unchanged.
+            return ClaudeCliEffortPolicy.ElideEffortSegment(template);
+        }
+
+        if (!ClaudeCliEffortPolicy.IsSupported(reasoningEffort))
+        {
+            Warn(
+                diagnosticSink,
+                $"unsupported:{profileName}:{reasoningEffort}",
+                $"[SubscriptionCliCompleter] WARNING: worker profile '{profileName}' configured reasoning effort " +
+                $"'{reasoningEffort}' is not supported by the Claude CLI; supported values: " +
+                $"{ClaudeCliEffortPolicy.SupportedValuesDisplay}. The {ClaudeCliEffortPolicy.EffortFlag} argument was omitted " +
+                "and the value was neither clamped nor remapped.");
+            return ClaudeCliEffortPolicy.ElideEffortSegment(template);
+        }
+
+        if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(template))
+        {
+            Warn(
+                diagnosticSink,
+                $"unmaterialized:{profileName}:{reasoningEffort}",
+                $"[SubscriptionCliCompleter] WARNING: worker profile '{profileName}' has no " +
+                $"{ClaudeCliEffortPolicy.EffortPlaceholder} template variable; configured reasoning effort " +
+                $"'{reasoningEffort}' was not materialized. The saved command template was left unchanged.");
+        }
+
+        return template;
+    }
+
+    // The completer runs on every refinement, glance, and acceptance pass; without the guard a single
+    // misconfigured profile would repeat the same line on every invocation. A supplied sink bypasses the
+    // guard so a caller observing diagnostics never depends on which invocation happened to be first.
+    private static readonly HashSet<string> _emittedWarnings = new(StringComparer.Ordinal);
+
+    private static void Warn(Action<string>? diagnosticSink, string key, string message)
+    {
+        if (diagnosticSink is not null)
+        {
+            diagnosticSink(message);
+            return;
+        }
+
+        lock (_emittedWarnings)
+        {
+            if (!_emittedWarnings.Add(key))
+            {
+                return;
+            }
+        }
+
+        Console.Error.WriteLine(message);
     }
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
