@@ -561,13 +561,20 @@ function Get-DefaultMtpResultsRoot {
 function Write-MtpRunOwnershipSidecar {
     param(
         [Parameter(Mandatory = $true)][string]$ResultsDirectory,
-        [Parameter(Mandatory = $true)][string]$RunLabel
+        [Parameter(Mandatory = $true)][string]$RunLabel,
+        # Set-MtpHermeticEnvironment strips MCG_ACCEPTANCE_GATE_ATTEMPT_ID from the process, so any
+        # caller running after it must pass the attempt id captured before the strip. Without it the
+        # sidecar records 'unowned' and the evidence never enters the attributed retention lane.
+        [string]$AttemptId
     )
 
     $receiptPath = Join-Path $ResultsDirectory '.mtp-run-ownership.json'
     $temporaryPath = $receiptPath + ".tmp-$([Guid]::NewGuid().ToString('N'))"
     try {
-        $attemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
+        $attemptId = $AttemptId
+        if ([string]::IsNullOrWhiteSpace($attemptId)) {
+            $attemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
+        }
         if ([string]::IsNullOrWhiteSpace($attemptId)) {
             $attemptId = 'unowned'
         }
@@ -631,7 +638,12 @@ function Initialize-MtpResultsDirectory {
         Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction Stop
         throw "Results root '$resolvedRoot' is too long for bounded MTP TRX paths. Choose a shorter directory beneath the Low-integrity-writable root."
     }
-    [void](Write-MtpRunOwnershipSidecar -ResultsDirectory $runDirectory -RunLabel $RunLabel)
+    if (-not (Write-MtpRunOwnershipSidecar -ResultsDirectory $runDirectory -RunLabel $RunLabel)) {
+        # An unowned run directory is undecidable to every retention sweep forever. Fail before the
+        # run populates it rather than leaving an orphan the sweep can neither attribute nor reclaim.
+        Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Could not write the retention ownership sidecar for invocation results directory '$runDirectory'. Without it the directory is undecidable to retention sweeps, so no run was started."
+    }
     return $runDirectory
 }
 
@@ -1514,13 +1526,20 @@ function Resolve-MtpEvaluatedTargetPath {
 
     $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
     $logPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-target-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.log' -MaximumLength 180)
-    $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath,TargetFramework,RuntimeIdentifier', '-getItem:Compile')
+    # -getResultOutputFile keeps the evaluation payload out of the capture log, which interleaves the
+    # child's stdout and stderr. Parsing the shared log turns any MSBuild warning on stderr, or a
+    # truncated drain, into an opaque "invalid result" instead of the real failure.
+    $resultPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-identity-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.json' -MaximumLength 180)
+    $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath,TargetFramework,RuntimeIdentifier', '-getItem:Compile', "-getResultOutputFile:$resultPath")
     $probe = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $logPath -WorkingDirectory $RepositoryRoot
-    if (-not $probe.Started -or -not [string]::IsNullOrWhiteSpace([string]$probe.StartFailureMessage) -or -not [string]::IsNullOrWhiteSpace([string]$probe.MonitoringFailureMessage) -or -not $probe.CleanupConfirmed -or $probe.ExitCode -ne 0) {
-        throw "MSBuild target-path evaluation failed for '$projectPath'; diagnostic log: $logPath"
+    if (-not $probe.Started -or -not [string]::IsNullOrWhiteSpace([string]$probe.StartFailureMessage) -or -not [string]::IsNullOrWhiteSpace([string]$probe.MonitoringFailureMessage) -or -not $probe.CleanupConfirmed -or -not $probe.DrainConfirmed -or $probe.ExitCode -ne 0) {
+        throw "MSBuild target-path evaluation failed for '$projectPath'; started=$($probe.Started) exitCode=$($probe.ExitCode) cleanupConfirmed=$($probe.CleanupConfirmed) drainConfirmed=$($probe.DrainConfirmed); diagnostic log: $logPath"
+    }
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        throw "MSBuild build-identity evaluation produced no result file for '$projectPath'; expected '$resultPath'; diagnostic log: $logPath"
     }
     try {
-        $payload = Get-Content -LiteralPath $logPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $payload = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         $properties = $payload.Properties
         if ($null -eq $properties -or
             [string]::IsNullOrWhiteSpace([string]$properties.TargetPath) -or
@@ -1530,7 +1549,7 @@ function Resolve-MtpEvaluatedTargetPath {
         }
     }
     catch {
-        throw "MSBuild build-identity evaluation returned an invalid result for '$projectPath'; diagnostic log: $logPath; $($_.Exception.Message)"
+        throw "MSBuild build-identity evaluation returned an invalid result for '$projectPath'; result file: $resultPath; diagnostic log: $logPath; $($_.Exception.Message)"
     }
     $resolved = [System.IO.Path]::GetFullPath([string]$properties.TargetPath)
     $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
@@ -1562,7 +1581,7 @@ function Resolve-MtpEvaluatedTargetPath {
         }
     }
     catch {
-        throw "MSBuild build-identity evaluation returned invalid Compile items for '$projectPath'; diagnostic log: $logPath; $($_.Exception.Message)"
+        throw "MSBuild build-identity evaluation returned invalid Compile items for '$projectPath'; result file: $resultPath; diagnostic log: $logPath; $($_.Exception.Message)"
     }
     return [pscustomobject]@{
         TargetPath = $resolved
@@ -2075,61 +2094,72 @@ function Write-MtpRunEvidenceReceipt {
         [string[]]$RequestedFilters = @(),
         [string[]]$ExecutedTestNames = @(),
         [object[]]$BuildSelections = @(),
-        [scriptblock]$OwnershipWriter
+        [scriptblock]$OwnershipWriter,
+        [string]$AttemptId
     )
 
     $resultsRoot = Split-Path -Parent $RunDirectory
     $evidenceDirectory = Join-Path $resultsRoot (Get-MtpBoundedFileName -Stem "$RunLabel-$([DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfff'))-$([Guid]::NewGuid().ToString('N').Substring(0, 8))" -Suffix '' -MaximumLength 180)
     [void](New-Item -ItemType Directory -Path $evidenceDirectory -ErrorAction Stop)
-    $trxEvidence = [System.Collections.Generic.List[object]]::new()
-    foreach ($trxPath in $TrxPaths) {
-        $summary = Read-MtpTrxResult -Path $trxPath
-        $leaf = [System.IO.Path]::GetFileName($trxPath)
-        Copy-Item -LiteralPath $trxPath -Destination (Join-Path $evidenceDirectory $leaf) -Force -ErrorAction Stop
-        $trxEvidence.Add([ordered]@{
-            file = $leaf
-            total = $summary.Total
-            passed = $summary.Passed
-            failed = $summary.Failed
-            skipped = $summary.Skipped
-            executedTestNames = @(if ($null -ne $summary.Document.TestRun.Results -and $null -ne $summary.Document.TestRun.Results.PSObject.Properties['UnitTestResult']) { $summary.Document.TestRun.Results.UnitTestResult | ForEach-Object { [string]$_.testName } | Sort-Object -Unique })
-        })
-    }
-    $selectionEvidence = @($BuildSelections | ForEach-Object {
-        $receipt = $_.Receipt
-        $sources = @($receipt.Sources | ForEach-Object { "$($_.Path):$($_.Sha256)" } | Sort-Object)
-        [ordered]@{
-            project = $_.Project
-            selectedDirectory = $_.Directory
-            assemblySha256 = $receipt.Headers['assemblySha256']
-            pdbSha256 = $receipt.Headers['pdbSha256']
-            sourceSetDigest = Get-MtpSha256Text -Text ($sources -join "`n")
-            receipt = $receipt.Path
-            rejectedCandidates = @($_.Rejections)
-            closureDirectory = $_.ClosureDirectory
-            closureDigest = $_.ClosureDigest
-            launchedAssembly = $_.LaunchedAssembly
-            launchedAssemblySha256 = $_.LaunchedAssemblySha256
-        }
-    })
-    $evidence = [ordered]@{
-        schemaVersion = 1
-        runLabel = $RunLabel
-        createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
-        requestedFilters = @($RequestedFilters)
-        executedTestNames = @($ExecutedTestNames | Sort-Object -Unique)
-        selections = $selectionEvidence
-        trx = $trxEvidence.ToArray()
-    }
-    $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'run-identity.json') -Encoding UTF8 -ErrorAction Stop
+    # Claim retention ownership before populating. A directory under the MTP results root with no
+    # sidecar is undecidable to every sweep, so it must never exist in that state - not even for the
+    # duration of the copies, and not if a later step throws.
     $ownershipWritten = if ($null -eq $OwnershipWriter) {
-        Write-MtpRunOwnershipSidecar -ResultsDirectory $evidenceDirectory -RunLabel $RunLabel
+        Write-MtpRunOwnershipSidecar -ResultsDirectory $evidenceDirectory -RunLabel $RunLabel -AttemptId $AttemptId
     }
     else {
         & $OwnershipWriter $evidenceDirectory $RunLabel
     }
     if (-not $ownershipWritten) {
-        throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. The original run directory remains available for diagnosis."
+        Remove-Item -LiteralPath $evidenceDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. No unowned evidence directory was left behind; the original run directory remains available for diagnosis."
+    }
+    try {
+        $trxEvidence = [System.Collections.Generic.List[object]]::new()
+        foreach ($trxPath in $TrxPaths) {
+            $summary = Read-MtpTrxResult -Path $trxPath
+            $leaf = [System.IO.Path]::GetFileName($trxPath)
+            Copy-Item -LiteralPath $trxPath -Destination (Join-Path $evidenceDirectory $leaf) -Force -ErrorAction Stop
+            $trxEvidence.Add([ordered]@{
+                file = $leaf
+                total = $summary.Total
+                passed = $summary.Passed
+                failed = $summary.Failed
+                skipped = $summary.Skipped
+                executedTestNames = @(if ($null -ne $summary.Document.TestRun.Results -and $null -ne $summary.Document.TestRun.Results.PSObject.Properties['UnitTestResult']) { $summary.Document.TestRun.Results.UnitTestResult | ForEach-Object { [string]$_.testName } | Sort-Object -Unique })
+            })
+        }
+        $selectionEvidence = @($BuildSelections | ForEach-Object {
+            $receipt = $_.Receipt
+            $sources = @($receipt.Sources | ForEach-Object { "$($_.Path):$($_.Sha256)" } | Sort-Object)
+            [ordered]@{
+                project = $_.Project
+                selectedDirectory = $_.Directory
+                assemblySha256 = $receipt.Headers['assemblySha256']
+                pdbSha256 = $receipt.Headers['pdbSha256']
+                sourceSetDigest = Get-MtpSha256Text -Text ($sources -join "`n")
+                receipt = $receipt.Path
+                rejectedCandidates = @($_.Rejections)
+                closureDirectory = $_.ClosureDirectory
+                closureDigest = $_.ClosureDigest
+                launchedAssembly = $_.LaunchedAssembly
+                launchedAssemblySha256 = $_.LaunchedAssemblySha256
+            }
+        })
+        $evidence = [ordered]@{
+            schemaVersion = 1
+            runLabel = $RunLabel
+            createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+            requestedFilters = @($RequestedFilters)
+            executedTestNames = @($ExecutedTestNames | Sort-Object -Unique)
+            selections = $selectionEvidence
+            trx = $trxEvidence.ToArray()
+        }
+        $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'run-identity.json') -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        Remove-Item -LiteralPath $evidenceDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        throw
     }
     return $evidenceDirectory
 }
@@ -2182,6 +2212,9 @@ function Invoke-MtpTestRun {
     $lastRunnerExitCode = $null
     $allExitsConfirmed = $true
     $environmentSnapshot = Get-MtpEnvironmentSnapshot
+    # Captured before Set-MtpHermeticEnvironment strips it, so retained evidence written after the
+    # strip still lands in the attributed retention lane instead of the 48h unattributed bound.
+    $acceptanceAttemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
     try {
         $startupHookPath = Resolve-MtpFaultDialogStartupHook
     }
@@ -2357,7 +2390,7 @@ function Invoke-MtpTestRun {
         }
 
         try {
-            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter
+            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter -AttemptId $acceptanceAttemptId
             Write-Host "Run identity and named TRX evidence retained: $retainedEvidenceDirectory"
         }
         catch {

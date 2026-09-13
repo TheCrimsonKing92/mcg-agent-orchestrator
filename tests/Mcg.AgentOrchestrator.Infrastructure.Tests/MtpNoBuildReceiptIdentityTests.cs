@@ -130,9 +130,33 @@ public sealed class MtpNoBuildReceiptIdentityTests
         Xunit.Assert.Equal(0, result.ExitCode);
         Xunit.Assert.Contains("EVIDENCE RETENTION FAILURE", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("Could not write retention ownership sidecar", result.Stdout, StringComparison.Ordinal);
-        var retainedRun = Xunit.Assert.Single(Directory.GetDirectories(sandbox.ResultsRoot)
-            .Where(directory => Directory.EnumerateFiles(directory, "*.runner.log", SearchOption.TopDirectoryOnly).Any()));
+        Xunit.Assert.Equal(28, TerminalRun(result).GetProperty("exitCode").GetInt32());
+        // The failed evidence directory must not survive: it has no ownership sidecar, so every
+        // retention sweep would classify it RetainedUndecidable forever and never reclaim it.
+        var retainedRun = Xunit.Assert.Single(Directory.GetDirectories(sandbox.ResultsRoot));
+        Xunit.Assert.True(
+            Directory.EnumerateFiles(retainedRun, "*.runner.log", SearchOption.TopDirectoryOnly).Any(),
+            $"Expected the original run directory to survive, found '{retainedRun}'.");
         Xunit.Assert.True(Directory.EnumerateFiles(retainedRun, "*.trx", SearchOption.TopDirectoryOnly).Any());
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_attributes_retained_evidence_to_the_requesting_acceptance_attempt")]
+    public void MtpNoBuildAttributesRetainedEvidenceToRequestingAcceptanceAttempt()
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        sandbox.CreateManagedAssemblyPlaceholder();
+        const string attemptId = "8f2c41d6b9a74e0f83c5d17e6b024a95";
+
+        var result = sandbox.RunPartitionUnderAcceptanceAttempt("GoalWorktree", attemptId);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        var evidenceDirectory = TerminalSummary(result).GetProperty("retainedEvidenceDirectory").GetString();
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(evidenceDirectory));
+        var ownershipPath = Path.Combine(evidenceDirectory!, ".mtp-run-ownership.json");
+        using var ownership = JsonDocument.Parse(File.ReadAllText(ownershipPath));
+        // Set-MtpHermeticEnvironment strips the attempt id long before the evidence is written, so
+        // 'unowned' here means retained evidence silently leaves the attributed retention lane.
+        Xunit.Assert.Equal(attemptId, ownership.RootElement.GetProperty("attemptId").GetString());
     }
 
     [Xunit.Fact(DisplayName = "MTP_no_build_launches_a_verified_evaluated_standard_output")]
@@ -168,6 +192,16 @@ public sealed class MtpNoBuildReceiptIdentityTests
         Xunit.Assert.Equal(0, result.ExitCode);
         Xunit.Assert.Contains("NO-BUILD BUILD RECEIPT SELECTED - evaluated standard output", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.True(File.Exists(sandbox.ArgumentLog), "The verified evaluated standard output must reach the runner.");
+    }
+
+    // RunPartitionWithRejectedEvidenceOwnership pipes the terminal result object to stdout as its
+    // last line; the hosting pwsh exit code is 0 regardless, so only this carries the run's verdict.
+    private static JsonElement TerminalRun(MtpTestRunnerScriptTests.ProcessResult result)
+    {
+        var payload = result.Stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Last(line => line.StartsWith('{'));
+        using var document = JsonDocument.Parse(payload);
+        return document.RootElement.Clone();
     }
 
     private static JsonElement TerminalSummary(MtpTestRunnerScriptTests.ProcessResult result)

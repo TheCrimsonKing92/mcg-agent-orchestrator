@@ -1355,7 +1355,15 @@ public sealed class MtpTestRunnerScriptTests
                     $sourcePath = '{{Path.Combine(root, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "receipt-source.cs")}}'
                     $open = [char]123
                     $close = [char]125
-                    Write-Output ($open + '"Properties":' + $open + '"TargetPath":' + ($targetPath | ConvertTo-Json -Compress) + ',"TargetFramework":"net10.0","RuntimeIdentifier":""' + $close + ',"Items":' + $open + '"Compile":[' + $open + '"Identity":' + ($sourcePath | ConvertTo-Json -Compress) + $close + ']' + $close + $close)
+                    $payload = ($open + '"Properties":' + $open + '"TargetPath":' + ($targetPath | ConvertTo-Json -Compress) + ',"TargetFramework":"net10.0","RuntimeIdentifier":""' + $close + ',"Items":' + $open + '"Compile":[' + $open + '"Identity":' + ($sourcePath | ConvertTo-Json -Compress) + $close + ']' + $close + $close)
+                    # Real MSBuild writes the evaluation payload to -getResultOutputFile, never to the
+                    # shared stdout/stderr capture. Fail loudly if the caller stops isolating it.
+                    $resultFile = @($Arguments | Where-Object { $_ -like '-getResultOutputFile:*' })
+                    if ($resultFile.Count -ne 1) {
+                        [Console]::Error.WriteLine('stub msbuild requires exactly one -getResultOutputFile argument')
+                        exit 9
+                    }
+                    Set-Content -LiteralPath $resultFile[0].Substring('-getResultOutputFile:'.Length) -Value $payload -Encoding utf8
                     exit 0
                 }
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
@@ -1527,6 +1535,17 @@ public sealed class MtpTestRunnerScriptTests
                 runnerOverride,
                 resultsRoot,
                 testHostTimeoutSeconds);
+            return Run(startInfo);
+        }
+
+        public ProcessResult RunPartitionUnderAcceptanceAttempt(string partition, string attemptId)
+        {
+            var startInfo = PartitionStartInfo(
+                partition,
+                noBuild: true,
+                dotnetPath: RunnerPath,
+                runnerOverride: false);
+            startInfo.Environment["MCG_ACCEPTANCE_GATE_ATTEMPT_ID"] = attemptId;
             return Run(startInfo);
         }
 
