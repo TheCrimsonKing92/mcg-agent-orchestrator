@@ -100,7 +100,7 @@ internal static partial class CliPersistentStateRunner
 
         if (IsOperatorIntentStatusCommand(args))
         {
-            PrintOperatorIntentStatus(args, workspace);
+            CliCriterionEvidenceIntents.PrintStatus(args, workspace);
             return false;
         }
 
@@ -261,6 +261,16 @@ internal static partial class CliPersistentStateRunner
             }
 
             return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
+        if (IsCriterionEvidenceMutationCommand(args))
+        {
+            return SubmitCriterionEvidenceOperatorIntent(
+                args,
+                stateRepository,
+                workspace,
+                ref currentGoal,
+                operatorIntentSubmissionSource);
         }
 
         if (IsGoalLifecycleDispositionCommand(args))
@@ -616,6 +626,12 @@ internal static partial class CliPersistentStateRunner
             OperatorIntentVerbs.Progress or
             OperatorIntentVerbs.Retry or
             OperatorIntentVerbs.VerifyManual;
+
+    internal static bool IsCriterionEvidenceMutationCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 && args[0].ToLowerInvariant() is
+            OperatorIntentVerbs.CriterionEvidenceMap or
+            OperatorIntentVerbs.CriterionEvidenceRecord or
+            OperatorIntentVerbs.CriterionEvidenceRepair;
 
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
@@ -1826,9 +1842,12 @@ internal static partial class CliPersistentStateRunner
                 preparedCommand.Text
                     ?? throw new InvalidOperationException("Prepared progress command is missing text.")),
             OperatorIntentVerbs.Retry => BuildRetryPayload(preparedCommand),
-            OperatorIntentVerbs.VerifyManual => new ManualVerificationOperatorIntentPayload(
-                preparedCommand.ManualVerification
-                    ?? throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence.")),
+            OperatorIntentVerbs.VerifyManual => preparedCommand.ManualVerification is { } manual
+                ? new ManualVerificationOperatorIntentPayload(Request: new ManualVerificationRequest(
+                    manual.ExitCode == 0,
+                    manual.ExitCode == 0 ? manual.AuthoritativeStandardOutput : manual.AuthoritativeStandardError,
+                    manual.WorkingDirectory))
+                : throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence."),
             _ => throw new InvalidOperationException(
                 $"Goal-scoped mutation '{preparedCommand.Command}' is not backed by the operator intent inbox.")
         };
@@ -1869,6 +1888,25 @@ internal static partial class CliPersistentStateRunner
         return false;
     }
 
+    private static bool SubmitCriterionEvidenceOperatorIntent(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref Goal? currentGoal,
+        OperatorIntentSubmissionSource submissionSource)
+    {
+        var goalSelector = ResolveFlagValue(args, "--goal")
+            ?? throw new ArgumentException($"{args[0]} requires --goal <goal-prefix>.");
+        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, goalSelector);
+        var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+            ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+        var kernel = KernelFromGoalSnapshot(snapshot, []);
+        var goal = kernel.GetGoal(goalId);
+        CliCriterionEvidenceIntents.Submit(args, workspace, goal.Id, ResolveOperatorIntentAttribution(args, submissionSource));
+        currentGoal = goal;
+        return false;
+    }
+
     internal static OperatorIntentAttribution ResolveOperatorIntentAttribution(
         IReadOnlyList<string> args,
         OperatorIntentSubmissionSource submissionSource)
@@ -1903,55 +1941,8 @@ internal static partial class CliPersistentStateRunner
             command.RetryCause);
     }
 
-    private static void PrintOperatorIntentStatus(
-        IReadOnlyList<string> args,
-        OrchestratorWorkspace workspace)
-    {
-        if (args.Count != 2)
-        {
-            throw new ArgumentException("Usage: operator-intent-status <intent-id>");
-        }
-
-        var databasePath = Path.Combine(
-            workspace.OrchestratorDirectory,
-            SqliteOperatorIntentStore.DatabaseFileName);
-        if (!File.Exists(databasePath))
-        {
-            throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
-        }
-
-        var intent = SqliteOperatorIntentStore
-            .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
-            .GetAsync(args[1])
-            .GetAwaiter()
-            .GetResult()
-            ?? throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
-        Console.WriteLine(
-            $"Operator intent {intent.Id}: verb={intent.Verb} goal={intent.GoalId[..Math.Min(8, intent.GoalId.Length)]} " +
-            $"task={(intent.TaskId is null ? "none" : intent.TaskId[..Math.Min(8, intent.TaskId.Length)])} " +
-            $"status={intent.Status} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance} " +
-            $"outcome={intent.Outcome ?? "pending"}");
-    }
-
-    private static string? ResolveFlagValue(IReadOnlyList<string> args, string flag)
-    {
-        for (var index = 0; index < args.Count; index++)
-        {
-            if (!args[index].Equals(flag, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (index + 1 >= args.Count || args[index + 1].StartsWith("--", StringComparison.Ordinal))
-            {
-                throw new ArgumentException($"{flag} requires a value.");
-            }
-
-            return args[index + 1];
-        }
-
-        return null;
-    }
+    private static string? ResolveFlagValue(IReadOnlyList<string> args, string flag) =>
+        CliCriterionEvidenceIntents.ResolveFlagValue(args, flag);
 
     private static bool ExecuteGoalScopedTaskMutationCommand(
         IReadOnlyList<string> args,
@@ -4067,6 +4058,23 @@ internal static partial class CliPersistentStateRunner
                                 (false, snapshot, (guardedResult, snapshot)));
                         }
 
+                        var outstandingEvidence = transactionKernel.GetGoal(request.GoalId)
+                            .GetOutstandingCriterionEvidenceObligations(request.TestedWorktreeHead);
+                        if (outstandingEvidence.Count > 0)
+                        {
+                            var evidenceMismatch = new AcceptanceMergeGuardMismatch(
+                                AcceptanceMergeGuardMismatchKind.CriterionEvidence,
+                                "Outstanding criterion evidence",
+                                "none",
+                                string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                            var guardedResult = GuardedAcceptanceAbort(
+                                request.GoalId,
+                                evidenceMismatch,
+                                request.PassingGateReceiptRecorded);
+                            return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
+                                (false, snapshot, (guardedResult, snapshot)));
+                        }
+
                         var result = request.Merge();
                         if (result.FastForwarded)
                         {
@@ -4691,21 +4699,6 @@ internal static partial class CliPersistentStateRunner
         IReadOnlyList<HumanInputRequestSnapshot>? humanInputRequests = null) =>
         AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], humanInputRequests ?? []));
 
-    private static GoalSnapshot ExportGoalSnapshot(AgentOrchestratorKernel kernel, GoalId goalId) =>
-        kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
-            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
-
-    private static GoalStateSnapshot ExportGoalStateSnapshot(AgentOrchestratorKernel kernel, GoalId goalId)
-    {
-        var snapshot = kernel.ExportSnapshot();
-        var goal = snapshot.Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
-            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
-        var humanInputRequests = snapshot.HumanInputRequests
-            .Where(request => string.Equals(request.GoalId, goalId.Value, StringComparison.Ordinal))
-            .ToArray();
-        return new GoalStateSnapshot(goal, humanInputRequests);
-    }
-
     internal static void PersistSingleGoalSnapshot(
         ITransactionalOrchestratorStateRepository stateRepository,
         AgentOrchestratorKernel kernel,
@@ -4730,24 +4723,6 @@ internal static partial class CliPersistentStateRunner
                 cancellationToken)
             .GetAwaiter()
             .GetResult();
-    }
-
-    private static GoalStateSnapshot MergeHumanInputCheckpoint(
-        GoalStateSnapshot stored,
-        GoalStateSnapshot current)
-    {
-        var requests = stored.HumanInputRequests
-            .ToDictionary(request => request.Id, StringComparer.Ordinal);
-        foreach (var request in current.HumanInputRequests)
-        {
-            if (!requests.TryGetValue(request.Id, out var existing) ||
-                request.IsCompleted && !existing.IsCompleted)
-            {
-                requests[request.Id] = request;
-            }
-        }
-
-        return new GoalStateSnapshot(current.Goal, requests.Values.ToArray());
     }
 
     private static GoalId? ResolveConductWatchGoalId(

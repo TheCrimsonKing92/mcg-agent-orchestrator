@@ -746,7 +746,14 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
     public void ProgressEmission_TickSummaryContainsPhaseTimingLines()
     {
         var (kernel, _) = SimpleGoal("phase timing dispatch");
-        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
+        TaskSpec? dispatchedTask = null;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: goal =>
+            {
+                dispatchedTask = Assert.Single(goal.Tasks);
+                return DispatchStartOutcome.Started([dispatchedTask]);
+            });
         BatchTickSummary? capturedTick = null;
 
         new ConductorBatchLoop().Run(
@@ -760,7 +767,9 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         var lines = capturedTick!.ProgressLines!;
         Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=sweep ", StringComparison.Ordinal) && line.Contains(" ts=", StringComparison.Ordinal));
         Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=prewalk ", StringComparison.Ordinal));
-        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=dispatch-prep ", StringComparison.Ordinal) && line.Contains(" task=", StringComparison.Ordinal));
+        Assert.NotNull(dispatchedTask);
+        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=dispatch-prep ", StringComparison.Ordinal)
+            && line.Contains($" task={dispatchedTask.Id.Value[..8]} role={dispatchedTask.RequiredRole} ", StringComparison.Ordinal));
         Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=per-goal-walk ", StringComparison.Ordinal) && line.Contains("slowest=", StringComparison.Ordinal));
     }
 
