@@ -33,6 +33,14 @@ public sealed class ConductorDriverTestsTesterFindingRetry
         Assert.Equal(0, harness.FocusedRuns);
         Assert.Equal(developer.Id, harness.RetriedTaskId);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        // The writable decision carries the same identities as the two evidence-bound branches: the
+        // Developer is told which finding it owns, and nothing claims a run produced this routing.
+        Assert.Contains("stable_id: T-FINDING", harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.Contains("location: src/Test.cs::Test.T-FINDING", harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain("ACTIONABLE_CANDIDATE_RED", harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            goal.Timeline,
+            evt => evt.Message.Contains("disposition=pending-execution-gate", StringComparison.Ordinal));
     }
 
     [Xunit.Theory(DisplayName = "Developer_owned_finding_awaiting_its_request_runs_that_evidence_before_Developer")]

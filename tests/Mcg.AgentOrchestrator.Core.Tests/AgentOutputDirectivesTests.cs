@@ -191,6 +191,51 @@ public sealed class AgentOutputDirectivesTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Tester_requirements_lock_the_pending_execution_evidence_distinction")]
+    public void TesterRequirementsLockThePendingExecutionEvidenceDistinction()
+    {
+        // The worker reads this bullet at the point of decision, so the guidance must name the same
+        // wire states the classifier emits into the brief. A renamed state that only moves in one of
+        // the two places leaves the Tester reading a token no brief will ever carry.
+        var pending = FindingEvidenceExecutionClassifier.ToWireValue(FindingEvidenceExecutionState.PendingExecution);
+        var executed = FindingEvidenceExecutionClassifier.ToWireValue(FindingEvidenceExecutionState.ExecutedOnCandidate);
+        var noneRequested = FindingEvidenceExecutionClassifier.ToWireValue(FindingEvidenceExecutionState.NoneRequested);
+
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            var bullet = Assert.Single(
+                requirements.Split(Environment.NewLine),
+                line => line.Contains("evidence_index", StringComparison.Ordinal));
+            Assert.Contains("MUST carry `evidence_request`", bullet, StringComparison.Ordinal);
+            Assert.Contains($"`state={pending}`", bullet, StringComparison.Ordinal);
+            Assert.Contains("is NOT a pass", bullet, StringComparison.Ordinal);
+            Assert.Contains($"`state={executed}`", bullet, StringComparison.Ordinal);
+            Assert.Contains("`candidate_sha`", bullet, StringComparison.Ordinal);
+            Assert.Contains("Never call the source correct", bullet, StringComparison.Ordinal);
+            // The brief renders evidence_index only for a finding that carries a request, so the
+            // guidance must not send the worker looking for a state no brief can ever print.
+            Assert.DoesNotContain($"state={noneRequested}", bullet, StringComparison.Ordinal);
+        }
+
+        // Negative control: roles that never emit evidence_request are not given the execution-state
+        // vocabulary, so the distinction stays with the role that decides on it.
+        foreach (var role in new[] { AgentRole.Planner, AgentRole.Researcher, AgentRole.Developer })
+        {
+            Assert.DoesNotContain(
+                "evidence_index",
+                SdlcRolePromptRequirements.BuildPlainText(role),
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "evidence_index",
+                SdlcRolePromptRequirements.BuildPlainText(role, TaskComplexity.Simple),
+                StringComparison.Ordinal);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "TryParseHumanInputRequest_ignores_explicit_no_input_directives")]
     [Xunit.InlineData("Human input: none")]
     [Xunit.InlineData("Human input: no")]

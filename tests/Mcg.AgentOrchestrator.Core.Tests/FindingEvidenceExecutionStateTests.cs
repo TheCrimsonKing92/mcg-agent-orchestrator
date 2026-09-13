@@ -147,9 +147,11 @@ public sealed class FindingEvidenceExecutionStateTests
     [Xunit.InlineData(FindingEvidenceNotHonouredReason.UnsupportedProject, FindingEvidenceExecutionState.PermanentlyRefused)]
     [Xunit.InlineData(FindingEvidenceNotHonouredReason.SupersededByActionableRed, FindingEvidenceExecutionState.PermanentlyRefused)]
     [Xunit.InlineData(FindingEvidenceNotHonouredReason.Unknown, FindingEvidenceExecutionState.PermanentlyRefused)]
+    [Xunit.InlineData(FindingEvidenceNotHonouredReason.PerRoundCap, FindingEvidenceExecutionState.PermanentlyRefused)]
     [Xunit.InlineData(FindingEvidenceNotHonouredReason.RunFailed, FindingEvidenceExecutionState.PendingExecution)]
     [Xunit.InlineData(FindingEvidenceNotHonouredReason.ExecutorUnavailable, FindingEvidenceExecutionState.PendingExecution)]
     [Xunit.InlineData(FindingEvidenceNotHonouredReason.CandidateShaMissing, FindingEvidenceExecutionState.PendingExecution)]
+    [Xunit.InlineData(FindingEvidenceNotHonouredReason.SelectionApparatusFailure, FindingEvidenceExecutionState.PendingExecution)]
     public void PermanentRefusalsStayWritableAndTransientOnesStayPending(
         FindingEvidenceNotHonouredReason reason,
         FindingEvidenceExecutionState expected)
@@ -159,6 +161,28 @@ public sealed class FindingEvidenceExecutionStateTests
             Honoured: false, ReceiptId: null, Reason: reason, Detail: "typed refusal"));
 
         Assert.Equal(expected, FindingEvidenceExecutionClassifier.Classify(task, finding, CandidateSha));
+    }
+
+    [Xunit.Fact(DisplayName = "Every_not_honoured_reason_has_a_decision_table_row")]
+    public void EveryNotHonouredReasonHasADecisionTableRow()
+    {
+        // The decision table above carries one row per reason, including the retired-but-persisted
+        // PerRoundCap. A new reason must arrive with its own row rather than inherit the fail-safe
+        // default silently, so this count is the reminder that the table is the contract.
+        Assert.Equal(9, Enum.GetValues<FindingEvidenceNotHonouredReason>().Length);
+    }
+
+    [Xunit.Fact(DisplayName = "Legacy_receipt_with_a_null_request_covers_nothing_and_stays_pending")]
+    public void LegacyReceiptWithANullRequestCoversNothingAndStaysPending()
+    {
+        // A persisted receipt whose non-nullable Request deserialized as null names no request at
+        // all. Classification renders briefs, so it must read as unmeasured, never fault the caller.
+        var task = TaskWithReceipts(new FindingEvidenceReceipt(
+            "malformed-legacy-receipt", CandidateSha, null!, Accepted: true, Passed: true, "legacy receipt"));
+
+        Assert.Equal(
+            FindingEvidenceExecutionState.PendingExecution,
+            FindingEvidenceExecutionClassifier.Classify(task, Finding(), CandidateSha));
     }
 
     [Xunit.Fact(DisplayName = "Outcome_without_a_reason_fails_safe_as_a_permanent_refusal")]

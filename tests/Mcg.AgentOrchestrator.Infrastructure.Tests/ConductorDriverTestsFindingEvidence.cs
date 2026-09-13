@@ -737,6 +737,16 @@ public sealed class ConductorDriverTestsFindingEvidence
         Assert.Contains("evidence_index:", nonRequesterBrief, StringComparison.Ordinal);
         Assert.DoesNotContain("evidence_receipt:", nonRequesterBrief, StringComparison.Ordinal);
         Assert.DoesNotContain("tester requested evidence passed", nonRequesterBrief, StringComparison.Ordinal);
+        // The point-of-decision fields on that line: a passing receipt reads as measured only at the
+        // exact candidate it was taken on. An unknown candidate, or a later one, stays unmeasured
+        // even though the same honoured receipt is attached to the finding.
+        Assert.Equal("state=candidate-unknown; candidate_sha=unavailable", EvidenceIndexState(nonRequesterBrief));
+        Assert.Equal(
+            "state=executed-on-candidate; candidate_sha=abc1234",
+            EvidenceIndexState(kernel.BuildTaskBrief(goal.Id, developer.Id, targetHeadCommit: "abc1234").Content));
+        Assert.Equal(
+            "state=pending-execution; candidate_sha=def5678",
+            EvidenceIndexState(kernel.BuildTaskBrief(goal.Id, developer.Id, targetHeadCommit: "def5678").Content));
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == tester.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
@@ -1004,6 +1014,17 @@ public sealed class ConductorDriverTestsFindingEvidence
                     requestedClass));
 
         Assert.Equal("Infrastructure.Tests:ThisClassIsNotDeclaredAnywhereTests", request);
+    }
+
+    // The trailing `state=...; candidate_sha=...` of the single evidence_index line in a brief.
+    private static string EvidenceIndexState(string brief)
+    {
+        var line = Assert.Single(
+            brief.Split(Environment.NewLine),
+            candidate => candidate.Contains("evidence_index:", StringComparison.Ordinal));
+        var start = line.IndexOf("state=", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"evidence_index line carried no state=: {line}");
+        return line[start..];
     }
 
     private static string CaptureNormalizedFindingEvidenceRequest(

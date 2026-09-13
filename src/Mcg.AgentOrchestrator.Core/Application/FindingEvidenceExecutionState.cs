@@ -166,10 +166,13 @@ public static class FindingEvidenceExecutionClassifier
             IsTerminalDisposition(disposition.Disposition));
 
     // Legacy receipts predate per-request dispositions; fall back to the executed request identity.
+    // A persisted receipt whose non-nullable Request deserialized as null names no request at all, so
+    // it covers nothing: this path renders briefs, and a malformed record must not fault that display.
     private static bool CoversRequestIdentity(FindingEvidenceReceipt receipt, string stableId, string identity) =>
+        receipt.Request is { } request &&
         (receipt.RequestDispositions ?? []).All(disposition =>
             !string.Equals(disposition.FindingStableId, stableId, StringComparison.Ordinal)) &&
-        string.Equals(BuildRequestIdentity(receipt.Request), identity, StringComparison.Ordinal);
+        string.Equals(BuildRequestIdentity(request), identity, StringComparison.Ordinal);
 
     private static bool IsTerminalDisposition(string disposition) =>
         disposition.StartsWith(ExecutedDispositionPrefix, StringComparison.Ordinal) ||
