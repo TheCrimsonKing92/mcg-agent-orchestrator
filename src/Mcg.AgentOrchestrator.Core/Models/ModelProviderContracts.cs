@@ -288,7 +288,12 @@ public sealed record TaskDispatchRecord(
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
     int PlannerSampleCount = 1,
     RetryContextFingerprint? RetryContextFingerprint = null,
-    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown)
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown,
+    // The Claude credential source this dispatch's auth preflight selected and reported, carried so the
+    // dispatch start boundary transports that decision to the worker sandbox instead of selecting again.
+    // A directory path and an explicit/default source kind only: never credential material.
+    string? ClaudeCredentialSourceDirectory = null,
+    bool ClaudeCredentialSourceIsExplicit = false)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

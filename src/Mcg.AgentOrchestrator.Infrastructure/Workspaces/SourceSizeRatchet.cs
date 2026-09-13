@@ -109,14 +109,30 @@ internal static class SourceSizeRatchet
             // Goal b3cba804 adds the authoritative-output-only scope-completion observation at the
             // existing dispatch-completion boundary; the runner retains output-artifact authority
             // and verification persistence while parsing stays with WorkerResultBlockers.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2669),
+            // Goal 0d92976e adds the BeforeRetryAdmission checkpoint phase to preserve
+            // current-tick evidence before retry admission replaces the goal snapshot; 2669 is
+            // the measured post-change size of the existing dispatch-state contract.
+            // Raised for goal df9ddb05: the Claude credential source the dispatch preflight selected must
+            // be transported from the dispatch record at the single process-start boundary that already
+            // owns the dispatch parameters; selection, validation, and seeding remain in
+            // ClaudeCredentialSource. 2682 is the measured size of that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
             // repository identities; 3229 is the measured combined post-rebase size.
             // Goal 52049d08 adds profile-aware policy selection, immutable receipt reuse, and compact
             // retry-projection wiring at this package-assembly boundary; each behavior remains extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3270),
+            // Goal df9ddb05 LOWERED this from 3234: ClaudeCliAuthState and ClaudeCliAuthProbe moved out
+            // to ClaudeCredentialSource.cs so the Claude credential selection rule and both consumers'
+            // views of it live in one file and cannot drift apart again. The dispatcher keeps only the
+            // preflight finding call site. 3200 is the measured post-extraction size, and 3241 is that
+            // size plus the preflight-to-dispatch handoff at both preparation paths: one shared auth probe
+            // per prepared task, its injection seam for fixture credential sources, and the reported
+            // credential source carried out of preflight onto the dispatch record so the dispatch start
+            // boundary transports it instead of resolving a second source. Selection, validation, and
+            // seeding all remain in ClaudeCredentialSource.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3241),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -138,11 +154,9 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at the measured shared-fixture size.
             // Raised for goal 8263a08c: the shared fixture forwards the exited-dispatch reconciler used by
             // the focused failure-state and dispatch-start invariant tests.
-            // Raised for goal ae54b5eb: the existing driver owner proves a refused prepared start writes
-            // exactly one retry and one dispatch across two conductor ticks before stable set-aside.
-            // Raised for goal ae54b5eb: the additional 64 lines prove the round-2 refused-start reporting
-            // and admission snapshot reload behavior in the existing driver test owner.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1672),
+            // Lowered after extracting admission-refusal regressions and their fixture to
+            // ConductorDriverTestsAdmissionRefusal; the original assertions and collection are preserved.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1508),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
