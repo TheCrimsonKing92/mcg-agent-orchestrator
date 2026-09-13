@@ -1607,6 +1607,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory)
                         .TryGetGoalBranchTip(remedy.GoalId));
                 var loopReaper = new BackgroundDispatchRunner();
+                var unappliedExitWatch = new ConductorUnappliedExitWatch();
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var intentGoalReloadObservations = new Dictionary<string, ConductorGoalReloadObservation>(StringComparer.Ordinal);
@@ -1749,7 +1750,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             orchestratorDirectory: context.Workspace.OrchestratorDirectory);
                         terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
                     }
-                    terminalSweep = terminalSweep with { ProgressEvents = remediation.Events };
+                    // Concatenate, never overwrite: the unapplied-exit records are surfaced through the same
+                    // progress-event channel as remediation, and an assignment here would silently drop them.
+                    terminalSweep = terminalSweep with
+                    {
+                        ProgressEvents = [.. remediation.Events, .. unappliedExitWatch.Observe(loopKernel)]
+                    };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);

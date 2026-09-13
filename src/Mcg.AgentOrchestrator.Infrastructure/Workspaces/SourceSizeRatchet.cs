@@ -116,7 +116,11 @@ internal static class SourceSizeRatchet
             // be transported from the dispatch record at the single process-start boundary that already
             // owns the dispatch parameters; selection, validation, and seeding remain in
             // ClaudeCredentialSource. 2682 is the measured size of that call site.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
+            // Goal 99f7b1f1 LOWERED this from 2682: the exited-process sweep's status/guard predicate and
+            // its terminal-status requeue fence moved to DispatchExitSweepEligibility.cs, so the single
+            // rule about which tasks may have an exit applied lives in one file and cannot drift from the
+            // sweep that consults it. The runner keeps only the call sites. 2678 is the measured size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2678),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
