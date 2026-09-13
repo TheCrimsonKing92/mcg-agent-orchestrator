@@ -36,13 +36,13 @@
         "name": "Goal lifecycle commands",
         "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliPersistentStateRunnerAcceptanceFailureRecoveryTests|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests|FullyQualifiedName~SourceBacklogSiblingCreationTests",
         "estimatedSerialSeconds": 267.1,
-        "exclusiveResourceKeys": [ "xunit:GoalWorktreeCleanupHooks" ]
+        "exclusiveResourceKeys": []
       },
       {
         "name": "Goal worktree cleanup",
         "filter": "FullyQualifiedName~AcceptanceCohortWorkflowTests|FullyQualifiedName~AcceptanceVerdictCarryForwardTests|FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCleanupHookDelegates|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup",
         "estimatedSerialSeconds": 330.9,
-        "exclusiveResourceKeys": [ "xunit:GoalWorktreeCleanupHooks" ]
+        "exclusiveResourceKeys": []
       },
       {
         "name": "Goal worktree parallel",

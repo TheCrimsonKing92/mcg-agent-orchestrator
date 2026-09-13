@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class AcceptanceCohortWorkflowTestsBlockingVerifier
 {
     [Fact]

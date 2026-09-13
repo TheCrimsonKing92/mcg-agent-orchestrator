@@ -122,7 +122,7 @@ private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<
 
     var confirm = HasCliConfirmation(parts, "--confirm-prune");
     var plan = confirm
-        ? GoalsPrunePlanner.Apply(context.Kernel, context.Workspace.ExecutionDirectory)
+        ? GoalsPrunePlanner.Apply(context.Kernel, context.Workspace.ExecutionDirectory, context.CleanupContext.Hooks)
         : GoalsPrunePlanner.Build(context.Kernel, context.Workspace.ExecutionDirectory);
 
     ConsoleViews.PrintGoalsPrunePlan(plan);

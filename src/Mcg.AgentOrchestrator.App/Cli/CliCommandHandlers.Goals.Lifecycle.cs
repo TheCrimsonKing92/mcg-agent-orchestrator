@@ -312,6 +312,7 @@ internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context,
         context.Kernel,
         context.Workspace.ExecutionDirectory,
         goal.Id,
+        cleanupHooks: context.CleanupContext.Hooks,
         orchestratorDirectory: context.Workspace.OrchestratorDirectory);
     ConsoleViews.PrintTerminalGoalSweep(sweep);
     TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);

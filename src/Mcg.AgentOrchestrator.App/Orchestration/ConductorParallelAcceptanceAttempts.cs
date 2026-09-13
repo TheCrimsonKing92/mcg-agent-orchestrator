@@ -172,7 +172,8 @@ internal sealed record ConductorParallelAcceptanceAttemptDecision(
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunch(
     ConductorParallelAcceptanceAttempt Attempt,
-    Action<int> ExecuteInCurrentProcess);
+    Action<int> ExecuteInCurrentProcess,
+    DotnetBuildStorageRoot? BuildStorageRoot);
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(int ProcessId);
 
@@ -354,6 +355,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly TimeSpan _buildPermitBusyTimeout;
     private readonly Action<TimeSpan>? _buildPermitSleep;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
+    private readonly DotnetBuildStorageRoot? _buildStorageRoot;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -375,7 +377,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Action<TimeSpan>? buildPermitSleep = null,
         Action? attemptWriterLeaseAcquiringForTests = null,
         IReadOnlyDictionary<string, TextWriter>? attemptLogWriters = null,
-        Action<ConductorParallelAcceptanceAttempt>? resultPublishedForTests = null)
+        Action<ConductorParallelAcceptanceAttempt>? resultPublishedForTests = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -402,6 +405,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
         _attemptLogWriters = attemptLogWriters;
         _conductEventLogWriter = conductEventLogWriter;
+        // Only an explicit operation setting crosses the hermetic child boundary.
+        // An absent setting retains the existing per-process default resolution.
+        _buildStorageRoot = buildStorageRoot;
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
         _buildPermitSleep = buildPermitSleep;
     }
@@ -510,7 +516,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
             timeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
             cancellationToken: cancellationToken,
-            slotCount: DotnetBuildEnvironmentManager.StableSlotCount);
+            slotCount: DotnetBuildEnvironmentManager.StableSlotCount,
+            storageRoot: _buildStorageRoot);
         Console.WriteLine(
             $"ACCEPTANCE_LEASE_ACQUIRE cohort={cohortId} permit=acceptance-{lease.Environment.BuildPermitIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} holderPid={Environment.ProcessId}");
         return lease;
@@ -1041,7 +1048,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     }
 
                     RunAttemptWithArtifactLease(activeAttempt, candidate, policy, runAcceptance);
-                }));
+                },
+                _buildStorageRoot));
             var launched = TryPersistOwnerProcess(attempt, launch.ProcessId);
             if (launched.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
             {
@@ -1125,7 +1133,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 agents,
                 profiles,
                 NullOperatorChannel.Instance,
-                providers);
+                providers,
+                cleanupHooks: WorktreeCleanupContext.Load(
+                    attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
             var policy = ResolveAttemptPolicy(attempt);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -1401,7 +1411,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             : "parallel-acceptance";
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
-            $"{purpose}-{attempt.AttemptId}");
+            $"{purpose}-{attempt.AttemptId}",
+            storageRoot: _buildStorageRoot);
         var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
             environment,
             _buildPermitBusyTimeout,
@@ -2347,7 +2358,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
-        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt);
+        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt, buildStorageRoot: launch.BuildStorageRoot);
         var process = ProcessTreeGuiSuppression.Start(startInfo)
             ?? throw new InvalidOperationException("failed to start acceptance attempt process");
         var processId = process.Id;
@@ -2357,6 +2368,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     internal static ProcessStartInfo BuildOwnedProcessStartInfo(
         ConductorParallelAcceptanceAttempt attempt,
+        DotnetBuildStorageRoot? buildStorageRoot,
         string? executable = null,
         IReadOnlyList<string>? commandLineArgs = null)
     {
@@ -2390,6 +2402,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
             attempt.ExecutionDirectory);
+        if (buildStorageRoot is { } storageRoot)
+        {
+            // This attempt selects the namespace; the child and its build descendants
+            // need the same value after ambient verification overrides are scrubbed.
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = storageRoot.RootPath;
+        }
         return startInfo;
     }
 

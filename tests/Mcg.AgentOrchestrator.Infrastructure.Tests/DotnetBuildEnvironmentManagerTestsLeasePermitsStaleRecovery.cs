@@ -10,6 +10,46 @@ using static DotnetBuildEnvironmentManagerTests;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void BusyPermitReceipt_DoesNotAttributeEveryPermitToRequestingGoalArtifactConsumer(bool firstAvailable)
+    {
+        var root = new DotnetBuildStorageRoot(Path.Combine(Path.GetTempPath(), $"mcg-permit-receipt-{Guid.NewGuid():N}"));
+        using var consumer = StartSleepProcess();
+        try
+        {
+            var goal = DotnetBuildEnvironmentManager.CreateAttempt(
+                new GoalId("89abcdef89abcdef89abcdef89abcdef"), "receipt-control", storageRoot: root);
+            using var firstLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0, storageRoot: root), TimeSpan.Zero)).Lease;
+            using var secondLease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1, storageRoot: root), TimeSpan.Zero)).Lease;
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [consumer.Id] = new(consumer.Id, Environment.ProcessId, "testhost", null, null,
+                        $"testhost.exe --artifacts-path \"{goal.ArtifactsPath}\"", ProcessInspectionStatus.Available)
+                });
+
+            var result = firstAvailable
+                ? DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(goal, TimeSpan.Zero)
+                : DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(goal, TimeSpan.Zero);
+            var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
+            Assert.Equal(DotnetBuildEnvironmentManager.BuildConcurrencySlotCount, busy.BusySlots.Count);
+            Assert.All(busy.BusySlots, slot => Assert.Equal(Environment.ProcessId, slot.OwnerProcessId));
+            Assert.DoesNotContain(busy.BusySlots, slot => slot.OwnerProcessId == consumer.Id);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
+            StopProcess(consumer);
+            if (Directory.Exists(root.RootPath)) Directory.Delete(root.RootPath, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_serializes_same_goal_lease_execution")]
     public async Task DotnetBuildEnvironmentManagerSerializesSameGoalLeaseExecution()
     {

@@ -55,14 +55,15 @@ internal static class GoalArtifactRetentionPlanner
         AgentOrchestratorKernel kernel,
         Goal goal,
         OrchestratorWorkspace workspace,
-        bool dryRun = true)
+        bool dryRun = true,
+        DotnetBuildStorageRoot? buildStorageRoot = null)
     {
         var goalPrefix = goal.Id.Value[..8];
         var worktreePath = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id);
         var branchExists = BranchExists(workspace.ExecutionDirectory, GoalWorktrees.BranchName(goal.Id));
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
         var state = ClassifyState(goal, acceptance, worktreePath is not null, branchExists);
-        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
+        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, buildStorageRoot);
         var contextPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator-context", goal.Id.Value);
         var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id);
         var transcriptPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "transcripts", $"{goalPrefix}.md");

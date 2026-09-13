@@ -233,7 +233,17 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                     : SelectGoalBuildPermit(
                         goal.Id,
                         context.StableSlotAcquisitionTimeout,
-                        onSlotWait);
+                        onSlotWait,
+                        context.CleanupHooks.BuildStorageRoot);
+                if (context.CleanupHooks.BuildStorageRoot is { } configuredRoot &&
+                    (!configuredRoot.ContainsPath(stableSlotLease.Environment.RootPath) ||
+                     !configuredRoot.ContainsPath(stableSlotLease.Environment.ArtifactsPath) ||
+                     !configuredRoot.ContainsPath(stableSlotLease.Environment.ExecutionLockPath)))
+                {
+                    stableSlotLease.Dispose();
+                    stableSlotLease = null;
+                    throw new InvalidOperationException("Acceptance build lease is outside the configured build storage namespace.");
+                }
                 stableSlotIndex = stableSlotLease.Environment.BuildPermitIndex ??
                     ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
                     ?? throw new IOException($"Build permit did not identify its pool index: {stableSlotLease.Environment.SlotOwnerToken}");
@@ -615,15 +625,16 @@ private static void RunPostLandingCanary(
 private static DotnetBuildEnvironmentLease SelectGoalBuildPermit(
     GoalId goalId,
     TimeSpan? timeout,
-    Action<DotnetBuildStableSlotWait>? onWait)
+    Action<DotnetBuildStableSlotWait>? onWait,
+    DotnetBuildStorageRoot? storageRoot)
 {
-    var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance");
+    var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance", storageRoot: storageRoot);
     if (environment.BuildPermitIndex is { } permitIndex &&
-        !DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(permitIndex))
+        !DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(permitIndex, storageRoot))
     {
         onWait?.Invoke(new DotnetBuildStableSlotWait(
             permitIndex,
-            DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(permitIndex)));
+            DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(permitIndex, storageRoot)));
     }
 
     return DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, timeout) switch

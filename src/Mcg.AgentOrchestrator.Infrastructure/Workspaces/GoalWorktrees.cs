@@ -101,31 +101,31 @@ internal sealed record GoalWorktreeDeleteResult(
 public sealed record GoalWorktreeCleanupHooks
 {
     /// <summary>
-    /// A live compatibility view over the legacy process-wide hooks. Each delegate dereferences
-    /// the corresponding static when it is invoked; explicitly constructed hook records remain fixed.
+    /// Creates fixed cleanup hooks for one configured workspace operation.
     /// </summary>
-    public static GoalWorktreeCleanupHooks Default { get; } = new()
+    public static GoalWorktreeCleanupHooks ForConfiguration(
+        GoalWorktreeCleanupOptions options,
+        string? attentionStoreDirectory = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null)
     {
-        BuildServerShutdown = static (path, timeout) => GoalWorktrees.BuildServerShutdown(path, timeout),
-        ResetSandboxAcl = static (path, timeout) => GoalWorktrees.SandboxAclHelper.ResetSandboxAcl(path, timeout),
-        TryKillRecordedProcess = static processId => GoalWorktrees.TryKillRecordedProcess(processId),
-        DeleteDirectory = static path => GoalWorktrees.DeleteDirectory(path),
-        DeleteDirectoryForCleanup = static path => GoalWorktrees.DeleteDirectoryForCleanup(path),
-        RunWorktreeRemove = static (directory, timeout, path, force) =>
-            GoalWorktrees.RunWorktreeRemove(directory, timeout, path, force),
-        RunWorktreePrune = static (directory, timeout, expireNow) =>
-            GoalWorktrees.RunWorktreePrune(directory, timeout, expireNow),
-        FindLockHoldersForCleanup = static path => GoalWorktrees.FindLockHoldersForCleanup(path),
-        CleanupWarningSink = static warning => GoalWorktrees.CleanupWarningSink(warning),
-        CleanupElapsedMilliseconds = static () => GoalWorktrees.CleanupElapsedMilliseconds,
-        CleanupUtcNow = static () => GoalWorktrees.CleanupUtcNow(),
-        CleanupBackoffDuration = static () => GoalWorktrees.CleanupBackoffDuration,
-        CleanupBudgetExhaustedBackoffDuration = static () => GoalWorktrees.CleanupBudgetExhaustedBackoffDuration,
-        CleanupOptions = static () => GoalWorktrees.CleanupOptions,
-        CleanupAttentionStoreDirectory = static () => GoalWorktrees.CleanupAttentionStoreDirectory
-    };
+        ArgumentNullException.ThrowIfNull(options);
+        var validatedOptions = options.Validate();
+        var normalizedAttentionStoreDirectory = string.IsNullOrWhiteSpace(attentionStoreDirectory)
+            ? null
+            : Path.GetFullPath(attentionStoreDirectory);
+
+        return new GoalWorktreeCleanupHooks
+        {
+            BuildStorageRoot = buildStorageRoot,
+            CleanupOptions = () => validatedOptions,
+            CleanupAttentionStoreDirectory = () => normalizedAttentionStoreDirectory
+        };
+    }
 
     public Action<string, int> BuildServerShutdown { get; init; } = GoalWorktrees.DefaultBuildServerShutdown;
+    // Null preserves callers that configure the ambient root after constructing hook overrides.
+    // Cleanup resolves that default once per artifact sweep, never separately for lookup and delete.
+    public DotnetBuildStorageRoot? BuildStorageRoot { get; init; }
     public Action<string, int> ResetSandboxAcl { get; init; } = static (path, timeout) =>
         (OperatingSystem.IsWindows()
             ? (ISandboxAclHelper)new WindowsSandboxAclHelper()
@@ -139,8 +139,15 @@ public sealed record GoalWorktreeCleanupHooks
         GoalWorktrees.DefaultRunWorktreeRemove;
     internal Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; init; } =
         GoalWorktrees.DefaultRunWorktreePrune;
-    public Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; init; } =
-        GoalWorktrees.FindLockHolders;
+    private Func<string, IReadOnlyList<WorktreeLockHolder>>? FindLockHoldersForCleanupOverride { get; init; }
+    public Func<IEnumerable<string>, ProcessCommandLineSnapshot> ProcessCommandLineSnapshot { get; init; } =
+        ProcessCommandLines.SnapshotByNames;
+    public Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup
+    {
+        get => FindLockHoldersForCleanupOverride ??
+            (path => GoalWorktrees.FindLockHolders(path, ProcessCommandLineSnapshot));
+        init => FindLockHoldersForCleanupOverride = value;
+    }
     public Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; init; } =
         GoalWorktrees.DefaultCleanupWarningSink;
     public Func<Func<long>?> CleanupElapsedMilliseconds { get; init; } = static () => null;
@@ -257,38 +264,5 @@ public static partial class GoalWorktrees
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
     private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
-    // Process-wide test seams; tests replacing these hooks must use the
-    // GoalWorktreeCleanupHooks collection so replacements cannot overlap.
-    // Called best-effort before directory deletion to release any
-    // VBCSCompiler/Roslyn/MSBuild file handles held by the acceptance build server.
-    internal static Action<string, int> BuildServerShutdown = DefaultBuildServerShutdown;
-    internal static ISandboxAclHelper SandboxAclHelper { get; set; } =
-        OperatingSystem.IsWindows() ? new WindowsSandboxAclHelper() : new NoOpSandboxAclHelper();
-    internal static Func<int, bool> TryKillRecordedProcess { get; set; } = DefaultTryKillRecordedProcess;
-    internal static Func<string, bool> DeleteDirectory { get; set; } = DeleteDirectoryWithRetry;
-    internal static Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; set; } = DeleteDirectoryWithReason;
-    internal static Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; set; } =
-        DefaultRunWorktreeRemove;
-    internal static Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; set; } =
-        DefaultRunWorktreePrune;
-    internal static Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; } = FindLockHolders;
-    internal static Func<IEnumerable<string>, ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForCleanupTests { get; set; }
-    internal static Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; } = DefaultCleanupWarningSink;
-    internal static Func<long>? CleanupElapsedMilliseconds { get; set; }
-    internal static Func<DateTimeOffset> CleanupUtcNow { get; set; } = () => DateTimeOffset.UtcNow;
-    internal static TimeSpan CleanupBackoffDuration { get; set; } = TimeSpan.FromMinutes(30);
-    internal static TimeSpan CleanupBudgetExhaustedBackoffDuration { get; set; } = TimeSpan.FromMinutes(1);
-    public static GoalWorktreeCleanupOptions CleanupOptions { get; private set; } = GoalWorktreeCleanupOptions.Default;
-    internal static string? CleanupAttentionStoreDirectory { get; private set; }
-
-    public static void ConfigureCleanup(
-        GoalWorktreeCleanupOptions options,
-        string? attentionStoreDirectory = null)
-    {
-        CleanupOptions = options.Validate();
-        CleanupAttentionStoreDirectory = string.IsNullOrWhiteSpace(attentionStoreDirectory)
-            ? null
-            : Path.GetFullPath(attentionStoreDirectory);
-    }
 
 }

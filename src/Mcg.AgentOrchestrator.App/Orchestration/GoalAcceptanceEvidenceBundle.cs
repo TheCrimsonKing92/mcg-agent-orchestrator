@@ -59,6 +59,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         string? worktreePath,
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
+        DotnetBuildStorageRoot? buildStorageRoot,
         string? executionDirectory = null)
     {
         var blockers = new List<GoalAcceptanceEvidenceBlocker>();
@@ -222,7 +223,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             testImpactPlan,
             verificationPolicy,
             policyChecks,
-            BuildEnvironmentEvidence(goal.Id),
+            BuildEnvironmentEvidence(goal.Id, buildStorageRoot),
             verification?.Checks?.ToArray() ?? [],
             taskEvidence,
             blockers,
@@ -353,9 +354,10 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             verification?.ModelFitNote);
     }
 
-    private static GoalAcceptanceBuildEnvironmentEvidence BuildEnvironmentEvidence(GoalId goalId)
+    private static GoalAcceptanceBuildEnvironmentEvidence BuildEnvironmentEvidence(
+        GoalId goalId, DotnetBuildStorageRoot? buildStorageRoot)
     {
-        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId);
+        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId, buildStorageRoot);
         var metadata = Path.Combine(root, "lease", "lease.json");
         return new GoalAcceptanceBuildEnvironmentEvidence(
             $"goal-{goalId.Value[..8].ToLowerInvariant()}",

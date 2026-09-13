@@ -3,9 +3,13 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
-public sealed class GoalsPruneTests
+public sealed class GoalsPruneTests : HostCapacityBoundTestBase
 {
+    private static GoalWorktreeCleanupHooks CreateCleanupHooks(string repo) =>
+        WorktreeCleanupContext.Load(
+            attentionStoreDirectory: OrchestratorWorkspace.ForDirectory(repo).OrchestratorDirectory,
+            buildStorageRoot: new DotnetBuildStorageRoot(Path.Combine(repo, ".orchestrator", "test-dotnet"))).Hooks;
+
     [Xunit.Fact(DisplayName = "GoalsPrune_classifies_merged_branchless_goal_as_reapable")]
     public void GoalsPruneClassifiesMergedBranchlessGoalAsReapable()
     {
@@ -47,13 +51,25 @@ public sealed class GoalsPruneTests
             GoalWorktrees.TryFastForwardMerge(repo, goal.Id);
             RunGit(repo, "worktree", "remove", path);
 
-            var applied = GoalsPrunePlanner.Apply(kernel, repo);
+            var cleanupHooks = CreateCleanupHooks(repo);
+            var ownedArtifacts = DotnetBuildEnvironmentManager.GoalRoot(goal.Id, cleanupHooks.BuildStorageRoot);
+            Directory.CreateDirectory(ownedArtifacts);
+            File.WriteAllText(Path.Combine(ownedArtifacts, "owned-marker.txt"), "prune must remove its owned artifacts");
+            var foreignRoot = new DotnetBuildStorageRoot(Path.Combine(repo, ".orchestrator", "foreign-dotnet"));
+            var foreignArtifacts = DotnetBuildEnvironmentManager.GoalRoot(goal.Id, foreignRoot);
+            Directory.CreateDirectory(foreignArtifacts);
+            var foreignMarker = Path.Combine(foreignArtifacts, "foreign-marker.txt");
+            File.WriteAllText(foreignMarker, "preserve this independent owner");
+
+            var applied = GoalsPrunePlanner.Apply(kernel, repo, cleanupHooks);
 
             Assert.False(applied.DryRun);
             Assert.Equal(1, applied.PrunedCount);
             Assert.Equal(GoalPruneDisposition.Pruned, applied.Items[0].Disposition);
             Assert.Equal(GoalStatus.Cancelled, goal.Status);
             Assert.False(BranchExists(repo, branch));
+            Assert.False(Directory.Exists(ownedArtifacts));
+            Assert.Equal("preserve this independent owner", File.ReadAllText(foreignMarker));
         }
         finally { DeleteDirectory(repo); }
     }
@@ -101,7 +117,7 @@ public sealed class GoalsPruneTests
             Assert.Equal(GoalPruneDisposition.SkippedLiveWorktree, plan.Items[0].Disposition);
 
             // Cleanup the worktree so the temp directory can be deleted.
-            GoalWorktrees.Remove(repo, goal.Id);
+            GoalWorktrees.Remove(repo, goal.Id, hooks: CreateCleanupHooks(repo));
         }
         finally { DeleteDirectory(repo); }
     }
@@ -146,11 +162,11 @@ public sealed class GoalsPruneTests
             GoalWorktrees.TryFastForwardMerge(repo, goal.Id);
             RunGit(repo, "worktree", "remove", path);
 
-            var first = GoalsPrunePlanner.Apply(kernel, repo);
+            var first = GoalsPrunePlanner.Apply(kernel, repo, CreateCleanupHooks(repo));
             Assert.Equal(1, first.PrunedCount);
 
             // Second apply: goal is already Cancelled — nothing left to reap.
-            var second = GoalsPrunePlanner.Apply(kernel, repo);
+            var second = GoalsPrunePlanner.Apply(kernel, repo, CreateCleanupHooks(repo));
             Assert.Equal(0, second.PrunedCount);
             Assert.Equal(GoalPruneDisposition.SkippedTerminal, second.Items[0].Disposition);
         }

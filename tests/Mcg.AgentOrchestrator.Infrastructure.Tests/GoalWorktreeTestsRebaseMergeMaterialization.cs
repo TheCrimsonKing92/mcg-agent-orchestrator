@@ -3,7 +3,6 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTestBase
 {
     [Xunit.Fact]

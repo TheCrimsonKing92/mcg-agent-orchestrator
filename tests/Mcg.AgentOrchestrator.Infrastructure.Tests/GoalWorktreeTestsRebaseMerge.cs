@@ -11,7 +11,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "GoalWorktrees_fast_forwards_goal_branch_on_merge")]
@@ -22,7 +21,9 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         {
             var goalId = GoalId.New();
             var path = GoalWorktrees.Ensure(repo, goalId);
-            var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "cleanup-test");
+            CleanupHooks.BuildStorageRoot = CreateIsolatedCleanupContext(repo).Hooks.BuildStorageRoot;
+            var buildEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
+                goalId, "cleanup-test", storageRoot: CleanupHooks.BuildStorageRoot);
             Assert.True(Directory.Exists(buildEnvironment.RootPath));
 
             File.WriteAllText(Path.Combine(path, "feature.txt"), "goal work");
@@ -34,7 +35,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             Assert.True(merge is not null);
             Assert.True(merge!.FastForwarded);
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
-            var removeResult = GoalWorktrees.Remove(repo, goalId);
+            var removeResult = RemoveWorktree(repo, goalId);
             Assert.Equal("Removed workspace and merged branch " + GoalWorktrees.BranchName(goalId) + ".", removeResult.Message);
             Assert.True(removeResult.IsComplete);
             Assert.True(GoalWorktrees.TryResolve(repo, goalId) is null);
@@ -318,7 +319,8 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal));
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory)));
             var merge = GoalWorktrees.TryFastForwardMerge(repo, goal.Id);
 
             Assert.True(output.Contains("Rebased", StringComparison.Ordinal));
@@ -364,6 +366,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Failed("Test run failed\nFailed: 2");
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
@@ -406,6 +409,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
@@ -449,7 +453,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             Assert.DoesNotContain(journal.LatestByOperation, entry =>
                 entry.Operation == "workspace:remove");
 
-            var cleanupBackoff = GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id);
+            var cleanupBackoff = TryGetCleanupBackoff(repo, goal.Id);
             Assert.NotNull(cleanupBackoff);
             Assert.Equal("remove:acceptance-deferred", cleanupBackoff!.Reason);
         }
@@ -494,6 +498,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                     return AcceptanceHostStopResult.Success("Stop-host: test stopped host.");
                 })
             {
+                CleanupContext = CreateIsolatedCleanupContext(repo),
                 AcceptanceVerifier = FakeAcceptanceVerifier.Passed(),
                 EventWriter = writer
             };
@@ -545,6 +550,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                     "BLOCKER step=stop-host reason=timeout hosts=pid=123 name=Mcg.AgentOrchestrator.App log=host.log action=\"Stop exact PID(s), inspect log path(s), then rerun acceptance.\"",
                     [new AcceptanceHostProcess(123, "Mcg.AgentOrchestrator.App", "host command", "host.log")]))
             {
+                CleanupContext = CreateIsolatedCleanupContext(repo),
                 AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
             };
 
@@ -672,6 +678,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 },
                 stopAcceptanceHosts: _ => AcceptanceHostStopResult.Success("Stop-host: none."))
             {
+                CleanupContext = CreateIsolatedCleanupContext(repo),
                 AcceptanceVerifier = FakeAcceptanceVerifier.Timeout()
             };
 
@@ -724,6 +731,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 finalizeAcceptanceMerge: _ => new AcceptanceMergeCommitResult(false, "conflicting files: feature.txt"),
                 stopAcceptanceHosts: _ => AcceptanceHostStopResult.Success("Stop-host: none."))
             {
+                CleanupContext = CreateIsolatedCleanupContext(repo),
                 AcceptanceVerifier = FakeAcceptanceVerifier.Passed()
             };
 
@@ -821,6 +829,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                     return AcceptanceHostStopResult.Success("Stop-host: should not run.");
                 })
             {
+                CleanupContext = CreateIsolatedCleanupContext(repo),
                 AcceptanceVerifier = FakeAcceptanceVerifier.Failed("Focused tests failed")
             };
 
@@ -870,6 +879,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 WorkerProfileCatalog.Default(),
                 goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -919,6 +929,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 WorkerProfileCatalog.Default(),
                 goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -968,6 +979,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -1015,6 +1027,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -1100,7 +1113,8 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal));
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory)));
 
             Assert.True(ex.Message.Contains("policy 'safe-auto' blocks acceptance merge", StringComparison.Ordinal));
             Assert.False(File.Exists(Path.Combine(repo, "policy.txt")));
@@ -1175,6 +1189,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -1227,6 +1242,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -1277,6 +1293,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             });
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance", "--skip-verify"], context));
@@ -1326,6 +1343,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
             var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, null, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
@@ -1373,6 +1391,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var initialKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
             var context = new CliExecutionContext(initialKernel, workspace, providers, agents, profiles, goal, null, () => stateRepository.LoadAsync().GetAwaiter().GetResult(), null, null)
             {
+                CleanupContext = CreateIsolatedCleanupContext(workspace.ExecutionDirectory),
                 AcceptanceVerifier = fakeVerifier
             };
 
