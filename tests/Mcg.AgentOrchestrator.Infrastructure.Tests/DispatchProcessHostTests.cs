@@ -934,6 +934,84 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_seeds_the_transported_selection_over_its_own_environment")]
+    public void ApplyWorkerSandboxSeedsTheTransportedSelectionOverItsOwnEnvironment()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(worktree);
+
+            // Two usable logins. The conductor selected the first; the dispatch host's own environment
+            // points at the second. The host process must seed the conductor's decision - re-selecting
+            // locally is exactly how preflight's reported login and the seeded login drifted apart.
+            var conductorSource = WriteSyntheticLogin(root, "conductor-source", "transported-selection-token");
+            var hostSource = WriteSyntheticLogin(root, "host-source", "host-local-selection-token");
+
+            var preflight = DispatchProcessHost.PreflightClaudeCredentialSource(
+                WorkerSandboxProvider.Claude,
+                sandboxLowIntegrity: true,
+                environmentReader: name => name == "CLAUDE_CONFIG_DIR" ? conductorSource : null);
+            var selection = preflight?.ToTransportedSelection();
+            Assert.Equal(Path.GetFullPath(conductorSource), selection?.DirectoryPath);
+
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude) with
+            {
+                ClaudeCredentialSelection = selection
+            };
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { },
+                providerEnvironmentReader: name => name switch
+                {
+                    "CLAUDE_CONFIG_DIR" => hostSource,
+                    // Explicitly absent: API-key mode would bypass source seeding entirely, so a host
+                    // that happens to export a key must not change what this fixture exercises.
+                    "ANTHROPIC_API_KEY" => null,
+                    _ => null,
+                });
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            var claudeConfig = Path.Combine(sandboxRoot, "claude-config");
+            var seeded = File.ReadAllText(Path.Combine(claudeConfig, ".credentials.json"));
+            Assert.Contains("transported-selection-token", seeded, StringComparison.Ordinal);
+            Assert.DoesNotContain("host-local-selection-token", seeded, StringComparison.Ordinal);
+
+            // The setup artifact an operator reads names the transported source too, so the reported
+            // login and the seeded login are one source of truth.
+            using var setup = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            Assert.Equal(
+                Path.GetFullPath(conductorSource),
+                setup.RootElement.GetProperty("credentialSource").GetProperty("directory").GetString());
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static string WriteSyntheticLogin(string root, string name, string token)
+    {
+        var directory = Path.Combine(root, name);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(
+            Path.Combine(directory, ".credentials.json"),
+            "{\"claudeAiOauth\":{\"accessToken\":\"" + token + "\"}}");
+        return directory;
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_scopes_grok_home_to_grok_provider")]
     public void ApplyWorkerSandboxScopesGrokHomeToGrokProvider()
     {

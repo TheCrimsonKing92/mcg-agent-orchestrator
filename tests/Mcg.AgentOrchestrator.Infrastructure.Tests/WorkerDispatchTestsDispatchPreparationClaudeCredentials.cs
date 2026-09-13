@@ -35,6 +35,7 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
     private const string EmptyFileReason = ".credentials.json is empty";
     private const string UnreadableFileReason = ".credentials.json could not be read";
     private const string MalformedFileReason = ".credentials.json is not a readable JSON object";
+    private const string NotTransportedReason = "dispatch carried no resolved credential source selection";
 
     [Xunit.Fact(DisplayName = "Claude_explicit_config_dir_drives_preflight_selection_and_seeding")]
     public void ExplicitConfigDirectoryDrivesPreflightSelectionAndSeeding()
@@ -702,6 +703,262 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             DeleteQuietly(root);
         }
     }
+
+    [Xunit.Fact(DisplayName = "Claude_dispatch_transports_the_explicit_preflight_selection_into_the_dispatch_host")]
+    public void ClaudeDispatchTransportsTheExplicitPreflightSelectionIntoTheDispatchHost()
+    {
+        AssertDispatchSeedsTheTransportedPreflightSelection(useExplicitConfigDirectory: true);
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_dispatch_transports_the_default_profile_preflight_selection_into_the_dispatch_host")]
+    public void ClaudeDispatchTransportsTheDefaultProfilePreflightSelectionIntoTheDispatchHost()
+    {
+        AssertDispatchSeedsTheTransportedPreflightSelection(useExplicitConfigDirectory: false);
+    }
+
+    /// <summary>
+    /// The PRODUCTION handoff, end to end and across the real dispatch boundary: the conductor resolves
+    /// once, its selection is serialized into the dispatch parameters file the detached host reads, and
+    /// the host seeds from that decision. The host is deliberately given an environment that resolves to
+    /// a DIFFERENT usable login; if it evaluated candidates of its own it would seed that one instead.
+    /// No worker process is started.
+    /// </summary>
+    private static void AssertDispatchSeedsTheTransportedPreflightSelection(bool useExplicitConfigDirectory)
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            var conductorHome = Path.Combine(root, "conductor-home");
+            var explicitDir = WriteProfile(root, "operator-config", ValidSyntheticCredentials, "{\"theme\":\"dark\"}");
+            var defaultProfileDir = WriteProfile(conductorHome, ".claude", ValidSyntheticCredentials, "{\"theme\":\"light\"}");
+            var expectedSourceDirectory = useExplicitConfigDirectory ? explicitDir : defaultProfileDir;
+
+            // What the dispatch host's OWN environment would select: a different, perfectly usable
+            // login. Seeding it would be the preflight/seeding drift this contract exists to remove.
+            var hostVisibleDir = WriteProfile(root, "host-config", WrongProfileSentinelCredentials);
+
+            // Conductor tick: one resolution, and the selection it reports is the one transported.
+            var conductorInputs = new CountingSelectionInputs(
+                configDirectory: useExplicitConfigDirectory ? explicitDir : null,
+                defaultHome: conductorHome);
+            var conductorResolver = new ClaudeCredentialResolver(
+                conductorInputs.EnvironmentReader,
+                conductorInputs.DefaultHomeProvider);
+
+            var preflight = DispatchProcessHost.PreflightClaudeCredentialSource(
+                WorkerSandboxProvider.Claude,
+                sandboxLowIntegrity: true,
+                conductorResolver);
+
+            Assert.NotNull(preflight);
+            var selection = preflight!.ToTransportedSelection();
+            Assert.NotNull(selection);
+            Assert.Equal(1, conductorResolver.ResolutionCount);
+            Assert.Equal(1, conductorInputs.ConfigDirectoryReads);
+            Assert.Equal(Path.GetFullPath(expectedSourceDirectory), preflight.SelectedSourceDirectory);
+
+            // Derived from the reported view, not computed beside it.
+            Assert.Equal(preflight.SelectedSourceDirectory, selection!.DirectoryPath);
+            Assert.Equal(useExplicitConfigDirectory, selection.IsExplicitSource);
+
+            // The real process boundary: the selection is written to the dispatch parameters file the
+            // detached host reads back. Nothing else carries it.
+            var parametersPath = Path.Combine(root, "dispatch.json");
+            DispatchProcessHost.WriteParameters(
+                parametersPath,
+                CreateClaudeDispatchParameters(root, selection));
+            var transported = DispatchProcessHost.ReadParameters(parametersPath);
+            Assert.Equal(selection, transported.ClaudeCredentialSelection);
+
+            // Dispatch host: builds its ONE resolver the way production does, from the transported
+            // selection plus its own (disagreeing) environment.
+            var hostInputs = new CountingSelectionInputs(
+                configDirectory: hostVisibleDir,
+                defaultHome: Path.Combine(root, "host-home"));
+            var hostResolver = DispatchProcessHost.CreateClaudeCredentialResolver(
+                transported,
+                hostInputs.EnvironmentReader);
+
+            var startInfo = CreateStartInfo(root);
+            var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+            var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+            var seededSource = DispatchProcessHost.SeedProviderEnvironment(
+                startInfo,
+                WorkerSandboxProvider.Claude,
+                sandboxRoot,
+                stderrPath,
+                anthropicApiKeyAccessor: null,
+                claudeCredentialDirectoryAccessor: null,
+                claudeCredentialResolver: hostResolver);
+
+            // The host never evaluated a candidate: no selection input was read in this process.
+            Assert.Equal(0, hostInputs.ConfigDirectoryReads);
+            Assert.Equal(0, hostInputs.DefaultHomeReads);
+            Assert.Equal(1, hostResolver.ResolutionCount);
+
+            // And the source it seeded is the one preflight reported, down to the source kind the
+            // setup artifact records.
+            Assert.NotNull(seededSource);
+            Assert.Equal(preflight.SelectedSourceDirectory, seededSource!.Inspection.DirectoryPath);
+            Assert.Equal(selection.IsExplicitSource, seededSource.Inspection.IsExplicitSource);
+
+            Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var seededDir));
+            Assert.Equal(Path.Combine(sandboxRoot, "claude-config"), seededDir);
+            var seeded = File.ReadAllText(Path.Combine(seededDir!, ".credentials.json"));
+            Assert.Equal(ValidSyntheticCredentials, seeded);
+            Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", seeded);
+            Assert.Equal(
+                HashFile(Path.Combine(Path.GetFullPath(expectedSourceDirectory), ".credentials.json")),
+                HashFile(Path.Combine(seededDir!, ".credentials.json")));
+            Assert.Equal(string.Empty, ReadDiagnostics(stderrPath));
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_dispatch_transports_a_rejected_selection_so_the_host_fails_on_the_same_source")]
+    public void ClaudeDispatchTransportsARejectedSelectionSoTheHostFailsOnTheSameSource()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            var missingExplicitDir = Path.Combine(root, "operator-config-missing");
+            var conductorHome = Path.Combine(root, "conductor-home");
+            WriteProfile(conductorHome, ".claude", WrongProfileSentinelCredentials);
+
+            // A rejected source must still travel: otherwise the host would have nothing to fail on and
+            // would fall back to selecting a source itself - a different account, silently.
+            var preflight = DispatchProcessHost.PreflightClaudeCredentialSource(
+                WorkerSandboxProvider.Claude,
+                sandboxLowIntegrity: true,
+                environmentReader: ClaudeEnvironment(configDirectory: missingExplicitDir),
+                defaultHomeProvider: () => conductorHome);
+
+            Assert.False(preflight!.HasCliCredentialArtifact);
+            var selection = preflight.ToTransportedSelection();
+            Assert.NotNull(selection);
+            Assert.Equal(Path.GetFullPath(missingExplicitDir), selection!.DirectoryPath);
+            Assert.True(selection.IsExplicitSource);
+
+            var hostInputs = new CountingSelectionInputs(
+                configDirectory: WriteProfile(root, "host-config", WrongProfileSentinelCredentials),
+                defaultHome: conductorHome);
+            var hostResolver = DispatchProcessHost.CreateClaudeCredentialResolver(
+                CreateClaudeDispatchParameters(root, selection),
+                hostInputs.EnvironmentReader);
+
+            var startInfo = CreateStartInfo(root);
+            var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+            var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+            var failure = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+                DispatchProcessHost.SeedProviderEnvironment(
+                    startInfo,
+                    WorkerSandboxProvider.Claude,
+                    sandboxRoot,
+                    stderrPath,
+                    anthropicApiKeyAccessor: null,
+                    claudeCredentialDirectoryAccessor: null,
+                    claudeCredentialResolver: hostResolver));
+
+            Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, failure.ErrorCode);
+            Assert.Contains(Path.GetFullPath(missingExplicitDir), failure.Message);
+            Assert.Contains("the directory does not exist", failure.Message);
+            Assert.Equal(0, hostInputs.ConfigDirectoryReads);
+            Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
+            Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", failure.Message);
+            Assert.DoesNotContain("sk-ant-", ReadDiagnostics(stderrPath));
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_dispatch_host_refuses_to_select_a_source_when_the_dispatch_transported_none")]
+    public void ClaudeDispatchHostRefusesToSelectASourceWhenTheDispatchTransportedNone()
+    {
+        var root = CreateFixtureRoot();
+        try
+        {
+            // A perfectly usable login sits in the host's own environment. Seeding it would mean the
+            // host chose a source no preflight ever reported, so an untransported dispatch fails loudly.
+            var hostVisibleDir = WriteProfile(root, "host-config", ValidSyntheticCredentials);
+            var parameters = CreateClaudeDispatchParameters(root, selection: null);
+
+            var startInfo = CreateStartInfo(root);
+            var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
+            var stderrPath = Path.Combine(root, "dispatch.stderr.log");
+
+            var failure = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+                DispatchProcessHost.SeedProviderEnvironment(
+                    startInfo,
+                    WorkerSandboxProvider.Claude,
+                    sandboxRoot,
+                    stderrPath,
+                    anthropicApiKeyAccessor: () => null,
+                    claudeCredentialDirectoryAccessor: null,
+                    claudeCredentialResolver: DispatchProcessHost.CreateClaudeCredentialResolver(parameters)));
+
+            Assert.Equal(ClaudeCliAuthProbe.AuthUnavailableErrorCode, failure.ErrorCode);
+            Assert.Contains(NotTransportedReason, failure.Message);
+
+            // A broken dispatch contract must not read as a broken login: an operator who sees this
+            // has to repair the dispatch path, not their credentials.
+            Assert.DoesNotContain(MissingFileReason, failure.Message);
+            Assert.DoesNotContain(MalformedFileReason, failure.Message);
+            Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+            Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "claude-config")));
+            Assert.DoesNotContain("sk-ant-", failure.Message);
+            Assert.DoesNotContain(Path.GetFullPath(hostVisibleDir), failure.Message);
+
+            // The injected-environment seam stays available for host tests that own their fixture, and
+            // it is the ONLY way to seed without a transported selection.
+            var seamResolver = DispatchProcessHost.CreateClaudeCredentialResolver(
+                parameters,
+                ClaudeEnvironment(configDirectory: hostVisibleDir));
+            Assert.True(seamResolver.Resolve().HasLocalAuthMaterial);
+        }
+        finally
+        {
+            DeleteQuietly(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Claude_credential_preflight_is_skipped_for_non_claude_and_unsandboxed_dispatches")]
+    public void ClaudeCredentialPreflightIsSkippedForNonClaudeAndUnsandboxedDispatches()
+    {
+        // Nothing to select, so nothing may be read or transported: these dispatches seed no Claude
+        // login at all, and a stray resolution here would touch the operator's real credential store.
+        Assert.Null(DispatchProcessHost.PreflightClaudeCredentialSource(
+            WorkerSandboxProvider.Codex,
+            sandboxLowIntegrity: true,
+            environmentReader: _ => throw new InvalidOperationException("selection input was read")));
+
+        Assert.Null(DispatchProcessHost.PreflightClaudeCredentialSource(
+            WorkerSandboxProvider.Claude,
+            sandboxLowIntegrity: false,
+            environmentReader: _ => throw new InvalidOperationException("selection input was read")));
+    }
+
+    private static DispatchProcessHost.DispatchRunParameters CreateClaudeDispatchParameters(
+        string root,
+        ClaudeCredentialSourceSelection? selection) =>
+        new(
+            "Write-Output ok",
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "exit.txt"),
+            null,
+            DisableSharedCompilation: false,
+            SandboxLowIntegrity: true,
+            Provider: WorkerSandboxProvider.Claude,
+            ClaudeCredentialSelection: selection);
 
     /// <summary>
     /// Counts every credential-selection input read. A second, independent resolution cannot hide from

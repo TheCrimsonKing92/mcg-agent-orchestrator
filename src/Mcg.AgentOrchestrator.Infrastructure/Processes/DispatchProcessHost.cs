@@ -81,7 +81,13 @@ public static class DispatchProcessHost
         int HeartbeatIntervalMilliseconds = 15_000,
         IReadOnlyList<MandatoryContextFileDescriptor>? MandatoryContextFiles = null,
         ProcessOutputDrainPolicy? OutputDrainPolicy = null,
-        string? SandboxInstanceName = null);
+        string? SandboxInstanceName = null,
+        // The Claude credential source the CONDUCTOR selected during dispatch preflight, transported to
+        // this detached host so seeding consumes that decision instead of selecting again in a process
+        // whose environment may differ. Path and source kind only - no credential material crosses here,
+        // and the payload is re-read at seeding time. Null for non-Claude dispatches; a Claude sandbox
+        // dispatch that arrives without it fails before launch rather than re-deriving a source.
+        ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -293,12 +299,11 @@ public static class DispatchProcessHost
         Action<string, DateTimeOffset, TimeSpan>? recordStep = null,
         Action<string>? protectWorkspaceBoundary = null,
         Action<string>? protectGitMetadata = null,
-        // Same injected-environment seam SeedProviderEnvironment already exposes, surfaced here so a
-        // sandbox test that only needs a Claude-shaped provider can point seeding at a synthetic
-        // login source. One reader covers both inputs the Claude path reads (ANTHROPIC_API_KEY and
-        // CLAUDE_CONFIG_DIR), so an injected test resolves nothing from process environment. Without
-        // it those tests fall through to the operator's REAL profile credential store, which makes
-        // them depend on host auth and fail closed on any machine without a Claude login.
+        // Injected environment for the Claude path, so a sandbox test resolves nothing from process
+        // state and never falls through to the operator's REAL credential store (which would make it
+        // depend on host auth). It answers ANTHROPIC_API_KEY in every case; it selects a source ONLY
+        // when the dispatch transported none, which in production is a hard failure, not a fallback -
+        // see CreateClaudeCredentialResolver.
         Func<string, string?>? providerEnvironmentReader = null)
     {
         if (!OperatingSystem.IsWindows())
@@ -409,7 +414,9 @@ public static class DispatchProcessHost
                 parameters.Provider,
                 sandboxRoot,
                 parameters.StderrPath,
-                environmentReader: providerEnvironmentReader));
+                // The conductor's transported selection, rehydrated into the single resolver this host
+                // seeds from. No candidate evaluation happens in this process.
+                claudeCredentialResolver: CreateClaudeCredentialResolver(parameters, providerEnvironmentReader)));
             TrackAction("materialize-ca-bundle", () => SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath));
 
             // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
@@ -475,6 +482,45 @@ public static class DispatchProcessHost
         Directory.CreateDirectory(powershellDirectory);
         environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDirectory, "ModuleAnalysisCache");
     }
+
+    /// <summary>
+    /// Runs the Claude credential preflight ONCE for a dispatch about to be launched, and returns the
+    /// reported view whose <see cref="ClaudeCliAuthState.ToTransportedSelection"/> the conductor puts in
+    /// <see cref="DispatchRunParameters.ClaudeCredentialSelection"/>. The detached host then seeds from
+    /// that selection instead of resolving again (see
+    /// <see cref="ClaudeCredentialResolver.ForTransportedSelection"/>), so the source reported here is
+    /// the source the worker receives - derived from this state, never computed a second time.
+    /// Returns null for non-Claude or non-sandbox dispatches, which seed no Claude login and must not
+    /// touch a credential store at all.
+    /// A rejected source is still reported and still transported on purpose: the host's pre-launch
+    /// failure must name the source preflight named rather than fall back to a locally chosen one.
+    /// </summary>
+    internal static ClaudeCliAuthState? PreflightClaudeCredentialSource(
+        WorkerSandboxProvider provider,
+        bool sandboxLowIntegrity,
+        ClaudeCredentialResolver? resolver = null,
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null) =>
+        provider == WorkerSandboxProvider.Claude && sandboxLowIntegrity
+            ? ClaudeCliAuthProbe.From(
+                resolver ?? new ClaudeCredentialResolver(environmentReader, defaultHomeProvider))
+            : null;
+
+    /// <summary>
+    /// Builds the ONE resolver this dispatch host uses for the Claude credential source. The conductor's
+    /// transported selection wins whenever it is present; the injected environment reader is a test-only
+    /// fallback for host tests that construct their own synthetic source. With neither, the resolver
+    /// resolves to <see cref="ClaudeCredentialStatus.SelectionNotTransported"/>, so subscription seeding
+    /// fails before launch instead of silently re-deriving a source in this process.
+    /// </summary>
+    internal static ClaudeCredentialResolver CreateClaudeCredentialResolver(
+        DispatchRunParameters parameters,
+        Func<string, string?>? providerEnvironmentReader = null) =>
+        parameters.ClaudeCredentialSelection is null && providerEnvironmentReader is not null
+            ? new ClaudeCredentialResolver(providerEnvironmentReader)
+            : ClaudeCredentialResolver.ForTransportedSelection(
+                parameters.ClaudeCredentialSelection,
+                providerEnvironmentReader);
 
     /// <summary>
     /// Publishes the provider's sandbox environment onto <paramref name="startInfo"/>. For Claude

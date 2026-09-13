@@ -11,6 +11,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal enum ClaudeCredentialStatus
 {
     SourceUnresolved,
+
+    /// <summary>
+    /// Dispatch-contract failure, not a login problem: the detached dispatch host was asked to seed a
+    /// Claude sandbox without the conductor's resolved selection. Recomputing selection here is what
+    /// let preflight and seeding disagree, so this fails loudly instead.
+    /// </summary>
+    SelectionNotTransported,
     DirectoryMissing,
     CredentialFileMissing,
     CredentialFileEmpty,
@@ -39,6 +46,17 @@ internal sealed record ClaudeCredentialInspection(
 }
 
 /// <summary>
+/// The selection half of one resolved credential source - which directory was chosen and whether the
+/// operator chose it explicitly - in a form that survives the dispatch process boundary.
+/// The conductor decides this once during dispatch preflight and transports it to the detached dispatch
+/// host, which seeds from it instead of evaluating candidates again.
+/// Carries NO credential bytes on purpose: the payload is deliberately re-read at seeding time so a CLI
+/// token refresh between preflight and launch reaches the worker. The decision travels; the secret does
+/// not.
+/// </summary>
+public sealed record ClaudeCredentialSourceSelection(string DirectoryPath, bool IsExplicitSource);
+
+/// <summary>
 /// Preflight's view of the ONE credential source <see cref="ClaudeCredentialResolver"/> selected.
 /// <paramref name="SelectedSourceDirectory"/>, <paramref name="IsExplicitSource"/> and
 /// <paramref name="UnavailableReason"/> carry paths and sanitized reason phrases only - never token,
@@ -60,6 +78,17 @@ public sealed record ClaudeCliAuthState(
     /// resolution - and the validated credential bytes it holds - can never reach ToString output.
     /// </summary>
     internal ClaudeCredentialResolution? Resolution { get; init; }
+
+    /// <summary>
+    /// This preflight view's selection, in the form that crosses the dispatch process boundary, or null
+    /// when nothing was selected. It is derived from the reported source rather than recomputed, so the
+    /// directory a worker is seeded from is by construction the directory preflight reported - including
+    /// when the source was rejected, so the pre-launch failure names the path preflight named.
+    /// </summary>
+    public ClaudeCredentialSourceSelection? ToTransportedSelection() =>
+        string.IsNullOrWhiteSpace(SelectedSourceDirectory)
+            ? null
+            : new ClaudeCredentialSourceSelection(SelectedSourceDirectory, IsExplicitSource);
 }
 
 /// <summary>
@@ -163,21 +192,49 @@ internal sealed class ClaudeCredentialResolution
 /// default-home inputs are injectable so tests are deterministic without mutating process state.
 /// </summary>
 /// <remarks>
-/// PROCESS SCOPE: the conductor resolves during dispatch preflight, while seeding runs in the detached
-/// dispatch host (<c>DispatchProcessHost.Run</c>) - a separate process that cannot share an object
-/// with its parent. Within each process the transported resolution is the only decision; across the
-/// boundary this type, its single-candidate rule and its injected inputs are the only decider, so the
-/// two processes cannot select different sources. Do not "reconcile" that by re-resolving inside a
-/// consumer: recomputation is exactly the drift this type exists to remove.
+/// PROCESS SCOPE: the conductor selects during dispatch preflight, while seeding runs in the detached
+/// dispatch host (<c>DispatchProcessHost.Run</c>) - a separate process that cannot share an object with
+/// its parent. Within each process the shared resolver instance is the only decision. Across the
+/// boundary the conductor's <see cref="ClaudeCredentialSourceSelection"/> is transported in the dispatch
+/// parameters and rehydrated with <see cref="ForTransportedSelection"/>, so the host performs NO
+/// candidate evaluation of its own and cannot pick a different login than preflight reported. A host
+/// asked to seed a Claude sandbox with no transported selection fails loudly
+/// (<see cref="ClaudeCredentialStatus.SelectionNotTransported"/>) rather than quietly re-deriving one.
+/// Only the selection travels: the credential bytes are re-read during the host's resolution on purpose,
+/// so a CLI token refresh between preflight and launch reaches the worker instead of seeding a snapshot.
 /// </remarks>
 internal sealed class ClaudeCredentialResolver
 {
     private readonly Func<string, string?> _environmentReader;
     private readonly Func<string?>? _defaultHomeProvider;
     private readonly Func<string>? _explicitDirectoryAccessor;
+    private readonly bool _consumesTransportedSelection;
+    private readonly ClaudeCredentialSourceSelection? _transportedSelection;
     private readonly object _gate = new();
     private ClaudeCredentialResolution? _resolution;
     private int _resolutionCount;
+
+    private ClaudeCredentialResolver(
+        ClaudeCredentialSourceSelection? transportedSelection,
+        Func<string, string?>? environmentReader)
+    {
+        _environmentReader = environmentReader ?? ClaudeCredentialSource.ProcessEnvironmentReader;
+        _consumesTransportedSelection = true;
+        _transportedSelection = transportedSelection;
+    }
+
+    /// <summary>
+    /// The dispatch host's entry point: rehydrates the conductor's already-made selection so seeding
+    /// consumes that decision instead of computing a second one. <paramref name="transportedSelection"/>
+    /// is null when the conductor transported nothing, which resolves to a typed pre-launch failure -
+    /// never to a locally re-derived source.
+    /// <paramref name="environmentReader"/> answers the ANTHROPIC_API_KEY auth-mode question only; it is
+    /// never consulted for selection on this path.
+    /// </summary>
+    internal static ClaudeCredentialResolver ForTransportedSelection(
+        ClaudeCredentialSourceSelection? transportedSelection,
+        Func<string, string?>? environmentReader = null) =>
+        new(transportedSelection, environmentReader);
 
     /// <param name="environmentReader">Reads CLAUDE_CONFIG_DIR and ANTHROPIC_API_KEY; process env by default.</param>
     /// <param name="defaultHomeProvider">Supplies the home root for the fallback candidate.</param>
@@ -227,15 +284,27 @@ internal sealed class ClaudeCredentialResolver
                 return existing;
             }
 
-            var (directoryPath, isExplicitSource) = _explicitDirectoryAccessor is not null
-                ? (_explicitDirectoryAccessor(), true)
-                : ClaudeCredentialSource.ResolveLocation(_environmentReader, _defaultHomeProvider);
-
             _resolutionCount++;
-            var resolution = ClaudeCredentialSource.Load(directoryPath, isExplicitSource);
+            var resolution = _consumesTransportedSelection
+                ? LoadTransported()
+                : LoadSelectedLocally();
             Volatile.Write(ref _resolution, resolution);
             return resolution;
         }
+    }
+
+    /// <summary>Rehydrates the conductor's decision; never evaluates a candidate of its own.</summary>
+    private ClaudeCredentialResolution LoadTransported() => _transportedSelection is { } selection
+        ? ClaudeCredentialSource.Load(selection.DirectoryPath, selection.IsExplicitSource)
+        : new(new(null, null, false, ClaudeCredentialStatus.SelectionNotTransported), null);
+
+    private ClaudeCredentialResolution LoadSelectedLocally()
+    {
+        var (directoryPath, isExplicitSource) = _explicitDirectoryAccessor is not null
+            ? (_explicitDirectoryAccessor(), true)
+            : ClaudeCredentialSource.ResolveLocation(_environmentReader, _defaultHomeProvider);
+
+        return ClaudeCredentialSource.Load(directoryPath, isExplicitSource);
     }
 }
 
@@ -512,14 +581,20 @@ internal static class ClaudeCredentialSource
         Describe(inspection.Status);
 
     private static string DescribeSource(ClaudeCredentialInspection inspection) =>
-        (inspection.IsExplicitSource
-            ? "explicit " + ConfigDirectoryEnvironmentVariable + " login source"
-            : "default profile login source") +
-        " '" + (inspection.DirectoryPath ?? "<unresolved>") + "'";
+        inspection.DirectoryPath is null
+            // No directory was selected at all, so naming a source kind would invent one.
+            ? "Claude login source '<unresolved>'"
+            : (inspection.IsExplicitSource
+                ? "explicit " + ConfigDirectoryEnvironmentVariable + " login source"
+                : "default profile login source") +
+              " '" + inspection.DirectoryPath + "'";
 
     private static string Describe(ClaudeCredentialStatus status) => status switch
     {
         ClaudeCredentialStatus.SourceUnresolved => "no credential directory could be resolved",
+        ClaudeCredentialStatus.SelectionNotTransported =>
+            "dispatch carried no resolved credential source selection from preflight, and the dispatch " +
+            "host must never select one of its own",
         ClaudeCredentialStatus.DirectoryMissing => "the directory does not exist",
         ClaudeCredentialStatus.CredentialFileMissing =>
             CredentialsFileName +
