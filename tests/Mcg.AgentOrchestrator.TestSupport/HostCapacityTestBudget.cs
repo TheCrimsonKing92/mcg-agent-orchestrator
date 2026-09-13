@@ -1,16 +1,19 @@
 using System.Globalization;
 
 /// <summary>
-/// Bounds how many host-capacity-bound tests execute at once inside one test process.
+/// Bounds how many host-capacity-bound tests execute at once inside one test process to a
+/// chosen slot count: one slot per eight logical processors, clamped, or the value of
+/// <see cref="SlotCountVariable"/>.
 ///
 /// The fixtures that take a slot drive real git subprocesses, real worktrees, SQLite
-/// state files and build-permit directories. Per-operation ownership makes those tests
-/// independent — distinct repositories, build storage roots, attention stores and
-/// process registries — but independence is not free: their cost is host CPU, disk and
-/// process capacity, which no amount of isolation partitions. The acceptance gate runs
-/// several test processes concurrently, so an unbounded per-process degree of
-/// parallelism multiplies into host oversubscription that inflates every test's wall
-/// clock without reducing lane wall clock.
+/// state files and build-permit directories. Per-operation ownership already makes those
+/// tests independent — distinct repositories, build storage roots, attention stores and
+/// process registries — so the slot count bounds concurrent host-capacity use and is not
+/// an isolation mechanism.
+///
+/// The slot count is a chosen bound, not a measured host threshold. Its cost and benefit
+/// are to be measured by the operator-owned criterion 6 before/after comparison; see
+/// docs/acceptance-gate-resource-isolation.md.
 ///
 /// This is a capacity budget, not a correctness lock. It never orders two operations
 /// against each other and never protects shared state. A fixture that needs exclusion
@@ -53,9 +56,9 @@ public sealed class HostCapacityTestBudget
     }
 
     /// <summary>
-    /// One slot per eight logical processors, clamped to [2, 4]. Two keeps overlap real on
-    /// a small host; four caps a large host so the several gate shards that run at once,
-    /// each holding its own budget, still fit inside the machine.
+    /// One slot per eight logical processors, clamped to [2, 4]. The ratio and both clamp
+    /// endpoints are chosen bounds, not measured host limits: the lower endpoint keeps two
+    /// tests overlapping on a small host, the upper endpoint is the chosen ceiling.
     /// </summary>
     public static int ResolveSlotCount(string? configuredSlotCount, int processorCount)
     {

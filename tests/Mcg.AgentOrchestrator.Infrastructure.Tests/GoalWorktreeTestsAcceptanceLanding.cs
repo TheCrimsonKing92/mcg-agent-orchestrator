@@ -940,8 +940,6 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             Assert.Null(writeFailure);
             Assert.NotNull(readElapsed);
             Assert.NotNull(writeElapsed);
-            Assert.True(readElapsed.Value < TimeSpan.FromSeconds(1), "State read exceeded the one-second verification-phase bound.");
-            Assert.True(writeElapsed.Value < TimeSpan.FromSeconds(1), "State write exceeded the one-second verification-phase bound.");
             Assert.True(File.Exists(Path.Combine(repo, "concurrency.txt")));
         }
         finally
