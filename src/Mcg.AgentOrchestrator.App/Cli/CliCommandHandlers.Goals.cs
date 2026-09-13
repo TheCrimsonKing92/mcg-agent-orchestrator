@@ -698,7 +698,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Kernel,
                     context.CurrentGoal,
                     context.Workspace,
-                    abandonReason));
+                    abandonReason,
+                    context.CleanupContext.Hooks));
                 return false;
             }
 
@@ -706,7 +707,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.CurrentGoal,
                 context.Workspace,
-                abandonReason);
+                abandonReason,
+                context.CleanupContext.Hooks);
             ConsoleViews.PrintGoalAbandonPlan(abandonPlan);
             if (!abandonPlan.CanApply)
             {
@@ -965,7 +967,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             ConsoleViews.PrintGoals(context.Kernel);
-            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(context.Workspace.ExecutionDirectory));
+            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(
+                context.Workspace.ExecutionDirectory,
+                context.CleanupContext.Hooks));
             return false;
 
         case "agents":
@@ -1028,7 +1032,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 tasksOnly);
             if (!tasksOnly)
             {
-                PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+                PrintGoalCleanupBackoffStatus(
+                    context.Workspace.ExecutionDirectory,
+                    context.CurrentGoal.Id,
+                    context.CleanupContext.Hooks);
             }
 
             return false;
@@ -1060,6 +1067,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.Workspace.ExecutionDirectory,
                 context.CurrentGoal.Id,
+                cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
@@ -1078,11 +1086,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.Workspace.ExecutionDirectory,
                 context.CurrentGoal.Id,
+                cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
-            ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
+            ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
+                context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory,
+                cleanupHooks: context.CleanupContext.Hooks));
             return recoverySweep.Changed;
 
         case "dogfood-eval":
@@ -1123,7 +1134,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoalArtifactRetentionPlan(GoalArtifactRetentionPlanner.Build(
                 context.Kernel,
                 context.CurrentGoal,
-                context.Workspace));
+                context.Workspace,
+                buildStorageRoot: context.CleanupContext.Hooks.BuildStorageRoot));
             return false;
 
         case "acceptance-queue":
@@ -1167,7 +1179,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new InvalidOperationException("build-lease-cleanup deletes an orphaned goal build lease. Re-run with --confirm-build-lease-cleanup after goal-recovery reports canCleanup=True.");
             }
 
-            if (!DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(context.CurrentGoal.Id, out _, out var cleanupDetail))
+            if (!DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(
+                    context.CurrentGoal.Id,
+                    out _,
+                    out var cleanupDetail,
+                    context.CleanupHooks.BuildStorageRoot))
             {
                 throw new InvalidOperationException(cleanupDetail);
             }
@@ -1312,6 +1328,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.Workspace.ExecutionDirectory,
                 context.CurrentGoal.Id,
+                cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
             ConsoleViews.PrintTerminalGoalSweep(nextSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
@@ -1526,7 +1543,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         goalId,
                         taskId),
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
-                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline);
+                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
+                    cleanupHooks: context.CleanupHooks);
                 var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
                     context.Workspace,
                     line =>
@@ -1718,6 +1736,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         loopKernel,
                         context.Workspace.ExecutionDirectory,
                         cache: terminalSweepCache,
+                        cleanupHooks: context.CleanupContext.Hooks,
                         orchestratorDirectory: context.Workspace.OrchestratorDirectory);
                     var remediation = reconcileSweepCoordinator.Process(terminalSweep);
                     if (remediation.RemedySucceeded)
@@ -1726,13 +1745,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             loopKernel,
                             context.Workspace.ExecutionDirectory,
                             cache: terminalSweepCache,
+                            cleanupHooks: context.CleanupContext.Hooks,
                             orchestratorDirectory: context.Workspace.OrchestratorDirectory);
                         terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
                     }
                     terminalSweep = terminalSweep with { ProgressEvents = remediation.Events };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
-                    GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
+                    context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                     GoalRefinementWorkCoordinator.TryLaunchFirstPending(
                         new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
                         context.Workspace);
@@ -1828,12 +1848,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Channel,
                 context.Providers,
                 persistCriticalDispatchStart: context.PersistCriticalGoalCheckpoint,
-                readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
-                    context.ReloadKernel(),
-                    goalId,
-                    taskId),
-                runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
-                recordDurableGoalBaseline: context.RecordDurableGoalBaseline);
+                    readCurrentInterruptedDispatchState: (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                        context.ReloadKernel(),
+                        goalId,
+                        taskId),
+                    runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
+                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
+                    cleanupHooks: context.CleanupHooks);
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other

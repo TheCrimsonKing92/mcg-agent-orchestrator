@@ -338,22 +338,20 @@ private static void PrintWorkspaceRemoveResult(GoalWorktreeRemoveResult result)
     }
 }
 
-private static void RecordDeferredGoalCleanup(string executionDirectory, GoalId goalId, string reason)
-{
-    var backoff = GoalWorktrees.RecordGoalCleanupNeeded(executionDirectory, goalId, reason);
-    if (backoff is not null)
-    {
-        Console.WriteLine($"Cleanup backoff: {GoalWorktrees.FormatCleanupBackoff(backoff)}");
-    }
-}
-
 private static void RecordDeferredGoalCleanup(CliExecutionContext context, Goal goal, string reason, string source)
 {
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "conductor:cleanup", $"Deferred cleanup after {source}.");
     GoalWorktreeCleanupBackoff? backoff;
     try
     {
-        backoff = GoalWorktrees.RecordGoalCleanupNeeded(context.Workspace.ExecutionDirectory, goal.Id, reason);
+        // The cleanup-debt write applies the owner's escalation threshold, escalated retry
+        // interval, clock and attention-store directory; falling back to record defaults here
+        // would silently replace configured policy with literals.
+        backoff = GoalWorktrees.RecordGoalCleanupNeeded(
+            context.Workspace.ExecutionDirectory,
+            goal.Id,
+            reason,
+            context.CleanupContext.Hooks);
     }
     catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
     {
@@ -372,9 +370,12 @@ private static void RecordDeferredGoalCleanup(CliExecutionContext context, Goal 
     }
 }
 
-private static void PrintGoalCleanupBackoffStatus(string executionDirectory, GoalId goalId)
+private static void PrintGoalCleanupBackoffStatus(
+    string executionDirectory,
+    GoalId goalId,
+    GoalWorktreeCleanupHooks hooks)
 {
-    var backoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId);
+    var backoff = GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goalId, hooks);
     if (backoff is null)
         return;
 

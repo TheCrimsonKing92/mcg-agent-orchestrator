@@ -2265,7 +2265,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(root);
+            _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
         }
     }
 

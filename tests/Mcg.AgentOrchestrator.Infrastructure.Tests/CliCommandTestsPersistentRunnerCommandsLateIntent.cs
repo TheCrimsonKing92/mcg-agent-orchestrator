@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsLateIntent : CliCommandTestBase
 {
     [Xunit.Theory]

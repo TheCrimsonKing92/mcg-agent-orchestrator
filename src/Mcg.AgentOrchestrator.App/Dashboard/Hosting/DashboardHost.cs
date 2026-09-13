@@ -350,6 +350,7 @@ public static async Task RunDashboardHostAsync(
     var builder = WebApplication.CreateBuilder();
     builder.WebHost.UseUrls(args.UrlPrefix);
     builder.Services.AddSingleton(workspace);
+    builder.Services.AddSingleton(WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory));
     builder.Services.AddHostedService<GoalWorktreeOrphanSweepHostedService>();
 
     var app = builder.Build();

@@ -1,4 +1,4 @@
-﻿using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -2723,7 +2723,6 @@ public sealed class CliCommandTestsIsolatedBuildLeaseCommands : CliCommandTestBa
     }
 }
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class CliCommandTestsGoalLifecycleCleanupHooksAbandon : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_abandon_goal_confirmed_cancels_and_removes_clean_workspace")]
@@ -2756,7 +2755,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAbandon : CliCommand
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace));
             Xunit.Assert.True(changed);
         });
 
@@ -3115,7 +3115,7 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
             WorkerProfileCatalog.Default(),
             goal)
         {
-            CleanupHooks = hooks
+            CleanupContext = new WorktreeCleanupContext(hooks)
         };
 
         var output = CaptureConsole(() => CliCommandHandlers.Execute(["cleanup-status"], context));
@@ -3154,7 +3154,6 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
 
 }
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_acceptance_records_dogfood_entry_in_sqlite_without_committing_log_file")]
@@ -3197,7 +3196,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref agents,
             providers,
             ref profiles,
-            ref currentGoal));
+            ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace)));
 
         var statusOutput = RunGitOutput(root, "status", "--porcelain", "DOGFOOD_LOG.md");
         Xunit.Assert.Equal(string.Empty, statusOutput.Trim());
@@ -3214,9 +3214,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
     [Xunit.Fact(DisplayName = "Cli_acceptance_pins_selected_stable_slot_and_records_receipt")]
     public void CliAcceptancePinsSelectedStableSlotAndRecordsReceipt()
     {
-        var previousRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         var isolatedRoot = Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-cli-{Guid.NewGuid():N}");
-        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
+        var storageRoot = new DotnetBuildStorageRoot(isolatedRoot);
         var root = CreateShortAcceptanceRepository();
         try
         {
@@ -3247,12 +3246,13 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             // acceptance under the no-overflow acquisition), while still proving acceptance
             // acquires and pins its own permit regardless of an unrelated held slot.
             var goalBuildPermit =
-                DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "permit-probe").BuildPermitIndex ?? 0;
-            var foreignSlot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(goalBuildPermit == 0 ? 1 : 0);
+                DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "permit-probe", storageRoot: storageRoot).BuildPermitIndex ?? 0;
+            var foreignSlot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(goalBuildPermit == 0 ? 1 : 0, storageRoot: storageRoot);
             using var foreignSlotLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(foreignSlot);
             var leaseHeldObserved = false;
             var verifier = new ProbeAcceptanceVerifier(stableSlotLease =>
             {
+                Xunit.Assert.True(storageRoot.ContainsPath(stableSlotLease!.Environment.RootPath), $"Acceptance lease root {stableSlotLease.Environment.RootPath} escaped supplied root {storageRoot.RootPath}.");
                 var reacquire = Xunit.Assert.ThrowsAny<IOException>(() =>
                     DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
                         stableSlotLease!.Environment,
@@ -3272,7 +3272,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 ref currentGoal,
                 acceptanceVerifier: verifier,
                 phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-                stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+                stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory, buildStorageRoot: storageRoot)));
 
             Xunit.Assert.Equal(goalBuildPermit, verifier.LastStableSlotIndex);
             var selectedSlot = verifier.LastStableSlotLease?.Environment.SlotOwnerToken;
@@ -3289,7 +3290,6 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         }
         finally
         {
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, previousRoot);
             if (Directory.Exists(isolatedRoot))
             {
                 Directory.Delete(isolatedRoot, recursive: true);
@@ -3340,7 +3340,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 slotAttempted = true;
                 throw new Xunit.Sdk.XunitException(
                     "The source-size rejection must run before the CLI stable-slot selector.");
-            }));
+            },
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.False(slotAttempted);
         Xunit.Assert.Equal(0, verifier.RunCount);
@@ -3348,19 +3349,19 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         Xunit.Assert.Contains("recorded ceiling of 2", output, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_acceptance_tests_use_fixture_isolated_dotnet_root")]
+    [Xunit.Fact(DisplayName = "Cli_acceptance_tests_use_workspace_owned_dotnet_root")]
     public void CliAcceptanceTestsUseFixtureIsolatedDotnetRoot()
     {
-        var isolatedRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateShortAcceptanceRepository());
+        var context = CreateIsolatedCleanupContext(workspace);
+        var storageRoot = Xunit.Assert.IsType<DotnetBuildStorageRoot>(context.Hooks.BuildStorageRoot);
+        var attempt = DotnetBuildEnvironmentManager.CreateAttempt(
+            GoalId.New(), "ownership-probe", storageRoot: storageRoot);
 
-        Xunit.Assert.False(string.IsNullOrWhiteSpace(isolatedRoot));
         Xunit.Assert.StartsWith(
-            "mdi-",
-            Path.GetFileName(isolatedRoot),
-            StringComparison.Ordinal);
-        Xunit.Assert.NotEqual(
-            Path.Combine(Path.GetTempPath(), DotnetBuildEnvironmentManager.RootDirectoryName),
-            isolatedRoot);
+            Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "test-dotnet") + Path.DirectorySeparatorChar,
+            attempt.RootPath,
+            StringComparison.OrdinalIgnoreCase);
     }
 
 
@@ -3399,7 +3400,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 {
                     onWait?.Invoke(new DotnetBuildStableSlotWait(2, 12345));
                     throw new IOException("Timed out waiting for an available stable dotnet build slot.");
-                }));
+                },
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
             Xunit.Assert.Contains("stable dotnet build slot", ex.Message);
         });
 
@@ -3440,7 +3442,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal));
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace)));
 
             Xunit.Assert.Contains("Acceptance repair: normalized raw Completed goal", output, StringComparison.Ordinal);
             Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
@@ -3491,7 +3494,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace));
             Xunit.Assert.True(changed);
         });
 
@@ -3565,7 +3569,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace));
             Xunit.Assert.True(changed);
         });
 
@@ -3610,7 +3615,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace));
 
             Xunit.Assert.True(changed);
             Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
@@ -3656,7 +3662,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref agents,
             providers,
             ref profiles,
-            ref currentGoal));
+            ref currentGoal,
+                cleanupContext: CreateIsolatedCleanupContext(workspace)));
 
         Xunit.Assert.Contains("searched both artifacts", error.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("branch not found locally or remotely", error.Message, StringComparison.Ordinal);
@@ -3700,7 +3707,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref currentGoal,
             acceptanceVerifier: verifier,
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(workspace)));
 
         Xunit.Assert.Contains("BUILD_LOCK_BLOCKED", output);
         Xunit.Assert.Contains("Mcg.AgentOrchestrator.App.dll", output);
@@ -3762,7 +3770,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref currentGoal,
             acceptanceVerifier: verifier,
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(workspace)));
 
         Xunit.Assert.Contains("ACCEPTANCE_INFRASTRUCTURE_DEFERRED", output);
         Xunit.Assert.Contains("trusted-main-build-failed", output);
@@ -3818,7 +3827,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             acceptanceVerifier: new ProbeAcceptanceVerifier(() => { }),
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
             stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
-            stableSlotSelector: (_, _) => throw new DotnetBuildSlotsBusyException(busy)));
+            stableSlotSelector: (_, _) => throw new DotnetBuildSlotsBusyException(busy),
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.Contains("SLOTS_BUSY", output);
         Xunit.Assert.Contains("goal remains ready", output);
@@ -3878,7 +3888,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                         ResultSummary: "timed out")
                 ])),
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.Contains("BLOCKER step=verification reason=timeout", output);
         Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id)!.Status);
@@ -3934,7 +3945,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
                         ResultSummary: $"base-build-cache main_sha={mainSha} build_phase_ms=42 projects=Core=hit,Infrastructure=miss,published built_projects=Infrastructure evictions=none; Passed: 1")
                 ])),
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.Contains("Verification: passed", output);
         var journal = GoalOperationJournal.Read(root, goal.Id);
@@ -4042,7 +4054,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref currentGoal,
             acceptanceVerifier: new ProbeAcceptanceVerifier(() => { }),
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.Contains("Verification: passed", output);
         Xunit.Assert.DoesNotContain("Acceptance evidence: blocked", output);
@@ -4094,7 +4107,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref currentGoal,
             acceptanceVerifier: verifier,
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.Contains("superseded failure is historical", output);
         Xunit.Assert.DoesNotContain("historical:", output);
@@ -4162,7 +4176,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref currentGoal,
             acceptanceVerifier: verifier,
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.Contains("superseded failure is historical", output);
         Xunit.Assert.Equal(1, verifier.RunCount);
@@ -4208,7 +4223,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             ref currentGoal,
             acceptanceVerifier: verifier,
             phaseTimings: new CliPhaseTimingRecorder("acceptance"),
-            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1),
+                cleanupContext: CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root))));
 
         Xunit.Assert.Contains("acceptance: not accepted", output);
         Xunit.Assert.Equal(0, verifier.RunCount);
@@ -4325,7 +4341,6 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
     }
 }
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class CliCommandTestsGoalLifecycleCleanupHooks : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_status_prints_cleanup_backoff_for_snapshot_visibility")]
@@ -4333,40 +4348,38 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooks : CliCommandTestBas
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var originalNow = GoalWorktrees.CleanupUtcNow;
-        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
-        try
+        var now = DateTimeOffset.Parse("2026-07-03T12:00:00Z");
+        var hooks = new GoalWorktreeCleanupHooks
         {
-            var now = DateTimeOffset.Parse("2026-07-03T12:00:00Z");
-            GoalWorktrees.CleanupUtcNow = () => now;
-            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(15);
-            var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("Cleanup debt visible in status");
-            GoalWorktrees.RecordGoalCleanupNeeded(workspace.ExecutionDirectory, goal.Id, "remove:branch-delete-failed");
-            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-            var providers = new InMemoryModelProviderRegistry([]);
-            var profiles = WorkerProfileCatalog.Default();
-            Goal? currentGoal = goal;
+            CleanupUtcNow = () => now,
+            CleanupBackoffDuration = static () => TimeSpan.FromMinutes(15)
+        };
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Cleanup debt visible in status");
+        GoalWorktrees.RecordGoalCleanupNeeded(
+            workspace.ExecutionDirectory,
+            goal.Id,
+            "remove:branch-delete-failed",
+            hooks);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
 
-            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-                ["status", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal));
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["status", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            cleanupContext: CreateIsolatedCleanupContext(workspace, hooks)));
 
-            Xunit.Assert.Contains("Cleanup backoff:", output);
-            Xunit.Assert.Contains("reason=remove:branch-delete-failed", output);
-            Xunit.Assert.Contains("skip_until_utc=2026-07-03T12:15:00.0000000+00:00", output);
-            Xunit.Assert.Contains("remaining_wait=00:15:00", output);
-            Xunit.Assert.Contains($"Cleanup retry: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", output);
-        }
-        finally
-        {
-            GoalWorktrees.CleanupUtcNow = originalNow;
-            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
-        }
+        Xunit.Assert.Contains("Cleanup backoff:", output);
+        Xunit.Assert.Contains("reason=remove:branch-delete-failed", output);
+        Xunit.Assert.Contains("skip_until_utc=2026-07-03T12:15:00.0000000+00:00", output);
+        Xunit.Assert.Contains("remaining_wait=00:15:00", output);
+        Xunit.Assert.Contains($"Cleanup retry: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", output);
     }
 }

@@ -386,7 +386,7 @@ internal static class TerminalGoalSweep
         string? orchestratorDirectory = null)
     {
         gitRunner ??= GitRunner;
-        cleanupHooks ??= GoalWorktreeCleanupHooks.Default;
+        cleanupHooks ??= new GoalWorktreeCleanupHooks();
         orchestratorDirectory ??= OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory;
         var dispatchRunner = new BackgroundDispatchRunner();
         var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);

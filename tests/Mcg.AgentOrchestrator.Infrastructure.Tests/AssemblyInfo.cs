@@ -15,10 +15,21 @@ public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<Isolat
 [Xunit.CollectionDefinition(TestCollections.GoalAcceptanceVerifier, DisableParallelization = true)]
 public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
-// GoalWorktrees exposes cleanup hook seams and some CLI acceptance tests acquire real slot leases;
-// keep those process-wide replacements serial and off the host gate slots.
-[Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
-public sealed class GoalWorktreeCleanupHooksCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
+// Fault injection replaces LandingExecutor.GitRunner process-wide; legacy landing
+// fixtures also require an isolated build root. Scoped cleanup tests need neither guard.
+[Xunit.CollectionDefinition(TestCollections.LandingGitRunner, DisableParallelization = true)]
+[ProcessLocalTestCollection("GitRunner and environment overrides are process-local; fixture storage roots are atomically claimed unique directories.")]
+public sealed class LandingGitRunnerCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
+
+// Persistent-runner and dispatch CLI fixtures overwrite process-wide environment variables
+// (worker sandbox enablement, dispatch-start suppression) that no per-operation context owns
+// yet. These classes previously took that exclusion from the GoalWorktreeCleanupHooks
+// definition; removing it left them naming a collection that no longer existed, so the guard
+// silently became grouping without exclusion. Named explicitly here until the variables have
+// owners. Every member takes a host-capacity slot as well, but that budget bounds load only.
+[Xunit.CollectionDefinition(TestCollections.CliProcessEnvironment, DisableParallelization = true)]
+[ProcessLocalTestCollection("Environment variables are process-local; each fixture owns its own repository root and build storage root.")]
+public sealed class CliProcessEnvironmentCollection;
 
 // Build-lease tests need a process-local isolated root but do not mutate cleanup-hook state.
 [Xunit.CollectionDefinition(TestCollections.IsolatedDotnetRoot, DisableParallelization = true)]

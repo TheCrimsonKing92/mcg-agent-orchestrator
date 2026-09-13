@@ -140,7 +140,12 @@ internal static class SourceSizeRatchet
             // Goal 9fe7200e journals LOOP_READY at the existing pre-loop orchestration boundary;
             // 4855 is the measured post-merge size after that required readiness signal was wired.
             // Goal 1592104a extracted evidence intent submission, status output, and metadata flag parsing.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4845),
+            // Goal 5daaa1db passes the operation-owned cleanup context through CLI acceptance and
+            // terminal sweeps; policy and cadence remain in WorktreeCleanupContext, not this runner.
+            // Raised eight lines for metadata-only goals and terminal-sweep caller ownership;
+            // five further lines preserve conduct-loop and global-reconcile scheduler cadence.
+            // The operation owner threads through this runner's own call sites.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4863),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
@@ -210,7 +215,9 @@ internal static class SourceSizeRatchet
             // Reconciled after main 4ba0dba0 added the reviewed target-boundary cancellation regression;
             // 5188 is the measured combined post-rebase size.
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5282),
+            // Goal 5daaa1db replaces ambient build-root mutation with explicit child-launch ownership
+            // and disposes the owned root; the real-process transport assertions remain in this fixture.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5284),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
