@@ -1407,6 +1407,7 @@ public sealed class WorkerDispatchTestsDispatchPreparationClaudeCredentials
             FileName = "cmd.exe",
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
+            CreateNoWindow = true,
             RedirectStandardError = true,
         };
 
