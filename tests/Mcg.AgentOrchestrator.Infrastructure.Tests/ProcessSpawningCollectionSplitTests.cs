@@ -68,7 +68,7 @@ public sealed class ProcessSpawningCollectionSplitTests
         var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
         var serialLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
             .Where(lane => lane.Name == "Process spawning"));
-        Xunit.Assert.Equal(["xunit:ProcessSpawning"], serialLane.ExclusiveResourceKeys);
+        Xunit.Assert.Equal(["xunit:ProcessSpawning", "host:ProcessSpawning"], serialLane.ExclusiveResourceKeys);
         Xunit.Assert.All(SerialClasses, type =>
             Xunit.Assert.Contains($"FullyQualifiedName~{type.Name}", serialLane.Filter, StringComparison.Ordinal));
         Xunit.Assert.All(MovedClasses, type =>
@@ -76,7 +76,7 @@ public sealed class ProcessSpawningCollectionSplitTests
 
         var parallelLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
             .Where(lane => lane.Name == "Process spawning parallel"));
-        Xunit.Assert.Empty(parallelLane.ExclusiveResourceKeys);
+        Xunit.Assert.Equal(["host:ProcessSpawning"], parallelLane.ExclusiveResourceKeys);
         Xunit.Assert.All(MovedClasses, type =>
             Xunit.Assert.Contains($"FullyQualifiedName~{type.Name}", parallelLane.Filter, StringComparison.Ordinal));
     }
