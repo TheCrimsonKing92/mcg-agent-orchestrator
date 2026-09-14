@@ -2,7 +2,7 @@
   "version": 1,
   "engine": {
     "slotCount": 4,
-    "maxConcurrentShards": 6,
+    "maxConcurrentShards": 4,
     "enforceStructuralCoverage": true,
     "partitionVerdictFullRerunEveryN": 5,
     "laneEstimateComment": "estimatedSerialSeconds values are one-decimal process-span means from acceptance receipts dated 2026-08-16 at or after 1f669450 (sample joined attempt 695e3554-0-20260816193157705-fcf6d38ae8bd4ef7b2e70518b04d80df), restricted to completed, exit-code-zero heartbeats joined by attempt id to completed TRX receipts. Full-result-count qualification is unobtainable from the recorded in-window receipts for Dotnet build slots (all 9 report 359 executed of 360 total) and Goal acceptance build slots (all 8 report 157 of 158 or 158 of 159); those two estimates retain the otherwise-qualified process-span means. Mtp managed project rebuild uses the 74.8-second elapsed time from focused receipt focused-20260828T043342070-5feea20d after conversion to managed assembly execution.",
@@ -36,13 +36,13 @@
         "name": "Goal lifecycle commands",
         "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliPersistentStateRunnerAcceptanceFailureRecoveryTests|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests|FullyQualifiedName~SourceBacklogSiblingCreationTests",
         "estimatedSerialSeconds": 267.1,
-        "exclusiveResourceKeys": []
+        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
       },
       {
         "name": "Goal worktree cleanup",
         "filter": "FullyQualifiedName~AcceptanceCohortWorkflowTests|FullyQualifiedName~AcceptanceVerdictCarryForwardTests|FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCleanupHookDelegates|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup",
         "estimatedSerialSeconds": 330.9,
-        "exclusiveResourceKeys": []
+        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
       },
       {
         "name": "Goal worktree parallel",
@@ -59,30 +59,32 @@
         "name": "Worker dispatch fixtures",
         "filter": "FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsModelSelectionEnvMutation|FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight|FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification|FullyQualifiedName~WorkerProcessJobsTests",
         "estimatedSerialSeconds": 392.8,
-        "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
+        "exclusiveResourceKeys": [ "xunit:EnvMutation", "host:ProcessSpawning" ]
       },
       {
         "name": "Process spawning",
         "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~OwnedProcessExitObservationTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~GitCliThreadPoolSaturationTests|FullyQualifiedName~PipeDrainThreadPoolSaturationTests|FullyQualifiedName~ChildOutputDrainAdoptionSaturationTests|FullyQualifiedName~HermesAcpTrialTests|FullyQualifiedName~HermesExecutableIdentityTests|FullyQualifiedName~IcaclsIntegrityLabelerTests|FullyQualifiedName~ConsoleIoPreservationTests",
         "estimatedSerialSeconds": 327.7,
-        "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
+        "exclusiveResourceKeys": [ "xunit:ProcessSpawning", "host:ProcessSpawning" ]
       },
       {
         "name": "Mtp managed project rebuild",
         "filter": "FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild",
         "estimatedSerialSeconds": 74.8,
-        "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ],
+        "exclusiveResourceKeys": [ "xunit:ProcessSpawning", "host:ProcessSpawning" ],
         "requiresBuildSystemChange": true
       },
       {
         "name": "Process spawning parallel",
         "filter": "FullyQualifiedName~AcceptanceFailureCensusScriptTests|FullyQualifiedName~AcceptanceLaneClosureHasherTests|FullyQualifiedName~AcceptancePartitionVerdictCacheContentReuseTests|FullyQualifiedName~AssemblyTempRedirectTests|FullyQualifiedName~AssemblyTempRedirectChildSmokeTests|FullyQualifiedName~CitedPriorEvidenceResolverTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~ExcessWorkerRoundAnalysisScriptTests|FullyQualifiedName~GitCliTests|FullyQualifiedName~LaneTimingMeasurementScriptTests|FullyQualifiedName~SemanticAcceptanceTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|(FullyQualifiedName~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsModelSelectionEnvMutation)",
-        "estimatedSerialSeconds": 200.3
+        "estimatedSerialSeconds": 200.3,
+        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
       },
       {
         "name": "Chaos gate",
         "filter": "(FullyQualifiedName~ChaosGate|FullyQualifiedName~AutoReviewRetryConvergenceBriefBuilderTests|FullyQualifiedName~InquiryDispatcherTests|FullyQualifiedName~ProgressiveReviewSteeringTests)&Category!=HostIntegration",
-        "estimatedSerialSeconds": 77.9
+        "estimatedSerialSeconds": 77.9,
+        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
       },
       {
         "name": "Dotnet build slots",
