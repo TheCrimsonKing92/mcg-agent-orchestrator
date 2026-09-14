@@ -12,7 +12,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var settings = AcceptanceGateEngineSettings.Load(repositoryRoot);
         var startupContract = GoalAcceptanceVerifier.ValidateStartupContract(repositoryRoot);
 
-        Xunit.Assert.Equal(6, settings.MaxConcurrentShards);
+        Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(20, settings.InfrastructureTestLanes.Count);
@@ -71,11 +71,13 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
         Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
         Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
-        Xunit.Assert.Empty(
+        Xunit.Assert.Equal(
+            ["host:ProcessSpawning"],
             settings.InfrastructureTestLanes
                 .Single(lane => lane.Name == "Goal lifecycle commands")
                 .ExclusiveResourceKeys);
-        Xunit.Assert.Empty(
+        Xunit.Assert.Equal(
+            ["host:ProcessSpawning"],
             settings.InfrastructureTestLanes
                 .Single(lane => lane.Name == "Goal worktree cleanup")
                 .ExclusiveResourceKeys);
