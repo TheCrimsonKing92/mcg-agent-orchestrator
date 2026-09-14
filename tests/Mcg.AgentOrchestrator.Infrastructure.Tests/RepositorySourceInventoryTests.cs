@@ -117,7 +117,7 @@ public sealed class RepositorySourceInventoryTests
                 Directory.Delete(junctionPath);
             }
 
-            Directory.Delete(outside, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(outside);
         }
     }
 

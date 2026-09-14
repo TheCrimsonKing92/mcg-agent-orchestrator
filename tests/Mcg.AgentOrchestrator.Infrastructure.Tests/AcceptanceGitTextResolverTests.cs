@@ -125,11 +125,5 @@ public sealed class AcceptanceGitTextResolverTests : IDisposable
         Assert.Null(result);
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_root))
-        {
-            Directory.Delete(_root, recursive: true);
-        }
-    }
+    public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
 }
