@@ -596,6 +596,21 @@ function Write-MtpRunOwnershipSidecar {
     }
 }
 
+function Remove-MtpUnownedDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # A directory under the MTP results root with no ownership sidecar is RetainedUndecidable to every
+    # retention sweep forever, so a caller that reports 'nothing was left behind' must know whether the
+    # removal actually happened. Never swallow this one: return the operator-facing text on failure.
+    try {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        return $null
+    }
+    catch {
+        return "The unowned directory '$Path' could also not be removed, so retention sweeps will report it undecidable until it is deleted by hand: $($_.Exception.Message)"
+    }
+}
+
 function Initialize-MtpResultsDirectory {
     param(
         [string]$ResultsRoot,
@@ -641,8 +656,9 @@ function Initialize-MtpResultsDirectory {
     if (-not (Write-MtpRunOwnershipSidecar -ResultsDirectory $runDirectory -RunLabel $RunLabel)) {
         # An unowned run directory is undecidable to every retention sweep forever. Fail before the
         # run populates it rather than leaving an orphan the sweep can neither attribute nor reclaim.
-        Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction SilentlyContinue
-        throw "Could not write the retention ownership sidecar for invocation results directory '$runDirectory'. Without it the directory is undecidable to retention sweeps, so no run was started."
+        $orphanWarning = Remove-MtpUnownedDirectory -Path $runDirectory
+        $removalOutcome = if ($null -eq $orphanWarning) { 'No unowned run directory was left behind.' } else { $orphanWarning }
+        throw "Could not write the retention ownership sidecar for invocation results directory '$runDirectory'. Without it the directory is undecidable to retention sweeps, so no run was started. $removalOutcome"
     }
     return $runDirectory
 }
@@ -1602,7 +1618,13 @@ function Select-MtpVerifiedBuildOutput {
 
     $projectName = Get-MtpProjectName -Invocation $Invocation
     $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
+    # Identity verification is not free: it spawns an MSBuild evaluation per project and re-hashes the
+    # Compile set plus the whole output closure per candidate. Measure both legs so the cost of the
+    # binding is visible per run instead of being inferred from wall clock.
+    $selectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $evaluationStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $evaluatedIdentity = Resolve-MtpEvaluatedTargetPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $RunDirectory
+    $evaluationStopwatch.Stop()
     $declaredAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration
     $declaredDirectory = Split-Path -Parent $declaredAssembly
     $evaluatedDirectory = Split-Path -Parent $evaluatedIdentity.TargetPath
@@ -1620,10 +1642,12 @@ function Select-MtpVerifiedBuildOutput {
     )
     $rejections = [System.Collections.Generic.List[string]]::new()
     $verified = [System.Collections.Generic.List[object]]::new()
+    $verificationStopwatch = [System.Diagnostics.Stopwatch]::new()
     foreach ($candidate in $candidates) {
         if (@($verified | Where-Object { $_.Directory.Equals($candidate.Directory, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) {
             continue
         }
+        $verificationStopwatch.Start()
         try {
             $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $evaluatedIdentity.TargetFramework -RuntimeIdentifier $evaluatedIdentity.RuntimeIdentifier -ExpectedSourcePaths $evaluatedIdentity.CompilePaths -RepairCommand $candidate.Repair
             $verified.Add([pscustomobject]@{
@@ -1635,6 +1659,9 @@ function Select-MtpVerifiedBuildOutput {
         }
         catch {
             $rejections.Add("$($candidate.Label) '$($candidate.Directory)': $($_.Exception.Message)")
+        }
+        finally {
+            $verificationStopwatch.Stop()
         }
     }
     if ($verified.Count -eq 0) {
@@ -1650,8 +1677,15 @@ function Select-MtpVerifiedBuildOutput {
         $selected = @($verified | Select-Object -First 1)
     }
     $rejected = @($rejections) + @($verified | Where-Object { $_.Directory -ne $selected[0].Directory } | ForEach-Object { "verified equivalent candidate path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256']) closureSha256=$($_.ClosureSha256)" })
-    Write-Host "NO-BUILD BUILD RECEIPT SELECTED - $($selected[0].Label) '$($selected[0].Directory)' assemblySha256=$($selected[0].Receipt.Headers['assemblySha256']) closureSha256=$($selected[0].ClosureSha256) rejected='$($rejected -join ' | ')'"
-    return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected }
+    $selectionStopwatch.Stop()
+    $identityCost = [ordered]@{
+        totalMs = [int]$selectionStopwatch.ElapsedMilliseconds
+        evaluateMs = [int]$evaluationStopwatch.ElapsedMilliseconds
+        verifyMs = [int]$verificationStopwatch.ElapsedMilliseconds
+        candidatesVerified = $verified.Count
+    }
+    Write-Host "NO-BUILD BUILD RECEIPT SELECTED - $($selected[0].Label) '$($selected[0].Directory)' assemblySha256=$($selected[0].Receipt.Headers['assemblySha256']) closureSha256=$($selected[0].ClosureSha256) identityCostMs total=$($identityCost.totalMs) evaluate=$($identityCost.evaluateMs) verify=$($identityCost.verifyMs) candidatesVerified=$($identityCost.candidatesVerified) rejected='$($rejected -join ' | ')'"
+    return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected; IdentityCost = $identityCost }
 }
 
 function New-MtpRunnerArguments {
@@ -2111,8 +2145,9 @@ function Write-MtpRunEvidenceReceipt {
         & $OwnershipWriter $evidenceDirectory $RunLabel
     }
     if (-not $ownershipWritten) {
-        Remove-Item -LiteralPath $evidenceDirectory -Recurse -Force -ErrorAction SilentlyContinue
-        throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. No unowned evidence directory was left behind; the original run directory remains available for diagnosis."
+        $orphanWarning = Remove-MtpUnownedDirectory -Path $evidenceDirectory
+        $removalOutcome = if ($null -eq $orphanWarning) { 'No unowned evidence directory was left behind' } else { $orphanWarning }
+        throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. $removalOutcome; the original run directory remains available for diagnosis."
     }
     try {
         $trxEvidence = [System.Collections.Generic.List[object]]::new()
@@ -2144,6 +2179,7 @@ function Write-MtpRunEvidenceReceipt {
                 closureDigest = $_.ClosureDigest
                 launchedAssembly = $_.LaunchedAssembly
                 launchedAssemblySha256 = $_.LaunchedAssemblySha256
+                identityCostMs = $_.IdentityCost
             }
         })
         $evidence = [ordered]@{
@@ -2251,6 +2287,7 @@ function Invoke-MtpTestRun {
                         ClosureDigest = [string]$closureMarker.digest
                         LaunchedAssembly = $launchedAssembly
                         LaunchedAssemblySha256 = Get-MtpSha256File -Path $launchedAssembly
+                        IdentityCost = $buildSelection.IdentityCost
                     })
                 }
                 catch {
@@ -2343,7 +2380,7 @@ function Invoke-MtpTestRun {
                     Write-Host "COMPLETED WITH MISSING TRX - managed MTP runner exited $($run.ExitCode) without producing TRX '$trxPath'. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     $exitCode = if ($run.ExitCode -ne 0) { $run.ExitCode } else { $script:ExitCodes.Runner }
-                    return New-MtpTerminalResult -Outcome completed-with-missing-trx -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome completed-with-missing-trx -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
 
                 Write-Host "TRX: $trxPath"
@@ -2353,7 +2390,7 @@ function Invoke-MtpTestRun {
                 catch {
                     Write-Host "RUNNER/TOOLING FAILURE - $($_.Exception.Message) Managed runner exit: $($run.ExitCode). Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 Write-Host ("{0}: total={1} passed={2} failed={3} skipped={4}" -f $trxFileName, $summary.Total, $summary.Passed, $summary.Failed, $summary.Skipped)
                 $unitTestResults = @(if ($null -ne $summary.Document.TestRun.Results -and $null -ne $summary.Document.TestRun.Results.PSObject.Properties['UnitTestResult']) { $summary.Document.TestRun.Results.UnitTestResult })
@@ -2365,7 +2402,7 @@ function Invoke-MtpTestRun {
                 if ($summary.Total -le 0) {
                     Write-Host "ZERO TESTS - filter matched no tests. Managed runner exit: $($run.ExitCode). TRX: $trxPath"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.ZeroTests -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.ZeroTests -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 if ($summary.Failed -gt 0) {
                     foreach ($failedResult in @($unitTestResults | Where-Object outcome -eq 'Failed')) {
@@ -2378,12 +2415,12 @@ function Invoke-MtpTestRun {
                     Write-Host "TEST FAILURES - $($summary.Failed) test(s) failed. TRX: $trxPath"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     $exitCode = if ($run.ExitCode -ne 0) { $run.ExitCode } else { 1 }
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 if ($run.ExitCode -ne 0) {
                     Write-Host "RUNNER/TOOLING FAILURE - managed runner exited $($run.ExitCode) although its TRX contains no failing tests. This is not a compile failure. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $run.ExitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $run.ExitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 }
             }

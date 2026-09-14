@@ -119,6 +119,28 @@ public sealed class MtpNoBuildReceiptIdentityTests
             decision.Reason == "mtp-unattributed-past-age-bound");
     }
 
+    [Xunit.Fact(DisplayName = "MTP_no_build_captures_the_measured_cost_of_its_identity_checks")]
+    public void MtpNoBuildCapturesMeasuredIdentityCheckCost()
+    {
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        sandbox.CreateManagedAssemblyPlaceholder();
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("identityCostMs total=", result.Stdout, StringComparison.Ordinal);
+        var evidenceDirectory = TerminalSummary(result).GetProperty("retainedEvidenceDirectory").GetString();
+        Xunit.Assert.False(string.IsNullOrWhiteSpace(evidenceDirectory));
+        using var identity = JsonDocument.Parse(File.ReadAllText(Path.Combine(evidenceDirectory!, "run-identity.json")));
+        // The MSBuild evaluation and the per-candidate re-hashing are the price of binding the launch
+        // to the declared build, so each run records what it paid instead of leaving it to wall clock.
+        var cost = identity.RootElement.GetProperty("selections")[0].GetProperty("identityCostMs");
+        var total = cost.GetProperty("totalMs").GetInt32();
+        Xunit.Assert.True(total >= cost.GetProperty("evaluateMs").GetInt32(), $"total={total}");
+        Xunit.Assert.True(total >= cost.GetProperty("verifyMs").GetInt32(), $"total={total}");
+        Xunit.Assert.True(cost.GetProperty("candidatesVerified").GetInt32() >= 1);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_no_build_keeps_original_artifacts_when_retained_evidence_ownership_write_fails")]
     public void MtpNoBuildKeepsOriginalArtifactsWhenRetainedEvidenceOwnershipWriteFails()
     {

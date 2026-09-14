@@ -227,6 +227,61 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.True(document.RootElement.GetProperty("ownerProcessId").GetInt32() > 0);
     }
 
+    [Xunit.Fact(DisplayName = "MTP_results_directory_reports_removal_of_the_unowned_run_directory_when_the_sidecar_write_fails")]
+    public void InitializeResultsDirectory_RemovesAndReportsRunDirectoryWhenOwnershipWriteFails()
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var nonce = Guid.NewGuid().ToString("N");
+        var command = $"$module = Import-Module '{module}' -Force -PassThru; " +
+            "& $module { Set-Item -Path 'function:script:Write-MtpRunOwnershipSidecar' -Value { param([string]$ResultsDirectory, [string]$RunLabel, [string]$AttemptId) return $false } }; " +
+            $"$root = Join-Path (Get-DefaultMtpResultsRoot) 'sidecar-reject-{nonce}'; " +
+            "try { $message = ''; " +
+            "try { [void](Initialize-MtpResultsDirectory -ResultsRoot $root -RunLabel 'ownership') } catch { $message = $_.Exception.Message } " +
+            "$leftovers = @(if (Test-Path -LiteralPath $root) { Get-ChildItem -LiteralPath $root -Force | ForEach-Object { $_.Name } }); " +
+            "[ordered]@{ message = $message; leftovers = $leftovers } | ConvertTo-Json -Compress } " +
+            "finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }";
+
+        var result = RunPowerShellCommand(RepositoryRoot(), command);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var message = document.RootElement.GetProperty("message").GetString();
+        Xunit.Assert.Contains("undecidable to retention sweeps, so no run was started", message, StringComparison.Ordinal);
+        // The removal outcome is stated, never assumed: a swallowed failure here would claim the
+        // orphan was cleaned up while leaving a directory every retention sweep must call undecidable.
+        Xunit.Assert.Contains("No unowned run directory was left behind.", message, StringComparison.Ordinal);
+        Xunit.Assert.Empty(document.RootElement.GetProperty("leftovers").EnumerateArray());
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_results_directory_names_the_surviving_unowned_orphan_when_its_removal_also_fails")]
+    public void InitializeResultsDirectory_NamesOrphanWhenRemovalAlsoFails()
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var nonce = Guid.NewGuid().ToString("N");
+        // The sidecar writer leaves an exclusively opened file behind, so the orphan removal is forced
+        // to fail. Silence here would report a clean failure while a sweep-undecidable directory lives on.
+        var command = $"$module = Import-Module '{module}' -Force -PassThru; " +
+            "$global:McgLockStream = $null; " +
+            "& $module { Set-Item -Path 'function:script:Write-MtpRunOwnershipSidecar' -Value { " +
+            "param([string]$ResultsDirectory, [string]$RunLabel, [string]$AttemptId) " +
+            "$global:McgLockStream = [System.IO.File]::Open((Join-Path $ResultsDirectory 'locked.bin'), 'CreateNew', 'Write', 'None'); return $false } }; " +
+            $"$root = Join-Path (Get-DefaultMtpResultsRoot) 'sidecar-locked-{nonce}'; " +
+            "try { $message = ''; " +
+            "try { [void](Initialize-MtpResultsDirectory -ResultsRoot $root -RunLabel 'ownership') } catch { $message = $_.Exception.Message } " +
+            "[ordered]@{ message = $message } | ConvertTo-Json -Compress } " +
+            "finally { if ($null -ne $global:McgLockStream) { $global:McgLockStream.Dispose() } " +
+            "Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }";
+
+        var result = RunPowerShellCommand(RepositoryRoot(), command);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var message = document.RootElement.GetProperty("message").GetString();
+        Xunit.Assert.Contains("could also not be removed", message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("until it is deleted by hand", message, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("No unowned run directory was left behind", message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_partition_validation_comes_from_manifest_and_precedes_build")]
     public void MtpPartitionValidationComesFromManifestAndPrecedesBuild()
     {
@@ -333,6 +388,24 @@ public sealed class MtpTestRunnerScriptTests
         Assert.Equal(expectedOutcome, terminal.GetProperty("outcome").GetString());
         Assert.True(terminal.GetProperty("artifactsRetained").GetBoolean());
         Assert.True(terminal.GetProperty("exitConfirmed").GetBoolean());
+        // A failing summary must still separate what coverage was requested from what actually ran;
+        // otherwise a zero-test or failed partition reports neither, and the distinction only exists
+        // on green runs where it is least needed.
+        var requestedFilters = terminal.GetProperty("requestedFilters").EnumerateArray()
+            .Select(filter => filter.GetString())
+            .ToArray();
+        Assert.Equal(["FullyQualifiedName~GoalWorktreeTests"], requestedFilters);
+        var executedTestNames = terminal.GetProperty("executedTestNames").EnumerateArray()
+            .Select(name => name.GetString())
+            .ToArray();
+        if (behavior == "failed")
+        {
+            Assert.Equal(["stub failure"], executedTestNames);
+        }
+        else
+        {
+            Assert.Empty(executedTestNames);
+        }
     }
 
     [Xunit.Fact]
