@@ -1,12 +1,25 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+// This class pins RunGoalService control flow only. Every fact injects a scripted in-process advance
+// step, so no fact starts an operating-system process and no fact needs an xunit Timeout. The single
+// real-process contract lives in RunGoalServiceProcessContractTests.
 public sealed class RunGoalServiceTests
 {
     private static readonly RunGoalService.SleepFunc NoSleep = async (_, _) => await Task.Yield();
+
+    // The injected advance step never launches a worker, so profile commands exist only to keep the
+    // catalog well formed for the profile names the agents reference.
+    private const string UnexecutedProfileCommand = "Write-Output run-goal-service-tests-never-executes-this";
+
+    private static readonly string PlannerPlanText = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
+        "`seed.txt`, ",
+        string.Empty,
+        StringComparison.Ordinal);
 
     private static string CreateTempDirectory()
     {
@@ -15,48 +28,8 @@ public sealed class RunGoalServiceTests
         return root;
     }
 
-    private static RunGoalService.SleepFunc WaitForCurrentExitFile(Goal goal, string logDirectory)
-    {
-        return async (_, ct) =>
-        {
-            Directory.CreateDirectory(logDirectory);
-            while (true)
-            {
-                var trackedExitPaths = goal.Tasks
-                    .Select(task => task.LastProcess)
-                    .Where(process => process is { IsRunning: true })
-                    .Select(process => Path.GetFullPath(process!.ExitCodePath))
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                if (trackedExitPaths.Any(File.Exists))
-                {
-                    return;
-                }
-
-                var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                using var watcher = new FileSystemWatcher(logDirectory, "*.exit.txt")
-                {
-                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
-                    EnableRaisingEvents = true
-                };
-                FileSystemEventHandler signal = (_, _) => changed.TrySetResult();
-                RenamedEventHandler signalRename = (_, _) => changed.TrySetResult();
-                ErrorEventHandler signalError = (_, args) => changed.TrySetException(args.GetException());
-                watcher.Created += signal;
-                watcher.Changed += signal;
-                watcher.Renamed += signalRename;
-                watcher.Error += signalError;
-
-                // Exit artifacts are durable level signals until RunGoalService refreshes the owning task.
-                // Re-check after subscribing to close the create-before-subscribe race without polling.
-                if (trackedExitPaths.Any(File.Exists))
-                {
-                    return;
-                }
-
-                await changed.Task.WaitAsync(ct);
-            }
-        };
-    }
+    private static WorkerProfileCatalog ProfileNames(params string[] names) => new WorkerProfileCatalog(
+        [.. names.Select(name => new WorkerProfile(name, UnexecutedProfileCommand))]);
 
     private static AgentDefinition EchoAgent() => new AgentDefinition(
         new AgentId("echo-planner"),
@@ -89,23 +62,6 @@ public sealed class RunGoalServiceTests
             Subscription: new SubscriptionLaunchProfile(profileName));
     }
 
-    private static string PlannerSuccessCommand(string marker)
-    {
-        var plan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
-            "`seed.txt`, ",
-            string.Empty,
-            StringComparison.Ordinal);
-        var encodedPlan = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(plan));
-        return $"Write-Output ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encodedPlan}'))); Write-Output {marker}";
-    }
-
-    private static WorkerProfileCatalog EchoProfiles() => new WorkerProfileCatalog(
-    [
-        new WorkerProfile("local", $"Start-Sleep -Milliseconds 100; {PlannerSuccessCommand("{subscriptionModelName}")}")
-    ]);
-
-    private static WorkerProfileCatalog Profiles(params WorkerProfile[] profiles) => new WorkerProfileCatalog(profiles);
-
     private static string DescribeRunGoalStop(RunGoalService.RunGoalResult result, TaskSpec task)
     {
         var verification = task.LastVerification ?? task.VerificationHistory.LastOrDefault();
@@ -125,6 +81,121 @@ public sealed class RunGoalServiceTests
             [],
             []));
         return goal;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Injected advance step. Mirrors GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked:
+    // each scripted iteration records on the kernel exactly what the real step would have recorded for
+    // that iteration - dispatches, verification results, failures, completions - and returns the loop
+    // DTO the real step would have returned.
+    // ---------------------------------------------------------------------------------------------
+
+    private sealed record AdvanceStepCall(
+        AgentOrchestratorKernel Kernel,
+        IReadOnlyList<AgentDefinition> Agents,
+        OrchestratorWorkspace Workspace,
+        Goal Goal);
+
+    private sealed class ScriptedAdvanceStep
+    {
+        private readonly List<Func<AdvanceStepCall, AdvanceLoopResultDto>> iterations;
+        private int completedCalls;
+
+        private ScriptedAdvanceStep(IEnumerable<Func<AdvanceStepCall, AdvanceLoopResultDto>> iterations)
+            => this.iterations = [.. iterations];
+
+        public static ScriptedAdvanceStep Script(params Func<AdvanceStepCall, AdvanceLoopResultDto>[] iterations)
+            => new(iterations);
+
+        public int CallCount => completedCalls;
+
+        public RunGoalService.AdvanceStepFunc Step => (kernel, agents, _, workspace, goal, _, _) =>
+        {
+            // Loud failure: an unscripted iteration means RunAsync looped past what the fact pins,
+            // which is a control-flow regression, not a fixture gap to absorb silently.
+            if (completedCalls >= iterations.Count)
+            {
+                throw new InvalidOperationException(
+                    $"RunGoalService requested advance iteration {completedCalls + 1} but the fact scripted only " +
+                    $"{iterations.Count}; RunAsync looped further than this fact pins.");
+            }
+
+            return iterations[completedCalls++](new AdvanceStepCall(kernel, agents, workspace, goal));
+        };
+    }
+
+    // Dispatch timestamps only have to order the kernel's own staleness comparisons against the retry
+    // records the kernel writes with its system clock; they never pace the test.
+    private sealed class DispatchLabels
+    {
+        private int tick;
+
+        public DateTimeOffset Next() => DateTimeOffset.UtcNow.AddSeconds(++tick);
+    }
+
+    private static AdvanceLoopResultDto Blocked(Goal goal, string stopReason, NextActionDto? blockingAction = null)
+        => new(goal.Id.Value, Executed: false, StepCount: 0, stopReason, blockingAction, []);
+
+    private static AdvanceLoopResultDto Advanced(Goal goal, int stepCount, string stopReason)
+        => new(goal.Id.Value, Executed: true, stepCount, stopReason, null, [], StateChanged: true);
+
+    private static NextActionDto BlockingAction(Goal goal, TaskSpec task, NextActionKind kind, string message)
+        => new(
+            1,
+            kind,
+            task.Id.Value,
+            goal.Tasks.ToList().FindIndex(candidate => candidate.Id == task.Id) + 1,
+            null,
+            message,
+            "run-goal",
+            null,
+            null);
+
+    private static AgentDefinition AssignedAgent(AdvanceStepCall call, TaskSpec task)
+        => call.Agents.Single(agent => agent.Id == task.AssignedAgentId);
+
+    // The successful shape the real subscription dispatch leaves behind: a dispatch record naming the
+    // assigned agent's worker profile, then an exit-0 verification whose stdout carries the Planner
+    // contract plan, the resolved subscription model name, and the fact's marker line.
+    private static void RecordCompletedDispatch(
+        AdvanceStepCall call,
+        TaskSpec task,
+        DispatchLabels labels,
+        string marker)
+    {
+        var agent = AssignedAgent(call, task);
+        var workerName = agent.Subscription!.WorkerProfileName;
+        var command = $"{workerName}: Write-Output planner-contract-plan; Write-Output {marker}";
+        var dispatchedAt = labels.Next();
+        call.Kernel.RecordTaskDispatch(call.Goal.Id, task.Id, new TaskDispatchRecord(
+            workerName,
+            command,
+            call.Workspace.ExecutionDirectory,
+            dispatchedAt,
+            ProviderName: agent.Model.ProviderName,
+            ModelName: agent.Model.ModelName));
+        call.Kernel.RecordDispatchExecutionResult(call.Goal.Id, task.Id, new TaskVerificationRecord(
+            command,
+            call.Workspace.ExecutionDirectory,
+            0,
+            string.Join(Environment.NewLine, PlannerPlanText, agent.Model.ModelName, marker),
+            string.Empty,
+            dispatchedAt.AddSeconds(1)));
+    }
+
+    private static void RecordStalledDispatch(AdvanceStepCall call, TaskSpec task, DispatchLabels labels)
+    {
+        var agent = AssignedAgent(call, task);
+        var workerName = agent.Subscription!.WorkerProfileName;
+        var dispatchedAt = labels.Next();
+        RecordHeartbeatStall(
+            call.Kernel,
+            call.Goal,
+            task,
+            call.Workspace,
+            workerName,
+            $"{workerName}: stalled command",
+            dispatchedAt);
     }
 
     private static void RecordRecoverableUsageLimit(
@@ -151,17 +222,18 @@ public sealed class RunGoalServiceTests
         Goal goal,
         TaskSpec task,
         OrchestratorWorkspace workspace,
+        string workerName,
         string command,
         DateTimeOffset completedAt)
     {
-        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", command, workspace.ExecutionDirectory, completedAt));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(workerName, command, workspace.ExecutionDirectory, completedAt));
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
             command,
             workspace.ExecutionDirectory,
             1,
             string.Empty,
             "Background dispatch made no observable progress before the stall timeout; wrapper heartbeat state=running.",
-            completedAt));
+            completedAt.AddSeconds(1)));
     }
 
     private static void RecordProviderConnectivityFailure(
@@ -190,36 +262,55 @@ public sealed class RunGoalServiceTests
             completedAt));
     }
 
-    [Xunit.Fact(Timeout = 30_000, DisplayName = "RunGoalService_completes_all_tasks_sequentially_and_stops_with_no_actions")]
+    [Xunit.Fact(DisplayName = "RunGoalService_completes_all_tasks_sequentially_and_stops_with_no_actions")]
     public async Task RunGoalServiceCompletesAllTasksSequentiallyAndStopsWithNoActions()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task1 = new TaskSpec(TaskId.New(), "First echo task", AgentRole.Planner);
         var task2 = new TaskSpec(TaskId.New(), "Second echo task", AgentRole.Planner);
         var goal = CreateRefinedGoal(kernel, "Sequential echo run", [task1, task2]);
         var agent = EchoAgent();
-        var profiles = EchoProfiles();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var labels = new DispatchLabels();
+        var advance = ScriptedAdvanceStep.Script(
+            call =>
+            {
+                RecordCompletedDispatch(call, task1, labels, "first-echo-ok");
+                return Advanced(goal, 2, $"Background work is still running for task {task2.Id.Value[..8]}; continue after it exits.");
+            },
+            call =>
+            {
+                RecordCompletedDispatch(call, task2, labels, "second-echo-ok");
+                return Advanced(goal, 2, "No next actions are available.");
+            });
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [agent],
-            profiles,
+            ProfileNames("local"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
+            sleep: NoSleep,
+            advanceStep: advance.Step,
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
+        // Stricter than the count alone, and asserted first so a missing completion names the task it lost.
+        Assert.Equal(
+            ["First echo task", "Second echo task"],
+            result.CompletedTasks.Select(summary => summary.Description).ToArray());
         Assert.Equal(2, result.CompletedTasks.Count);
         Assert.True(result.CompletedTasks.All(t => t.Succeeded));
         Assert.True(result.ContinueAfter is null);
         Assert.True(result.StopEvidence is null);
         Assert.Equal(WorkTaskStatus.Completed, task1.Status);
         Assert.Equal(WorkTaskStatus.Completed, task2.Status);
+        // The background-running stop reason must drive exactly one more loop iteration, not zero and not many.
+        Assert.Equal(2, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_stops_on_task_failure")]
@@ -242,20 +333,29 @@ public sealed class RunGoalServiceTests
             "Simulated failure output.",
             now));
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                $"Task {task.Id.Value[..8]} failed; inspect the preserved failure evidence before continuing.",
+                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [agent],
-            EchoProfiles(),
+            ProfileNames("local"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.Equal(NextActionKind.InspectFailedTask, result.BlockingAction?.Kind);
         Assert.True(result.ContinueAfter is null);
         Assert.Contains("Simulated failure output.", result.StopEvidence?.OutputTail ?? string.Empty, StringComparison.Ordinal);
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_stops_on_human_input_request")]
@@ -270,19 +370,28 @@ public sealed class RunGoalServiceTests
         kernel.ActivateGoal(goal.Id, [agent]);
         kernel.RequestHumanInput(goal.Id, task.Id, "Which approach should be used?");
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                $"Task {task.Id.Value[..8]} is waiting for a human answer.",
+                BlockingAction(goal, task, NextActionKind.AnswerHumanInput, "Answer the pending human input request.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [agent],
-            EchoProfiles(),
+            ProfileNames("local"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.Equal(NextActionKind.AnswerHumanInput, result.BlockingAction?.Kind);
         Assert.True(result.ContinueAfter is null);
         Assert.Equal(1, result.StopEvidence?.TaskNumber);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_stops_on_subscription_limit_review_required")]
@@ -306,20 +415,29 @@ public sealed class RunGoalServiceTests
                 cmd, workspace.ExecutionDirectory, 1, string.Empty, limitOutput, now));
         }
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "blocked: repeated recoverable subscription limits require operator review",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Review the repeated subscription limit before redispatch.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [agent],
-            EchoProfiles(),
+            ProfileNames("local"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.Contains("usage limit", result.StopReason, StringComparison.OrdinalIgnoreCase);
         Assert.True(result.ContinueAfter is null);
         Assert.Equal(1, result.StopEvidence?.TaskNumber);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_stops_with_alternate_guidance_on_retry_window_without_alternate")]
@@ -343,14 +461,22 @@ public sealed class RunGoalServiceTests
             $"ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again at {retryTime:h:mm tt}.",
             now));
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                $"Task {task.Id.Value[..8]} hit a recoverable subscription usage limit; retry after {retryTime:u}.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Wait for the subscription retry window.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [agent],
-            EchoProfiles(),
+            ProfileNames("local"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.True(result.ContinueAfter is null);
@@ -358,13 +484,13 @@ public sealed class RunGoalServiceTests
         Assert.Contains("Planner", result.StopReason, StringComparison.Ordinal);
         Assert.Contains("retry deferral", result.StopReason, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, result.StopEvidence?.TaskNumber);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_usage_limit_redelegates_and_continues")]
     public async Task RunGoalServiceAutoFailoverUsageLimitRedelegatesAndContinues()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with recoverable usage limit", AgentRole.Planner);
@@ -380,18 +506,29 @@ public sealed class RunGoalServiceTests
             "limited command",
             DateTimeOffset.UtcNow,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits.");
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var labels = new DispatchLabels();
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the recoverable subscription usage limit stands.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")),
+            call =>
+            {
+                RecordCompletedDispatch(call, task, labels, "alternate-ok");
+                return Advanced(goal, 2, "No next actions are available.");
+            });
 
         var result = await RunGoalService.RunAsync(
             kernel,
             [limited, alternate],
-            Profiles(new WorkerProfile("alternate", PlannerSuccessCommand("{subscriptionModelName}; Write-Output alternate-ok"))),
+            ProfileNames("limited", "alternate"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
-            cancellationToken: cts.Token);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
         Assert.True(result.StopEvidence is null);
@@ -403,13 +540,13 @@ public sealed class RunGoalServiceTests
         Assert.Equal(1, result.CompletedTasks.Count);
         Assert.True(result.CompletedTasks.Single().Succeeded);
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("alternate-planner", StringComparison.Ordinal)));
+        Assert.Equal(2, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_uses_added_same_role_catalog_alternate")]
     public async Task RunGoalServiceAutoFailoverUsesAddedSameRoleCatalogAlternate()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var alternate = new AgentDefinition(
@@ -432,18 +569,29 @@ public sealed class RunGoalServiceTests
             "primary command",
             DateTimeOffset.UtcNow,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits.");
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var labels = new DispatchLabels();
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the recoverable subscription usage limit stands.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")),
+            call =>
+            {
+                RecordCompletedDispatch(call, task, labels, "catalog-alternate-ok");
+                return Advanced(goal, 2, "No next actions are available.");
+            });
 
         var result = await RunGoalService.RunAsync(
             kernel,
             agents,
-            Profiles(new WorkerProfile("qwen-code-cli", PlannerSuccessCommand("{subscriptionModelName}; Write-Output catalog-alternate-ok"))),
+            ProfileNames("qwen-code-cli"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
-            cancellationToken: cts.Token);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
         Xunit.Assert.True(task.Status == WorkTaskStatus.Completed, DescribeRunGoalStop(result, task));
@@ -451,13 +599,13 @@ public sealed class RunGoalServiceTests
         Assert.Equal(alternate.Id, task.AssignedAgentId);
         Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
         Assert.Contains("catalog-alternate-ok", task.LastVerification!.StandardOutput, StringComparison.Ordinal);
+        Assert.Equal(2, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_heartbeat_stall_redelegates")]
     public async Task RunGoalServiceAutoFailoverHeartbeatStallRedelegates()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with heartbeat stall", AgentRole.Planner);
@@ -465,19 +613,30 @@ public sealed class RunGoalServiceTests
         var stalled = SubscriptionPlanner("stalled-planner", "Stalled Planner", "stalled");
         var alternate = SubscriptionPlanner("heartbeat-alternate", "Heartbeat Alternate", "alternate");
         kernel.ActivateGoal(goal.Id, [stalled, alternate]);
-        RecordHeartbeatStall(kernel, goal, task, workspace, "stalled command", DateTimeOffset.UtcNow);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        RecordHeartbeatStall(kernel, goal, task, workspace, "stalled", "stalled command", DateTimeOffset.UtcNow);
+        var labels = new DispatchLabels();
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the heartbeat stall evidence stands.",
+                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the stalled dispatch.")),
+            call =>
+            {
+                RecordCompletedDispatch(call, task, labels, "heartbeat-ok");
+                return Advanced(goal, 2, "No next actions are available.");
+            });
 
         var result = await RunGoalService.RunAsync(
             kernel,
             [stalled, alternate],
-            Profiles(new WorkerProfile("alternate", PlannerSuccessCommand("{subscriptionModelName}; Write-Output heartbeat-ok"))),
+            ProfileNames("stalled", "alternate"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
-            cancellationToken: cts.Token);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
         Xunit.Assert.True(result.StopEvidence is null, DescribeRunGoalStop(result, task));
@@ -495,6 +654,7 @@ public sealed class RunGoalServiceTests
                 item.Message.Contains(
                     "provider-neutral heartbeat/progress stall evidence",
                     StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(2, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_codex_websocket_connectivity_stops_when_no_alternate_exists")]
@@ -518,14 +678,22 @@ public sealed class RunGoalServiceTests
             "Prompt reminder: include Model fit: and Changed files: in final output.\n" +
             "Error: websocket transport failed with OS error 10013 before session start.");
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the provider connectivity failure stands.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary],
-            Profiles(new WorkerProfile("codex-cli", "Write-Output should-not-run")),
+            ProfileNames("codex-cli"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.Contains("recoverable provider connectivity", result.StopReason, StringComparison.OrdinalIgnoreCase);
@@ -534,6 +702,7 @@ public sealed class RunGoalServiceTests
         Assert.Contains("websocket", result.StopEvidence?.OutputTail ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(primary.Id, task.AssignedAgentId);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_provider_connectivity_ignores_prompt_echo_but_not_stdout_summary")]
@@ -555,19 +724,30 @@ public sealed class RunGoalServiceTests
             "Error: websocket transport failed with OS error 10013 after partial work.",
             DateTimeOffset.UtcNow));
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                $"Task {task.Id.Value[..8]} failed; inspect the preserved failure evidence before continuing.",
+                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary],
-            Profiles(new WorkerProfile("codex-cli", "Write-Output should-not-run")),
+            ProfileNames("codex-cli"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.False(result.StopReason.Contains("recoverable provider connectivity", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(primary.Id, task.AssignedAgentId);
+        // No failover fired, so RunAsync must stop on the first iteration rather than loop.
+        Assert.Equal(1, advance.CallCount);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRedelegated);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_claude_api_connectionrefused_stops_when_no_alternate_exists")]
@@ -590,14 +770,22 @@ public sealed class RunGoalServiceTests
             DateTimeOffset.UtcNow,
             "Error: Unable to connect to API: ConnectionRefused while opening provider transport.");
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the provider connectivity failure stands.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary],
-            Profiles(new WorkerProfile("claude-cli", "Write-Output should-not-run")),
+            ProfileNames("claude-cli"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.Contains("recoverable provider connectivity", result.StopReason, StringComparison.OrdinalIgnoreCase);
@@ -605,13 +793,13 @@ public sealed class RunGoalServiceTests
         Assert.Contains("ConnectionRefused", result.StopEvidence?.OutputTail ?? string.Empty, StringComparison.Ordinal);
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(primary.Id, task.AssignedAgentId);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_provider_connectivity_redelegates_same_role_alternate_and_continues")]
     public async Task RunGoalServiceAutoFailoverProviderConnectivityRedelegatesSameRoleAlternateAndContinues()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with provider connectivity failover", AgentRole.Planner);
@@ -628,18 +816,29 @@ public sealed class RunGoalServiceTests
             "codex-cli exec",
             DateTimeOffset.UtcNow,
             "Error: websocket transport failed with os error 10013 before useful work.");
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var labels = new DispatchLabels();
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the provider connectivity failure stands.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")),
+            call =>
+            {
+                RecordCompletedDispatch(call, task, labels, "connectivity-alternate-ok");
+                return Advanced(goal, 2, "No next actions are available.");
+            });
 
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary, alternate],
-            Profiles(new WorkerProfile("qwen-code-cli", PlannerSuccessCommand("{subscriptionModelName}; Write-Output connectivity-alternate-ok"))),
+            ProfileNames("codex-cli", "qwen-code-cli"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
-            cancellationToken: cts.Token);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
         Xunit.Assert.True(result.StopEvidence is null, DescribeRunGoalStop(result, task));
@@ -653,13 +852,13 @@ public sealed class RunGoalServiceTests
         Assert.Equal(1, result.CompletedTasks.Count);
         Assert.True(result.CompletedTasks.Single().Succeeded);
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("qwen-planner", StringComparison.Ordinal)));
+        Assert.Equal(2, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_provider_model_rejection_redelegates")]
     public async Task RunGoalServiceAutoFailoverProviderModelRejectionRedelegates()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with provider model rejection", AgentRole.Planner);
@@ -677,18 +876,29 @@ public sealed class RunGoalServiceTests
             DateTimeOffset.UtcNow,
             "Planner output contract failed: missing required evidence. Retry Planner for contract repair.\n" +
             "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account."); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var labels = new DispatchLabels();
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the provider model rejection stands.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch with a supported model.")),
+            call =>
+            {
+                RecordCompletedDispatch(call, task, labels, "model-rejection-alternate-ok");
+                return Advanced(goal, 2, "No next actions are available.");
+            });
 
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary, alternate],
-            Profiles(new WorkerProfile("qwen-code-cli", PlannerSuccessCommand("{subscriptionModelName}; Write-Output model-rejection-alternate-ok"))),
+            ProfileNames("codex-cli", "qwen-code-cli"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
-            cancellationToken: cts.Token);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
         Xunit.Assert.True(result.StopEvidence is null, DescribeRunGoalStop(result, task));
@@ -697,6 +907,7 @@ public sealed class RunGoalServiceTests
         Assert.Equal("qwen-code-cli", task.LastDispatch!.WorkerName);
         Assert.Contains("model-rejection-alternate-ok", task.LastVerification!.StandardOutput, StringComparison.Ordinal);
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("qwen-planner", StringComparison.Ordinal)));
+        Assert.Equal(2, advance.CallCount);
     }
 
     [Xunit.Fact]
@@ -725,20 +936,29 @@ public sealed class RunGoalServiceTests
             "  Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist. Retry Planner for contract repair.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             completedAt));
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                $"Task {task.Id.Value[..8]} failed; inspect the preserved failure evidence before continuing.",
+                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary, alternate],
-            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output should-not-run")),
+            ProfileNames("codex-cli", "qwen-code-cli"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(primary.Id, task.AssignedAgentId);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRedelegated);
         Assert.Contains("Planner output contract failed", result.StopEvidence?.OutputTail ?? string.Empty, StringComparison.Ordinal);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_stops_when_no_alternate_exists")]
@@ -760,14 +980,22 @@ public sealed class RunGoalServiceTests
             DateTimeOffset.UtcNow,
             "ERROR: You've hit your usage limit. Visit settings to purchase more credits.");
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the recoverable subscription usage limit stands.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [limited],
-            Profiles(new WorkerProfile("limited", "Write-Output should-not-run")),
+            ProfileNames("limited"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.Executed);
         Assert.Contains("no available unused alternate", result.StopReason, StringComparison.OrdinalIgnoreCase);
@@ -776,13 +1004,13 @@ public sealed class RunGoalServiceTests
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         Assert.Equal(limited.Id, task.AssignedAgentId);
         Assert.Contains("usage limit", result.StopEvidence?.OutputTail ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_does_not_loop_back_to_failed_agent")]
     public async Task RunGoalServiceAutoFailoverDoesNotLoopBackToFailedAgent()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with two failed agents", AgentRole.Planner);
@@ -790,19 +1018,31 @@ public sealed class RunGoalServiceTests
         var first = SubscriptionPlanner("first-planner", "First Planner", "first");
         var second = SubscriptionPlanner("second-planner", "Second Planner", "second");
         kernel.ActivateGoal(goal.Id, [first, second]);
-        RecordHeartbeatStall(kernel, goal, task, workspace, "first command", DateTimeOffset.UtcNow);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        RecordHeartbeatStall(kernel, goal, task, workspace, "first", "first command", DateTimeOffset.UtcNow);
+        var labels = new DispatchLabels();
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Automatic handoff is blocked while the heartbeat stall evidence stands.",
+                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the stalled dispatch.")),
+            call =>
+            {
+                // The alternate stalls the same way, so the second failover round finds no unused agent.
+                RecordStalledDispatch(call, task, labels);
+                return Advanced(goal, 1, "Automatic handoff stopped after the alternate stalled as well.");
+            });
 
         var result = await RunGoalService.RunAsync(
             kernel,
             [first, second],
-            Profiles(new WorkerProfile("second", "Write-Output {subscriptionModelName}; Write-Output 'Background dispatch made no observable progress before the stall timeout; wrapper heartbeat state=running.'; exit 1")),
+            ProfileNames("first", "second"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
             pollInterval: TimeSpan.FromMilliseconds(50),
-            sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
-            cancellationToken: cts.Token);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.Executed);
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
@@ -812,6 +1052,7 @@ public sealed class RunGoalServiceTests
         Assert.False(goal.Timeline.Any(evt =>
             evt.Kind == ProgressKind.TaskRedelegated &&
             evt.Message.Contains("to agent 'first-planner'", StringComparison.Ordinal)));
+        Assert.Equal(2, advance.CallCount);
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_stops_when_cost_guard_flag_missing")]
@@ -829,17 +1070,27 @@ public sealed class RunGoalServiceTests
             "local", "Write-Output gpt-4o-mini", workspace.ExecutionDirectory, now,
             ProviderName: "OpenAI", ModelName: "gpt-4o-mini", PromptCharacterCount: 13000));
 
+        var advance = ScriptedAdvanceStep.Script(
+            call => Blocked(
+                goal,
+                "Paid subscription start requires explicit confirmation: 13000 prompt chars across 1 task(s). " +
+                $"rerun with {SubscriptionPromptCostGuard.CliConfirmationFlag} after inspecting subscription-plan.",
+                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Confirm the paid subscription start.")));
+
         var result = await RunGoalService.RunAsync(
             kernel,
             [agent],
-            EchoProfiles(),
+            ProfileNames("local"),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
-            sleep: NoSleep);
+            sleep: NoSleep,
+            advanceStep: advance.Step,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("--confirm-large-paid-subscription-start", result.StopReason, StringComparison.Ordinal);
         Assert.True(result.ContinueAfter is null);
         Assert.Equal(1, result.StopEvidence?.TaskNumber);
+        Assert.Equal(1, advance.CallCount);
     }
 }

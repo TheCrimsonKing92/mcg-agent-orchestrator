@@ -9,6 +9,18 @@ internal static class RunGoalService
 {
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(5);
     internal delegate Task SleepFunc(TimeSpan delay, CancellationToken ct);
+
+    // Test-only seam. Mirrors GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked so the
+    // control-flow tests can drive RunAsync in-process; production callers leave it unset and get the real step.
+    internal delegate AdvanceLoopResultDto AdvanceStepFunc(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles,
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        bool allowLargePaidSubscriptionStart,
+        IModelProviderRegistry? providers);
+
     private const int OutputTailLineCount = 20;
     private const int MaxAutomaticFailoverAttemptsPerTask = 3;
 
@@ -50,11 +62,13 @@ internal static class RunGoalService
         SleepFunc? sleep = null,
         IClock? clock = null,
         IModelProviderRegistry? providers = null,
+        AdvanceStepFunc? advanceStep = null,
         CancellationToken cancellationToken = default)
     {
         var interval = pollInterval ?? DefaultPollInterval;
         var sleepImpl = sleep ?? ((delay, ct) => Task.Delay(delay, ct));
         var clockImpl = clock ?? new SystemClock();
+        var advanceImpl = advanceStep ?? GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked;
         var completedTasks = new List<RunGoalTaskSummary>();
         var completedTaskIds = new HashSet<TaskId>();
         var failedAgentsByTask = new Dictionary<TaskId, HashSet<AgentId>>();
@@ -67,7 +81,7 @@ internal static class RunGoalService
         {
             var priorStatuses = goal.Tasks.ToDictionary(t => t.Id, t => t.Status);
 
-            var result = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+            var result = advanceImpl(
                 kernel, agents, profiles, workspace, goal, allowLargePaidSubscriptionStart, providers);
 
             if (result.StepCount > 0) executed = true;
