@@ -5,6 +5,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class HarnessHookRootContractTests
 {
+    // Failsafe, not an assertion: every fact here launches at least one cold pwsh hook process and no
+    // fact asserts on elapsed time. The former 20-second bound cancelled
+    // RenderedCompoundHook_RejectsCompoundShellPayload (two launches under one bound) during a saturated
+    // acceptance gate, reporting a TaskCanceledException that reads as a hook defect.
+    private static readonly TimeSpan HookProcessFailsafe = TimeSpan.FromMinutes(5);
+
     private const string LegacyBlockCommand =
         "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/Block-CompoundShell.ps1\"";
 
@@ -12,7 +18,7 @@ public sealed class HarnessHookRootContractTests
     public async Task LegacyCommand_WithoutRoot_ResolvesSlashPathAndFails()
     {
         using var fixture = HookWorkspace.Create();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var timeout = new CancellationTokenSource(HookProcessFailsafe);
         var command =
             "$env:CLAUDE_PROJECT_DIR = $null; Remove-Variable CLAUDE_PROJECT_DIR -ErrorAction SilentlyContinue; " +
             LegacyBlockCommand;
@@ -31,7 +37,7 @@ public sealed class HarnessHookRootContractTests
     {
         using var fixture = HookWorkspace.Create();
         var command = WithoutOptionalEnvironment(ReadHookCommand(fixture.Root, "UserPromptSubmit"));
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var timeout = new CancellationTokenSource(HookProcessFailsafe);
 
         var result = await WorkerProcessRunner.RunBufferedAsync(
             new WorkerProcessRunRequest(command, fixture.Root),
@@ -49,7 +55,7 @@ public sealed class HarnessHookRootContractTests
         var command =
             "$env:CLAUDE_PROJECT_DIR = $null; " +
             ReadHookCommand(fixture.Root, "UserPromptSubmit");
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var timeout = new CancellationTokenSource(HookProcessFailsafe);
 
         var result = await WorkerProcessRunner.RunBufferedAsync(
             new WorkerProcessRunRequest(command, fixture.Root),
@@ -69,7 +75,7 @@ public sealed class HarnessHookRootContractTests
         var command = WithoutOptionalEnvironment(ReadHookCommand(fixture.Root, "PreToolUse"));
         var benignPayload = JsonSerializer.Serialize(new { tool_input = new { command = "Get-ChildItem" } });
         var compoundPayload = JsonSerializer.Serialize(new { tool_input = new { command = "Get-ChildItem && Get-Date" } });
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var timeout = new CancellationTokenSource(HookProcessFailsafe);
 
         var benign = await WorkerProcessRunner.RunBufferedAsync(
             new WorkerProcessRunRequest(command, fixture.Root, StandardInput: benignPayload),
@@ -92,7 +98,7 @@ public sealed class HarnessHookRootContractTests
         var command =
             "$env:CLAUDE_PROJECT_DIR = $null; " +
             ReadHookCommand(fixture.Root, "PreToolUse");
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var timeout = new CancellationTokenSource(HookProcessFailsafe);
 
         var result = await WorkerProcessRunner.RunBufferedAsync(
             new WorkerProcessRunRequest(command, fixture.Root),

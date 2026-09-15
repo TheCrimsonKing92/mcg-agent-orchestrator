@@ -9,7 +9,10 @@ internal static class ReverseDependencyTestImpactReader
     internal const int MaximumChangedSourceFiles = 5;
     private const int MaximumDependencyHops = 2;
     private const int MaximumFrontierSymbols = 64;
-    private const int MaximumSelectedTestClasses = 32;
+    // The dispatch closure in this repository already resolves 33 consumer test classes, so a 32-class
+    // bound widened every dispatch change to the full Infrastructure suite. 48 keeps the guardrail
+    // against unbounded filters while leaving headroom for the closure's observed size.
+    internal const int MaximumSelectedTestClasses = 48;
     private const int MaximumIndexedSourceFiles = 2_000;
 
     internal static ReverseDependencyTestSelection Read(
