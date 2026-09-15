@@ -45,6 +45,13 @@ internal sealed record DeveloperBranchIntegrationResult(
         Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
 }
 
+// What a cohort run reports to the conduct tick: the ordinary run result, plus the typed fault when the
+// run ended in a cohort gate fault. The fault rides beside the result rather than inside it so the shared
+// ConductorAcceptanceCohortRunResult shape stays as it is for every other cohort caller.
+internal sealed record ConductorAcceptanceCohortRunOutcome(
+    ConductorAcceptanceCohortRunResult Run,
+    ConductorAcceptanceCohortGateFault? Fault = null);
+
 // A background acceptance cohort gate that ended in an exception, carried as data so the conduct tick
 // can classify it and hold or escalate the members instead of receiving a throw across the tick boundary.
 internal sealed record ConductorAcceptanceCohortGateFault(
@@ -3628,6 +3635,34 @@ internal sealed partial class ConductorDriver
         }
     }
 
+    // The conduct tick's entry point. A background cohort gate that ended in an exception is reported here
+    // as a typed fault beside the held run result, so the tick classifies the fault instead of receiving a
+    // throw from a thread that finished several ticks ago. A parked fault is taken before anything else,
+    // including an injected cohort runner, so it can never be lost or turned into a fresh gate start.
+    internal ConductorAcceptanceCohortRunOutcome RunAcceptanceCohortForTick(
+        ConductorAcceptanceCohortSelection selection,
+        IReadOnlyList<Goal> orderedGoals,
+        ConductorAutonomyPolicy policy,
+        CancellationToken cancellationToken = default,
+        Action? onGateAdmitted = null,
+        bool runGateInBackground = false)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(orderedGoals);
+        return TakeCohortGateFault(selection) is { } fault
+            ? new ConductorAcceptanceCohortRunOutcome(
+                CohortGateFaulted(selection, orderedGoals, policy, fault),
+                fault)
+            : new ConductorAcceptanceCohortRunOutcome(
+                RunAcceptanceCohort(
+                    selection,
+                    orderedGoals,
+                    policy,
+                    cancellationToken,
+                    onGateAdmitted,
+                    runGateInBackground));
+    }
+
     internal ConductorAcceptanceCohortRunResult RunAcceptanceCohort(
         ConductorAcceptanceCohortSelection selection,
         IReadOnlyList<Goal> orderedGoals,
@@ -3646,25 +3681,22 @@ internal sealed partial class ConductorDriver
             selection.Members[0],
             selection.Members[1]);
         var memberPairKey = CohortGateMemberPairKey(selection);
-        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun))
+        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun) &&
+            !currentRun.Completion.Task.IsCompleted)
         {
-            if (!currentRun.Completion.Task.IsCompleted)
-            {
-                return CohortInFlight(
-                    selection,
-                    orderedGoals,
-                    policy,
-                    currentRun.PairFingerprint,
-                    currentRun.StartedAt);
-            }
-
-            _cohortGateRuns.TryRemove(memberPairKey, out _);
-            ObserveCohortGateCompletion(memberPairKey, currentRun);
+            return CohortInFlight(
+                selection,
+                orderedGoals,
+                policy,
+                currentRun.PairFingerprint,
+                currentRun.StartedAt);
         }
-        SweepCompletedCohortGateRuns();
+
         // Drained ahead of the production-dependency check so a faulted background completion is always
         // reported as data; describing the fault needs the selection only, not the cohort dependencies.
-        if (_cohortGateFaults.TryRemove(memberPairKey, out var backgroundFault))
+        // A direct caller that did not come through RunAcceptanceCohortForTick still gets the held result
+        // rather than the background thread's exception.
+        if (TakeCohortGateFault(selection) is { } backgroundFault)
         {
             return CohortGateFaulted(selection, orderedGoals, policy, backgroundFault);
         }
@@ -4174,6 +4206,24 @@ internal sealed partial class ConductorDriver
         }
     }
 
+    // Observes this member pair's completed background gate, if any, and takes the fault it parked. Called
+    // before the ordinary cohort path so a faulted pair is reported as data instead of being restarted as a
+    // fresh gate, and so the exception is never observed by a GetAwaiter().GetResult() on the tick thread.
+    private ConductorAcceptanceCohortGateFault? TakeCohortGateFault(
+        ConductorAcceptanceCohortSelection selection)
+    {
+        var memberPairKey = CohortGateMemberPairKey(selection);
+        if (_cohortGateRuns.TryGetValue(memberPairKey, out var run) &&
+            run.Completion.Task.IsCompleted &&
+            _cohortGateRuns.TryRemove(memberPairKey, out var completed))
+        {
+            ObserveCohortGateCompletion(memberPairKey, completed);
+        }
+
+        SweepCompletedCohortGateRuns();
+        return _cohortGateFaults.TryRemove(memberPairKey, out var fault) ? fault : null;
+    }
+
     // Observes a completed background cohort gate without rethrowing: a fault is parked as typed data
     // for its member pair, and a clean completion clears that pair's transient-fault count.
     private void ObserveCohortGateCompletion(string memberPairKey, CohortGateRun run)
@@ -4251,8 +4301,7 @@ internal sealed partial class ConductorDriver
                         GoalLifecycleState.Verified,
                         $"Acceptance cohort gate faulted: {detail}")),
                 StringComparer.Ordinal),
-            detail,
-            fault);
+            detail);
     }
 
     private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>

@@ -3013,17 +3013,20 @@ internal sealed partial class ConductorBatchLoop
                 EmitProgress(
                     $"ACCEPTANCE_COHORT_ENTRY tick={tick} goal={markerGoal} members={memberIds}");
                 ConductorAcceptanceCohortRunResult cohortRun;
+                ConductorAcceptanceCohortGateFault? gateFault;
                 var exitOutcome = "exception";
                 var exitReason = string.Empty;
                 try
                 {
-                    cohortRun = driver.RunAcceptanceCohort(
+                    var cohortOutcome = driver.RunAcceptanceCohortForTick(
                         cohortSelection,
                         cohortEligible,
                         policy,
                         onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
                         runGateInBackground: true);
-                    (exitOutcome, exitReason) = cohortRun.Fault is { } backgroundFault
+                    cohortRun = cohortOutcome.Run;
+                    gateFault = cohortOutcome.Fault;
+                    (exitOutcome, exitReason) = gateFault is { } backgroundFault
                         ? DescribeAcceptanceCohortGateFault(backgroundFault)
                         : DescribeAcceptanceCohortExit(cohortRun);
                 }
@@ -3032,23 +3035,22 @@ internal sealed partial class ConductorBatchLoop
                     // The cohort gate is the conductor's own machinery. Nothing it throws is allowed to end
                     // the tick: a transient fault is held and retried like the background attempt path does,
                     // and anything else escalates both members on the spot. Either way it leaves as data.
-                    var synchronousFault = ConductorDriver.CreateCohortGateFault(
+                    gateFault = ConductorDriver.CreateCohortGateFault(
                         cohortSelection,
                         cohortGateException);
                     cohortRun = new ConductorAcceptanceCohortRunResult(
                         Receipt: null,
                         new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
-                        $"outcome=gate-fault fingerprint={synchronousFault.PairFingerprint} " +
-                        $"fault={synchronousFault.FaultType} detail={SanitizeReason(synchronousFault.Message)}",
-                        synchronousFault);
-                    (exitOutcome, exitReason) = DescribeAcceptanceCohortGateFault(synchronousFault);
+                        $"outcome=gate-fault fingerprint={gateFault.PairFingerprint} " +
+                        $"fault={gateFault.FaultType} detail={SanitizeReason(gateFault.Message)}");
+                    (exitOutcome, exitReason) = DescribeAcceptanceCohortGateFault(gateFault);
                 }
                 finally
                 {
                     EmitProgress(
                         $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}{exitReason}");
                 }
-                if (cohortRun.Fault is { } cohortGateFault)
+                if (gateFault is { } cohortGateFault)
                 {
                     cohortRun = ResolveFaultedAcceptanceCohort(
                         driver,

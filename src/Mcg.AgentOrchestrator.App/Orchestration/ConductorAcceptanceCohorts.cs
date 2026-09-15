@@ -47,10 +47,7 @@ internal sealed record ConductorAcceptanceCohortSelectionResult(
 internal sealed record ConductorAcceptanceCohortRunResult(
     AcceptanceCohortReceipt? Receipt,
     IReadOnlyDictionary<string, ConductorAdvanceResult> MemberResults,
-    string Detail,
-    // Set when a background cohort gate ended in an exception. The conduct tick classifies this instead
-    // of catching a throw that crossed the tick boundary.
-    ConductorAcceptanceCohortGateFault? Fault = null);
+    string Detail);
 
 internal static class ConductorAcceptanceCohortSelector
 {
