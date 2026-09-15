@@ -9,6 +9,74 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsFindingEvidenceReuse
 {
     [Xunit.Fact]
+    public void TesterReopenedSameCandidateFindingReusesAndProjectsCompletedProcessReceipt()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer);
+        var finding = EvidenceFindingWithRequest(
+            "The process receipt is missing.",
+            id: "tester-process-receipt",
+            category: FindingCategory.TestEvidence);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        RecordTesterEvidenceOnlyFinding(
+            kernel,
+            goal,
+            tester,
+            finding with { Description = "The reopened finding still needs its completed process receipt." });
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        var receipt = Assert.Single(tester.VerificationHistory
+            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+            .DistinctBy(candidate => candidate.ReceiptId));
+        Assert.Contains(receipt.Arms!, arm =>
+            arm is
+            {
+                Arm: FindingEvidenceArm.Candidate,
+                Disposition: FindingEvidenceArmDisposition.Green,
+                Accepted: true,
+                Passed: true
+            } && string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            receipt.ReceiptId,
+            tester.VerificationHistory.Last().MergedReviewFindings!
+                .Single(candidate => candidate.StableId == finding.StableId)
+                .EvidenceOutcome?.ReceiptId);
+        Assert.Contains(goal.Timeline, item =>
+            item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal));
+        var projection = ReviewFindingContextProjector.Project(goal, tester, candidateSha);
+        var packagedReceipt = Assert.Single(projection.ReceiptBodies);
+        Assert.Contains(receipt.ReceiptId, System.Text.Encoding.UTF8.GetString(packagedReceipt.Bytes), StringComparison.Ordinal);
+        using var ledger = System.Text.Json.JsonDocument.Parse(projection.LedgerBytes);
+        var projectedFinding = Assert.Single(ledger.RootElement.GetProperty("findings").EnumerateArray());
+        var projectedOutcome = projectedFinding.GetProperty("evidence_outcome");
+        Assert.Equal(receipt.ReceiptId, projectedOutcome.GetProperty("receipt_id").GetString());
+        Assert.Equal("valid-evidence", projectedOutcome.GetProperty("result_reason").GetString());
+        var projectedReceiptBody = Assert.Single(projectedFinding.GetProperty("receipt_bodies").EnumerateArray());
+        Assert.Equal(packagedReceipt.Sha256, projectedReceiptBody.GetProperty("sha256").GetString());
+        Assert.Contains(packagedReceipt.Sha256, projection.ActiveBodyHashes);
+    }
+
+    [Xunit.Fact]
     public void EmptySelectionCannotSynthesizeAnHonouredReceiptFromUnrelatedHistory()
     {
         const string candidateSha = "abc1234";
@@ -416,6 +484,33 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         Assert.All(
             reviewer.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []),
             receipt => Assert.False(receipt.Passed));
+    }
+
+    private static void RecordTesterEvidenceOnlyFinding(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec tester,
+        ReviewFinding finding)
+    {
+        DispatchTask(kernel, goal, tester, "test");
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: test",
+            "tests: deferred - focused evidence requested",
+            "blockers: exact-blocker - focused evidence requested",
+            $"findings: {System.Text.Json.JsonSerializer.Serialize(new[] { finding })}",
+            "touched_anchors: []",
+            "model_fit: test/test - adequate - fixture - fixture",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                "test", "C:\\tmp", 1, output, "", DateTimeOffset.UtcNow, WorkerResultPresent: true));
     }
 
     [Xunit.Fact]
