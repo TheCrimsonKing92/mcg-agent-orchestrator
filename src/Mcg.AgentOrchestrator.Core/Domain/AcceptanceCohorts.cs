@@ -452,10 +452,17 @@ public static class AcceptanceCohortGateEvidence
             string.Equals((string?)result.Attribute("outcome"), "Passed", StringComparison.OrdinalIgnoreCase));
         var failedResults = unitResults.Count(result =>
             string.Equals((string?)result.Attribute("outcome"), "Failed", StringComparison.OrdinalIgnoreCase));
+        var notExecutedResults = unitResults.Count(result =>
+            string.Equals((string?)result.Attribute("outcome"), "NotExecuted", StringComparison.OrdinalIgnoreCase));
+        // Rows carrying any other outcome (Error, Aborted, Timeout, Inconclusive, absent or unrecognized)
+        // count toward neither tally, so their presence leaves the document incoherent.
+        var unclassifiedResults = unitResults.Length - (passedResults + failedResults + notExecutedResults);
         return total > 0 &&
             executed > 0 &&
             executed <= total &&
-            unitResults.Length == executed &&
+            unclassifiedResults == 0 &&
+            passedResults + failedResults == executed &&
+            notExecutedResults == total - executed &&
             passedResults == passed &&
             failedResults == failed &&
             passed + failed == executed;
