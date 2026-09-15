@@ -320,6 +320,29 @@ public sealed class ConductorAcceptanceCohortTests
         }
     }
 
+    [Fact]
+    public void NonVerdictRowAlongsideCoherentCounters_IsInfrastructureFailure()
+    {
+        var trx = Path.Combine(Path.GetTempPath(), $"cohort-skipped-plus-error-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(trx, TrxWithSkippedAndErrorRows());
+
+            Assert.Equal(
+                AcceptanceCohortGateOutcome.InfrastructureFailure,
+                ConductorDriver.ClassifyCohortVerification(new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    TestResultPaths: [trx])));
+        }
+        finally
+        {
+            if (File.Exists(trx)) File.Delete(trx);
+        }
+    }
+
     private static string ValidPassingTrx() => """
         <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
           <Results>
@@ -350,6 +373,19 @@ public sealed class ConductorAcceptanceCohortTests
           </Results>
           <ResultSummary outcome="Completed">
             <Counters total="2" executed="{executed}" passed="1" failed="0" />
+          </ResultSummary>
+        </TestRun>
+        """;
+
+    private static string TrxWithSkippedAndErrorRows() => """
+        <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+          <Results>
+            <UnitTestResult testId="1" testName="Passes" outcome="Passed" />
+            <UnitTestResult testId="2" testName="SkippedOptIn" outcome="NotExecuted" />
+            <UnitTestResult testId="3" testName="Errored" outcome="Error" />
+          </Results>
+          <ResultSummary outcome="Completed">
+            <Counters total="2" executed="1" passed="1" failed="0" />
           </ResultSummary>
         </TestRun>
         """;

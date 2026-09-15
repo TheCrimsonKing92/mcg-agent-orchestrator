@@ -96,3 +96,92 @@ than from a stale binary or a cached run receipt. The GREEN arm also confirms th
 `NonVerdictTrxOutcome_IsInfrastructureFailure` theory cases (`Error`, `Aborted`, `Timeout`,
 `NotExecuted`) stay red-for-the-right-reason: each has zero verdict rows against `executed="1"`, so
 the predicate still rejects a TRX whose executed counter exceeds its verdict rows.
+
+---
+
+# Second negative control: an unclassified row cannot ride along with self-consistent counters
+
+Reviewer finding `db34cdb0-positive-evidence-nonverdict-row` established that counting `Passed`,
+`Failed` and `NotExecuted` rows is not by itself sufficient. A row carrying some *other* outcome
+falls into neither tally, so it can be added to an otherwise-coherent document without disturbing
+any counter comparison. The follow-up adds an explicit guard to `HasCoherentExecutedTrxEvidence`:
+
+```csharp
+        var unclassifiedResults = unitResults.Length - (passedResults + failedResults + notExecutedResults);
+```
+
+with `unclassifiedResults == 0` joined to the returned conjunction. This encodes the specified
+contract that rows with any other outcome (`Error`, `Aborted`, `Timeout`, `Inconclusive`, or an
+absent/unrecognized attribute) count toward neither tally and therefore leave the document
+incoherent. It is a row-classification condition, not a counter check: it never compares a row count
+to the `total` counter, and it only rejects — no previously-rejected document becomes coherent.
+
+The bound fact is `ConductorAcceptanceCohortTests.NonVerdictRowAlongsideCoherentCounters_IsInfrastructureFailure`,
+whose fixture is exactly the shape named in the finding — one `Passed` row, one `NotExecuted` row and
+one `Error` row against counters `total="2" executed="1" passed="1" failed="0"`. Every counter
+comparison in the predicate is satisfied by that document; only the unclassified `Error` row
+distinguishes it.
+
+## Mutation
+
+The single line
+
+```csharp
+            unclassifiedResults == 0 &&
+```
+
+was deleted from the returned conjunction in `HasCoherentExecutedTrxEvidence`. Nothing else changed:
+the `unclassifiedResults` assignment above the `return` stayed in place (unused under the mutation),
+every other condition was untouched, and no test file was edited between arms.
+
+## Invocation
+
+Both arms ran the same managed-runner command from the goal worktree
+`C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0`:
+
+```powershell
+.\scripts\Invoke-TestSummary.ps1 -Target tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj -Filter "FullyQualifiedName~ConductorAcceptanceCohortTests"
+```
+
+## RED (mutation applied)
+
+```
+failed ConductorAcceptanceCohortTests.NonVerdictRowAlongsideCoherentCounters_IsInfrastructureFailure (1ms)
+  Assert.Equal() Failure: Values differ
+  Expected: InfrastructureFailure
+  Actual:   Passed
+    at ConductorAcceptanceCohortTests.NonVerdictRowAlongsideCoherentCounters_IsInfrastructureFailure() in C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator-worktrees\db34cdb0\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\ConductorAcceptanceCohortTests.cs:331
+```
+
+```
+Test run summary: Failed!
+  total: 25
+  failed: 1
+  succeeded: 24
+  skipped: 0
+  duration: 581ms
+```
+
+Exactly one case moved, and the observed value is `Passed` where `InfrastructureFailure` is required
+— that is the reviewer's reported defect reproduced directly, not a fixture or parse error. The
+first negative control's fact `SkippedRowWithMatchingCounters_IsPassed` passes in this arm, which
+confirms the two guards are independent: removing the unclassified-row check does not weaken the
+`NotExecuted` reconciliation.
+
+## GREEN (mutation reverted)
+
+```
+Test run summary: Passed!
+  total: 25
+  failed: 0
+  succeeded: 25
+  skipped: 0
+  duration: 524ms
+```
+
+Both arms rebuilt the test assembly from source before executing (`Build succeeded. 0 Error(s)` in
+each), so the differing verdicts come from the one-line mutation rather than a stale binary. The
+GREEN arm keeps all twenty-four pre-existing cases green, including the four
+`NonVerdictTrxOutcome_IsInfrastructureFailure` theory cases and both facts from the first negative
+control, so the added guard rejects the unclassified-row document without widening or narrowing any
+other classification.
