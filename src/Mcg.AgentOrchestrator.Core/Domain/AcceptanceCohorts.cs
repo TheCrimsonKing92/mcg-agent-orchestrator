@@ -452,10 +452,13 @@ public static class AcceptanceCohortGateEvidence
             string.Equals((string?)result.Attribute("outcome"), "Passed", StringComparison.OrdinalIgnoreCase));
         var failedResults = unitResults.Count(result =>
             string.Equals((string?)result.Attribute("outcome"), "Failed", StringComparison.OrdinalIgnoreCase));
+        var notExecutedResults = unitResults.Count(result =>
+            string.Equals((string?)result.Attribute("outcome"), "NotExecuted", StringComparison.OrdinalIgnoreCase));
         return total > 0 &&
             executed > 0 &&
             executed <= total &&
-            unitResults.Length == executed &&
+            passedResults + failedResults == executed &&
+            notExecutedResults == total - executed &&
             passedResults == passed &&
             failedResults == failed &&
             passed + failed == executed;
