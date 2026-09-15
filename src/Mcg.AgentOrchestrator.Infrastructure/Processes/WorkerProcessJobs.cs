@@ -22,6 +22,11 @@ internal sealed record OwnedChildStartMetadata(
     IReadOnlyList<string> ArgumentList,
     string WorkingDirectory);
 
+internal sealed record WorkerProcessJobReleaseEvidence(
+    bool RegistrationFound,
+    bool TerminationRequested,
+    bool JobExitConfirmed);
+
 internal sealed class RegisteredJob
 {
     internal RegisteredJob(
@@ -690,11 +695,16 @@ public static class WorkerProcessJobs
             lifecycleAuthority);
     }
 
+    /// <param name="inheritableWindowObserver">
+    /// Invoked while this launch's inheritable capture duplicates exist, immediately before
+    /// CreateProcessW. Per-launch; production callers leave it null.
+    /// </param>
     internal static Process StartRegisteredWithFileCaptureOrThrow(
         ProcessStartInfo startInfo,
         string stdoutPath,
         string stderrPath,
-        string? ownerId = null)
+        string? ownerId = null,
+        Action? inheritableWindowObserver = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
@@ -703,7 +713,11 @@ public static class WorkerProcessJobs
         }
 
         return StartRegisteredWindows(
-            () => OwnedProcessGroup.StartSuspendedWithFileCapture(startInfo, stdoutPath, stderrPath),
+            () => OwnedProcessGroup.StartSuspendedWithFileCapture(
+                startInfo,
+                stdoutPath,
+                stderrPath,
+                inheritableWindowObserver),
             ownerId);
     }
 
@@ -1514,6 +1528,52 @@ public static class WorkerProcessJobs
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
     }
 
+    /// <summary>
+    /// Releases a registration and reports what was actually proven about its termination, so a caller
+    /// that must decide whether it still owns anything can say so instead of assuming it.
+    /// </summary>
+    internal static WorkerProcessJobReleaseEvidence ReleaseWithCompletionEvidence(
+        int processId,
+        out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal != StaticRegistrationRemoval.Removed)
+        {
+            if (removal == StaticRegistrationRemoval.Missing)
+            {
+                Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+            }
+
+            return new WorkerProcessJobReleaseEvidence(
+                RegistrationFound: false,
+                TerminationRequested: false,
+                JobExitConfirmed: false);
+        }
+
+        WorkerProcessJobReleaseEvidence evidence;
+        try
+        {
+            Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+        }
+        finally
+        {
+            var terminationRequested = ReadAccountingAndDispose(
+                job,
+                kill: true,
+                captureAccounting: true,
+                preferDuplicate: false,
+                out accounting,
+                out var jobExitConfirmed);
+            evidence = new WorkerProcessJobReleaseEvidence(
+                RegistrationFound: true,
+                TerminationRequested: terminationRequested,
+                JobExitConfirmed: jobExitConfirmed);
+        }
+
+        return evidence;
+    }
+
     internal static RegisteredJob GetRegisteredJobOrThrow(int processId, object lifecycleAuthority)
     {
         if (Jobs.TryGetValue(processId, out var job) &&
@@ -1748,7 +1808,25 @@ public static class WorkerProcessJobs
         bool preferDuplicate,
         out WorkerProcessJobAccounting? accounting)
     {
+        return ReadAccountingAndDispose(
+            job,
+            kill,
+            captureAccounting,
+            preferDuplicate,
+            out accounting,
+            out _);
+    }
+
+    private static bool ReadAccountingAndDispose(
+        RegisteredJob? job,
+        bool kill,
+        bool captureAccounting,
+        bool preferDuplicate,
+        out WorkerProcessJobAccounting? accounting,
+        out bool jobExitConfirmed)
+    {
         accounting = null;
+        jobExitConfirmed = false;
         if (job is null)
         {
             return !kill;
@@ -1798,7 +1876,9 @@ public static class WorkerProcessJobs
                 job.Group.Kill();
                 if (job.DuplicateAccountingHandle is not null)
                 {
-                    OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
+                    jobExitConfirmed = OwnedProcessGroup.WaitForJobExit(
+                        job.DuplicateAccountingHandle,
+                        TimeSpan.FromSeconds(5));
                 }
 
                 EmitTempRootReapResults(ReapOwnedTempRoots(ownedTempRoots));

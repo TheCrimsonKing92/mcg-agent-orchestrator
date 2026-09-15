@@ -182,12 +182,9 @@ internal static class WindowsNativeProcessInspection
 
     internal static IReadOnlyList<int> ListIdentityBoundDescendantProcessIds(int ancestorProcessId)
     {
-        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
-        {
-            return [];
-        }
-
-        return ListIdentityBoundDescendantProcessIds(ancestorProcessId, EnumerateProcesses, ReadOne);
+        return ReadIdentityBoundDescendants(ancestorProcessId).Records.Keys
+            .OrderBy(processId => processId)
+            .ToArray();
     }
 
     internal static IReadOnlyList<int> ListIdentityBoundDescendantProcessIds(
@@ -195,10 +192,39 @@ internal static class WindowsNativeProcessInspection
         Func<ProcessEnumerationResult> enumerate,
         Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
     {
-        var enumeration = enumerate();
-        if (ancestorProcessId <= 0 || enumeration.Failure is not null)
+        return ReadIdentityBoundDescendants(ancestorProcessId, enumerate, readOne).Records.Keys
+            .OrderBy(processId => processId)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The identity-bound descendant set with each accepted record kept, so a caller can re-check the
+    /// exact identity later instead of re-resolving a bare pid that may have been reassigned.
+    /// </summary>
+    internal static ProcessInspectionResult ReadIdentityBoundDescendants(int ancestorProcessId)
+    {
+        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
         {
-            return [];
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
+        }
+
+        return ReadIdentityBoundDescendants(ancestorProcessId, EnumerateProcesses, ReadOne);
+    }
+
+    internal static ProcessInspectionResult ReadIdentityBoundDescendants(
+        int ancestorProcessId,
+        Func<ProcessEnumerationResult> enumerate,
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
+    {
+        var enumeration = enumerate();
+        if (ancestorProcessId <= 0)
+        {
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
+        }
+
+        if (enumeration.Failure is not null)
+        {
+            return ProcessInspectionResult.Failed(enumeration.Failure);
         }
 
         var seedsById = enumeration.Processes
@@ -207,7 +233,7 @@ internal static class WindowsNativeProcessInspection
             .ToDictionary(group => group.Key, group => group.First());
         if (!seedsById.TryGetValue(ancestorProcessId, out var rootSeed))
         {
-            return [];
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
         }
 
         var records = new Dictionary<int, ProcessInspectionRecord>();
@@ -225,14 +251,14 @@ internal static class WindowsNativeProcessInspection
         var root = Read(rootSeed);
         if (!CanEstablishLiveIdentity(root))
         {
-            return [];
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
         }
 
         var childrenByParent = enumeration.Processes
             .Where(seed => seed.ProcessId > 0 && seed.ParentProcessId > 0 && seed.ProcessId != ancestorProcessId)
             .GroupBy(seed => seed.ParentProcessId)
             .ToDictionary(group => group.Key, group => group.ToArray());
-        var accepted = new List<int>();
+        var accepted = new Dictionary<int, ProcessInspectionRecord>();
         var queue = new Queue<ProcessInspectionSeed>();
         queue.Enqueue(rootSeed);
         while (queue.TryDequeue(out var parentSeed))
@@ -253,12 +279,12 @@ internal static class WindowsNativeProcessInspection
                     continue;
                 }
 
-                accepted.Add(childSeed.ProcessId);
+                accepted.TryAdd(childSeed.ProcessId, child);
                 queue.Enqueue(childSeed);
             }
         }
 
-        return accepted.Distinct().OrderBy(processId => processId).ToArray();
+        return ProcessInspectionResult.Success(accepted);
     }
 
     internal static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
