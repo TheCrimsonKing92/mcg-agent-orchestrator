@@ -6860,7 +6860,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 return null;
             }
 
-            if (!process.WaitForExit(5000))
+            if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return null;
