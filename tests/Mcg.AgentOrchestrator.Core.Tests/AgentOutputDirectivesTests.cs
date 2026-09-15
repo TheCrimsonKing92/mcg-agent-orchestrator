@@ -123,6 +123,11 @@ public sealed class AgentOutputDirectivesTests
             Assert.Contains("REVIEW DEFECT", requirements, StringComparison.Ordinal);
             Assert.Contains("demonstrably present in an earlier reviewed complete candidate diff", requirements, StringComparison.Ordinal);
             Assert.Contains("violated criterion index, normalized file path, line/region, then stable_id", requirements, StringComparison.Ordinal);
+            Assert.DoesNotContain("Use only `Core.Tests`", requirements, StringComparison.Ordinal);
+            Assert.Contains(
+                "Use any test project declared in `config/acceptance-manifest.json` by label, file name, or repo-relative path",
+                requirements,
+                StringComparison.Ordinal);
         }
         Assert.True(
             complex.Length <= SdlcRolePromptRequirements.ReviewerComplexRequirementsMaxChars,
