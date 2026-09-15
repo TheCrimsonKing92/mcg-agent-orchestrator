@@ -56,9 +56,21 @@
         "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
       },
       {
-        "name": "Worker dispatch fixtures",
-        "filter": "FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsModelSelectionEnvMutation|FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight|FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification|FullyQualifiedName~WorkerProcessJobsTests",
-        "estimatedSerialSeconds": 392.8,
+        "name": "Worker dispatch fixtures A",
+        "filter": "FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification",
+        "estimatedSerialSeconds": 663.9,
+        "exclusiveResourceKeys": [ "xunit:EnvMutation", "host:ProcessSpawning" ]
+      },
+      {
+        "name": "Worker dispatch fixtures B",
+        "filter": "FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight",
+        "estimatedSerialSeconds": 433.8,
+        "exclusiveResourceKeys": [ "xunit:EnvMutation", "host:ProcessSpawning" ]
+      },
+      {
+        "name": "Worker dispatch fixtures C",
+        "filter": "FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsModelSelectionEnvMutation|FullyQualifiedName~WorkerProcessJobsTests",
+        "estimatedSerialSeconds": 416.7,
         "exclusiveResourceKeys": [ "xunit:EnvMutation", "host:ProcessSpawning" ]
       },
       {
@@ -139,7 +151,7 @@
       {
         "name": "WorkerDispatch",
         "description": "Worker shell, sandbox, profile, and dispatch coverage.",
-        "laneNames": [ "Worker shell", "Worker sandbox planner", "Worker profiles", "Worker dispatch fixtures" ]
+        "laneNames": [ "Worker shell", "Worker sandbox planner", "Worker profiles", "Worker dispatch fixtures A", "Worker dispatch fixtures B", "Worker dispatch fixtures C" ]
       },
       {
         "name": "GoalWorktree",

@@ -82,4 +82,57 @@ public sealed class ProcessSpawningCollectionSplitTests
         Xunit.Assert.All(MovedClasses, type =>
             Xunit.Assert.Contains($"FullyQualifiedName~{type.Name}", parallelLane.Filter, StringComparison.Ordinal));
     }
+
+    [Xunit.Fact(DisplayName = "WorkerDispatchFixtures_lane_split_partitions_the_original_class_entries_exactly")]
+    public void WorkerDispatchFixturesLaneSplitPartitionsTheOriginalClassEntriesExactly()
+    {
+        var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
+        var shardEntries = WorkerDispatchFixtureLaneNames
+            .Select(name => (
+                Lane: name,
+                Entries: FilterClassEntries(Xunit.Assert.Single(settings.InfrastructureTestLanes
+                    .Where(lane => lane.Name == name)).Filter)))
+            .ToArray();
+
+        Xunit.Assert.DoesNotContain(
+            settings.InfrastructureTestLanes,
+            lane => lane.Name == "Worker dispatch fixtures");
+        Xunit.Assert.Equal(
+            OriginalWorkerDispatchFixtureClasses.Order(StringComparer.Ordinal),
+            shardEntries.SelectMany(shard => shard.Entries).Order(StringComparer.Ordinal));
+        foreach (var left in shardEntries)
+        {
+            foreach (var right in shardEntries.Where(other =>
+                         !string.Equals(other.Lane, left.Lane, StringComparison.Ordinal)))
+            {
+                var shared = left.Entries.Intersect(right.Entries, StringComparer.Ordinal).ToArray();
+                Xunit.Assert.True(
+                    shared.Length == 0,
+                    $"Lanes '{left.Lane}' and '{right.Lane}' both claim [{string.Join(", ", shared)}].");
+            }
+        }
+    }
+
+    private static readonly string[] WorkerDispatchFixtureLaneNames =
+    [
+        "Worker dispatch fixtures A",
+        "Worker dispatch fixtures B",
+        "Worker dispatch fixtures C"
+    ];
+
+    private static readonly string[] OriginalWorkerDispatchFixtureClasses =
+    [
+        "RealWorkerProcessGuardTests",
+        "WorkerDispatchTestsDispatchPreparation",
+        "WorkerDispatchTestsModelSelectionEnvMutation",
+        "WorkerDispatchTestsSandboxLowIntegrity",
+        "WorkerDispatchTestsSubscriptionPreflight",
+        "WorkerDispatchTestsWorkerResultClassification",
+        "WorkerProcessJobsTests"
+    ];
+
+    private static string[] FilterClassEntries(string filter) =>
+        filter.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(operand => operand["FullyQualifiedName~".Length..])
+            .ToArray();
 }
