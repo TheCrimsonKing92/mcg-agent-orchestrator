@@ -471,7 +471,8 @@ public sealed class ConductorDriverTests
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         string? executionDirectory = null,
-        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null)
+        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
+        ApparatusRedGate? apparatusRedGate = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -530,7 +531,8 @@ public sealed class ConductorDriverTests
             resolveAcceptanceHeads: resolveAcceptanceHeads,
             getLandingFileScopes: getLandingFileScopes,
             executionDirectory: executionDirectory,
-            reconcileExitedDispatch: reconcileExitedDispatch);
+            reconcileExitedDispatch: reconcileExitedDispatch,
+            apparatusRedGate: apparatusRedGate);
     }
 
     internal static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>

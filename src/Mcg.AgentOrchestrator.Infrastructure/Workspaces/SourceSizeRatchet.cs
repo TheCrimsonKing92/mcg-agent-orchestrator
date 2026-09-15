@@ -183,7 +183,10 @@ internal static class SourceSizeRatchet
             // the focused failure-state and dispatch-start invariant tests.
             // Lowered after extracting admission-refusal regressions and their fixture to
             // ConductorDriverTestsAdmissionRefusal; the original assertions and collection are preserved.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1508),
+            // Raised by two lines for goal 678fa66f: the shared fixture forwards only the apparatus-RED
+            // gate seam so the re-gate facts can inject a census store; the facts themselves live in
+            // ConductorDriverTestsApparatusRedRegate.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1510),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
