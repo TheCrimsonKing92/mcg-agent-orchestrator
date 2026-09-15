@@ -1357,10 +1357,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "advance":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            var advance = GoalManagementCommandService.AdvanceGoalAsync(context.Kernel, context.Agents, context.WorkerProfiles, context.Providers, context.Workspace, context.CurrentGoal)
+            var advance = new GoalAdvancementOperations()
+                .AdvanceGoalAsync(context.Kernel, context.Agents, context.Providers, context.Workspace, context.CurrentGoal)
                 .GetAwaiter()
                 .GetResult();
-            ConsoleViews.PrintAdvanceResult(advance);
+            ConsoleViews.PrintAdvanceResult(context.CurrentGoal, advance, context.Agents);
             return advance.Executed;
 
         case "advance-subscription":
@@ -1375,7 +1376,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 GetOptionalArgument(parts, "--confirm-subscription-advance", SubscriptionPromptCostGuard.CliConfirmationFlag));
             RecordPolicyAllowed(context, context.CurrentGoal, subscriptionAdvancePolicy, AutonomyAction.DispatchStart, "advance-subscription");
-            var subscriptionAdvance = GoalManagementCommandService.AdvanceGoalWithSubscriptions(
+            var subscriptionAdvance = new GoalAdvancementOperations().AdvanceGoalWithSubscriptions(
                 context.Kernel,
                 context.Agents,
                 context.WorkerProfiles,
@@ -1383,10 +1384,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag),
                 context.Providers);
-            ConsoleViews.PrintAdvanceResult(subscriptionAdvance);
-            if (subscriptionAdvance.Result is DispatchProcessStartFailureDto subscriptionAdvanceFailure)
+            ConsoleViews.PrintAdvanceResult(context.CurrentGoal, subscriptionAdvance, context.Agents);
+            if (subscriptionAdvance.Payload is GoalAdvanceDispatchStartFailed subscriptionAdvanceFailure)
             {
-                context.FailAfterCommit(subscriptionAdvanceFailure.Reason);
+                context.FailAfterCommit(subscriptionAdvanceFailure.Failure.Reason);
             }
 
             return subscriptionAdvance.Executed || subscriptionAdvance.StateChanged;
@@ -1405,7 +1406,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
             RecordPolicyAllowed(context, context.CurrentGoal, runGoalPolicy, AutonomyAction.DispatchStart, "run-goal");
             var runGoalResult = RunGoal(context, context.CurrentGoal, HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-            ConsoleViews.PrintRunGoalResult(context.CurrentGoal, runGoalResult);
+            ConsoleViews.PrintRunGoalResult(context.CurrentGoal, runGoalResult, context.Agents);
             if (runGoalResult.Failure is { } runGoalFailure)
             {
                 context.FailAfterCommit(runGoalFailure.Reason);
@@ -1728,7 +1729,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                     foreach (var loopGoal in loopKernel.Goals.ToArray())
                     {
-                        try { GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper); }
+                        try { new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, loopReaper); }
                         catch { /* per-goal isolation */ }
                     }
 
@@ -1781,7 +1782,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             taskId)),
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
                     {
-                        return GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
+                        return new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, loopReaper);
                     },
                     handoffOnMaxDuration: supervisedChild ? null : handoff,
                     conductEventLogWriter: conductEventLogWriter,
@@ -1880,7 +1881,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
                     RemoteGitMirror.TryStartBackgroundProcessing(wk, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
-                    if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g, watchReaper); } catch { } }
+                    if (g is not null) { try { new GoalDispatchOperations().RefreshDispatches(wk, g, watchReaper); } catch { } }
                 };
                 var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
@@ -1895,7 +1896,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             context.ReloadKernel(),
                             goalId,
                             taskId)),
-                    (wk, goal) => GoalManagementCommandService.RefreshDispatches(wk, goal, watchReaper),
+                    (wk, goal) => new GoalDispatchOperations().RefreshDispatches(wk, goal, watchReaper),
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
@@ -1931,7 +1932,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var refreshedGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             try
             {
-                GoalManagementCommandService.RefreshDispatches(context.Kernel, refreshedGoal);
+                new GoalDispatchOperations().RefreshDispatches(context.Kernel, refreshedGoal);
                 refreshedGoal = context.Kernel.GetGoal(refreshedGoal.Id);
             }
             catch

@@ -83,7 +83,7 @@ public static class RepositoryChangeClassifier
         "src/Mcg.AgentOrchestrator.App/Orchestration/SemanticAcceptance",
         "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals",
         "src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner",
-        "src/Mcg.AgentOrchestrator.App/Dashboard/Api/GoalManagementCommandService.Dispatches",
+        "src/Mcg.AgentOrchestrator.App/Application/",
         "src/Mcg.AgentOrchestrator.App/Providers/",
         "src/Mcg.AgentOrchestrator.App/SubscriptionPlanning/",
         "src/Mcg.AgentOrchestrator.App/Program.cs",

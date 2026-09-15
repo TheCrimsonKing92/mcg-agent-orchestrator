@@ -582,7 +582,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             void RunSuccessorTick() => new ConductorBatchLoop(
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                        GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                        new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -714,7 +714,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -761,7 +761,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -805,7 +805,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -849,7 +849,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -894,7 +894,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -939,7 +939,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -988,7 +988,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                     successor,
                     MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                     ConductorAutonomyPolicy.Conservative,
@@ -1054,7 +1054,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             var output = CaptureConsole(() => new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                     successor,
                     MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                     ConductorAutonomyPolicy.Conservative,
@@ -1101,7 +1101,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             var output = CaptureConsole(() => new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -1147,7 +1147,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             var output = CaptureConsole(() => new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -1189,7 +1189,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             var output = CaptureConsole(() => new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,
@@ -1222,7 +1222,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
             var output = CaptureConsole(() => new ConductorBatchLoop(
                 refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, runner)).Run(
+                    new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, runner)).Run(
                         successor,
                         MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
                         ConductorAutonomyPolicy.Conservative,

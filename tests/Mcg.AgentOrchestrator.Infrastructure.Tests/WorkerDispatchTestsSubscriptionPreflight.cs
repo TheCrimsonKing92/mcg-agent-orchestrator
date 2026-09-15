@@ -977,7 +977,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 
     var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
     var item = plan.Items.Single();
-    var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+    var parallelPlan = DispatchReadinessRules.BuildReadyTaskParallelPlan(goal, agents);
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -1041,7 +1041,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 
     var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
     var item = plan.Items.Single();
-    var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+    var parallelPlan = DispatchReadinessRules.BuildReadyTaskParallelPlan(goal, agents);
     var expiredRetryAfter = task.SubscriptionRetryAfter;
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,

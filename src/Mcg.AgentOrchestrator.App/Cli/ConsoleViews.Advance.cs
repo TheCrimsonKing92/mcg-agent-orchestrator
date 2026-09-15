@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Rendering;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -8,17 +8,25 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-public static void PrintAdvanceResult(AdvanceResultDto result)
+public static void PrintAdvanceResult(
+    Goal goal,
+    GoalAdvanceOutcome result,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     Console.WriteLine();
     Console.WriteLine(result.Executed
-        ? $"Advanced goal {result.GoalId[..8]}: {OutputTextPreview.CreateTimeline(result.Message).Text}"
-        : $"Cannot advance goal {result.GoalId[..8]}: {OutputTextPreview.CreateTimeline(result.Message).Text}");
+        ? $"Advanced goal {result.GoalId.Value[..8]}: {OutputTextPreview.CreateTimeline(result.Message).Text}"
+        : $"Cannot advance goal {result.GoalId.Value[..8]}: {OutputTextPreview.CreateTimeline(result.Message).Text}");
 
     if (result.Action is not null)
     {
         Console.WriteLine($"Next action: {result.Action.Kind} - {OutputTextPreview.CreateTimeline(result.Action.Message).Text}");
-        Console.WriteLine($"Command: {result.Action.SuggestedCommand}");
+        // The suggested command is a follow-up hint, so it is deliberately built from the live goal
+        // rather than from a pre-execution capture: after an executed step the operator wants the
+        // command for the state they are now in. The dispatch state on the dashboard response is a
+        // record of the action that ran, so that one is captured before execution instead - see
+        // GoalAdvanceOutcome.ActionDispatchState.
+        Console.WriteLine($"Command: {BuildSuggestedCommand(goal, result.Action, agents)}");
     }
 
     Console.WriteLine();
@@ -109,7 +117,10 @@ private static string BuildRunAssignedTaskCommand(
         : $"{command} {ApiPromptCostGuard.CliConfirmationFlag}";
 }
 
-public static void PrintRunGoalResult(Goal goal, RunGoalService.RunGoalResult result)
+public static void PrintRunGoalResult(
+    Goal goal,
+    RunGoalService.RunGoalResult result,
+    IReadOnlyList<AgentDefinition>? agents = null)
 {
     Console.WriteLine();
     var goalPrefix = goal.Id.Value[..8];
@@ -135,7 +146,7 @@ public static void PrintRunGoalResult(Goal goal, RunGoalService.RunGoalResult re
     if (result.BlockingAction is not null)
     {
         Console.WriteLine($"Blocked: {result.BlockingAction.Kind} - {OutputTextPreview.CreateTimeline(result.BlockingAction.Message).Text}");
-        Console.WriteLine($"Command: {result.BlockingAction.SuggestedCommand}");
+        Console.WriteLine($"Command: {BuildSuggestedCommand(goal, result.BlockingAction, agents)}");
     }
 
     if (result.StopEvidence is not null)

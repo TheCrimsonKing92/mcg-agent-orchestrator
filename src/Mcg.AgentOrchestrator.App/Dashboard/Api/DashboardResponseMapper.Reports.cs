@@ -324,7 +324,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         ToGoalBuildEnvironmentDto(goal),
         goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task, processSnapshot)).ToList(),
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
-        ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
+        ToParallelExecutionPlanDto(DispatchReadinessRules.BuildReadyTaskParallelPlan(goal, agents)),
         testImpact,
         operatorIntents?.Select(ToOperatorIntentDto).ToList(),
         ReadProgressiveReviewGlanceGuards(goal, executionDirectory))
@@ -720,10 +720,30 @@ public static NextActionDto ToNextActionDto(
     int priority,
     WorkerProfileCatalog workerProfiles,
     IReadOnlyList<AgentDefinition>? agents = null,
-    ProcessCommandLineSnapshot? processSnapshot = null)
+    ProcessCommandLineSnapshot? processSnapshot = null) =>
+    ToNextActionDtoWithEvaluatedState(
+        goal,
+        item,
+        priority,
+        workerProfiles,
+        agents,
+        DispatchRecoveryView.EvaluateState(goal, item, processSnapshot));
+
+/// <summary>
+/// Renders a next action against a dispatch state that was already evaluated by the caller. The
+/// advancement adapter uses this so the response describes the action as it stood before the
+/// application operation mutated the goal, which is where this DTO used to be built.
+/// </summary>
+internal static NextActionDto ToNextActionDtoWithEvaluatedState(
+    Goal goal,
+    NextActionItem item,
+    int priority,
+    WorkerProfileCatalog workerProfiles,
+    IReadOnlyList<AgentDefinition>? agents,
+    DispatchAuthoritativeState? evaluatedDispatchState)
 {
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
-    var dispatchState = ToDispatchAuthoritativeStateDto(DispatchRecoveryView.EvaluateState(goal, item, processSnapshot));
+    var dispatchState = ToDispatchAuthoritativeStateDto(evaluatedDispatchState);
     return new NextActionDto(
         priority,
         item.Kind,

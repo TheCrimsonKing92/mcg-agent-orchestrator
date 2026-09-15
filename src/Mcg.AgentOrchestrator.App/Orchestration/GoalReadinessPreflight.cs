@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -184,7 +183,7 @@ internal static class GoalReadinessPreflight
                     goal,
                     SubscriptionPlanBuilder.Build(goal, agents, profiles),
                     DateTimeOffset.UtcNow)
-                : GoalManagementCommandService.HasAssignedDispatchCandidates(goal)
+                : DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
                     ? (DispatchReadinessVerdict)new DispatchReadinessReady()
                     : new DispatchReadinessBlocked("No assigned dispatch candidates");
             findings.Add(readinessVerdict switch

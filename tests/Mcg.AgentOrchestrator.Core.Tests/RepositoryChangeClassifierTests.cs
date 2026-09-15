@@ -408,7 +408,7 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementGate.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/DispatchReadinessEvaluator.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorEntityResolver.cs")]
-    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Dashboard/Api/GoalManagementCommandService.Dispatches.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Application/GoalDispatchOperations.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/SubscriptionPlanning/SubscriptionPlanBuilder.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/VerificationPolicyCompiler.cs")]

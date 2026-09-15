@@ -198,7 +198,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         }
 
         var hasIncompleteEarlierStage = goal.Tasks.Any(candidate =>
-            GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+            DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
             candidate.Status != WorkTaskStatus.Completed);
         if (hasIncompleteEarlierStage)
         {
@@ -254,7 +254,7 @@ private static void PrintRecoverDispatchRecovery(TaskSpec task, Goal goal, Dispa
 
 private static bool HasRunningDownstreamTask(Goal goal, TaskSpec task) =>
     goal.Tasks.Any(candidate =>
-        GoalManagementCommandService.IsEarlierSdlcStageOf(task.RequiredRole, candidate.RequiredRole) &&
+        DispatchReadinessRules.IsEarlierSdlcStageOf(task.RequiredRole, candidate.RequiredRole) &&
         candidate.LastProcess is { IsRunning: true });
 
 // Deterministic verification from git ground truth: when a goal still has un-verified work tasks
