@@ -3023,12 +3023,42 @@ internal sealed partial class ConductorBatchLoop
                         policy,
                         onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
                         runGateInBackground: true);
-                    (exitOutcome, exitReason) = DescribeAcceptanceCohortExit(cohortRun);
+                    (exitOutcome, exitReason) = cohortRun.Fault is { } backgroundFault
+                        ? DescribeAcceptanceCohortGateFault(backgroundFault)
+                        : DescribeAcceptanceCohortExit(cohortRun);
+                }
+                catch (Exception cohortGateException)
+                {
+                    // The cohort gate is the conductor's own machinery. Nothing it throws is allowed to end
+                    // the tick: a transient fault is held and retried like the background attempt path does,
+                    // and anything else escalates both members on the spot. Either way it leaves as data.
+                    var synchronousFault = ConductorDriver.CreateCohortGateFault(
+                        cohortSelection,
+                        cohortGateException);
+                    cohortRun = new ConductorAcceptanceCohortRunResult(
+                        Receipt: null,
+                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                        $"outcome=gate-fault fingerprint={synchronousFault.PairFingerprint} " +
+                        $"fault={synchronousFault.FaultType} detail={SanitizeReason(synchronousFault.Message)}",
+                        synchronousFault);
+                    (exitOutcome, exitReason) = DescribeAcceptanceCohortGateFault(synchronousFault);
                 }
                 finally
                 {
                     EmitProgress(
                         $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}{exitReason}");
+                }
+                if (cohortRun.Fault is { } cohortGateFault)
+                {
+                    cohortRun = ResolveFaultedAcceptanceCohort(
+                        driver,
+                        policy,
+                        cohortSelection,
+                        cohortEligible,
+                        cohortRun,
+                        cohortGateFault,
+                        tick,
+                        changedGoalLines);
                 }
                 foreach (var pair in cohortRun.MemberResults)
                 {
@@ -3788,6 +3818,69 @@ internal sealed partial class ConductorBatchLoop
 
     private static void RecordParallelAcceptanceProgress(string line, List<string> changedGoalLines) =>
         changedGoalLines.Add(line);
+
+    // The infrastructure faults the background attempt path treats as transient (IsRetryableAcceptanceRun).
+    // A cohort gate that fails this way is retried on a later tick, not turned into a candidate verdict.
+    private static bool IsTransientCohortGateFault(Exception exception) =>
+        exception is AcceptanceInfrastructureDeferredException or
+            AcceptanceGateEngineException or
+            DotnetBuildSlotsBusyException or
+            BuildLockBlockedException or
+            OperationCanceledException;
+
+    private static (string Outcome, string Reason) DescribeAcceptanceCohortGateFault(
+        ConductorAcceptanceCohortGateFault fault) =>
+        ("gate-fault", $" fault={fault.FaultType} detail={SanitizeReason(fault.Message)}");
+
+    // Counts a transient fault against the member pair the way CompleteParallelAcceptanceRun counts a
+    // single candidate's transient failures: hold and retry below the cap, escalate both members at it.
+    // A fault outside that class is not retryable and escalates immediately rather than holding stale.
+    private static ConductorAcceptanceCohortRunResult ResolveFaultedAcceptanceCohort(
+        ConductorDriver driver,
+        ConductorAutonomyPolicy policy,
+        ConductorAcceptanceCohortSelection selection,
+        IReadOnlyList<Goal> cohortEligible,
+        ConductorAcceptanceCohortRunResult cohortRun,
+        ConductorAcceptanceCohortGateFault fault,
+        int tick,
+        List<string> changedGoalLines)
+    {
+        var transient = IsTransientCohortGateFault(fault.Fault);
+        var failureCount = transient ? driver.RecordCohortGateTransientFault(fault.MemberPairKey) : 0;
+        var escalate = !transient || failureCount >= ParallelAcceptanceTransientFailureCap;
+        var classification = transient ? "transient" : "non-transient";
+        var selectedIds = selection.Members.Select(member => member.GoalId).ToHashSet();
+        var memberResults = new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal);
+        foreach (var goal in cohortEligible.Where(goal => selectedIds.Contains(goal.Id)))
+        {
+            memberResults[goal.Id.Value] = escalate
+                ? EscalateParallelAcceptanceSafely(
+                    driver,
+                    goal,
+                    policy,
+                    $"acceptance cohort gate fault ({classification} " +
+                    $"{failureCount}/{ParallelAcceptanceTransientFailureCap}): " +
+                    $"{fault.FaultType}: {SanitizeReason(fault.Message)}")
+                : ParallelAcceptanceHeld(
+                    goal,
+                    policy,
+                    $"Acceptance cohort gate fault ({failureCount}/{ParallelAcceptanceTransientFailureCap}); " +
+                    $"retry on next conduct tick. {fault.FaultType}: {fault.Message}");
+            RecordParallelAcceptanceProgress(
+                $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result={(escalate ? "escalated" : "held")} " +
+                $"fault={fault.FaultType} classification={classification} " +
+                $"failures={failureCount}/{ParallelAcceptanceTransientFailureCap} " +
+                $"fingerprint={fault.PairFingerprint} detail={SanitizeReason(fault.Message)}",
+                changedGoalLines);
+        }
+
+        if (escalate)
+        {
+            driver.ClearCohortGateTransientFaults(fault.MemberPairKey);
+        }
+
+        return cohortRun with { MemberResults = memberResults };
+    }
 
     private static string? BuildDocumentationExclusionAdmissionRecord(
         ConductorParallelAcceptanceCandidate candidate,

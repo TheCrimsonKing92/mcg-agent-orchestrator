@@ -2364,6 +2364,109 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    // The 2026-09-15 chain: protected daemon 1000 ← supervisor 900 ← cmd 800 ← pwsh 700, where 700 had
+    // exited hours earlier. Windows keeps 700 in 800's parent-pid record, and had just handed pid 700 to
+    // a freshly spawned gate child.
+    private const int ProtectedDaemonPid = 1000;
+    private const int SupervisorPid = 900;
+    private const int LauncherShellPid = 800;
+    private const int RecycledShellPid = 700;
+
+    private static readonly DateTime ChainStartedAt = new(2026, 9, 15, 4, 50, 0, DateTimeKind.Utc);
+
+    private static readonly Dictionary<int, (int ParentProcessId, DateTime StartTimeUtc)> ProtectedChain = new()
+    {
+        [ProtectedDaemonPid] = (SupervisorPid, ChainStartedAt.AddMinutes(3)),
+        [SupervisorPid] = (LauncherShellPid, ChainStartedAt.AddMinutes(2)),
+        [LauncherShellPid] = (RecycledShellPid, ChainStartedAt),
+        // The live process now holding pid 700 started three hours after the child that still names it.
+        [RecycledShellPid] = (1, ChainStartedAt.AddHours(3))
+    };
+
+    private static WorkerProcessJobs.ProcessAncestryLookup AncestryLookup(
+        IReadOnlyDictionary<int, (int ParentProcessId, DateTime StartTimeUtc)> chain) =>
+        (int processId, out WorkerProcessJobs.ProcessAncestryFacts facts) =>
+        {
+            if (!chain.TryGetValue(processId, out var entry))
+            {
+                facts = default;
+                return false;
+            }
+
+            facts = new WorkerProcessJobs.ProcessAncestryFacts(entry.ParentProcessId, entry.StartTimeUtc);
+            return true;
+        };
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_refuses_recycled_dead_ancestor_pid")]
+    public void WorkerProcessJobsAncestryWalkRefusesRecycledDeadAncestorPid()
+    {
+        var lookup = AncestryLookup(ProtectedChain);
+
+        Assert.False(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            RecycledShellPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.False(WorkerProcessJobs.IsDescendantOf(ProtectedDaemonPid, RecycledShellPid, lookup));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_refuses_hop_through_an_exited_parent_pid")]
+    public void WorkerProcessJobsAncestryWalkRefusesHopThroughAnExitedParentPid()
+    {
+        // Same chain, except pid 700 names no process at all: the hop cannot be verified either way.
+        var chain = ProtectedChain
+            .Where(entry => entry.Key != RecycledShellPid)
+            .ToDictionary(entry => entry.Key, entry => entry.Value);
+
+        Assert.False(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            RecycledShellPid,
+            ProtectedDaemonPid,
+            AncestryLookup(chain)));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_still_refuses_protected_pid_and_live_ancestors")]
+    public void WorkerProcessJobsAncestryWalkStillRefusesProtectedPidAndLiveAncestors()
+    {
+        var lookup = AncestryLookup(ProtectedChain);
+
+        Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            ProtectedDaemonPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            SupervisorPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            LauncherShellPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.True(WorkerProcessJobs.IsDescendantOf(ProtectedDaemonPid, LauncherShellPid, lookup));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_accepts_a_real_live_ancestor")]
+    public void WorkerProcessJobsAncestryWalkAcceptsARealLiveAncestor()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var child = StartLongRunningShell();
+        try
+        {
+            // The default lookup reads the live Toolhelp32 parent plus Process.StartTime, so this
+            // process — a genuinely live ancestor of the child it just spawned — still classifies as one.
+            Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+                Environment.ProcessId,
+                child.Id,
+                WorkerProcessJobs.ReadProcessAncestryFactsForTests));
+        }
+        finally
+        {
+            try { child.Kill(entireProcessTree: true); } catch { }
+        }
+    }
+
     private static Process StartLongRunningShell()
     {
         var process = Process.Start(new ProcessStartInfo
