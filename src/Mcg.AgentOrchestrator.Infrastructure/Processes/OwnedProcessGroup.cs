@@ -860,8 +860,12 @@ internal sealed class OwnedProcessGroup : IDisposable
         /// <summary>
         /// Standard handles supplied to a single CreateProcessW call. Capture-file handles are owned:
         /// they are inheritable duplicates created immediately before the launch and closed immediately
-        /// after it, so no unrelated concurrent CreateProcess can inherit them. Pipe handles are borrowed
-        /// and their lifetime stays with the caller that created them.
+        /// after it, which narrows the window in which they are inheritable to that one call rather than
+        /// eliminating it. Any unrelated CreateProcessW that this process issues with bInheritHandle=TRUE
+        /// while the window is open still inherits them - that is exactly what the two-arm inheritance
+        /// control in PostLandingCanaryCaptureAvailabilityTests demonstrates, and why a retained capture
+        /// can be held by a process this group never launched. Pipe handles are borrowed and their
+        /// lifetime stays with the caller that created them.
         /// </summary>
         private readonly struct InheritableStandardHandles : IDisposable
         {

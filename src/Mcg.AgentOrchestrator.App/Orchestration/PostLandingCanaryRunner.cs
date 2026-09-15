@@ -546,8 +546,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var processId = process.Id;
         var processExitTask = process.WaitForExitAsync(CancellationToken.None);
         WorkerProcessJobReleaseEvidence? releaseEvidence = null;
-        Task<IReadOnlyList<ProcessInspectionRecord>>? descendantObservationTask = null;
-        IReadOnlyList<ProcessInspectionRecord> observedDescendantIdentities = [];
+        Task<IReadOnlyList<ProcessInspectionRecord>?>? descendantObservationTask = null;
+        IReadOnlyList<ProcessInspectionRecord>? observedDescendantIdentities = [];
         var exitCode = 0;
         try
         {
@@ -689,16 +689,23 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             ? "unknown"
             : observation.LengthWasStable ? $"stable({first})" : $"grew({first}->{last})";
 
-    private static async Task<IReadOnlyList<ProcessInspectionRecord>> ObserveIdentityBoundDescendantsUntilExitAsync(
+    /// <summary>
+    /// Observes the launched process's identity-bound descendants until it exits. Returns null when any
+    /// poll failed to observe: an unreadable poll leaves an unknown descendant set, and an unknown set is
+    /// not an empty one. Swallowing the failure and returning no descendants would let
+    /// <see cref="EnsureRetainedCaptureReadable"/> read "nothing survives" out of "nothing was seen" and
+    /// call ownership proven, so the failure is surfaced instead and the run is reported incomplete.
+    /// </summary>
+    private static async Task<IReadOnlyList<ProcessInspectionRecord>?> ObserveIdentityBoundDescendantsUntilExitAsync(
         int processId,
         Task processExitTask,
         Action<IReadOnlyList<int>>? descendantObservation)
     {
         var observed = new Dictionary<int, ProcessInspectionRecord>();
+        var observationFailed = false;
         var polls = 0;
         while (!processExitTask.IsCompleted)
         {
-            // Diagnostic-only data: a failure here must never fail an otherwise-clean canary run.
             try
             {
                 var inspection = WindowsNativeProcessInspection.ReadIdentityBoundDescendants(processId);
@@ -711,9 +718,16 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                         observed.TryAdd(record.ProcessId, record);
                     }
                 }
+                else
+                {
+                    observationFailed = true;
+                    Console.Error.WriteLine(
+                        $"canary-descendant-observation-failed: pid={processId}; failure={inspection.Failure}");
+                }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                observationFailed = true;
                 Console.Error.WriteLine(
                     $"canary-descendant-observation-failed: pid={processId}; error={exception.GetType().Name}");
             }
@@ -726,7 +740,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
 
         await processExitTask.ConfigureAwait(false);
-        return observed.Values.ToArray();
+        return observationFailed ? null : observed.Values.ToArray();
     }
 
     /// <summary>
@@ -740,9 +754,19 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         polls < 40 ? TimeSpan.FromMilliseconds(250) :
         TimeSpan.FromMilliseconds(1000);
 
+    /// <summary>
+    /// Re-checks each observed descendant identity after exit. Null in means the observation itself
+    /// failed, and null out means the surviving set is unknown, which
+    /// <see cref="EnsureRetainedCaptureReadable"/> treats as ownership unproven.
+    /// </summary>
     private static IReadOnlyList<int>? ListStillLiveIdentityBoundProcessIds(
-        IReadOnlyList<ProcessInspectionRecord> expectedIdentities)
+        IReadOnlyList<ProcessInspectionRecord>? expectedIdentities)
     {
+        if (expectedIdentities is null)
+        {
+            return null;
+        }
+
         if (expectedIdentities.Count == 0)
         {
             return [];

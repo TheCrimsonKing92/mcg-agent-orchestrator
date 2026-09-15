@@ -74,6 +74,32 @@ public sealed class PostLandingCanaryCaptureAvailabilityTests
         Assert.Equal("true", ReadKey(unconfirmedException.Message, "exclusive-open"));
         Assert.Equal("false", ReadKey(unconfirmedException.Message, "job-exit-confirmed"));
         Assert.Equal("none", ReadKey(unconfirmedException.Message, "capture-holders"));
+
+        // A failed descendant observation is an UNKNOWN surviving set, not an empty one. Every other
+        // release fact here is proven, so this arm isolates the one difference: null surviving ids must
+        // still be incomplete, because "nothing was seen" is not "nothing survives".
+        var fullyReleased = new WorkerProcessJobReleaseEvidence(
+            RegistrationFound: true,
+            TerminationRequested: true,
+            JobExitConfirmed: true);
+        var unobserved = Assert.Throws<InvalidOperationException>(() =>
+            PostLandingCanaryRunner.EnsureRetainedCaptureReadable(
+                "fixture.err.log",
+                readableButUnconfirmed,
+                fullyReleased,
+                null,
+                _ => new FileHandleHolderObservation([], null)));
+        Assert.Equal("true", ReadKey(unobserved.Message, "exclusive-open"));
+        Assert.Equal("true", ReadKey(unobserved.Message, "job-exit-confirmed"));
+        Assert.Equal("observation-failed", ReadKey(unobserved.Message, "surviving-descendants"));
+
+        // Control: the same call with an observed-empty set is the only shape that is allowed to pass.
+        PostLandingCanaryRunner.EnsureRetainedCaptureReadable(
+            "fixture.err.log",
+            readableButUnconfirmed,
+            fullyReleased,
+            [],
+            _ => new FileHandleHolderObservation([], null));
     }
 
     // Controlled comparison for the acceptance-observed signature
