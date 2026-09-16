@@ -207,7 +207,8 @@ internal static class SourceSizeRatchet
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
             // Raised for goal 52590d3e: the finding-evidence owner now carries both recorded incident shapes,
             // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2713),
+            // Goal aab291fd extracted manifest-declared project resolution controls to their own partial.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1299),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
