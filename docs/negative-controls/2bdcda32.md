@@ -99,7 +99,7 @@ which RED 3 removes.
 
 ## RED 3 — driver's typed background fault removed (with the RED 2 catch still disabled)
 
-Mutation in `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs`, inside
+Mutation in `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorAcceptanceCohorts.cs`, inside
 `ObserveCohortGateCompletion`, restoring the pre-fix rethrow of the background completion. The RED 2
 mutation is left in place, so this is exactly the pre-fix production shape:
 
