@@ -2640,11 +2640,13 @@ public sealed class DashboardRenderingTests
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         executionDirectory: workspace.ExecutionDirectory);
     var second = DashboardResponseMapper.ToGoalWorkSummaryDto(
         kernel,
         goal,
         WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
         executionDirectory: workspace.ExecutionDirectory);
     var html = DashboardRenderer.Render(kernel, RenderOptions(
         EnableOperatorControls: true,
