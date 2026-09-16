@@ -700,20 +700,12 @@ internal sealed partial class ConductorDriver
             {
                 try
                 {
-                    checkAttributions = CleanTestBaseline.Attribute(
+                    (baselineReceipt, checkAttributions) = AttributeAcceptanceFailureWithExecutedBaseline(
                         baselineReceipt,
                         failedChecks,
                         baselineEvidence,
                         goal.Id,
                         mainHeadSha ?? string.Empty,
-                        verification.Checks);
-                    // Replace the pre-gate candidate observation with the executed merge-base verdict
-                    // whenever the authoritative producer supplied one, so the retained attestation and
-                    // the emitted brief report proof rather than correlation.
-                    baselineReceipt = CleanTestBaseline.WithExecutedBaselineAttestation(
-                        baselineReceipt,
-                        failedChecks,
-                        goal.Id,
                         verification.Checks);
                 }
                 catch
@@ -4503,52 +4495,6 @@ internal sealed partial class ConductorDriver
         string.IsNullOrWhiteSpace(recorded) ||
         string.IsNullOrWhiteSpace(current) ||
         recorded.Equals(current, StringComparison.OrdinalIgnoreCase);
-
-    internal static void ReconcileCleanBaselineAttention(
-        ICollaborationItemStore store,
-        Goal goal,
-        string? mainHeadSha,
-        CleanTestBaselineReceipt receipt)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(goal);
-        ArgumentNullException.ThrowIfNull(receipt);
-
-        var currentCorrelationKey =
-            CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
-        var activeCorrelationKey = receipt.Attestation is
-            CleanBaselineAttestation.AttestedRed or CleanBaselineAttestation.ObservedRedCorrelation
-            ? currentCorrelationKey
-            : null;
-        if (activeCorrelationKey is not null)
-        {
-            store.RaiseAsync(
-                CollaborationItemType.Decision,
-                goal.Id.Value,
-                CleanTestBaseline.FormatAttentionSubject(receipt, FormatShortSha(mainHeadSha)),
-                CleanTestBaseline.FormatJournalDetail(receipt),
-                activeCorrelationKey,
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-
-        var staleItems = store.ListAsync(cancellationToken: CancellationToken.None)
-            .GetAwaiter()
-            .GetResult()
-            .Where(item =>
-                item.CorrelationKey is { Length: > 0 } key &&
-                key.StartsWith(CleanBaselineRedCorrelationKeyPrefix, StringComparison.Ordinal) &&
-                !string.Equals(key, activeCorrelationKey, StringComparison.Ordinal) &&
-                (receipt.Attestation != CleanBaselineAttestation.Unattested ||
-                 !string.Equals(key, currentCorrelationKey, StringComparison.Ordinal)))
-            .ToArray();
-        foreach (var item in staleItems)
-        {
-            store.TryResolveAsync(
-                item.CorrelationKey!,
-                $"clean-test failure correlation no longer active at main {FormatShortSha(mainHeadSha)}",
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-    }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
         ConductorParallelAcceptanceCandidate candidate,
