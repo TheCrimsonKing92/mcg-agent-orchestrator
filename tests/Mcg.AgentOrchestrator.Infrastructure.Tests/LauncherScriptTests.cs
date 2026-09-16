@@ -820,7 +820,7 @@ public sealed class LauncherScriptTests
             "CoNdUcT",
             "--LoOp");
 
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
         var errorLines = result.Stderr.Split(
             JsonLineSeparators,
@@ -829,16 +829,20 @@ public sealed class LauncherScriptTests
         Assert.True(errorLines[0].Length < 1024, errorLines[0]);
         using var document = JsonDocument.Parse(errorLines[0]);
         var properties = document.RootElement.EnumerateObject().ToArray();
-        Assert.Equal(2, properties.Length);
-        Assert.Equal("reason", properties[0].Name);
+        Assert.Equal(4, properties.Length);
+        Assert.Equal("kind", properties[0].Name);
+        Assert.Equal("stop-authority-refused", properties[0].Value.GetString());
+        Assert.Equal("reason", properties[1].Name);
         Assert.Equal(
             $"Conduct loop launch refused because active stop authority exists at '{stopFilePath}'. " +
             "Deliberately remove the stop file before retrying.",
-            properties[0].Value.GetString());
-        Assert.Equal("args", properties[1].Name);
+            properties[1].Value.GetString());
+        Assert.Equal("stopFilePath", properties[2].Name);
+        Assert.Equal(stopFilePath, properties[2].Value.GetString());
+        Assert.Equal("args", properties[3].Name);
         Assert.Equal(
             new[] { launcherPath, "CoNdUcT", "--LoOp" },
-            properties[1].Value.EnumerateArray().Select(argument => argument.GetString()).ToArray());
+            properties[3].Value.EnumerateArray().Select(argument => argument.GetString()).ToArray());
 
         Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
         Assert.False(File.Exists(sandbox.InvocationPath), "The child process host must not be invoked.");
@@ -866,8 +870,9 @@ public sealed class LauncherScriptTests
             "conduct",
             "--loop");
 
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, result.ExitCode);
         using var document = JsonDocument.Parse(result.Stderr);
+        Assert.Equal("stop-authority-refused", document.RootElement.GetProperty("kind").GetString());
         Assert.Contains(
             stopFilePath,
             document.RootElement.GetProperty("reason").GetString(),
@@ -928,8 +933,9 @@ public sealed class LauncherScriptTests
             "conduct",
             "--loop");
 
-        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(2, result.ExitCode);
         using var document = JsonDocument.Parse(result.Stderr);
+        Assert.Equal("stop-authority-refused", document.RootElement.GetProperty("kind").GetString());
         Assert.Contains(
             stopFilePath,
             document.RootElement.GetProperty("reason").GetString(),

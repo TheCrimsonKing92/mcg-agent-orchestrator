@@ -1,3 +1,8 @@
+<#
+Exit codes:
+- 1: generic launch failure
+- 2: conduct-loop launch refused because stop authority is active
+#>
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Name = "command",
@@ -159,11 +164,20 @@ function Write-LaunchFailure {
         [string]$Reason,
         [string]$StdoutPath,
         [string]$StderrPath,
-        [string[]]$LaunchArgs
+        [string[]]$LaunchArgs,
+        [string]$Kind,
+        [string]$StopFilePath
     )
 
-    $errorPayload = [ordered]@{
-        reason = $Reason
+    $errorPayload = [ordered]@{}
+    if (-not [string]::IsNullOrWhiteSpace($Kind)) {
+        $errorPayload.kind = $Kind
+    }
+
+    $errorPayload.reason = $Reason
+
+    if (-not [string]::IsNullOrWhiteSpace($StopFilePath)) {
+        $errorPayload.stopFilePath = $StopFilePath
     }
 
     if (-not [string]::IsNullOrWhiteSpace($StdoutPath)) {
@@ -186,6 +200,9 @@ $launcher = Join-Path $repoRoot "mcg-orchestrator.cmd"
 $stdoutPath = $null
 $stderrPath = $null
 $processArguments = @()
+$failureKind = $null
+$failureStopFilePath = $null
+$exitCode = 1
 
 try {
     $Arguments = @($Arguments | ForEach-Object { [string]$_ })
@@ -212,6 +229,9 @@ try {
         }
         $stopFilePath = [System.IO.Path]::GetFullPath((Join-Path $effectiveRepositoryRoot ".conduct-stop"))
         if (Test-Path -LiteralPath $stopFilePath -ErrorAction Stop) {
+            $failureKind = "stop-authority-refused"
+            $failureStopFilePath = $stopFilePath
+            $exitCode = 2
             throw "Conduct loop launch refused because active stop authority exists at '$stopFilePath'. Deliberately remove the stop file before retrying."
         }
     }
@@ -307,6 +327,8 @@ catch {
         -Reason $_.Exception.Message `
         -StdoutPath $stdoutPath `
         -StderrPath $stderrPath `
-        -LaunchArgs $processArguments
-    exit 1
+        -LaunchArgs $processArguments `
+        -Kind $failureKind `
+        -StopFilePath $failureStopFilePath
+    exit $exitCode
 }
