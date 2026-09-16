@@ -47,10 +47,7 @@ internal static class SourceSizeRatchet
             // gate-wide attribution batching behavior; 9688 is the measured combined post-rebase size.
             // Raised for goal 6f9ddf54: the verifier must carry the job-owned command-child identity rather
             // than the Windows shell wrapper identity into acceptance evidence used for root correlation.
-            // Raised for goal 12d05095: bounded publication must stay in the capped-capture owner,
-            // where byte retention, file sharing, cancellation teardown, and heartbeat-visible output
-            // share one lifecycle; extracting it would split that invariant across collaborators.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9742),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9710),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
