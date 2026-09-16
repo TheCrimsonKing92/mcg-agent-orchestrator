@@ -4647,7 +4647,7 @@ internal sealed partial class ConductorBatchLoop
             return false;
         }
 
-        if (kernel.GetPendingHumanInput(goal.Id).Count > 0)
+        if (kernel.GetPendingBlockingHumanInput(goal.Id).Count > 0)
         {
             return false;
         }

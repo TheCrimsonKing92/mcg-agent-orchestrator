@@ -70,7 +70,10 @@ public enum HumanWaitKind
     Other,
     // Prerequisite evidence a Planner could not reach, answered by the operator and required by
     // later same-goal roles. Serialized as a string, so appending here is persistence-safe.
-    PlannerPrerequisiteEvidence
+    PlannerPrerequisiteEvidence,
+    // Evidence that can only be produced after a candidate exists. It remains an acceptance
+    // obligation but must not pause planning or implementation.
+    ProspectiveAcceptanceEvidence
 }
 
 public enum ProgressKind

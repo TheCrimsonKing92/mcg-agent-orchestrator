@@ -19,7 +19,10 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (_humanInputRequests.Values.Any(candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted))
+        if (_humanInputRequests.Values.Any(candidate =>
+                candidate.GoalId == goal.Id &&
+                !candidate.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
         {
             goal.SetStatus(GoalStatus.WaitingForHuman);
             return;

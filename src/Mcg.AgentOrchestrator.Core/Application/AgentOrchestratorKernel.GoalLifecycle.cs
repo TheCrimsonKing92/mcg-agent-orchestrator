@@ -1558,7 +1558,7 @@ public sealed partial class AgentOrchestratorKernel
                     ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
                 }
 
-                HoldTaskForExistingHumanInput(goal, taskId);
+                HoldTaskForExistingHumanInput(goal, taskId, open.Kind);
                 if (recordDuplicateSuppression)
                 {
                     open.IncrementSuppressionCount();
@@ -1633,7 +1633,7 @@ public sealed partial class AgentOrchestratorKernel
                 blockerFingerprint);
             _humanInputRequests.Add(request.Id, request);
 
-            HoldTaskForExistingHumanInput(goal, taskId);
+            HoldTaskForExistingHumanInput(goal, taskId, request.Kind);
             Append(goal, taskId, ProgressKind.HumanInputRequested, question);
             AppendContradictoryRecordAdvisoryIfNeeded(goal, request);
             return new HumanInputRequestCreationResult(request, WasReused: false, WasSuppressedByAnswer: false);
@@ -1691,8 +1691,13 @@ public sealed partial class AgentOrchestratorKernel
             $"alreadyAnsweredRequest={answeredRequest?.Id.Value ?? "none"}");
     }
 
-    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId)
+    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId, HumanWaitKind kind)
     {
+        if (!HumanWaitPolicyDefaults.BlocksActiveWork(kind))
+        {
+            return;
+        }
+
         if (taskId is not null)
         {
             goal.FindTask(taskId).SetStatus(WorkTaskStatus.WaitingForHuman);
@@ -1833,7 +1838,7 @@ public sealed partial class AgentOrchestratorKernel
                     goal.AuthoritativeBrief.Version);
             }
 
-            if (request.TaskId is not null)
+            if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             {
                 var task = goal.FindTask(request.TaskId);
                 if (!_humanInputRequests.Values.Any(candidate =>
@@ -2395,6 +2400,13 @@ public sealed partial class AgentOrchestratorKernel
         return _humanInputRequests.Values
             .Where(request => request.GoalId == goalId && !request.IsCompleted)
             .OrderBy(request => request.RequestedAt)
+            .ToList();
+    }
+
+    public IReadOnlyList<HumanInputRequest> GetPendingBlockingHumanInput(GoalId goalId)
+    {
+        return GetPendingHumanInput(goalId)
+            .Where(request => HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             .ToList();
     }
 

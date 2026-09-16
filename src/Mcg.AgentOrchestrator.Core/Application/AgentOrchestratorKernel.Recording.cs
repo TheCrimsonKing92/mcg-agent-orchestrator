@@ -172,7 +172,8 @@ public sealed partial class AgentOrchestratorKernel
                     completedRound,
                     verification.StandardOutputPath);
             }
-            if (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer)
+            if (HumanWaitPolicyDefaults.BlocksActiveWork(requestResult.Request.Kind) &&
+                (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer))
             {
                 return;
             }
