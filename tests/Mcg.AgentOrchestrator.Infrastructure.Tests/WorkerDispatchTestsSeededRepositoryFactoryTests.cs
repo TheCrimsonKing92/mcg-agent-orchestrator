@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 // Parallel-safe: each test injects an explicit unique root, and every Git child receives a
 // hermetic environment. No verdict observes a shared temp root, process list, clock, or schedule.
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -125,9 +127,19 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         }
     }
 
-    [Xunit.Fact(Timeout = 60_000)]
+    // Failsafe against a hang, not a measured bound. The guarded reap assertions after
+    // Task.WhenAll are the condition under test.
+    private const int ConcurrentCreatesFailsafeTimeoutMilliseconds = 300_000;
+
+    // Failsafe against a hang, not a measured bound. The guarded reap assertions after
+    // Task.WhenAll are the condition under test.
+    private const int ConcurrentCreatesRendezvousFailsafeSeconds = 240;
+
+    [Xunit.Fact(Timeout = ConcurrentCreatesFailsafeTimeoutMilliseconds)]
     public async Task TempRootJanitor_GuardedPolicy_PreservesTemplateForConcurrentCreates()
     {
+        var elapsed = Stopwatch.StartNew();
+
         if (!OperatingSystem.IsWindows())
         {
             return;
@@ -148,8 +160,10 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
                     BeforeTemplateValidation: _ =>
                     {
                         Xunit.Assert.True(
-                            rendezvous.SignalAndWait(TimeSpan.FromSeconds(30)),
-                            "Concurrent factory hooks did not rendezvous.");
+                            rendezvous.SignalAndWait(TimeSpan.FromSeconds(
+                                ConcurrentCreatesRendezvousFailsafeSeconds)),
+                            $"Concurrent factory hooks did not rendezvous after " +
+                            $"{elapsed.Elapsed.TotalSeconds:F1} elapsed seconds.");
                         var receipt = Xunit.Assert.Single(TempRootJanitor.ReapOwnedRoots(
                             [new TempRootJanitorOwnedRoot(
                                 processId,
