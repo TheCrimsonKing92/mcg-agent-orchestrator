@@ -285,6 +285,7 @@ public sealed class AgentOutputDirectivesTests
         Assert.False(parsed.IsMalformed, parsed.Diagnostic);
         Assert.NotNull(parsed.Directive);
         Assert.Equal("ProspectiveAcceptanceEvidence", parsed.Directive.Kind.ToString());
+        Assert.Equal("operator", parsed.Directive.EvidenceOwner);
         Assert.Contains("Owner: operator", parsed.Directive.Question, StringComparison.Ordinal);
     }
 
@@ -304,6 +305,7 @@ public sealed class AgentOutputDirectivesTests
     [Xunit.Theory]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"retrievable\",\"needed\":\"stdout\",\"reason\":\"inaccessible\"}")]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"never-recorded\",\"store\":\"somewhere\",\"needed\":\"stdout\",\"reason\":\"absent\"}")]
+    [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"never-recorded\",\"store\":\"\",\"needed\":\"stdout\",\"reason\":\"absent\"}")]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"post-implementation\",\"needed\":\"live observation\",\"reason\":\"candidate required\"}")]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"post-implementation\",\"owner\":\"operator\",\"store\":\"somewhere\",\"needed\":\"live observation\",\"reason\":\"candidate required\"}")]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: not-json")]

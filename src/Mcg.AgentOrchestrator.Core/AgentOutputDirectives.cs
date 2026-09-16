@@ -6,7 +6,8 @@ public sealed record HumanInputDirective(
     string Question,
     string QuestionFingerprint,
     string? BlockerFingerprint = null,
-    HumanWaitKind Kind = HumanWaitKind.SpecClarification);
+    HumanWaitKind Kind = HumanWaitKind.SpecClarification,
+    string? EvidenceOwner = null);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {
@@ -187,6 +188,7 @@ public static class AgentOutputDirectives
             var hasStore = TryGetRequiredString(root, "store", out var store);
             string availabilityText;
             var kind = HumanWaitKind.PlannerPrerequisiteEvidence;
+            string? evidenceOwner = null;
             if (availability.Equals("retrievable", StringComparison.OrdinalIgnoreCase))
             {
                 if (!hasStore)
@@ -198,7 +200,7 @@ public static class AgentOutputDirectives
             }
             else if (availability.Equals("never-recorded", StringComparison.OrdinalIgnoreCase))
             {
-                if (hasStore)
+                if (root.TryGetProperty("store", out _))
                 {
                     return MalformedEvidenceRequest("never-recorded evidence must not name a store");
                 }
@@ -219,6 +221,7 @@ public static class AgentOutputDirectives
 
                 availabilityText = $"post-implementation; produced after the candidate exists. Owner: {owner}";
                 kind = HumanWaitKind.ProspectiveAcceptanceEvidence;
+                evidenceOwner = owner;
             }
             else
             {
@@ -231,7 +234,7 @@ public static class AgentOutputDirectives
                 $"Availability: {availabilityText}. Reason: {reason}";
             var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(criterionIndex, evidenceKey);
             return new HumanInputDirectiveParseResult(
-                new HumanInputDirective(question, fingerprint, fingerprint, kind),
+                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner),
                 null);
         }
         catch (JsonException error)

@@ -90,7 +90,8 @@ public sealed record TaskVerificationRecord(
     bool? AssignedScopeComplete = null,
     // Carried alongside the fingerprints because the directive text is stripped from the recorded
     // stdout snapshot, so kernel reparse cannot recover the classification on its own.
-    HumanWaitKind? HumanInputKind = null)
+    HumanWaitKind? HumanInputKind = null,
+    string? HumanInputEvidenceOwner = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -150,6 +151,7 @@ public sealed record TaskVerificationRecord(
             HumanInputQuestionFingerprint = preferred.HumanInputQuestionFingerprint ?? HumanInputQuestionFingerprint,
             HumanInputBlockerFingerprint = preferred.HumanInputBlockerFingerprint ?? HumanInputBlockerFingerprint,
             HumanInputKind = preferred.HumanInputKind ?? HumanInputKind,
+            HumanInputEvidenceOwner = preferred.HumanInputEvidenceOwner ?? HumanInputEvidenceOwner,
             ObservedRootExitCode = preferred.ObservedRootExitCode ?? ObservedRootExitCode,
             ReconciledToSuccess = ReconciledToSuccess || preferred.ReconciledToSuccess,
             ReconciliationOriginRule = preferred.ReconciliationOriginRule ?? ReconciliationOriginRule,

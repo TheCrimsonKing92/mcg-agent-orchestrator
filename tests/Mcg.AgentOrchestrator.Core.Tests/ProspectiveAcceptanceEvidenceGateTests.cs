@@ -37,6 +37,7 @@ public sealed class ProspectiveAcceptanceEvidenceGateTests
         var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
         Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
         Assert.Equal(HumanWaitKind.ProspectiveAcceptanceEvidence, request.Kind);
+        Assert.Equal("operator", request.EvidenceOwner);
         Assert.Contains("Owner: operator", request.Question, StringComparison.Ordinal);
         Assert.False(request.IsAutoDefaultable);
         Assert.False(request.IsDismissible);
@@ -52,6 +53,7 @@ public sealed class ProspectiveAcceptanceEvidenceGateTests
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
         var restoredRequest = Assert.Single(restored.GetPendingHumanInput(goal.Id));
         Assert.Equal(HumanWaitKind.ProspectiveAcceptanceEvidence, restoredRequest.Kind);
+        Assert.Equal("operator", restoredRequest.EvidenceOwner);
         Assert.Equal(
             HumanInputRequest.BuildPlannerEvidenceFingerprint(1, "candidate-observation"),
             restoredRequest.QuestionFingerprint);
@@ -129,6 +131,112 @@ public sealed class ProspectiveAcceptanceEvidenceGateTests
         Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
         Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
         Assert.Single(kernel.GetPendingBlockingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
+    public void PassingVerificationCompletesTaskWithOpenProspectiveEvidence()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement the candidate.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Verify without satisfying future evidence.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Observe the implemented candidate.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence).Request;
+
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("focused test", "C:\\repo", 0, "passed", string.Empty, clock.UtcNow));
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.False(request.IsCompleted);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+    }
+
+    [Xunit.Fact]
+    public void AnsweringBlockingRequestRestoresTaskWhenProspectiveEvidenceRemainsOpen()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Plan the candidate.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep future evidence while resolving design input.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var prospective = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Observe the implemented candidate.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence,
+            questionFingerprint: "criterion-1-evidence").Request;
+        var prerequisite = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Which persistence contract should the plan use?",
+            HumanWaitKind.PlannerPrerequisiteEvidence,
+            questionFingerprint: "criterion-1-evidence").Request;
+
+        kernel.SubmitHumanInput(prerequisite.Id, "Use SQLite.");
+
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.False(prospective.IsCompleted);
+        Assert.Equal(GoalStatus.Active, goal.Status);
+    }
+
+    [Xunit.Fact]
+    public void VerificationReconciliationIgnoresOpenProspectiveEvidence()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement the candidate.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Reconcile verified work before future observation.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Observe the implemented candidate.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implemented.");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("focused test", "C:\\repo", 0, "passed", string.Empty, clock.UtcNow));
+        var snapshot = kernel.ExportSnapshot();
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            snapshot with
+            {
+                Goals = [Assert.Single(snapshot.Goals) with { Status = GoalStatus.Completed }]
+            },
+            clock);
+
+        var reconciled = restored.ReconcileGoalVerificationStatus(goal.Id, "All task gates passed.");
+
+        Assert.True(reconciled);
+        Assert.Equal(GoalStatus.Verified, restored.GetGoal(goal.Id).Status);
+        Assert.Single(restored.GetPendingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
+    public void ParkingGoalDoesNotSatisfyProspectiveEvidence()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement the candidate.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve future evidence while parked.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Observe the implemented candidate.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence).Request;
+
+        kernel.ParkGoal(goal.Id, "Pause implementation.");
+
+        Assert.False(request.IsCompleted);
+        Assert.Null(request.Answer);
+        Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Equal(GoalStatus.Parked, goal.Status);
     }
 
     private static string PlannerResult(
