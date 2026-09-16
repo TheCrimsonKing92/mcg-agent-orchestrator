@@ -393,7 +393,7 @@ public sealed class GoalLifecycleTests
     AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "Challenge generic summaries");
     AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "Ignore generated bin/obj output");
     AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "evidence_request:{selections:");
-    AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "Dashboard.Tests");
+    AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "config/acceptance-manifest.json");
     AssertBriefContains(kernel, goal, AgentRole.Tester, "Tester Requirements", "evidence_request:{selections:");
 }
     [Xunit.Fact(DisplayName = "SetTaskVerificationPlan_persists_plan_and_timeline_event")]
