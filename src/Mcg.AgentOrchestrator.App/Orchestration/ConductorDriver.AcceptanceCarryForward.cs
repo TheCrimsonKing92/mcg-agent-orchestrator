@@ -27,6 +27,22 @@ internal sealed partial class ConductorDriver
             out rebaseStatus);
     }
 
+    private ConductorAdvanceResult CompleteParallelLandingAfterPreMergeRebase(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        AcceptanceVerificationSummary acceptance)
+    {
+        var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy, out var rebaseStatus);
+        if (rebase is not null)
+        {
+            return rebase;
+        }
+
+        return rebaseStatus == GoalWorktreeRebaseStatus.Rebased
+            ? CompleteLandingAfterRacingLandingCarryForward(candidate, policy, acceptance)
+            : CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+    }
+
     private ConductorAdvanceResult CompleteLandingAfterRacingLandingCarryForward(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
