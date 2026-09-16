@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -401,7 +400,7 @@ internal sealed partial class ConductorDriver
             SubscriptionStartResult result;
             try
             {
-                result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+                result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
                     kernel,
                     workspace,
                     goal,
@@ -479,7 +478,7 @@ internal sealed partial class ConductorDriver
             ProcessBatchExecutionResult result;
             try
             {
-                result = GoalManagementCommandService.StartDispatches(
+                result = new GoalDispatchOperations().StartDispatches(
                     kernel,
                     workspace,
                     goal,
@@ -1394,7 +1393,7 @@ internal sealed partial class ConductorDriver
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
         _evaluateReadiness = evaluateReadiness ?? (goal =>
-            GoalManagementCommandService.HasAssignedDispatchCandidates(goal)
+            DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
@@ -5683,7 +5682,7 @@ internal sealed partial class ConductorDriver
             task.RequiredRole == AgentRole.Developer &&
             task.Status == WorkTaskStatus.Assigned &&
             !goal.Tasks.Any(candidate =>
-                GoalManagementCommandService.IsEarlierSdlcStageOf(
+                DispatchReadinessRules.IsEarlierSdlcStageOf(
                     candidate.RequiredRole,
                     task.RequiredRole) &&
                 candidate.Status != WorkTaskStatus.Completed));
@@ -5789,7 +5788,7 @@ internal sealed partial class ConductorDriver
         }
 
         var predecessor = goal.Tasks.FirstOrDefault(candidate =>
-            GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+            DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
             candidate.Status != WorkTaskStatus.Completed);
         if (predecessor is not null)
         {
@@ -5813,7 +5812,7 @@ internal sealed partial class ConductorDriver
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
         {
             var predecessor = goal.Tasks.FirstOrDefault(candidate =>
-                GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+                DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
                 candidate.Status == WorkTaskStatus.Cancelled);
             if (predecessor is null)
             {

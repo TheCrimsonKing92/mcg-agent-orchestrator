@@ -1,3 +1,8 @@
+<#
+Exit codes:
+- 1: generic launch failure
+- 2: conduct-loop launch refused because stop authority is active
+#>
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [string]$Name = "command",
@@ -110,6 +115,14 @@ function Test-HasArgument {
     return $false
 }
 
+function Test-IsConductLoop {
+    param([string[]]$Values)
+
+    return $Values.Count -ge 2 -and
+        $Values[0].Equals("conduct", [System.StringComparison]::OrdinalIgnoreCase) -and
+        (Test-HasArgument -Values $Values -Name "--loop")
+}
+
 function Write-LastDriveJournal {
     param(
         [string]$RepositoryRoot,
@@ -119,9 +132,7 @@ function Write-LastDriveJournal {
         [string[]]$CommandArguments
     )
 
-    if ($CommandArguments.Count -lt 2 -or
-        -not $CommandArguments[0].Equals("conduct", [System.StringComparison]::OrdinalIgnoreCase) -or
-        -not (Test-HasArgument -Values $CommandArguments -Name "--loop")) {
+    if (-not (Test-IsConductLoop -Values $CommandArguments)) {
         return
     }
 
@@ -153,11 +164,20 @@ function Write-LaunchFailure {
         [string]$Reason,
         [string]$StdoutPath,
         [string]$StderrPath,
-        [string[]]$LaunchArgs
+        [string[]]$LaunchArgs,
+        [string]$Kind,
+        [string]$StopFilePath
     )
 
-    $errorPayload = [ordered]@{
-        reason = $Reason
+    $errorPayload = [ordered]@{}
+    if (-not [string]::IsNullOrWhiteSpace($Kind)) {
+        $errorPayload.kind = $Kind
+    }
+
+    $errorPayload.reason = $Reason
+
+    if (-not [string]::IsNullOrWhiteSpace($StopFilePath)) {
+        $errorPayload.stopFilePath = $StopFilePath
     }
 
     if (-not [string]::IsNullOrWhiteSpace($StdoutPath)) {
@@ -180,6 +200,9 @@ $launcher = Join-Path $repoRoot "mcg-orchestrator.cmd"
 $stdoutPath = $null
 $stderrPath = $null
 $processArguments = @()
+$failureKind = $null
+$failureStopFilePath = $null
+$exitCode = 1
 
 try {
     $Arguments = @($Arguments | ForEach-Object { [string]$_ })
@@ -193,6 +216,25 @@ try {
     } else {
         [System.IO.Path]::GetFullPath($AppDll)
     }
+    $processArguments = @($targetExecutable) + $Arguments
+
+    if (Test-IsConductLoop -Values $Arguments) {
+        $configuredRepositoryRoot = [Environment]::GetEnvironmentVariable(
+            "MCG_ORCHESTRATOR_REPOSITORY_ROOT",
+            "Process")
+        $effectiveRepositoryRoot = if ($usesLauncher -or [string]::IsNullOrWhiteSpace($configuredRepositoryRoot)) {
+            $repoRoot
+        } else {
+            [System.IO.Path]::GetFullPath($configuredRepositoryRoot)
+        }
+        $stopFilePath = [System.IO.Path]::GetFullPath((Join-Path $effectiveRepositoryRoot ".conduct-stop"))
+        if (Test-Path -LiteralPath $stopFilePath -ErrorAction Stop) {
+            $failureKind = "stop-authority-refused"
+            $failureStopFilePath = $stopFilePath
+            $exitCode = 2
+            throw "Conduct loop launch refused because active stop authority exists at '$stopFilePath'. Deliberately remove the stop file before retrying."
+        }
+    }
 
     $logsRoot = Join-Path $repoRoot ".orchestrator\logs"
     New-Item -ItemType Directory -Force -Path $logsRoot | Out-Null
@@ -201,7 +243,6 @@ try {
     $safeName = ConvertTo-SafeName $Name
     $stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
     $stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
-    $processArguments = @($targetExecutable) + $Arguments
 
     if (-not (Test-Path -LiteralPath $targetExecutable -PathType Leaf)) {
         throw "Launcher or App DLL not found: $targetExecutable"
@@ -286,6 +327,8 @@ catch {
         -Reason $_.Exception.Message `
         -StdoutPath $stdoutPath `
         -StderrPath $stderrPath `
-        -LaunchArgs $processArguments
-    exit 1
+        -LaunchArgs $processArguments `
+        -Kind $failureKind `
+        -StopFilePath $failureStopFilePath
+    exit $exitCode
 }

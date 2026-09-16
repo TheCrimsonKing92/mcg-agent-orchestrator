@@ -3862,7 +3862,7 @@ internal static partial class CliPersistentStateRunner
             case "refresh-dispatches":
                 var refreshGoal = ResolveDispatchCommandGoal(args, kernel, currentGoal, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
                 currentGoal = refreshGoal;
-                var refreshed = GoalManagementCommandService.RefreshDispatches(kernel, refreshGoal);
+                var refreshed = new GoalDispatchOperations().RefreshDispatches(kernel, refreshGoal);
                 ConsoleViews.PrintProcessBatchResult(refreshGoal, refreshed);
                 break;
 

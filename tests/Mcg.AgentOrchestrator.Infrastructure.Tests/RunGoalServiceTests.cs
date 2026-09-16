@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -84,10 +83,10 @@ public sealed class RunGoalServiceTests
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Injected advance step. Mirrors GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked:
+    // Injected advance step. Mirrors GoalAdvancementOperations.AdvanceGoalWithSubscriptionsUntilBlocked:
     // each scripted iteration records on the kernel exactly what the real step would have recorded for
     // that iteration - dispatches, verification results, failures, completions - and returns the loop
-    // DTO the real step would have returned.
+    // outcome the real step would have returned.
     // ---------------------------------------------------------------------------------------------
 
     private sealed record AdvanceStepCall(
@@ -98,13 +97,13 @@ public sealed class RunGoalServiceTests
 
     private sealed class ScriptedAdvanceStep
     {
-        private readonly List<Func<AdvanceStepCall, AdvanceLoopResultDto>> iterations;
+        private readonly List<Func<AdvanceStepCall, GoalAdvanceLoopOutcome>> iterations;
         private int completedCalls;
 
-        private ScriptedAdvanceStep(IEnumerable<Func<AdvanceStepCall, AdvanceLoopResultDto>> iterations)
+        private ScriptedAdvanceStep(IEnumerable<Func<AdvanceStepCall, GoalAdvanceLoopOutcome>> iterations)
             => this.iterations = [.. iterations];
 
-        public static ScriptedAdvanceStep Script(params Func<AdvanceStepCall, AdvanceLoopResultDto>[] iterations)
+        public static ScriptedAdvanceStep Script(params Func<AdvanceStepCall, GoalAdvanceLoopOutcome>[] iterations)
             => new(iterations);
 
         public int CallCount => completedCalls;
@@ -133,23 +132,26 @@ public sealed class RunGoalServiceTests
         public DateTimeOffset Next() => DateTimeOffset.UtcNow.AddSeconds(++tick);
     }
 
-    private static AdvanceLoopResultDto Blocked(Goal goal, string stopReason, NextActionDto? blockingAction = null)
-        => new(goal.Id.Value, Executed: false, StepCount: 0, stopReason, blockingAction, []);
+    // The advance step now returns the application outcome instead of the presentation DTO. The fields
+    // RunGoalService reads map one to one - GoalId (typed GoalId instead of its string value), Executed,
+    // StepCount, StopReason, BlockingAction (NextActionItem instead of NextActionDto), Steps,
+    // ContinueAfter, StateChanged, Failure - so every fact below pins the same loop input it did before.
+    private static GoalAdvanceLoopOutcome Blocked(Goal goal, string stopReason, NextActionItem? blockingAction = null)
+        => new(goal.Id, Executed: false, StepCount: 0, stopReason, blockingAction, []);
 
-    private static AdvanceLoopResultDto Advanced(Goal goal, int stepCount, string stopReason)
-        => new(goal.Id.Value, Executed: true, stepCount, stopReason, null, [], StateChanged: true);
+    private static GoalAdvanceLoopOutcome Advanced(Goal goal, int stepCount, string stopReason)
+        => new(goal.Id, Executed: true, stepCount, stopReason, null, [], StateChanged: true);
 
-    private static NextActionDto BlockingAction(Goal goal, TaskSpec task, NextActionKind kind, string message)
+    // NextActionItem carries the identity RunGoalService resolves the stop task from (Kind, TaskId,
+    // HumanInputRequestId, Message, ResumeCommand). The DTO's Priority, TaskNumber, Control and Recovery
+    // were presentation projections the loop never read, so they have no application counterpart to set.
+    private static NextActionItem BlockingAction(TaskSpec task, NextActionKind kind, string message)
         => new(
-            1,
             kind,
-            task.Id.Value,
-            goal.Tasks.ToList().FindIndex(candidate => candidate.Id == task.Id) + 1,
+            task.Id,
             null,
             message,
-            "run-goal",
-            null,
-            null);
+            "run-goal");
 
     private static AgentDefinition AssignedAgent(AdvanceStepCall call, TaskSpec task)
         => call.Agents.Single(agent => agent.Id == task.AssignedAgentId);
@@ -337,7 +339,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 $"Task {task.Id.Value[..8]} failed; inspect the preserved failure evidence before continuing.",
-                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
+                BlockingAction(task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -374,7 +376,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 $"Task {task.Id.Value[..8]} is waiting for a human answer.",
-                BlockingAction(goal, task, NextActionKind.AnswerHumanInput, "Answer the pending human input request.")));
+                BlockingAction(task, NextActionKind.AnswerHumanInput, "Answer the pending human input request.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -419,7 +421,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "blocked: repeated recoverable subscription limits require operator review",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Review the repeated subscription limit before redispatch.")));
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Review the repeated subscription limit before redispatch.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -465,7 +467,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 $"Task {task.Id.Value[..8]} hit a recoverable subscription usage limit; retry after {retryTime:u}.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Wait for the subscription retry window.")));
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Wait for the subscription retry window.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -511,7 +513,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the recoverable subscription usage limit stands.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")),
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")),
             call =>
             {
                 RecordCompletedDispatch(call, task, labels, "alternate-ok");
@@ -574,7 +576,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the recoverable subscription usage limit stands.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")),
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")),
             call =>
             {
                 RecordCompletedDispatch(call, task, labels, "catalog-alternate-ok");
@@ -619,7 +621,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the heartbeat stall evidence stands.",
-                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the stalled dispatch.")),
+                BlockingAction(task, NextActionKind.InspectFailedTask, "Inspect the stalled dispatch.")),
             call =>
             {
                 RecordCompletedDispatch(call, task, labels, "heartbeat-ok");
@@ -682,7 +684,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the provider connectivity failure stands.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")));
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -728,7 +730,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 $"Task {task.Id.Value[..8]} failed; inspect the preserved failure evidence before continuing.",
-                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
+                BlockingAction(task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -774,7 +776,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the provider connectivity failure stands.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")));
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -821,7 +823,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the provider connectivity failure stands.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")),
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Redispatch after provider connectivity recovers.")),
             call =>
             {
                 RecordCompletedDispatch(call, task, labels, "connectivity-alternate-ok");
@@ -881,7 +883,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the provider model rejection stands.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch with a supported model.")),
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Redispatch with a supported model.")),
             call =>
             {
                 RecordCompletedDispatch(call, task, labels, "model-rejection-alternate-ok");
@@ -940,7 +942,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 $"Task {task.Id.Value[..8]} failed; inspect the preserved failure evidence before continuing.",
-                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
+                BlockingAction(task, NextActionKind.InspectFailedTask, "Inspect the failed task.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -984,7 +986,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the recoverable subscription usage limit stands.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")));
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Redispatch after the usage limit clears.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,
@@ -1024,7 +1026,7 @@ public sealed class RunGoalServiceTests
             call => Blocked(
                 goal,
                 "Automatic handoff is blocked while the heartbeat stall evidence stands.",
-                BlockingAction(goal, task, NextActionKind.InspectFailedTask, "Inspect the stalled dispatch.")),
+                BlockingAction(task, NextActionKind.InspectFailedTask, "Inspect the stalled dispatch.")),
             call =>
             {
                 // The alternate stalls the same way, so the second failover round finds no unused agent.
@@ -1075,7 +1077,7 @@ public sealed class RunGoalServiceTests
                 goal,
                 "Paid subscription start requires explicit confirmation: 13000 prompt chars across 1 task(s). " +
                 $"rerun with {SubscriptionPromptCostGuard.CliConfirmationFlag} after inspecting subscription-plan.",
-                BlockingAction(goal, task, NextActionKind.RunAssignedTask, "Confirm the paid subscription start.")));
+                BlockingAction(task, NextActionKind.RunAssignedTask, "Confirm the paid subscription start.")));
 
         var result = await RunGoalService.RunAsync(
             kernel,

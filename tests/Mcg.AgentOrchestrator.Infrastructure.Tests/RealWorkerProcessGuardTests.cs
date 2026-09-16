@@ -224,7 +224,7 @@ public sealed class RealWorkerProcessGuardTests
 
         try
         {
-            var result = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+            var result = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
                 kernel,
                 [agent],
                 WorkerProfileCatalog.Default(),

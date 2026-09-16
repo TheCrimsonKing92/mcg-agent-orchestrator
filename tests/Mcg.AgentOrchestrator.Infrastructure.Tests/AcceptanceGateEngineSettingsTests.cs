@@ -15,7 +15,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(20, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(22, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(7, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
@@ -81,10 +81,14 @@ public sealed class AcceptanceGateEngineSettingsTests
             settings.InfrastructureTestLanes
                 .Single(lane => lane.Name == "Goal worktree cleanup")
                 .ExclusiveResourceKeys);
-        AssertLanePairPreservesCoverage(
+        AssertLaneSetPreservesCoverage(
             settings,
-            "Worker profiles",
-            "Worker dispatch fixtures",
+            [
+                "Worker profiles",
+                "Worker dispatch fixtures A",
+                "Worker dispatch fixtures B",
+                "Worker dispatch fixtures C"
+            ],
             [
                 "AdvanceLoopTests",
                 "ConductLoopLockTests",

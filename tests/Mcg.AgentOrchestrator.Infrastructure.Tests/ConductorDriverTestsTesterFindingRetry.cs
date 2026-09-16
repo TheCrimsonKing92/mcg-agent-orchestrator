@@ -275,7 +275,7 @@ public sealed class ConductorDriverTestsTesterFindingRetry
             {
                 if (!capacityAvailable)
                     return DispatchStartOutcome.EmptyBatch("Fixture provider capacity temporarily unavailable.");
-                var batch = GoalManagementCommandService.BuildReadyTaskParallelPlan(dispatchGoal, DefaultAgents())
+                var batch = DispatchReadinessRules.BuildReadyTaskParallelPlan(dispatchGoal, DefaultAgents())
                     .Batches.FirstOrDefault();
                 var started = dispatchGoal.Tasks.Where(task =>
                     batch?.IntentIds.Contains(task.Id.Value) == true).ToArray();

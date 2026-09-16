@@ -1474,7 +1474,7 @@ internal static partial class CliCommandHandlers
     }
 
     private static bool GitCommitShaExists(string executionDirectory, string sha) =>
-        GitCli.Run(executionDirectory, 5_000, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
+        GitCli.Run(executionDirectory, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
 
     private static DateTimeOffset? ParseDurationsSince(string? value)
     {

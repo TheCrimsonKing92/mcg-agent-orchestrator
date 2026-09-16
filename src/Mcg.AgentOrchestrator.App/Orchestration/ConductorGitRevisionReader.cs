@@ -12,12 +12,18 @@ internal static partial class ConductorGitRevisionReader
 
     internal static string ReadRequiredCommit(string worktreePath, string reference)
     {
-        var result = GitCli.Run(worktreePath, 5_000, "rev-parse", "--verify", reference);
+        var result = GitCli.Run(worktreePath, "rev-parse", "--verify", reference);
         var commit = result.Output.Trim();
         if (!result.Succeeded || !TryNormalize(commit, out var normalized))
         {
+            // Carry git's own exit code and stderr so a failsafe expiry is distinguishable from a
+            // genuinely missing reference; without them every failure reads as the same exclusion.
+            var gitError = string.IsNullOrWhiteSpace(result.Error)
+                ? "(no git error output)"
+                : result.Error.Trim();
             throw new InvalidOperationException(
-                $"Landing escalation recheck could not resolve git reference '{reference}'.");
+                $"Landing escalation recheck could not resolve git reference '{reference}' " +
+                $"(git exit code {result.ExitCode}): {gitError}");
         }
 
         return normalized;

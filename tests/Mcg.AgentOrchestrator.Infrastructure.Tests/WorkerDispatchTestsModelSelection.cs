@@ -480,7 +480,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     var task = goal.Tasks.Single();
     var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
 
-    var dispatch = GoalManagementCommandService.ProfileDispatchTask(
+    var dispatch = new GoalDispatchOperations().ProfileDispatchTask(
         kernel,
         workspace,
         goal,
