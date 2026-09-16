@@ -3,6 +3,56 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Fact]
+    public void RetryTask_AllowsOpenProspectiveAcceptanceEvidence()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Retry planning without losing future evidence.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Plan complete.");
+        kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
+
+        kernel.RetryTask(goal.Id, task.Id, "Revise the plan.", RetryCause.NewSourceFinding);
+
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(RetryCause.NewSourceFinding, task.PendingRetryCause);
+        Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
+    public void RequeueInterruptedDispatch_AllowsOpenProspectiveAcceptanceEvidence()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Recover planning without losing future evidence.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("planner", "plan", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
+
+        kernel.RequeueInterruptedDispatch(
+            goal.Id,
+            task.Id,
+            "Recover the interrupted plan.",
+            RetryCause.ProviderInterruption,
+            "dispatch-1");
+
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
+        Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+    }
+
     [Xunit.Fact(DisplayName = "RetryTask_operator_feedback_replaces_prior_automatic_feedback_without_consuming_automatic_retry_budget")]
     public void RetryTaskOperatorFeedbackReplacesPriorAutomaticFeedback()
     {

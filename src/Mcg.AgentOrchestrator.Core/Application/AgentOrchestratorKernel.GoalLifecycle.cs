@@ -538,7 +538,11 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request => request.GoalId == goalId && request.TaskId == taskId && !request.IsCompleted))
+            _humanInputRequests.Values.Any(request =>
+                request.GoalId == goalId &&
+                request.TaskId == taskId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
@@ -744,7 +748,11 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request => request.GoalId == goalId && request.TaskId == taskId && !request.IsCompleted))
+            _humanInputRequests.Values.Any(request =>
+                request.GoalId == goalId &&
+                request.TaskId == taskId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
@@ -1546,6 +1554,7 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(candidate =>
                     candidate.GoalId == goalId &&
                     candidate.TaskId == taskId &&
+                    candidate.Kind == kind &&
                     string.Equals(candidate.QuestionFingerprint, effectiveQuestionFingerprint, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)

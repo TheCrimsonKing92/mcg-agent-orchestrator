@@ -3,6 +3,34 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class HumanInputSupersedeTests
 {
     [Xunit.Fact]
+    public void Deduplication_DoesNotCollapseBlockingRequestIntoProspectiveEvidence()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var planner = new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep planning prerequisites distinct from future evidence.", [planner]);
+        const string fingerprint = "planner-evidence:criterion-1:candidate-observation";
+        var prospective = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            planner.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence,
+            questionFingerprint: fingerprint);
+
+        var prerequisite = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            planner.Id,
+            "Provide the design input required to plan.",
+            HumanWaitKind.PlannerPrerequisiteEvidence,
+            questionFingerprint: fingerprint);
+
+        Assert.False(prerequisite.WasReused);
+        Assert.NotEqual(prospective.Request.Id, prerequisite.Request.Id);
+        Assert.Equal(HumanWaitKind.PlannerPrerequisiteEvidence, prerequisite.Request.Kind);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
+        Assert.Equal(2, kernel.GetPendingHumanInput(goal.Id).Count);
+    }
+
+    [Xunit.Fact]
     public void Supersede_AppendsHistory_RetractsPriorAnswers_AndRestoresBlockedTasks()
     {
         var clock = new FakeClock();
