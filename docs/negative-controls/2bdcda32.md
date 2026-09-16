@@ -38,16 +38,16 @@ only the start-time ordering check:
 
 ```diff
 -            if (!readAncestryFacts(parentProcessId, out var parent) ||
--                parent.StartTimeUtc > child.StartTimeUtc)
+-                parent.StartTimeUtc >= child.StartTimeUtc)
 +            if (!readAncestryFacts(parentProcessId, out var parent))
              {
                  return false;
              }
 ```
 
-Invocation: `-Filter "DisplayName~AncestryWalk"` (2026-09-15T14:05Z; `WorkerProcessJobs.cs` and
-`WorkerProcessJobsTests.cs` are byte-identical to that run, so this RED was not repeated).
-Result: total=4 passed=3 failed=1, exit code 2.
+Invocation after `Invoke-WorkerBuildCheck.ps1` rebuilt the infrastructure tests (2026-09-16T11:16Z):
+`dotnet C:\Users\miles\AppData\LocalLow\mcg-dotnet-isolated\goals\2bdcda32\artifacts\bin\Mcg.AgentOrchestrator.Infrastructure.Tests\debug\Mcg.AgentOrchestrator.Infrastructure.Tests.dll --filter-method '*WorkerProcessJobsAncestryWalk*' --minimum-expected-tests 5 --progress off --no-ansi`.
+Result: total=5 passed=3 failed=2, exit code 1.
 
 ```
 FAIL  WorkerProcessJobs_ancestry_walk_refuses_recycled_dead_ancestor_pid
@@ -55,6 +55,11 @@ FAIL  WorkerProcessJobs_ancestry_walk_refuses_recycled_dead_ancestor_pid
       Expected: False
       Actual:   True
       at WorkerProcessJobsTests.WorkerProcessJobsAncestryWalkRefusesRecycledDeadAncestorPid()
+FAIL  WorkerProcessJobs_ancestry_walk_refuses_equal_start_time_parent
+      Assert.False() Failure
+      Expected: False
+      Actual:   True
+      at WorkerProcessJobsTests.WorkerProcessJobsAncestryWalkRefusesEqualStartTimeParent()
 ```
 
 Liveness alone does not settle the hop: the recycled pid names a live process, so without the
@@ -141,6 +146,8 @@ RED 2 and RED 3 reverted to the landed source (RED 1's file was already back at 
   (2026-09-15T15:19Z): total=77 passed=77 failed=0, ALL GREEN. That filter includes all four
   ancestry-walk tests, the existing live-ancestor kill refusal, the rest of the registration guard, the
   registration-fault classification, and the real spawned-process guard.
+- After restoring the strict `parent.StartTimeUtc >= child.StartTimeUtc` rejection, the RED 1 direct
+  managed-runner invocation above was repeated (2026-09-16T11:17Z): total=5 passed=5 failed=0, ALL GREEN.
 
 Each RED is paired with the GREEN above it: removing the start-time comparison must fail the dead-pid
 fact, removing the tick-level catch must fail the synchronous arrival of the faulted-cohort fact, and

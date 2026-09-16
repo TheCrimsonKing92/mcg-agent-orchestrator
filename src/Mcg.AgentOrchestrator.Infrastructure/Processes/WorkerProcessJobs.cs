@@ -2282,7 +2282,7 @@ public static class WorkerProcessJobs
     }
 
     // Walks parent pids from processId looking for ancestorProcessId. A hop is credited only when the
-    // parent pid still names a live process that started no later than the child it claims; anything
+    // parent pid still names a live process that started earlier than the child it claims; anything
     // that cannot be verified ends the walk as "not an ancestor". Without that check a pid Windows has
     // just handed to a freshly spawned child is indistinguishable from a long-dead ancestor whose pid
     // still sits in its children's parent-pid records.
@@ -2309,7 +2309,7 @@ public static class WorkerProcessJobs
             }
 
             if (!readAncestryFacts(parentProcessId, out var parent) ||
-                parent.StartTimeUtc > child.StartTimeUtc)
+                parent.StartTimeUtc >= child.StartTimeUtc)
             {
                 return false;
             }

@@ -2423,6 +2423,21 @@ public sealed class WorkerProcessJobsTests : IDisposable
             AncestryLookup(chain)));
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_refuses_equal_start_time_parent")]
+    public void WorkerProcessJobsAncestryWalkRefusesEqualStartTimeParent()
+    {
+        var chain = new Dictionary<int, (int ParentProcessId, DateTime StartTimeUtc)>
+        {
+            [ProtectedDaemonPid] = (SupervisorPid, ChainStartedAt),
+            [SupervisorPid] = (1, ChainStartedAt)
+        };
+
+        Assert.False(WorkerProcessJobs.IsDescendantOf(
+            ProtectedDaemonPid,
+            SupervisorPid,
+            AncestryLookup(chain)));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_still_refuses_protected_pid_and_live_ancestors")]
     public void WorkerProcessJobsAncestryWalkStillRefusesProtectedPidAndLiveAncestors()
     {
