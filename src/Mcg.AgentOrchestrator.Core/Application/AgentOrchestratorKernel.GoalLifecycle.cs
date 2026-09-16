@@ -1086,7 +1086,10 @@ public sealed partial class AgentOrchestratorKernel
         var promoted = 0;
         foreach (var goal in _goals.Values.Where(goal => goal.Status == GoalStatus.Parked).ToArray())
         {
-            if (_humanInputRequests.Values.Any(request => request.GoalId == goal.Id && !request.IsCompleted) ||
+            if (_humanInputRequests.Values.Any(request =>
+                    request.GoalId == goal.Id &&
+                    !request.IsCompleted &&
+                    HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)) ||
                 !HasHumanInputResolvedAfterLatestParkDecision(goal))
             {
                 continue;
@@ -1956,7 +1959,8 @@ public sealed partial class AgentOrchestratorKernel
                 if (!_humanInputRequests.Values.Any(candidate =>
                         candidate.GoalId == goal.Id &&
                         candidate.TaskId == task.Id &&
-                        !candidate.IsCompleted))
+                        !candidate.IsCompleted &&
+                        HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
                     RestoreTaskAfterHumanInput(goal, task);
                 }

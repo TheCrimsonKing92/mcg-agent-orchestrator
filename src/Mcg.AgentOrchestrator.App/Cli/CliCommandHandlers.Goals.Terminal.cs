@@ -55,7 +55,10 @@ private static Goal HandleGoalParkCommand(CliExecutionContext context, IReadOnly
         _ = runner.CancelLatestProcess(context.Kernel, goal.Id, task.Id);
     }
 
-    var resolvedHumanWaits = context.Kernel.HumanInputRequests.Count(request => request.GoalId == goal.Id && !request.IsCompleted);
+    var resolvedHumanWaits = context.Kernel.HumanInputRequests.Count(request =>
+        request.GoalId == goal.Id &&
+        !request.IsCompleted &&
+        HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind));
     _ = context.Kernel.ParkGoal(goal.Id, reason);
     var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
     var resolvedAttentionItems = store.ResolveOpenForGoalAsync(goal.Id.Value, $"Goal parked: {reason}").GetAwaiter().GetResult();
