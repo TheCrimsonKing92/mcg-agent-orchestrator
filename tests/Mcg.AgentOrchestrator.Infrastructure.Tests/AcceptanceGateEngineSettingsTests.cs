@@ -71,16 +71,12 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
         Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
         Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
-        Xunit.Assert.Equal(
-            ["host:ProcessSpawning"],
-            settings.InfrastructureTestLanes
-                .Single(lane => lane.Name == "Goal lifecycle commands")
-                .ExclusiveResourceKeys);
-        Xunit.Assert.Equal(
-            ["host:ProcessSpawning"],
-            settings.InfrastructureTestLanes
-                .Single(lane => lane.Name == "Goal worktree cleanup")
-                .ExclusiveResourceKeys);
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal lifecycle commands")
+            .ExclusiveResourceKeys);
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal worktree cleanup")
+            .ExclusiveResourceKeys);
         AssertLaneSetPreservesCoverage(
             settings,
             [
