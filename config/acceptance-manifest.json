@@ -35,14 +35,12 @@
       {
         "name": "Goal lifecycle commands",
         "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliPersistentStateRunnerAcceptanceFailureRecoveryTests|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests|FullyQualifiedName~SourceBacklogSiblingCreationTests",
-        "estimatedSerialSeconds": 267.1,
-        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
+        "estimatedSerialSeconds": 267.1
       },
       {
         "name": "Goal worktree cleanup",
         "filter": "FullyQualifiedName~AcceptanceCohortWorkflowTests|FullyQualifiedName~AcceptanceVerdictCarryForwardTests|FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCleanupHookDelegates|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup",
-        "estimatedSerialSeconds": 330.9,
-        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
+        "estimatedSerialSeconds": 330.9
       },
       {
         "name": "Goal worktree parallel",
@@ -59,44 +57,42 @@
         "name": "Worker dispatch fixtures A",
         "filter": "FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification",
         "estimatedSerialSeconds": 663.9,
-        "exclusiveResourceKeys": [ "xunit:EnvMutation", "host:ProcessSpawning" ]
+        "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
       },
       {
         "name": "Worker dispatch fixtures B",
         "filter": "FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight",
         "estimatedSerialSeconds": 433.8,
-        "exclusiveResourceKeys": [ "xunit:EnvMutation", "host:ProcessSpawning" ]
+        "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
       },
       {
         "name": "Worker dispatch fixtures C",
         "filter": "FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsModelSelectionEnvMutation|FullyQualifiedName~WorkerProcessJobsTests",
         "estimatedSerialSeconds": 416.7,
-        "exclusiveResourceKeys": [ "xunit:EnvMutation", "host:ProcessSpawning" ]
+        "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
       },
       {
         "name": "Process spawning",
         "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~OwnedProcessExitObservationTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~GitCliThreadPoolSaturationTests|FullyQualifiedName~PipeDrainThreadPoolSaturationTests|FullyQualifiedName~ChildOutputDrainAdoptionSaturationTests|FullyQualifiedName~HermesAcpTrialTests|FullyQualifiedName~HermesExecutableIdentityTests|FullyQualifiedName~IcaclsIntegrityLabelerTests|FullyQualifiedName~ConsoleIoPreservationTests|FullyQualifiedName~MtpNoBuildReceiptIdentityTests|FullyQualifiedName~RunGoalServiceProcessContractTests|FullyQualifiedName~PostLandingCanaryCaptureAvailabilityTests",
         "estimatedSerialSeconds": 392.7,
-        "exclusiveResourceKeys": [ "xunit:ProcessSpawning", "host:ProcessSpawning" ]
+        "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
       },
       {
         "name": "Mtp managed project rebuild",
         "filter": "FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild",
         "estimatedSerialSeconds": 74.8,
-        "exclusiveResourceKeys": [ "xunit:ProcessSpawning", "host:ProcessSpawning" ],
+        "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ],
         "requiresBuildSystemChange": true
       },
       {
         "name": "Process spawning parallel",
         "filter": "FullyQualifiedName~AcceptanceFailureCensusScriptTests|FullyQualifiedName~AcceptanceLaneClosureHasherTests|FullyQualifiedName~AcceptancePartitionVerdictCacheContentReuseTests|FullyQualifiedName~AssemblyTempRedirectTests|FullyQualifiedName~AssemblyTempRedirectChildSmokeTests|FullyQualifiedName~CitedPriorEvidenceResolverTests|FullyQualifiedName~CliHelpTests|FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~ExcessWorkerRoundAnalysisScriptTests|FullyQualifiedName~GitCliTests|FullyQualifiedName~LaneTimingMeasurementScriptTests|FullyQualifiedName~SemanticAcceptanceTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|(FullyQualifiedName~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsModelSelectionEnvMutation)",
-        "estimatedSerialSeconds": 200.3,
-        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
+        "estimatedSerialSeconds": 200.3
       },
       {
         "name": "Chaos gate",
         "filter": "(FullyQualifiedName~ChaosGate|FullyQualifiedName~AutoReviewRetryConvergenceBriefBuilderTests|FullyQualifiedName~InquiryDispatcherTests|FullyQualifiedName~ProgressiveReviewSteeringTests)&Category!=HostIntegration",
-        "estimatedSerialSeconds": 77.9,
-        "exclusiveResourceKeys": [ "host:ProcessSpawning" ]
+        "estimatedSerialSeconds": 77.9
       },
       {
         "name": "Dotnet build slots",
