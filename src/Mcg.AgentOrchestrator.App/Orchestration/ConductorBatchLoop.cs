@@ -3026,6 +3026,14 @@ internal sealed partial class ConductorBatchLoop
                         runGateInBackground: true);
                     cohortRun = cohortOutcome.Run;
                     gateFault = cohortOutcome.Fault;
+                    if (gateFault is { } observedFault)
+                    {
+                        var observedMemberIds = observedFault.MemberGoalIds
+                            .OrderBy(id => id, StringComparer.Ordinal)
+                            .ToArray();
+                        memberIds = string.Join(',', observedMemberIds.Select(id => id[..8]));
+                        markerGoal = observedMemberIds[0][..8];
+                    }
                     (exitOutcome, exitReason) = gateFault is { } backgroundFault
                         ? DescribeAcceptanceCohortGateFault(backgroundFault)
                         : DescribeAcceptanceCohortExit(cohortRun);
@@ -3055,7 +3063,6 @@ internal sealed partial class ConductorBatchLoop
                     cohortRun = ResolveFaultedAcceptanceCohort(
                         driver,
                         policy,
-                        cohortSelection,
                         cohortEligible,
                         cohortRun,
                         cohortGateFault,

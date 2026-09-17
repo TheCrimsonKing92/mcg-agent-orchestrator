@@ -61,6 +61,7 @@ internal sealed record ConductorAcceptanceCohortRunOutcome(
 // can classify it and hold or escalate the members instead of receiving a throw across the tick boundary.
 internal sealed record ConductorAcceptanceCohortGateFault(
     string MemberPairKey,
+    IReadOnlySet<string> MemberGoalIds,
     string PairFingerprint,
     Exception Fault)
 {
@@ -293,7 +294,6 @@ internal sealed partial class ConductorBatchLoop
     private static ConductorAcceptanceCohortRunResult ResolveFaultedAcceptanceCohort(
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,
-        ConductorAcceptanceCohortSelection selection,
         IReadOnlyList<Goal> cohortEligible,
         ConductorAcceptanceCohortRunResult cohortRun,
         ConductorAcceptanceCohortGateFault fault,
@@ -304,9 +304,8 @@ internal sealed partial class ConductorBatchLoop
         var failureCount = transient ? driver.RecordCohortGateTransientFault(fault.MemberPairKey) : 0;
         var escalate = !transient || failureCount >= ParallelAcceptanceTransientFailureCap;
         var classification = transient ? "transient" : "non-transient";
-        var selectedIds = selection.Members.Select(member => member.GoalId).ToHashSet();
         var memberResults = new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal);
-        foreach (var goal in cohortEligible.Where(goal => selectedIds.Contains(goal.Id)))
+        foreach (var goal in cohortEligible.Where(goal => fault.MemberGoalIds.Contains(goal.Id.Value)))
         {
             memberResults[goal.Id.Value] = escalate
                 ? EscalateParallelAcceptanceSafely(
@@ -363,9 +362,9 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
-        return TakeCohortGateFault(selection) is { } fault
+        return TakeNextCohortGateFault() is { } fault
             ? new ConductorAcceptanceCohortRunOutcome(
-                CohortGateFaulted(selection, orderedGoals, policy, fault),
+                CohortGateFaulted(orderedGoals, policy, fault),
                 fault)
             : new ConductorAcceptanceCohortRunOutcome(
                 RunAcceptanceCohort(
@@ -409,6 +408,23 @@ internal sealed partial class ConductorDriver
         return _cohortGateFaults.TryRemove(memberPairKey, out var fault) ? fault : null;
     }
 
+    // A completed run belongs to the pair that started it, not whichever pair happens to be selected on the
+    // next tick. Drain by stable key so every parked fault is surfaced and counted for its own
+    // members before the newly selected pair can start another gate.
+    private ConductorAcceptanceCohortGateFault? TakeNextCohortGateFault()
+    {
+        SweepCompletedCohortGateRuns();
+        foreach (var memberPairKey in _cohortGateFaults.Keys.OrderBy(key => key, StringComparer.Ordinal))
+        {
+            if (_cohortGateFaults.TryRemove(memberPairKey, out var fault))
+            {
+                return fault;
+            }
+        }
+
+        return null;
+    }
+
     // Observes a completed background cohort gate without rethrowing: a fault is parked as typed data
     // for its member pair, and a clean completion clears that pair's transient-fault count.
     private void ObserveCohortGateCompletion(string memberPairKey, CohortGateRun run)
@@ -417,6 +433,7 @@ internal sealed partial class ConductorDriver
         {
             _cohortGateFaults[memberPairKey] = new ConductorAcceptanceCohortGateFault(
                 memberPairKey,
+                run.MemberGoalIds,
                 run.PairFingerprint,
                 aggregate.InnerExceptions.Count == 1 ? aggregate.InnerExceptions[0] : aggregate);
             return;
@@ -454,6 +471,9 @@ internal sealed partial class ConductorDriver
         Exception fault) =>
         new(
             CohortGateMemberPairKey(selection),
+            selection.Members
+                .Select(member => member.GoalId.Value)
+                .ToHashSet(StringComparer.Ordinal),
             ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
             fault);
 
@@ -464,13 +484,11 @@ internal sealed partial class ConductorDriver
         _cohortGateFaultCounts.TryRemove(memberPairKey, out _);
 
     private ConductorAcceptanceCohortRunResult CohortGateFaulted(
-        ConductorAcceptanceCohortSelection selection,
         IReadOnlyList<Goal> orderedGoals,
         ConductorAutonomyPolicy policy,
         ConductorAcceptanceCohortGateFault fault)
     {
-        var selectedIds = selection.Members.Select(member => member.GoalId).ToHashSet();
-        var goals = orderedGoals.Where(goal => selectedIds.Contains(goal.Id)).ToArray();
+        var goals = orderedGoals.Where(goal => fault.MemberGoalIds.Contains(goal.Id.Value)).ToArray();
         var detail =
             $"outcome=gate-fault fingerprint={fault.PairFingerprint} fault={fault.FaultType} " +
             $"detail={BoundCohortDetail(fault.Message)}";

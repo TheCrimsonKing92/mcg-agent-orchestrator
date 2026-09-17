@@ -3637,7 +3637,7 @@ internal sealed partial class ConductorDriver
         // rather than the background thread's exception.
         if (TakeCohortGateFault(selection) is { } backgroundFault)
         {
-            return CohortGateFaulted(selection, orderedGoals, policy, backgroundFault);
+            return CohortGateFaulted(orderedGoals, policy, backgroundFault);
         }
 
         if (_cohortKernel is null ||

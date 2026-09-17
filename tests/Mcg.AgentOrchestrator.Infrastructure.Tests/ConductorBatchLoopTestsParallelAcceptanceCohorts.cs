@@ -409,6 +409,36 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         Assert.Contains("Production acceptance cohort dependencies", afterDrain.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void FaultedBackgroundCohortCompletion_IsDrainedBeforeDifferentPairSelection()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "First completed background member");
+        var second = CreateVerifiedSimpleGoal(kernel, "Second completed background member");
+        var third = CreateVerifiedSimpleGoal(kernel, "Newly selected cohort member");
+        var driver = MakeDriver();
+        var completedSelection = CohortSelection(first, second);
+        var currentSelection = CohortSelection(second, third);
+        var fault = CaptureGateEngineFault();
+        driver.PublishCompletedCohortGateRunForTests(completedSelection, fault);
+
+        ConductorAcceptanceCohortRunOutcome? outcome = null;
+        var thrown = Record.Exception(() => outcome = driver.RunAcceptanceCohortForTick(
+            currentSelection,
+            [first, second, third],
+            ConductorAutonomyPolicy.Conservative,
+            runGateInBackground: true));
+
+        Assert.Null(thrown);
+        Assert.NotNull(outcome);
+        Assert.NotNull(outcome!.Fault);
+        Assert.Same(fault, outcome.Fault!.Fault);
+        Assert.Equal(
+            new[] { first.Id.Value, second.Id.Value }.OrderBy(value => value, StringComparer.Ordinal),
+            outcome.Run.MemberResults.Keys.OrderBy(value => value, StringComparer.Ordinal));
+        Assert.DoesNotContain(third.Id.Value, outcome.Run.MemberResults.Keys);
+    }
+
     // How the cohort gate fault reaches the tick: thrown by the cohort run itself, or parked by a background
     // cohort gate thread whose completion the driver observes on a later tick.
     private enum CohortFaultArrival
