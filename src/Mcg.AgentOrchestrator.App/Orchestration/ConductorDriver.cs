@@ -700,7 +700,7 @@ internal sealed partial class ConductorDriver
             {
                 try
                 {
-                    checkAttributions = CleanTestBaseline.Attribute(
+                    (baselineReceipt, checkAttributions) = AttributeAcceptanceFailureWithExecutedBaseline(
                         baselineReceipt,
                         failedChecks,
                         baselineEvidence,
@@ -4495,51 +4495,6 @@ internal sealed partial class ConductorDriver
         string.IsNullOrWhiteSpace(recorded) ||
         string.IsNullOrWhiteSpace(current) ||
         recorded.Equals(current, StringComparison.OrdinalIgnoreCase);
-
-    internal static void ReconcileCleanBaselineAttention(
-        ICollaborationItemStore store,
-        Goal goal,
-        string? mainHeadSha,
-        CleanTestBaselineReceipt receipt)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(goal);
-        ArgumentNullException.ThrowIfNull(receipt);
-
-        var currentCorrelationKey =
-            CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
-        var activeCorrelationKey = receipt.Attestation == CleanBaselineAttestation.AttestedRed
-            ? currentCorrelationKey
-            : null;
-        if (activeCorrelationKey is not null)
-        {
-            store.RaiseAsync(
-                CollaborationItemType.Decision,
-                goal.Id.Value,
-                $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
-                CleanTestBaseline.FormatJournalDetail(receipt),
-                activeCorrelationKey,
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-
-        var staleItems = store.ListAsync(cancellationToken: CancellationToken.None)
-            .GetAwaiter()
-            .GetResult()
-            .Where(item =>
-                item.CorrelationKey is { Length: > 0 } key &&
-                key.StartsWith(CleanBaselineRedCorrelationKeyPrefix, StringComparison.Ordinal) &&
-                !string.Equals(key, activeCorrelationKey, StringComparison.Ordinal) &&
-                (receipt.Attestation != CleanBaselineAttestation.Unattested ||
-                 !string.Equals(key, currentCorrelationKey, StringComparison.Ordinal)))
-            .ToArray();
-        foreach (var item in staleItems)
-        {
-            store.TryResolveAsync(
-                item.CorrelationKey!,
-                $"clean-test baseline no longer active at main {FormatShortSha(mainHeadSha)}",
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-    }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
         ConductorParallelAcceptanceCandidate candidate,

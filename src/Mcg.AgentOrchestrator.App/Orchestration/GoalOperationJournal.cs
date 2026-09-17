@@ -827,7 +827,8 @@ internal static class GoalOperationJournal
                     entry.At,
                     entry.MainHeadSha,
                     entry.AcceptanceOutcome,
-                    entry.FailedCheckNames));
+                    entry.FailedCheckNames,
+                    entry.BranchHeadSha));
             }
         }
 
@@ -865,7 +866,8 @@ internal static class GoalOperationJournal
         DateTimeOffset At,
         string? MainHeadSha,
         string? AcceptanceOutcome,
-        IReadOnlyList<string>? FailedCheckNames);
+        IReadOnlyList<string>? FailedCheckNames,
+        string? BranchHeadSha = null);
 
     private static GoalOperationJournalSummary BuildSummary(string path, GoalOperationJournalEntry[] entries)
     {
