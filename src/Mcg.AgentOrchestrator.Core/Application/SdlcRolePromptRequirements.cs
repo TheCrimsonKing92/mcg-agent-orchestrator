@@ -231,7 +231,7 @@ internal static class SdlcRolePromptRequirements
                 "### 2. Code quality (only after section 1)",
                 "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",
                 "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",
-                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use any test project declared in `config/acceptance-manifest.json` by label, file name, or repo-relative path; never infer or encode a request in description prose.",
+                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use a test project from `config/acceptance-manifest.json` by label, file name, or path; never infer or encode a request in prose.",
                 "- Categories: `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, `operator-owned`, or `acceptance-owned`.",
                 "- Emit exactly one `findings` entry per OPEN_ACTIVE_RECHECK stable_id: `resolved` with closure evidence if fixed, otherwise `open`. Narrative does not update the ledger; omission leaves it open.",
                 "- Move a carried ID only when its prior anchor was touched; emit `touched_anchors`; new-code defects get new IDs.",
