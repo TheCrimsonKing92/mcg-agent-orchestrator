@@ -700,7 +700,7 @@ internal sealed partial class ConductorDriver
             {
                 try
                 {
-                    checkAttributions = CleanTestBaseline.Attribute(
+                    (baselineReceipt, checkAttributions) = AttributeAcceptanceFailureWithExecutedBaseline(
                         baselineReceipt,
                         failedChecks,
                         baselineEvidence,
@@ -2758,7 +2758,7 @@ internal sealed partial class ConductorDriver
                 refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
                 refusalDetail =
                     $"Focused evidence does not support test project '{project}'. Accepted forms: " +
-                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms}.";
+                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms(engineSettings)}.";
                 return false;
             }
 
@@ -3616,6 +3616,30 @@ internal sealed partial class ConductorDriver
         {
             return _runAcceptanceCohortOverride(selection, orderedGoals, policy);
         }
+        var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
+            selection.Members[0],
+            selection.Members[1]);
+        var memberPairKey = CohortGateMemberPairKey(selection);
+        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun) &&
+            !currentRun.Completion.Task.IsCompleted)
+        {
+            return CohortInFlight(
+                selection,
+                orderedGoals,
+                policy,
+                currentRun.PairFingerprint,
+                currentRun.StartedAt);
+        }
+
+        // Drained ahead of the production-dependency check so a faulted background completion is always
+        // reported as data; describing the fault needs the selection only, not the cohort dependencies.
+        // A direct caller that did not come through RunAcceptanceCohortForTick still gets the held result
+        // rather than the background thread's exception.
+        if (TakeCohortGateFault(selection) is { } backgroundFault)
+        {
+            return CohortGateFaulted(orderedGoals, policy, backgroundFault);
+        }
+
         if (_cohortKernel is null ||
             _cohortWorkspace is null ||
             _cohortAcceptanceVerifier is null ||
@@ -3623,27 +3647,6 @@ internal sealed partial class ConductorDriver
         {
             throw new InvalidOperationException("Production acceptance cohort dependencies are unavailable.");
         }
-
-        var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
-            selection.Members[0],
-            selection.Members[1]);
-        var memberPairKey = CohortGateMemberPairKey(selection);
-        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun))
-        {
-            if (!currentRun.Completion.Task.IsCompleted)
-            {
-                return CohortInFlight(
-                    selection,
-                    orderedGoals,
-                    policy,
-                    currentRun.PairFingerprint,
-                    currentRun.StartedAt);
-            }
-
-            _cohortGateRuns.TryRemove(memberPairKey, out _);
-            currentRun.Completion.Task.GetAwaiter().GetResult();
-        }
-        SweepCompletedCohortGateRuns();
 
         var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
         var goals = selection.Members.Select(member =>
@@ -4128,20 +4131,6 @@ internal sealed partial class ConductorDriver
             testResultPaths);
     }
 
-    private void SweepCompletedCohortGateRuns()
-    {
-        foreach (var pair in _cohortGateRuns)
-        {
-            if (!pair.Value.Completion.Task.IsCompleted ||
-                !_cohortGateRuns.TryRemove(pair.Key, out var completed))
-            {
-                continue;
-            }
-
-            completed.Completion.Task.GetAwaiter().GetResult();
-        }
-    }
-
     private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>
         string.Join(
             ":",
@@ -4506,51 +4495,6 @@ internal sealed partial class ConductorDriver
         string.IsNullOrWhiteSpace(recorded) ||
         string.IsNullOrWhiteSpace(current) ||
         recorded.Equals(current, StringComparison.OrdinalIgnoreCase);
-
-    internal static void ReconcileCleanBaselineAttention(
-        ICollaborationItemStore store,
-        Goal goal,
-        string? mainHeadSha,
-        CleanTestBaselineReceipt receipt)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(goal);
-        ArgumentNullException.ThrowIfNull(receipt);
-
-        var currentCorrelationKey =
-            CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
-        var activeCorrelationKey = receipt.Attestation == CleanBaselineAttestation.AttestedRed
-            ? currentCorrelationKey
-            : null;
-        if (activeCorrelationKey is not null)
-        {
-            store.RaiseAsync(
-                CollaborationItemType.Decision,
-                goal.Id.Value,
-                $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
-                CleanTestBaseline.FormatJournalDetail(receipt),
-                activeCorrelationKey,
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-
-        var staleItems = store.ListAsync(cancellationToken: CancellationToken.None)
-            .GetAwaiter()
-            .GetResult()
-            .Where(item =>
-                item.CorrelationKey is { Length: > 0 } key &&
-                key.StartsWith(CleanBaselineRedCorrelationKeyPrefix, StringComparison.Ordinal) &&
-                !string.Equals(key, activeCorrelationKey, StringComparison.Ordinal) &&
-                (receipt.Attestation != CleanBaselineAttestation.Unattested ||
-                 !string.Equals(key, currentCorrelationKey, StringComparison.Ordinal)))
-            .ToArray();
-        foreach (var item in staleItems)
-        {
-            store.TryResolveAsync(
-                item.CorrelationKey!,
-                $"clean-test baseline no longer active at main {FormatShortSha(mainHeadSha)}",
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-    }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
         ConductorParallelAcceptanceCandidate candidate,

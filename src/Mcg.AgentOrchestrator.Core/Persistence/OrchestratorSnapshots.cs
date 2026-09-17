@@ -278,7 +278,8 @@ public sealed record HumanInputRequestSnapshot(
     IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
     IReadOnlyList<HumanInputAnswerRecord>? AnswerHistory = null,
     int SuppressionAnswerRevision = 0,
-    long SuppressionRevision = 0);
+    long SuppressionRevision = 0,
+    string? EvidenceOwner = null);
 
 public static class VerificationTextBounds
 {

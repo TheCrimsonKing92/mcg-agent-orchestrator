@@ -134,7 +134,7 @@ public sealed class CleanTestBaselineTests
     }
 
     [Xunit.Fact]
-    public void ResolveGreenMainAttributesCandidateFailureAsIntroduced()
+    public void ResolveCandidatePassRetainsOnlyObservedGreenEvidence()
     {
         var current = GoalId.New();
         var prior = GoalId.New();
@@ -145,12 +145,13 @@ public sealed class CleanTestBaselineTests
         var attribution = Assert.Single(CleanTestBaseline.Attribute(
             receipt, ["core tests"], journals, current, "main-a"));
 
-        Assert.Equal(CleanBaselineAttestation.AttestedGreen, receipt.Attestation);
-        Assert.Equal(AcceptanceFailureOrigin.Introduced, attribution.Origin);
+        Assert.Equal(CleanBaselineAttestation.ObservedGreenCandidatePass, receipt.Attestation);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Contains("does not attest", attribution.Evidence, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void ResolveTwoGoalsSharingFailureAttributesAsInherited()
+    public void ResolveTwoGoalsSharingFailureRetainsOnlyObservedCorrelation()
     {
         var current = GoalId.New();
         var first = GoalId.New();
@@ -163,9 +164,9 @@ public sealed class CleanTestBaselineTests
         var attribution = Assert.Single(CleanTestBaseline.Attribute(
             receipt, ["infrastructure tests"], journals, current, "main-a"));
 
-        Assert.Equal(CleanBaselineAttestation.AttestedRed, receipt.Attestation);
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
         Assert.Equal(["infrastructure tests"], receipt.SharedFailingChecks);
-        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
         Assert.Equal(AcceptanceFailureCause.NotClassified, attribution.Cause);
         Assert.True(
             attribution.Evidence.Contains(first.Value[..8], StringComparison.OrdinalIgnoreCase) ||
@@ -202,7 +203,254 @@ public sealed class CleanTestBaselineTests
         Assert.Equal(
             AcceptanceFailureCause.EnvironmentalApparatus,
             attribution.Cause);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
         Assert.Contains("git child receipt", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void AttributeUsesExecutedMergeBaseIdentityEvidenceForUniformOrigin()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        const string identity = "Tests.BaselineFixture.Fails";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a")
+            ]);
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, [checkName], journals, current, "main-a", [failedCheck]));
+
+        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Contains("merge-base base-a", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void AttributeMixedMergeBaseIdentityEvidenceRemainsUnattributed()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: ["Tests.One", "Tests.Two"],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution("Tests.One", AcceptanceTestFailureOrigin.Inherited, "failed at merge-base base-a"),
+                new AcceptanceTestFailureAttribution("Tests.Two", AcceptanceTestFailureOrigin.Introduced, "green at merge-base base-a")
+            ]);
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, [checkName], journals, current, "main-a", [failedCheck]));
+
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Contains("correlation does not prove", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ExecutedMergeBaseInheritedOriginAttestsRedAtProvenScopeOnly()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        const string identity = "Tests.BaselineFixture.Fails";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a")
+            ]);
+
+        var observed = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            observed, [checkName], current, [failedCheck]);
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, observed.Attestation);
+        Assert.Equal(CleanBaselineAttestation.AttestedRed, attested.Attestation);
+        Assert.Equal(current.Value, attested.SourceGoalId);
+        Assert.Null(attested.SourceAt);
+        Assert.Contains("executed merge-base baseline arm", attested.Evidence, StringComparison.Ordinal);
+        Assert.Contains("proven only for that executed focused selection", attested.Evidence, StringComparison.Ordinal);
+        Assert.Contains("merge-base base-a", attested.Evidence, StringComparison.Ordinal);
+        // The correlated-observation reporting stays readable beside the proof.
+        Assert.Contains("retained observation:", attested.Evidence, StringComparison.Ordinal);
+        Assert.Equal(observed.SharedFailingChecks, attested.SharedFailingChecks);
+    }
+
+    [Xunit.Fact]
+    public void ExecutedMergeBaseIntroducedOriginsAttestGreenOnlyForExecutedSelection()
+    {
+        var current = GoalId.New();
+        const string checkName = "core tests";
+        const string identity = "Tests.Core.Introduced";
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Introduced,
+                    "focused identity was green at merge-base base-a")
+            ]);
+
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            CleanTestBaseline.Unattested("main-a"), [checkName], current, [failedCheck]);
+
+        Assert.Equal(CleanBaselineAttestation.AttestedGreen, attested.Attestation);
+        Assert.Contains(
+            "attests only that executed focused selection",
+            attested.Evidence,
+            StringComparison.Ordinal);
+        Assert.Contains("not the whole baseline at main", attested.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ExecutedMergeBaseGreenArmMissingAFailingCheckStaysUnattested()
+    {
+        var current = GoalId.New();
+        const string covered = "core tests";
+        const string uncovered = "infrastructure tests";
+        var failedCheck = new AcceptanceCheckResult(
+            covered,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: ["Tests.Core.Introduced"],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    "Tests.Core.Introduced",
+                    AcceptanceTestFailureOrigin.Introduced,
+                    "focused identity was green at merge-base base-a")
+            ]);
+
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            CleanTestBaseline.Unattested("main-a"), [covered, uncovered], current, [failedCheck]);
+
+        Assert.Equal(CleanBaselineAttestation.Unattested, attested.Attestation);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void NameOnlyOrMixedEvidenceNeverProducesAuthoritativeAttestation(bool supplyMixedIdentities)
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        AcceptanceCheckResult[]? receipts = supplyMixedIdentities
+            ?
+            [
+                new AcceptanceCheckResult(
+                    checkName,
+                    false,
+                    1,
+                    "failure",
+                    FailingTestIdentities: ["Tests.One", "Tests.Two"],
+                    FailingTestAttributions:
+                    [
+                        new AcceptanceTestFailureAttribution("Tests.One", AcceptanceTestFailureOrigin.Inherited, "failed at merge-base base-a"),
+                        new AcceptanceTestFailureAttribution("Tests.Two", AcceptanceTestFailureOrigin.Unattributed, "baseline inconclusive at merge-base base-a")
+                    ])
+            ]
+            : null;
+
+        var observed = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            observed, [checkName], current, receipts);
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, attested.Attestation);
+        Assert.Equal(observed.Evidence, attested.Evidence);
+        Assert.Equal(observed.SourceGoalId, attested.SourceGoalId);
+    }
+
+    [Xunit.Fact]
+    public void AuthoritativeAttestationDoesNotChangeTypedOriginOrCauseForConsumers()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        const string checkName = "infrastructure tests";
+        const string identity = "Tests.BaselineFixture.Fails";
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", [checkName])),
+            (second, Entry(second, "main-a", "failed", [checkName])));
+        var failedCheck = new AcceptanceCheckResult(
+            checkName,
+            false,
+            1,
+            "failure",
+            FailingTestIdentities: [identity],
+            FailingTestAttributions:
+            [
+                new AcceptanceTestFailureAttribution(
+                    identity,
+                    AcceptanceTestFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a")
+            ]);
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, [checkName], journals, current, "main-a", [failedCheck]));
+        var attested = CleanTestBaseline.WithExecutedBaselineAttestation(
+            receipt, [checkName], current, [failedCheck]);
+        var summary = new AcceptanceVerificationSummary(
+            false,
+            [failedCheck],
+            FailedChecks: [checkName],
+            CheckAttributions: [attribution],
+            BaselineAttestation: CleanTestBaseline.FormatFailureAttestation(attested));
+
+        // An attested-red baseline is proof of origin, never of cause: the gate still needs its own
+        // positive apparatus receipt, so the deterministic apparatus path must not trip from this.
+        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureCause.NotClassified, attribution.Cause);
+        Assert.Equal(CleanBaselineAttestation.AttestedRed, attested.Attestation);
+        Assert.StartsWith("attested-red;", summary.BaselineAttestation, StringComparison.Ordinal);
+        Assert.Same(summary, ConductorDriver.ClassifyInheritedBaselineApparatus(summary));
+        Assert.False(ConductorDriver.IsEnvironmentalApparatusAcceptanceRun(summary));
     }
 
     [Xunit.Fact]
@@ -521,9 +769,63 @@ public sealed class CleanTestBaselineTests
         var attribution = Assert.Single(CleanTestBaseline.Attribute(
             receipt, ["core tests"], journals, current, "main-a"));
 
-        Assert.Equal(CleanBaselineAttestation.AttestedRed, receipt.Attestation);
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
         Assert.Equal(["core tests"], receipt.SharedFailingChecks);
-        Assert.Equal(AcceptanceFailureOrigin.Inherited, attribution.Origin);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+    }
+
+    [Xunit.Fact]
+    public void ResolveRepeatedCandidateLineageRemainsObservedAndUnattributed()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", ["core tests"], "candidate-a")),
+            (second, Entry(second, "main-a", "failed", ["core tests"], "candidate-a")));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, ["core tests"], journals, current, "main-a"));
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Contains("same candidate lineage", receipt.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ResolveDistinctCandidateLineagesRemainObservedWithoutClaimingIdentityIsIncomplete()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        var journals = Journals(
+            (first, Entry(first, "main-a", "failed", ["core tests"], "candidate-a")),
+            (second, Entry(second, "main-a", "failed", ["core tests"], "candidate-b")));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+
+        Assert.Equal(CleanBaselineAttestation.ObservedRedCorrelation, receipt.Attestation);
+        Assert.Contains("distinct candidate lineages", receipt.Evidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("incomplete lineage identity", receipt.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ResolveLegacyOrInconclusiveEvidenceRemainsUnattested()
+    {
+        var current = GoalId.New();
+        var legacy = GoalId.New();
+        var inconclusive = GoalId.New();
+        var journals = Journals(
+            (legacy, Entry(legacy, "main-a", "unknown", ["core tests"])),
+            (inconclusive, Entry(inconclusive, "main-a", "failed", null)));
+
+        var receipt = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attribution = Assert.Single(CleanTestBaseline.Attribute(
+            receipt, ["core tests"], journals, current, "main-a"));
+
+        Assert.Equal(CleanBaselineAttestation.Unattested, receipt.Attestation);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
     }
 
     [Xunit.Fact]
@@ -578,6 +880,7 @@ public sealed class CleanTestBaselineTests
 
             var acceptance = Assert.Single(journal.Entries.Where(entry => entry.AcceptanceOutcome == "failed"));
             Assert.Equal(["core tests"], acceptance.FailedCheckNames);
+            Assert.Equal("branch-a", acceptance.BranchHeadSha);
             var baseline = Assert.Single(journal.LatestByOperation.Where(entry =>
                 entry.Operation == "conductor:clean-baseline"));
             Assert.Equal("main-a", baseline.MainHeadSha);
@@ -587,6 +890,7 @@ public sealed class CleanTestBaselineTests
             Assert.Equal(goal.Id, evidence.GoalId);
             Assert.Equal("failed", evidence.AcceptanceOutcome);
             Assert.Equal(["core tests"], evidence.FailedCheckNames);
+            Assert.Equal("branch-a", evidence.BranchHeadSha);
             Assert.Empty(GoalOperationJournal.ReadAcceptanceEvidenceForMain(root, "main-b"));
             Assert.Empty(GoalOperationJournal.ReadAcceptanceEvidenceForMain(root, "   "));
         }
@@ -608,7 +912,7 @@ public sealed class CleanTestBaselineTests
             var red = new CleanTestBaselineReceipt(
                 "main-a",
                 null,
-                CleanBaselineAttestation.AttestedRed,
+                CleanBaselineAttestation.ObservedRedCorrelation,
                 goal.Id.Value,
                 DateTimeOffset.UtcNow,
                 ["core tests"],
@@ -616,7 +920,7 @@ public sealed class CleanTestBaselineTests
             var green = new CleanTestBaselineReceipt(
                 "main-b",
                 null,
-                CleanBaselineAttestation.AttestedGreen,
+                CleanBaselineAttestation.ObservedGreenCandidatePass,
                 goal.Id.Value,
                 DateTimeOffset.UtcNow,
                 [],
@@ -627,8 +931,76 @@ public sealed class CleanTestBaselineTests
 
             var item = Assert.Single(await store.ListAsync());
             Assert.Equal("clean-baseline-red:main-a", item.CorrelationKey);
+            // Name-only correlation must be titled as a correlation over the named checks, never as an
+            // attested red baseline; the attested wording belongs to the executed merge-base arm alone.
+            Assert.Equal("Observed clean-test failure correlation at main-a for core tests", item.Subject);
+            Assert.DoesNotContain("Attested red", item.Subject, StringComparison.Ordinal);
             Assert.Equal(CollaborationItemStatus.Resolved, item.Status);
             Assert.Contains("main-b", item.Resolution, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ReconcileAttentionTitlesExecutedBaselineEvidenceAsAttestedRed()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-clean-baseline-attested-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = CollaborationItemStore.ForDirectory(Path.Combine(root, ".orchestrator"));
+            var goal = TestGoal("Baseline attention");
+            var attested = new CleanTestBaselineReceipt(
+                "main-a",
+                "base-a",
+                CleanBaselineAttestation.AttestedRed,
+                goal.Id.Value,
+                null,
+                ["core tests"],
+                "executed merge-base baseline arm reproduced 1 failing check(s)");
+
+            ConductorDriver.ReconcileCleanBaselineAttention(store, goal, "main-a", attested);
+
+            var item = Assert.Single(await store.ListAsync());
+            Assert.Equal("clean-baseline-red:main-a", item.CorrelationKey);
+            Assert.Equal(
+                "Attested red clean-test baseline at main-a from executed merge-base evidence",
+                item.Subject);
+            Assert.DoesNotContain("Observed", item.Subject, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ReconcileAttentionTruncatesManyCorrelatedCheckNames()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-clean-baseline-many-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = CollaborationItemStore.ForDirectory(Path.Combine(root, ".orchestrator"));
+            var goal = TestGoal("Baseline attention");
+            var correlated = new CleanTestBaselineReceipt(
+                "main-a",
+                null,
+                CleanBaselineAttestation.ObservedRedCorrelation,
+                goal.Id.Value,
+                DateTimeOffset.UtcNow,
+                ["a tests", "b tests", "c tests", "d tests"],
+                "observed 4 shared check label(s)");
+
+            ConductorDriver.ReconcileCleanBaselineAttention(store, goal, "main-a", correlated);
+
+            var item = Assert.Single(await store.ListAsync());
+            Assert.Equal(
+                "Observed clean-test failure correlation at main-a for a tests, b tests, c tests (+1 more)",
+                item.Subject);
         }
         finally
         {
@@ -658,7 +1030,8 @@ public sealed class CleanTestBaselineTests
         GoalId goalId,
         string mainSha,
         string outcome,
-        IReadOnlyList<string>? failedChecks = null) =>
+        IReadOnlyList<string>? failedChecks = null,
+        string? branchHeadSha = null) =>
         new(
             Guid.NewGuid().ToString("N"),
             goalId,
@@ -666,6 +1039,7 @@ public sealed class CleanTestBaselineTests
             outcome == "passed" ? GoalOperationStatus.Completed : GoalOperationStatus.Failed,
             DateTimeOffset.UtcNow,
             "receipt",
+            BranchHeadSha: branchHeadSha,
             MainHeadSha: mainSha,
             AcceptanceOutcome: outcome,
             FailedCheckNames: failedChecks);

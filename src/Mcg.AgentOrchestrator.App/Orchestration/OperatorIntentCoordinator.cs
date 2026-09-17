@@ -353,6 +353,7 @@ internal sealed class OperatorIntentCoordinator
                 request.GoalId == goal.Id &&
                 request.TaskId == taskId &&
                 !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind) &&
                 !IsRetryCauseClarification(request, blockerFingerprint)))
         {
             return RetryClarificationHandling.AwaitingOtherHumanInput;

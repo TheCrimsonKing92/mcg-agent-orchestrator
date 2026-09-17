@@ -2378,6 +2378,13 @@ public sealed class DispatchProcessHostTests
             {
                 warmup = RunMeasuredDispatch(root, worktree, logs, "warmup");
                 Assert.Equal("complete", warmup.Phase);
+                Assert.False(warmup.PrepReceiptHit);
+                Assert.Contains(
+                    WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase,
+                    warmup.SandboxPrepEvents.Select(evt => evt.Phase));
+                Assert.Contains(
+                    WorkerSandboxPreparer.ProtectGitMetadataPhase,
+                    warmup.SandboxPrepEvents.Select(evt => evt.Phase));
 
                 for (var attempt = 1; attempt <= 5; attempt++)
                 {
@@ -2389,9 +2396,12 @@ public sealed class DispatchProcessHostTests
 
                 Assert.All(receiptHitMeasurements, measurement =>
                 {
+                    var phases = measurement.SandboxPrepEvents.Select(evt => evt.Phase).ToArray();
+                    Assert.DoesNotContain(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, phases);
+                    Assert.DoesNotContain(WorkerSandboxPreparer.ProtectGitMetadataPhase, phases);
                     Assert.Equal("receipt-hit", measurement.Phase);
-                    Assert.InRange(measurement.SandboxPrepElapsedMs, 0, 10_000);
-                    Assert.InRange(measurement.DispatchElapsedMs, 0, 10_000);
+                    Assert.Contains("receipt-fast-path", phases);
+                    Assert.True(measurement.PrepReceiptHit);
                     Assert.Contains("worker-first-output", File.ReadAllText(measurement.StdoutPath), StringComparison.Ordinal);
                 });
 
@@ -2664,6 +2674,12 @@ public sealed class DispatchProcessHostTests
         }
 
         var sandboxPrepEvents = ReadSandboxPrepEvents(stderrPath);
+        var setupArtifactPath = Path.Combine(
+            worktree,
+            ".mcg-sandbox",
+            DispatchProcessHost.LowIntegritySetupArtifactName);
+        using var setupArtifact = JsonDocument.Parse(File.ReadAllText(setupArtifactPath));
+        var prepReceiptHit = setupArtifact.RootElement.GetProperty("prepReceiptHit").GetBoolean();
         var terminalPrepEvent = sandboxPrepEvents
             .LastOrDefault(evt =>
             {
@@ -2677,6 +2693,7 @@ public sealed class DispatchProcessHostTests
             terminalPrepEvent.GetProperty("phase").GetString() ?? string.Empty,
             elapsed.GetInt64(),
             stopwatch.ElapsedMilliseconds,
+            prepReceiptHit,
             stdoutPath,
             sandboxPrepEvents.Select(ToSandboxPrepEvent).ToArray());
     }
@@ -2988,6 +3005,7 @@ public sealed class DispatchProcessHostTests
         string Phase,
         long SandboxPrepElapsedMs,
         long DispatchElapsedMs,
+        bool PrepReceiptHit,
         string StdoutPath,
         IReadOnlyCollection<SandboxPrepEvent> SandboxPrepEvents);
 

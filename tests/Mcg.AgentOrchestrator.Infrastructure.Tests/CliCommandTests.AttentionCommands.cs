@@ -844,6 +844,11 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
         RecordRunningProcess(kernel, goal, task, root);
+        var prospective = kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
         var goalPrefix = goal.Id.Value[..8];
 
         var dryRunOutput = CaptureConsole(() =>
@@ -861,7 +866,7 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
 
         Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
         Xunit.Assert.True(task.LastProcess!.IsRunning);
-        Xunit.Assert.Empty(kernel.HumanInputRequests);
+        Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
         Xunit.Assert.Contains("Goal park dry run", dryRunOutput);
         Xunit.Assert.Contains("attention waits: resolve with park reason", dryRunOutput);
 
@@ -880,7 +885,8 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
 
         Xunit.Assert.Equal(GoalStatus.Parked, goal.Status);
         Xunit.Assert.False(task.LastProcess!.IsRunning);
-        Xunit.Assert.Empty(kernel.HumanInputRequests);
+        Xunit.Assert.False(prospective.IsCompleted);
+        Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
         Xunit.Assert.Contains("Resolved human waits: 0", applyOutput);
         Xunit.Assert.Contains("Resolved attention items: 0", applyOutput);
     }

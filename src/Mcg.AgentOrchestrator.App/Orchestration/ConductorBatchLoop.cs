@@ -3013,22 +3013,61 @@ internal sealed partial class ConductorBatchLoop
                 EmitProgress(
                     $"ACCEPTANCE_COHORT_ENTRY tick={tick} goal={markerGoal} members={memberIds}");
                 ConductorAcceptanceCohortRunResult cohortRun;
+                ConductorAcceptanceCohortGateFault? gateFault;
                 var exitOutcome = "exception";
                 var exitReason = string.Empty;
                 try
                 {
-                    cohortRun = driver.RunAcceptanceCohort(
+                    var cohortOutcome = driver.RunAcceptanceCohortForTick(
                         cohortSelection,
                         cohortEligible,
                         policy,
                         onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
                         runGateInBackground: true);
-                    (exitOutcome, exitReason) = DescribeAcceptanceCohortExit(cohortRun);
+                    cohortRun = cohortOutcome.Run;
+                    gateFault = cohortOutcome.Fault;
+                    if (gateFault is { } observedFault)
+                    {
+                        var observedMemberIds = observedFault.MemberGoalIds
+                            .OrderBy(id => id, StringComparer.Ordinal)
+                            .ToArray();
+                        memberIds = string.Join(',', observedMemberIds.Select(id => id[..8]));
+                        markerGoal = observedMemberIds[0][..8];
+                    }
+                    (exitOutcome, exitReason) = gateFault is { } backgroundFault
+                        ? DescribeAcceptanceCohortGateFault(backgroundFault)
+                        : DescribeAcceptanceCohortExit(cohortRun);
+                }
+                catch (Exception cohortGateException)
+                {
+                    // The cohort gate is the conductor's own machinery. Nothing it throws is allowed to end
+                    // the tick: a transient fault is held and retried like the background attempt path does,
+                    // and anything else escalates both members on the spot. Either way it leaves as data.
+                    gateFault = ConductorDriver.CreateCohortGateFault(
+                        cohortSelection,
+                        cohortGateException);
+                    cohortRun = new ConductorAcceptanceCohortRunResult(
+                        Receipt: null,
+                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                        $"outcome=gate-fault fingerprint={gateFault.PairFingerprint} " +
+                        $"fault={gateFault.FaultType} detail={SanitizeReason(gateFault.Message)}");
+                    (exitOutcome, exitReason) = DescribeAcceptanceCohortGateFault(gateFault);
                 }
                 finally
                 {
                     EmitProgress(
                         $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}{exitReason}");
+                }
+                if (gateFault is { } cohortGateFault)
+                {
+                    cohortRun = ResolveFaultedAcceptanceCohort(
+                        driver,
+                        policy,
+                        cohortEligible,
+                        cohortRun,
+                        cohortGateFault,
+                        tick,
+                        changedGoalLines);
                 }
                 foreach (var pair in cohortRun.MemberResults)
                 {
@@ -4647,7 +4686,7 @@ internal sealed partial class ConductorBatchLoop
             return false;
         }
 
-        if (kernel.GetPendingHumanInput(goal.Id).Count > 0)
+        if (kernel.GetPendingBlockingHumanInput(goal.Id).Count > 0)
         {
             return false;
         }

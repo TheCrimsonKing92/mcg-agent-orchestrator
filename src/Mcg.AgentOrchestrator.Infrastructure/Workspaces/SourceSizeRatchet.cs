@@ -71,7 +71,10 @@ internal static class SourceSizeRatchet
             // Raised for goal 8263a08c: exited-dispatch reconciliation must precede the existing failure
             // retry ladder and guard the shared dispatch-start boundary before LastProcess is replaced.
             // Goal 1592104a extracted acceptance-owned evidence recording and outstanding-obligation diagnostics.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6774),
+            // Lowered for goal 5d57fe95: clean-baseline attention subject formatting moved to CleanTestBaseline,
+            // which already owns receipt wire values and journal/attestation text; the driver keeps only the
+            // correlation-key lifecycle and passes its own short-sha rendering to that formatter.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6757),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -116,13 +119,13 @@ internal static class SourceSizeRatchet
             // be transported from the dispatch record at the single process-start boundary that already
             // owns the dispatch parameters; selection, validation, and seeding remain in
             // ClaudeCredentialSource. 2682 is the measured size of that call site.
-            // Raised by one line for goal bb2d2d5a: the completion state carries the typed
-            // HumanWaitKind the worker's human-input directive declared, so the kind the planner
-            // raised survives to the recording boundary that decides whether an answer is
-            // prerequisite evidence. There is nothing to extract - it is a single named argument on
-            // the existing DispatchProcessCompletionState construction, and moving the construction
-            // itself would split the completion contract the runner owns.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2683),
+            // Goal bb2d2d5a added the typed HumanWaitKind, and goal be5e06b0 adds the typed
+            // EvidenceOwner, so both parts of the planner's evidence obligation survive to the
+            // recording boundary. Each increase is one named argument on the existing
+            // DispatchProcessCompletionState construction; moving that construction would split
+            // the completion contract the runner owns rather than extract independent behavior.
+            // 2684 is the measured post-change size of that contract-preserving handoff.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2684),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -194,7 +197,10 @@ internal static class SourceSizeRatchet
             // Reconciled after main 0d44d054 added the 27-line no-eager-journal-read regression; this is
             // the measured combined test-owner size, not additional goal coverage.
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1279),
+            // Raised by one line for goal 5d57fe95: the observed-correlation control must assert both that
+            // origin stays Unattributed and that the apparatus hold still classifies, because the defect being
+            // guarded is exactly the pair coming apart; splitting them would lose the contract they compare.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1280),
             // Raised for goal 13630c9f: lifecycle coverage keeps unchanged-candidate holds, bounded
             // operator release, and main/candidate HEAD regating in one state-transition decision table.
             // Raised for goal d5fcf981: acceptance attribution controls prove worker retry versus held
@@ -207,7 +213,8 @@ internal static class SourceSizeRatchet
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
             // Raised for goal 52590d3e: the finding-evidence owner now carries both recorded incident shapes,
             // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2713),
+            // Goal aab291fd extracted manifest-declared project resolution controls to their own partial.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1299),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.

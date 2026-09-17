@@ -12,7 +12,7 @@ using System.Xml.Linq;
 using static ConductorDriverTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class ConductorDriverTestsFindingEvidence
+public sealed partial class ConductorDriverTestsFindingEvidence
 {
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_evidence_request_runs_focused_evidence_and_retries_reviewer_only")]
     public void ConductorDriverReviewerEvidenceRequestRunsFocusedEvidenceAndRetriesReviewerOnly()
@@ -2288,51 +2288,6 @@ public sealed class ConductorDriverTestsFindingEvidence
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("reason=unsupported-project", retryBrief, StringComparison.Ordinal);
         Assert.Contains("valid evidence passed", retryBrief, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact]
-    public void FindingEvidenceRequestAcceptsRegisteredCliInfrastructureProject()
-    {
-        const string cliProject =
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
-            "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
-        var (kernel, goal) = SoftwareGoal();
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
-        var finding = EvidenceFindingWithRequest(
-            "The extracted CLI project needs focused evidence.",
-            id: "cli-extracted-project",
-            project: "Infrastructure.Cli.Tests",
-            classes: ["CliArgumentNormalizationTests", "CliCommandTestsAddTaskCommands"]);
-        FailReviewerNeedsWork(kernel, goal, reviewer, "registered extracted project", findings: [finding]);
-        string? request = null;
-        var driver = MakeDriver(
-            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            getFindingEvidenceEngineSettings: _ => new AcceptanceGateEngineSettings
-            {
-                MtpInvocations = [new AcceptanceMtpInvocation { Project = cliProject }]
-            },
-            runFocusedEvidence: (_, value) =>
-            {
-                request = value;
-                return new FocusedEvidenceRunResult(value, true, true, "registered project passed", []);
-            },
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
-            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(
-            "Infrastructure.Cli.Tests:CliArgumentNormalizationTests; Infrastructure.Cli.Tests:CliCommandTestsAddTaskCommands",
-            request);
-        var recorded = reviewer.VerificationHistory.Last().MergedReviewFindings!;
-        Assert.True(recorded.Single(item => item.StableId == "cli-extracted-project").EvidenceOutcome?.Honoured);
     }
 
     [Xunit.Fact]
