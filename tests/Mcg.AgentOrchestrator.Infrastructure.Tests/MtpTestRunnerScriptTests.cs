@@ -314,11 +314,22 @@ public sealed class MtpTestRunnerScriptTests
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         using var translated = JsonDocument.Parse(result.Stdout.Trim());
         Assert.Equal(configuredCount, translated.RootElement.GetArrayLength());
+        var universe = DiscoverManagedTestCatalog(allowEmpty: false);
         foreach (var item in translated.RootElement.EnumerateArray())
         {
-            var arguments = item.GetProperty("args").EnumerateArray().Select(value => value.GetString()).ToArray();
+            var filter = item.GetProperty("filter").GetString()!;
+            var arguments = item.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
             Assert.NotEmpty(arguments);
-            Assert.True(arguments.Length % 2 == 0, item.GetProperty("filter").GetString());
+            Assert.True(arguments.Length % 2 == 0, filter);
+
+            var expected = universe
+                .Where(test => ManagedFilterExpressionEvaluator.Evaluate(filter, test))
+                .Select(test => test.Uid)
+                .Order(StringComparer.Ordinal);
+            var actual = DiscoverManagedTests(allowEmpty: true, arguments)
+                .Keys
+                .Order(StringComparer.Ordinal);
+            Assert.Equal(expected, actual);
         }
 
         var broadClass = DiscoverManagedTests("--filter-class", "*MtpTestRunnerScriptTests*");
@@ -1266,6 +1277,12 @@ public sealed class MtpTestRunnerScriptTests
     private static IReadOnlyDictionary<string, string> DiscoverManagedTests(
         bool allowEmpty,
         params string[] filterArguments)
+        => DiscoverManagedTestCatalog(allowEmpty, filterArguments)
+            .ToDictionary(test => test.Uid, test => test.DisplayName, StringComparer.Ordinal);
+
+    private static IReadOnlyList<ManagedTestDescriptor> DiscoverManagedTestCatalog(
+        bool allowEmpty,
+        params string[] filterArguments)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -1291,15 +1308,157 @@ public sealed class MtpTestRunnerScriptTests
         using var document = JsonDocument.Parse(result.Stdout.Trim());
         var tests = document.RootElement.GetProperty("tests")
             .EnumerateArray()
-            .ToDictionary(
-                test => test.GetProperty("uid").GetString()!,
-                test => test.GetProperty("displayName").GetString()!,
-                StringComparer.Ordinal);
+            .Select(test =>
+            {
+                var type = test.GetProperty("type");
+                var traits = test.TryGetProperty("traits", out var traitElements)
+                    ? traitElements.EnumerateArray()
+                        .Select(trait => new KeyValuePair<string, string>(
+                            trait.GetProperty("key").GetString()!,
+                            trait.GetProperty("value").GetString()!))
+                        .ToArray()
+                    : [];
+                return new ManagedTestDescriptor(
+                    test.GetProperty("uid").GetString()!,
+                    test.GetProperty("displayName").GetString()!,
+                    type.GetProperty("typeName").GetString()!,
+                    type.GetProperty("methodName").GetString()!,
+                    traits);
+            })
+            .ToArray();
         if (!allowEmpty)
         {
             Assert.NotEmpty(tests);
         }
         return tests;
+    }
+
+    private sealed record ManagedTestDescriptor(
+        string Uid,
+        string DisplayName,
+        string TypeName,
+        string MethodName,
+        IReadOnlyList<KeyValuePair<string, string>> Traits);
+
+    private sealed class ManagedFilterExpressionEvaluator
+    {
+        private readonly string _filter;
+        private readonly ManagedTestDescriptor _test;
+        private int _index;
+
+        private ManagedFilterExpressionEvaluator(string filter, ManagedTestDescriptor test)
+        {
+            _filter = filter;
+            _test = test;
+        }
+
+        public static bool Evaluate(string filter, ManagedTestDescriptor test)
+        {
+            var evaluator = new ManagedFilterExpressionEvaluator(filter, test);
+            var result = evaluator.ReadOr();
+            evaluator.SkipWhitespace();
+            if (evaluator._index != filter.Length)
+            {
+                throw new InvalidOperationException($"Unexpected manifest filter text at position {evaluator._index}: {filter}");
+            }
+            return result;
+        }
+
+        private bool ReadOr()
+        {
+            var result = ReadAnd();
+            while (TryRead('|'))
+            {
+                result |= ReadAnd();
+            }
+            return result;
+        }
+
+        private bool ReadAnd()
+        {
+            var result = ReadAtom();
+            while (TryRead('&'))
+            {
+                result &= ReadAtom();
+            }
+            return result;
+        }
+
+        private bool ReadAtom()
+        {
+            SkipWhitespace();
+            if (TryRead('('))
+            {
+                var result = ReadOr();
+                if (!TryRead(')'))
+                {
+                    throw new InvalidOperationException($"Unclosed group in manifest filter: {_filter}");
+                }
+                return result;
+            }
+
+            var start = _index;
+            while (_index < _filter.Length && _filter[_index] is not ('&' or '|' or '(' or ')'))
+            {
+                _index++;
+            }
+            var predicate = _filter[start.._index].Trim();
+            return EvaluatePredicate(predicate);
+        }
+
+        private bool EvaluatePredicate(string predicate)
+        {
+            var (property, operation, value) = SplitPredicate(predicate);
+            return (property, operation) switch
+            {
+                ("FullyQualifiedName", "~") => Contains(_test.TypeName, value),
+                ("FullyQualifiedName", "!~") => !Contains(_test.TypeName, value),
+                ("Name", "~") => Contains(_test.MethodName, value),
+                ("Name", "!~") => !Contains(_test.MethodName, value),
+                ("Category", "!=") => !_test.Traits.Any(trait =>
+                    trait.Key.Equals("Category", StringComparison.OrdinalIgnoreCase) &&
+                    trait.Value.Equals(value, StringComparison.OrdinalIgnoreCase)),
+                _ => throw new InvalidOperationException($"Unsupported manifest predicate '{predicate}' in '{_filter}'.")
+            };
+        }
+
+        private static (string Property, string Operation, string Value) SplitPredicate(string predicate)
+        {
+            foreach (var operation in new[] { "!~", "!=", "~" })
+            {
+                var operatorIndex = predicate.IndexOf(operation, StringComparison.Ordinal);
+                if (operatorIndex > 0 && operatorIndex + operation.Length < predicate.Length)
+                {
+                    return (
+                        predicate[..operatorIndex].Trim(),
+                        operation,
+                        predicate[(operatorIndex + operation.Length)..].Trim());
+                }
+            }
+            throw new InvalidOperationException($"Malformed manifest predicate '{predicate}'.");
+        }
+
+        private static bool Contains(string candidate, string value) =>
+            candidate.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+        private bool TryRead(char expected)
+        {
+            SkipWhitespace();
+            if (_index >= _filter.Length || _filter[_index] != expected)
+            {
+                return false;
+            }
+            _index++;
+            return true;
+        }
+
+        private void SkipWhitespace()
+        {
+            while (_index < _filter.Length && char.IsWhiteSpace(_filter[_index]))
+            {
+                _index++;
+            }
+        }
     }
 
     private static ProcessStartInfo PowerShellStartInfo(string workingDirectory) => new()
