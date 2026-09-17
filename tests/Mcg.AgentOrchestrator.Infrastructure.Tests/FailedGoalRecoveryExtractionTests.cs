@@ -29,4 +29,30 @@ public sealed class FailedGoalRecoveryExtractionTests
         Assert.DoesNotContain("TryBuildVerifyingFindingAutoRetry", interpreter, StringComparison.Ordinal);
         Assert.DoesNotContain("var runningSibling = goal.Tasks.FirstOrDefault", driver, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void DriverDoesNotOwnRungEightSelection()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var driver = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Orchestration",
+            "ConductorDriver.cs"));
+        var policy = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.Core",
+            "Application",
+            "FailedGoalRecoveryPolicy.cs"));
+
+        Assert.Contains("SelectReviewContractCandidate", policy, StringComparison.Ordinal);
+        Assert.Contains("SelectReviewContractObservation", policy, StringComparison.Ordinal);
+        Assert.Contains("SelectVerifyingFindingRoute", policy, StringComparison.Ordinal);
+        Assert.DoesNotContain("targetTask = trigger.TargetTask", driver, StringComparison.Ordinal);
+        Assert.DoesNotContain("round >= policy.ReviewAutoRetryStopRound", driver, StringComparison.Ordinal);
+        Assert.DoesNotContain("AutomaticWorkerRetryCause.Resolve(triggeringTask) ??", driver, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryBuildMissingFindingResultRetry", driver, StringComparison.Ordinal);
+    }
 }

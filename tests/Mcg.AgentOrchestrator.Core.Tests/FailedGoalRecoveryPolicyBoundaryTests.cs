@@ -16,13 +16,18 @@ public sealed class FailedGoalRecoveryPolicyBoundaryTests
     [Fact]
     public void EvaluationHasNoEffectCallbackOrEffectfulMemberBoundary()
     {
-        var evaluate = typeof(FailedGoalRecoveryPolicy).GetMethod(nameof(FailedGoalRecoveryPolicy.Evaluate))!;
+        var policyMethods = typeof(FailedGoalRecoveryPolicy).GetMethods(
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
 
-        Assert.DoesNotContain(evaluate.GetParameters(), parameter => typeof(Delegate).IsAssignableFrom(parameter.ParameterType));
-        var members = ReadReferencedMembersTransitive(evaluate);
+        Assert.All(
+            policyMethods,
+            method => Assert.DoesNotContain(
+                method.GetParameters(),
+                parameter => typeof(Delegate).IsAssignableFrom(parameter.ParameterType)));
+        var members = policyMethods.SelectMany(ReadReferencedMembersTransitive).ToArray();
         Assert.DoesNotContain(
             members.OfType<MethodBase>(),
-            method => method.DeclaringType?.Assembly == evaluate.DeclaringType!.Assembly &&
+            method => method.DeclaringType?.Assembly == typeof(FailedGoalRecoveryPolicy).Assembly &&
                 method.GetParameters().Any(parameter => typeof(Delegate).IsAssignableFrom(parameter.ParameterType)));
         Assert.DoesNotContain(members, member => IsForbidden(member.DeclaringType));
     }

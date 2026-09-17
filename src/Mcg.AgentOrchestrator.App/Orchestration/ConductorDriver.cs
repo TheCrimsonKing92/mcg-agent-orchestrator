@@ -1606,23 +1606,19 @@ internal sealed partial class ConductorDriver
         out FailedGoalFindingObservation observation)
     {
         observation = FailedGoalFindingObservation.None;
-        var reviewerTask = goal.Tasks.FirstOrDefault(task =>
-            (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester) &&
-            task.Status == WorkTaskStatus.Failed &&
-            task.LastVerification?.ReviewFindingContractViolation is not null);
-        if (reviewerTask?.LastVerification?.ReviewFindingContractViolation is not { } violation)
-        {
+        var candidate = FailedGoalRecoveryPolicy.SelectReviewContractCandidate(
+            goal.Tasks.Select(task => new FailedGoalReviewContractCandidate(
+                task.Id,
+                task.RequiredRole,
+                task.Status,
+                task.LastVerification?.ReviewFindingContractViolation?.Code,
+                task.LastVerification?.MergedReviewFindings is not null)));
+        if (candidate is null)
             return false;
-        }
 
-        if ((violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
-                ReviewFindingConvergence.RecycledAnchorIdentityViolationCode) &&
-            reviewerTask.LastVerification.MergedReviewFindings is not null)
-        {
-            // The kernel retained the prior form of the invalid transition and accepted the rest of
-            // the substantive round. Let normal Reviewer/Tester convergence route its real blockers.
-            return false;
-        }
+        var reviewerTask = goal.Tasks.Single(task => task.Id == candidate.TaskId);
+        var violation = reviewerTask.LastVerification?.ReviewFindingContractViolation ??
+            throw new InvalidOperationException("Selected review-contract candidate lost its violation evidence.");
 
         IReadOnlyList<ReviewFinding> canonicalLedger;
         try
@@ -1633,71 +1629,70 @@ internal sealed partial class ConductorDriver
         catch (Exception ex) when (
             ex is ReviewFindingConvergenceException or InvalidOperationException or ArgumentException)
         {
-            observation = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.ReviewContractLedgerUnavailable,
-                $"{reviewerTask.RequiredRole} contract-repair could not reconstruct the canonical finding ledger for task {reviewerTask.Id.Value[..8]}; " +
-                $"violation={violation.Code}; diagnostic={TrimForConductorMessage(ex.Message)}; operator action required.");
+            observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(
+                new FailedGoalReviewContractSelectionFacts(
+                    candidate,
+                    $"{reviewerTask.RequiredRole} contract-repair could not reconstruct the canonical finding ledger for task {reviewerTask.Id.Value[..8]}; " +
+                        $"violation={violation.Code}; diagnostic={TrimForConductorMessage(ex.Message)}; operator action required.",
+                    null,
+                    null,
+                    0,
+                    MaxReviewFindingContractRepairsPerRound,
+                    string.Empty,
+                    string.Empty,
+                    BuildFailedGoalAttemptIdentity(reviewerTask)));
             return true;
         }
-
-        if (violation.Code is ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
-                ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode)
-        {
-            var receipt = reviewerTask.LastDispatch?.ReviewRetryCap;
-            observation = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.ReviewRetryCapReached,
-                BuildReviewCapDecisionMessage(
-                goal,
-                reviewerTask,
-                receipt,
-                violation.Message,
-                FormatVerifyingRoleOutputArtifact(reviewerTask),
-                canonicalLedger));
-            return true;
-        }
-
-        if (violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
-                ReviewFindingConvergence.UntouchedReopenViolationCode &&
-            reviewerTask.LastVerification?.ReviewFindingTouchProofDiagnostic is { Length: > 0 } touchProofDiagnostic)
-        {
-            observation = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.ReviewTouchProofUnavailable,
-                $"{reviewerTask.RequiredRole} review-finding contract cannot classify touch-dependent violation {violation.Code} " +
+        var retryCapEvidence = violation.Code is ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
+                ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode
+            ? BuildReviewCapDecisionMessage(
+                 goal,
+                 reviewerTask,
+                 reviewerTask.LastDispatch?.ReviewRetryCap,
+                 violation.Message,
+                 FormatVerifyingRoleOutputArtifact(reviewerTask),
+                 canonicalLedger)
+            : null;
+        var touchProofDiagnostic = reviewerTask.LastVerification?.ReviewFindingTouchProofDiagnostic;
+        var touchProofUnavailableEvidence =
+            (violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
+                ReviewFindingConvergence.UntouchedReopenViolationCode) &&
+            touchProofDiagnostic is { Length: > 0 }
+            ? $"{reviewerTask.RequiredRole} review-finding contract cannot classify touch-dependent violation {violation.Code} " +
                 $"for task {reviewerTask.Id.Value[..8]} because system-derived round-diff proof is unavailable; " +
                 $"suppression=missing-system-derived-round-diff-proof; operator adjudication is required and the mechanical repair budget was not consumed. " +
-                $"Diagnostic: {TrimForConductorMessage(touchProofDiagnostic)}");
-            return true;
-        }
-
+                $"Diagnostic: {TrimForConductorMessage(touchProofDiagnostic)}"
+            : null;
         var priorRepairs = CountReviewerContractRepairsInCurrentRound(goal, reviewerTask);
-        if (priorRepairs >= MaxReviewFindingContractRepairsPerRound)
-        {
-            observation = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.ReviewContractRepairLimitReached,
-                $"{reviewerTask.RequiredRole} exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
+        var repairLimitEvidence =
+            $"{reviewerTask.RequiredRole} exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
                 $"violation_code={violation.Code}; prior_stable_id={violation.PriorStableId ?? "none"}; " +
                 $"submitted_stable_id={violation.SubmittedStableId ?? "none"}; " +
                 $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
                 $"submitted_location={violation.SubmittedLocation?.ToString() ?? "none"}; " +
                 $"canonical_open_count={canonicalLedger.Count(finding => finding.State == ReviewFindingState.Open)}. " +
-                "Operator remedy: retry <goal> <task#> \"<reason>\" --mechanical, then progress <task#> completed and verify-manual <task#> passed.");
+                "Operator remedy: retry <goal> <task#> \"<reason>\" --mechanical, then progress <task#> completed and verify-manual <task#> passed.";
+        var selectionFacts = new FailedGoalReviewContractSelectionFacts(
+                candidate,
+                null,
+                retryCapEvidence,
+                touchProofUnavailableEvidence,
+                priorRepairs,
+                MaxReviewFindingContractRepairsPerRound,
+                repairLimitEvidence,
+                string.Empty,
+                BuildFailedGoalAttemptIdentity(reviewerTask));
+        observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(selectionFacts);
+        if (observation.Kind != FailedGoalFindingObservationKind.ReviewContractRepairEnvelopeAvailable)
             return true;
-        }
-
-        var attempt = priorRepairs + 1;
         var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
             goal,
             reviewerTask,
             violation,
-            attempt,
+            priorRepairs + 1,
             MaxReviewFindingContractRepairsPerRound,
             FormatVerifyingRoleOutputArtifact(reviewerTask));
-        observation = FailedGoalFindingObservation.Routed(
-            FailedGoalFindingObservationKind.ReviewContractRepairEnvelopeAvailable,
-            reviewerTask.Id,
-            BuildFailedGoalAttemptIdentity(reviewerTask),
-            brief,
-            null);
+        observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(selectionFacts with { RepairEnvelope = brief });
         return true;
     }
 
@@ -1722,7 +1717,6 @@ internal sealed partial class ConductorDriver
         {
             return true;
         }
-
         if (trigger is null)
         {
             foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
@@ -1732,7 +1726,6 @@ internal sealed partial class ConductorDriver
                     return true;
                 }
             }
-
             trigger = goal.Tasks
                 .Select(task => BuildVerifyingFindingTrigger(goal, task))
                 .FirstOrDefault(candidate => candidate is not null);
@@ -1765,46 +1758,49 @@ internal sealed partial class ConductorDriver
             }
 
             reviewerRoute = ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding);
-            if (reviewerRoute.EscalateToOperator)
-            {
-                observation = FailedGoalFindingObservation.Observed(
-                    FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
-                    $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
-                    $"Route: {reviewerRoute.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
-                observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
-                return true;
-            }
         }
 
-        var targetRole = triggeringTask.RequiredRole == AgentRole.Tester
-            ? AgentRole.Developer
-            : reviewerRoute?.TargetRole ?? AgentRole.Developer;
-        var targetTask = trigger.TargetTask ??
-            (trigger.RequiresCommittedTarget
-                ? null
-                : goal.Tasks
-                    .TakeWhile(t => t.Id != triggeringTask.Id)
-                    .LastOrDefault(t => t.RequiredRole == targetRole));
-        if (targetTask is null && triggeringTask.RequiredRole == AgentRole.Reviewer && targetRole != AgentRole.Developer)
+        var round = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound).Round;
+        var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(
+            new FailedGoalVerifyingFindingRouteFacts(
+                triggeringTask.Id,
+                triggeringTask.RequiredRole,
+                BuildFailedGoalAttemptIdentity(triggeringTask),
+                trigger.TargetTask?.Id,
+                trigger.RequiresCommittedTarget,
+                reviewerRoute?.TargetRole,
+                reviewerRoute?.EscalateToOperator == true,
+                round,
+                policy.ReviewAutoRetryStopRound,
+                policy.ReviewAutoRetryWarningRound,
+                IsMissingFindingResultRetryEligible(goal, triggeringTask, trigger.Finding),
+                AutomaticWorkerRetryCause.Resolve(triggeringTask),
+                goal.Tasks
+                    .TakeWhile(task => task.Id != triggeringTask.Id)
+                    .Select(task => new FailedGoalFindingRouteTask(task.Id, task.RequiredRole))));
+
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired)
         {
-            targetRole = AgentRole.Developer;
-            targetTask = goal.Tasks
-                .TakeWhile(t => t.Id != triggeringTask.Id)
-                .LastOrDefault(t => t.RequiredRole == AgentRole.Developer);
+            observation = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
+                $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
+                $"Route: {reviewerRoute?.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
+            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            return true;
         }
 
-        if (targetTask is null)
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.TargetUnavailable)
         {
             observation = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingRouteUnavailable,
-                $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {targetRole} task; operator action required. " +
+                $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {route.TargetRole} task; operator action required. " +
                 $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
             observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
             return true;
         }
 
-        var round = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound).Round;
-        if (round >= policy.ReviewAutoRetryStopRound)
+        var targetTask = goal.Tasks.Single(task => task.Id == route.TargetTaskId);
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.RetryCapReached)
         {
             observation = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingRetryCapReached,
@@ -1823,8 +1819,18 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        if (TryBuildMissingFindingResultRetry(goal, triggeringTask, trigger.Finding, round, out observation))
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.MissingFindingResult)
         {
+            observation = FailedGoalFindingObservation.Routed(
+                FailedGoalFindingObservationKind.FindingResultMissing,
+                triggeringTask.Id,
+                route.AttemptIdentity,
+                $"auto-review-retry round {route.Round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} " +
+                "reported needs-work, but its structured finding result was missing or unparseable and no current open blocking finding exists. " +
+                "Re-run the verifying role against the current Developer output; do not reopen the Developer from superseded finding history.",
+                warningMessage: null,
+                route.RoundKind,
+                route.RetryCause);
             observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
             return true;
         }
@@ -1841,7 +1847,7 @@ internal sealed partial class ConductorDriver
                 triggeringTask,
                 trigger.Finding,
                 triggerLabel,
-                targetRole,
+                route.TargetRole,
                 round,
                 outputArtifact,
                 landingFileScopes);
@@ -1856,7 +1862,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var warning = round >= policy.ReviewAutoRetryWarningRound
+        var warning = route.EmitWarning
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."
             : null;
@@ -1866,8 +1872,8 @@ internal sealed partial class ConductorDriver
             BuildFailedGoalAttemptIdentity(targetTask),
             message,
             warning,
-            null,
-            AutomaticWorkerRetryCause.Resolve(triggeringTask) ?? RetryCause.CriterionEvidenceOwnerMismatch);
+            route.RoundKind,
+            route.RetryCause);
         observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
         return true;
     }

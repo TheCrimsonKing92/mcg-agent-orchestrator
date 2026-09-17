@@ -4,14 +4,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private static bool TryBuildMissingFindingResultRetry(
+    private static bool IsMissingFindingResultRetryEligible(
         Goal goal,
         TaskSpec triggeringTask,
-        string blockersText,
-        int round,
-        out FailedGoalFindingObservation observation)
+        string blockersText)
     {
-        observation = FailedGoalFindingObservation.None;
         if (UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(triggeringTask, blockersText) ||
             triggeringTask.RequiredRole != AgentRole.Reviewer ||
             triggeringTask.LastVerification is not { MergedReviewFindings: null } latestVerification ||
@@ -21,14 +18,6 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        observation = FailedGoalFindingObservation.Routed(
-            FailedGoalFindingObservationKind.FindingResultMissing,
-            triggeringTask.Id,
-            BuildFailedGoalAttemptIdentity(triggeringTask),
-            $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} " +
-            "reported needs-work, but its structured finding result was missing or unparseable and no current open blocking finding exists. " +
-            "Re-run the verifying role against the current Developer output; do not reopen the Developer from superseded finding history.",
-            null);
         return true;
     }
 }

@@ -192,6 +192,80 @@ public sealed class FailedGoalRecoveryPolicyTests
         Assert.DoesNotContain(nameof(RetryCause.UnchangedContextRepeat), actionNames);
     }
 
+    [Fact]
+    public void ReviewContractSelectionPreservesFirstCandidateAndContractPrecedence()
+    {
+        var first = new FailedGoalReviewContractCandidate(
+            new TaskId("reviewer-first"),
+            AgentRole.Reviewer,
+            WorkTaskStatus.Failed,
+            "contract-code",
+            HasMergedReviewFindings: false);
+        var second = first with { TaskId = new TaskId("tester-second"), RequiredRole = AgentRole.Tester };
+
+        var selected = FailedGoalRecoveryPolicy.SelectReviewContractCandidate([first, second]);
+        Assert.Equal(first, selected);
+
+        var observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(
+            new FailedGoalReviewContractSelectionFacts(
+                first,
+                LedgerUnavailableEvidence: null,
+                RetryCapEvidence: "cap evidence",
+                TouchProofUnavailableEvidence: "touch evidence",
+                PriorRepairCount: 2,
+                MaxRepairCount: 2,
+                RepairLimitEvidence: "limit evidence",
+                RepairEnvelope: "repair envelope",
+                AttemptIdentity: "verification:1:none"));
+        Assert.Equal(FailedGoalFindingObservationKind.ReviewRetryCapReached, observation.Kind);
+
+        var counterfactual = FailedGoalRecoveryPolicy.SelectReviewContractObservation(
+            new FailedGoalReviewContractSelectionFacts(
+                first,
+                LedgerUnavailableEvidence: null,
+                RetryCapEvidence: null,
+                TouchProofUnavailableEvidence: null,
+                PriorRepairCount: 1,
+                MaxRepairCount: 2,
+                RepairLimitEvidence: "limit evidence",
+                RepairEnvelope: "repair envelope",
+                AttemptIdentity: "verification:1:none"));
+        Assert.Equal(FailedGoalFindingObservationKind.ReviewContractRepairEnvelopeAvailable, counterfactual.Kind);
+        Assert.Equal(first.TaskId, counterfactual.TargetTaskId);
+    }
+
+    [Fact]
+    public void VerifyingRouteSelectionOwnsFallbackCapAndRetryCause()
+    {
+        var facts = new FailedGoalVerifyingFindingRouteFacts(
+            new TaskId("reviewer-trigger"),
+            AgentRole.Reviewer,
+            "verification:3:none",
+            ExplicitTargetTaskId: null,
+            RequiresCommittedTarget: false,
+            ReviewerTargetRole: AgentRole.Tester,
+            ReviewerEscalatesToOperator: false,
+            Round: 2,
+            StopRound: 2,
+            WarningRound: 1,
+            MissingFindingResult: false,
+            ObservedCause: RetryCause.NewTestFinding,
+            PriorTasks:
+            [
+                new FailedGoalFindingRouteTask(new TaskId("developer-target"), AgentRole.Developer)
+            ]);
+
+        var capped = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(facts);
+        Assert.Equal(FailedGoalVerifyingFindingRouteKind.RetryCapReached, capped.Kind);
+        Assert.Equal(new TaskId("developer-target"), capped.TargetTaskId);
+        Assert.Equal(AgentRole.Developer, capped.TargetRole);
+
+        var routed = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(facts with { Round = 1 });
+        Assert.Equal(FailedGoalVerifyingFindingRouteKind.Routed, routed.Kind);
+        Assert.Equal(RetryCause.NewTestFinding, routed.RetryCause);
+        Assert.True(routed.EmitWarning);
+    }
+
     private static FailedGoalRecoveryDecision AssertDecision(
         FailedGoalRecoveryFacts facts,
         FailedGoalRecoveryAction action,

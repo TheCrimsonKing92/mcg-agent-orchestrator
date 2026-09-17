@@ -76,11 +76,11 @@ internal static class SourceSizeRatchet
             // correlation-key lifecycle and passes its own short-sha rendering to that formatter.
             // Goal 42115646 extracted Failed-lifecycle selection to a deterministic Core policy; the
             // driver retains attributed observation, stale-authority revalidation, and effect application.
-            // Review correction split rung-8 contract and verifying observations so the policy, rather
-            // than Driver's former action-shaped candidate, owns their precedence and final action.
+            // Review correction moved rung-8 candidate, route, target, cap, and retry-cause selection
+            // behind the policy; Driver retains evidence observation and effect-payload formatting.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6435),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 353),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 597),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -229,9 +229,9 @@ internal static class SourceSizeRatchet
             // Goal 42115646 pins pure-policy precedence/equality separately from the Driver effect seam.
             // Review correction adds the rung-8 phase counterfactual and walks policy-owned helper IL
             // transitively so an effect hidden behind Decide or a future helper cannot evade the boundary.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyTests.cs", 249),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyBoundaryTests.cs", 105),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailedGoalRecoveryExtractionTests.cs", 32),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyTests.cs", 323),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyBoundaryTests.cs", 110),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailedGoalRecoveryExtractionTests.cs", 58),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFailedGoalRecoveryInterpreter.cs", 149),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1489),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs", 697),

@@ -114,6 +114,62 @@ public sealed record FailedGoalFindingObservation(
             warningMessage);
 }
 
+public sealed record FailedGoalReviewContractCandidate(
+    TaskId TaskId,
+    AgentRole RequiredRole,
+    WorkTaskStatus Status,
+    string? ViolationCode,
+    bool HasMergedReviewFindings);
+
+public sealed record FailedGoalReviewContractSelectionFacts(
+    FailedGoalReviewContractCandidate Candidate,
+    string? LedgerUnavailableEvidence,
+    string? RetryCapEvidence,
+    string? TouchProofUnavailableEvidence,
+    int PriorRepairCount,
+    int MaxRepairCount,
+    string RepairLimitEvidence,
+    string RepairEnvelope,
+    string AttemptIdentity);
+
+public sealed record FailedGoalFindingRouteTask(
+    TaskId TaskId,
+    AgentRole RequiredRole);
+
+public enum FailedGoalVerifyingFindingRouteKind
+{
+    OperatorEvidenceRequired,
+    TargetUnavailable,
+    RetryCapReached,
+    MissingFindingResult,
+    Routed
+}
+
+public sealed record FailedGoalVerifyingFindingRouteFacts(
+    TaskId TriggeringTaskId,
+    AgentRole TriggeringRole,
+    string TriggerAttemptIdentity,
+    TaskId? ExplicitTargetTaskId,
+    bool RequiresCommittedTarget,
+    AgentRole? ReviewerTargetRole,
+    bool ReviewerEscalatesToOperator,
+    int Round,
+    int StopRound,
+    int WarningRound,
+    bool MissingFindingResult,
+    RetryCause? ObservedCause,
+    IEnumerable<FailedGoalFindingRouteTask> PriorTasks);
+
+public sealed record FailedGoalVerifyingFindingRouteSelection(
+    FailedGoalVerifyingFindingRouteKind Kind,
+    TaskId? TargetTaskId,
+    AgentRole TargetRole,
+    string AttemptIdentity,
+    int Round,
+    RetryCause? RetryCause,
+    RetryRoundKind? RoundKind,
+    bool EmitWarning);
+
 public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts>
 {
     public FailedGoalRecoveryFacts(
@@ -257,6 +313,128 @@ public sealed record FailedGoalRecoveryDecision(
 /// </summary>
 public static class FailedGoalRecoveryPolicy
 {
+    public static FailedGoalReviewContractCandidate? SelectReviewContractCandidate(
+        IEnumerable<FailedGoalReviewContractCandidate> candidates)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        var candidate = candidates.FirstOrDefault(item =>
+            item.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
+            item.Status == WorkTaskStatus.Failed &&
+            !string.IsNullOrWhiteSpace(item.ViolationCode));
+        if (candidate is null)
+            return null;
+
+        return candidate.HasMergedReviewFindings &&
+            candidate.ViolationCode is ReviewFindingConvergence.IdentityMovedViolationCode or
+                ReviewFindingConvergence.RecycledAnchorIdentityViolationCode
+            ? null
+            : candidate;
+    }
+
+    public static FailedGoalFindingObservation SelectReviewContractObservation(
+        FailedGoalReviewContractSelectionFacts facts)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        if (!string.IsNullOrWhiteSpace(facts.LedgerUnavailableEvidence))
+        {
+            return FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.ReviewContractLedgerUnavailable,
+                facts.LedgerUnavailableEvidence);
+        }
+
+        if (!string.IsNullOrWhiteSpace(facts.RetryCapEvidence))
+        {
+            return FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.ReviewRetryCapReached,
+                facts.RetryCapEvidence);
+        }
+
+        if (!string.IsNullOrWhiteSpace(facts.TouchProofUnavailableEvidence))
+        {
+            return FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.ReviewTouchProofUnavailable,
+                facts.TouchProofUnavailableEvidence);
+        }
+
+        if (facts.PriorRepairCount >= facts.MaxRepairCount)
+        {
+            return FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.ReviewContractRepairLimitReached,
+                facts.RepairLimitEvidence);
+        }
+
+        return FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.ReviewContractRepairEnvelopeAvailable,
+            facts.Candidate.TaskId,
+            facts.AttemptIdentity,
+            facts.RepairEnvelope,
+            warningMessage: null);
+    }
+
+    public static FailedGoalVerifyingFindingRouteSelection SelectVerifyingFindingRoute(
+        FailedGoalVerifyingFindingRouteFacts facts)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        var priorTasks = facts.PriorTasks.ToArray();
+        var targetRole = facts.TriggeringRole == AgentRole.Tester
+            ? AgentRole.Developer
+            : facts.ReviewerTargetRole ?? AgentRole.Developer;
+
+        if (facts.ReviewerEscalatesToOperator)
+        {
+            return Selection(FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired, null, targetRole);
+        }
+
+        var targetTaskId = facts.ExplicitTargetTaskId;
+        if (targetTaskId is null && !facts.RequiresCommittedTarget)
+            targetTaskId = priorTasks.LastOrDefault(task => task.RequiredRole == targetRole)?.TaskId;
+        if (targetTaskId is null && facts.TriggeringRole == AgentRole.Reviewer && targetRole != AgentRole.Developer)
+        {
+            targetRole = AgentRole.Developer;
+            targetTaskId = priorTasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer)?.TaskId;
+        }
+
+        if (targetTaskId is null)
+            return Selection(FailedGoalVerifyingFindingRouteKind.TargetUnavailable, null, targetRole);
+        if (facts.Round >= facts.StopRound)
+            return Selection(FailedGoalVerifyingFindingRouteKind.RetryCapReached, targetTaskId, targetRole);
+        if (facts.MissingFindingResult)
+        {
+            return new FailedGoalVerifyingFindingRouteSelection(
+                FailedGoalVerifyingFindingRouteKind.MissingFindingResult,
+                facts.TriggeringTaskId,
+                facts.TriggeringRole,
+                facts.TriggerAttemptIdentity,
+                facts.Round,
+                RetryCause.EnvironmentApparatusFailure,
+                RetryRoundKind.Mechanical,
+                EmitWarning: false);
+        }
+
+        return new FailedGoalVerifyingFindingRouteSelection(
+            FailedGoalVerifyingFindingRouteKind.Routed,
+            targetTaskId,
+            targetRole,
+            string.Empty,
+            facts.Round,
+            facts.ObservedCause ?? RetryCause.CriterionEvidenceOwnerMismatch,
+            null,
+            facts.Round >= facts.WarningRound);
+
+        FailedGoalVerifyingFindingRouteSelection Selection(
+            FailedGoalVerifyingFindingRouteKind kind,
+            TaskId? taskId,
+            AgentRole role) => new(
+                kind,
+                taskId,
+                role,
+                string.Empty,
+                facts.Round,
+                null,
+                null,
+                EmitWarning: false);
+    }
+
     public static FailedGoalRecoveryDecision Evaluate(FailedGoalRecoveryFacts facts)
     {
         ArgumentNullException.ThrowIfNull(facts);
