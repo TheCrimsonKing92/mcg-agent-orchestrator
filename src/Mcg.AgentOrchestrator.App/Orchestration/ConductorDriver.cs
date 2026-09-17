@@ -2758,7 +2758,7 @@ internal sealed partial class ConductorDriver
                 refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
                 refusalDetail =
                     $"Focused evidence does not support test project '{project}'. Accepted forms: " +
-                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms}.";
+                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms(engineSettings)}.";
                 return false;
             }
 
