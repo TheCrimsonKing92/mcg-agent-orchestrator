@@ -429,7 +429,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var summary = new ConductorBatchLoop().Run(
                 kernel,
                 driver,
-                ConductorAutonomyPolicy.Conservative,
+                ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = acceptanceWidth },
                 NoStopPath(),
                 maxIterations: 1,
                 onTick: current => tick = current);

@@ -250,9 +250,14 @@ internal static class GateLoadContextProbe
     private static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants()
     {
         var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0));
-        if (string.IsNullOrWhiteSpace(heartbeatDirectory) || !Directory.Exists(heartbeatDirectory))
+        if (string.IsNullOrWhiteSpace(heartbeatDirectory))
         {
             throw new LoadProbeUnavailableException("gate-heartbeat-directory-unavailable");
+        }
+
+        if (!Directory.Exists(heartbeatDirectory))
+        {
+            return [];
         }
 
         var occupants = new List<LiveGateOccupant>();

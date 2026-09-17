@@ -169,6 +169,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
     [Fact]
     public void ProductionBatch_LongCohortGateDoesNotBlockTicksOrOperatorIntents_AndReconcilesLater()
     {
+        using var liveGateProbe = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
         var repo = CreateReducedAcceptanceCohortRepository();
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
         using var gateStarted = new ManualResetEventSlim();
@@ -521,6 +522,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
     [Fact]
     public void ProductionBatch_OrdinaryParallelAcceptanceStillStartsPromptlyAndReconcilesLater()
     {
+        using var liveGateProbe = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
         var repo = CreateReducedAcceptanceCohortRepository();
         var attemptRoot = Path.Combine(repo, ".orchestrator", "ordinary-negative-control");
         try
