@@ -102,6 +102,7 @@ public sealed class ConductorDriverTestsFailedGoalExitReconciliation
         });
         goal = kernel.GetGoal(goal.Id);
         first = goal.Tasks[0];
+        second = goal.Tasks[1];
         var reconcileCount = 0;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
