@@ -2966,7 +2966,7 @@ internal sealed partial class ConductorBatchLoop
             activeCohortCapacity,
             tick,
             changedGoalLines,
-            blockAdmissionOnFailure: false);
+            blockAdmissionOnFailure: true);
         var cohortEligible = orderedEligible
             .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value))
             .ToArray();
