@@ -12,8 +12,8 @@
 .EXAMPLE
   .\scripts\Invoke-TestSummary.ps1
   .\scripts\Invoke-TestSummary.ps1 -Target .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj
-  .\scripts\Invoke-TestSummary.ps1 -Filter "DisplayName~lifecycle"
-  .\scripts\Invoke-TestSummary.ps1 -AllowBreakaway -Filter "DisplayName~ConductorLoopHandoff"
+  .\scripts\Invoke-TestSummary.ps1 -Filter "Name~Lifecycle"
+  .\scripts\Invoke-TestSummary.ps1 -AllowBreakaway -Filter "Name~ConductorLoopHandoff"
   .\scripts\Invoke-TestSummary.ps1 -Partition GoalWorktree
 #>
 [CmdletBinding()]

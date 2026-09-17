@@ -458,57 +458,283 @@ function Get-MtpLocalPartitions {
     return @($partitions)
 }
 
-function ConvertTo-MtpFilterArguments {
+function New-MtpFilterDiagnostic {
+    param(
+        [Parameter(Mandatory = $true)][string]$Filter,
+        [Parameter(Mandatory = $true)][string]$Detail
+    )
+
+    return "MTP test filter '$Filter' is unsupported: $Detail Supported syntax: FullyQualifiedName~Class, FullyQualifiedName!~Class, Name~Method, Name!~Method, and Category!=Trait; use '|' only for positive alternatives of one predicate kind and '&' between representable clauses. Parentheses may group expressions. See docs/operator-runbook.md#managed-test-filter-syntax."
+}
+
+function Get-MtpFilterTokens {
     param([Parameter(Mandatory = $true)][string]$Filter)
 
-    $arguments = [System.Collections.Generic.List[string]]::new()
-    foreach ($rawToken in [regex]::Split($Filter, '[&|]')) {
-        $token = $rawToken.Trim().Trim('(', ')').Trim()
-        if ($token.Length -eq 0) {
+    $tokens = [System.Collections.Generic.List[object]]::new()
+    $index = 0
+    while ($index -lt $Filter.Length) {
+        if ([char]::IsWhiteSpace($Filter[$index])) {
+            $index++
             continue
         }
 
+        $character = $Filter[$index]
+        if ($character -in @('(', ')', '&', '|')) {
+            $tokens.Add([pscustomobject]@{
+                    TokenType = [string]$character
+                    Text = [string]$character
+                    Position = $index
+                })
+            $index++
+            continue
+        }
+
+        $start = $index
+        while ($index -lt $Filter.Length -and $Filter[$index] -notin @('(', ')', '&', '|')) {
+            $index++
+        }
+        $text = $Filter.Substring($start, $index - $start).Trim()
+        if ($text.Length -eq 0) {
+            throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "an empty predicate occurs at position $start.")
+        }
+
         $fullyQualifiedName = [regex]::Match(
-            $token,
+            $text,
             '^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$',
             [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if ($fullyQualifiedName.Success) {
-            if ($fullyQualifiedName.Groups['op'].Value -eq '!~') {
-                $arguments.Add('--filter-not-class')
-            }
-            else {
-                $arguments.Add('--filter-class')
-            }
-            $arguments.Add("*$($fullyQualifiedName.Groups['value'].Value)*")
+            $tokens.Add([pscustomobject]@{
+                    TokenType = 'Predicate'
+                    Kind = 'Class'
+                    IsPositive = $fullyQualifiedName.Groups['op'].Value -eq '~'
+                    Value = $fullyQualifiedName.Groups['value'].Value
+                    Text = $text
+                    Position = $start
+                })
             continue
         }
 
         $methodName = [regex]::Match(
-            $token,
-            '^(DisplayName|Name)\s*(?<op>!~|~)\s*(?<value>[^\s&|()]+)$',
+            $text,
+            '^Name\s*(?<op>!~|~)\s*(?<value>[^\s&|()]+)$',
             [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if ($methodName.Success) {
-            if ($methodName.Groups['op'].Value -eq '!~') {
-                $arguments.Add('--filter-not-method')
-            }
-            else {
-                $arguments.Add('--filter-method')
-            }
-            $arguments.Add("*$($methodName.Groups['value'].Value)*")
+            $tokens.Add([pscustomobject]@{
+                    TokenType = 'Predicate'
+                    Kind = 'Method'
+                    IsPositive = $methodName.Groups['op'].Value -eq '~'
+                    Value = $methodName.Groups['value'].Value
+                    Text = $text
+                    Position = $start
+                })
             continue
+        }
+
+        if ($text -match '^DisplayName\s*(!~|~)') {
+            throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "token '$text' uses DisplayName text, but this runner filters method symbols; use Name~Method or FullyQualifiedName~Class.")
         }
 
         $categoryExclusion = [regex]::Match(
-            $token,
+            $text,
             '^Category\s*!=\s*(?<value>[A-Za-z_][A-Za-z0-9_.-]*)$',
             [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if ($categoryExclusion.Success) {
-            $arguments.Add('--filter-not-trait')
-            $arguments.Add("Category=$($categoryExclusion.Groups['value'].Value)")
+            $tokens.Add([pscustomobject]@{
+                    TokenType = 'Predicate'
+                    Kind = 'Category'
+                    IsPositive = $false
+                    Value = $categoryExclusion.Groups['value'].Value
+                    Text = $text
+                    Position = $start
+                })
             continue
         }
 
-        throw "MTP test filter '$Filter' contains unsupported token '$token'. Use FullyQualifiedName~Class, DisplayName~Method, or Category!=Trait syntax."
+        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "token '$text' at position $start is not a supported predicate.")
+    }
+
+    if ($tokens.Count -eq 0) {
+        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail 'the expression is empty.')
+    }
+    return $tokens.ToArray()
+}
+
+function Read-MtpFilterAtom {
+    param([Parameter(Mandatory = $true)][pscustomobject]$State)
+
+    if ($State.Index -ge $State.Tokens.Count) {
+        throw (New-MtpFilterDiagnostic -Filter $State.Filter -Detail 'an operand is missing at the end of the expression.')
+    }
+
+    $token = $State.Tokens[$State.Index]
+    if ($token.TokenType -eq 'Predicate') {
+        $State.Index++
+        return [pscustomobject]@{
+            NodeType = 'Predicate'
+            Kind = $token.Kind
+            IsPositive = $token.IsPositive
+            Value = $token.Value
+            Text = $token.Text
+        }
+    }
+
+    if ($token.TokenType -eq '(') {
+        $openPosition = $token.Position
+        $State.Index++
+        $node = Read-MtpFilterOrExpression -State $State
+        if ($State.Index -ge $State.Tokens.Count -or $State.Tokens[$State.Index].TokenType -ne ')') {
+            throw (New-MtpFilterDiagnostic -Filter $State.Filter -Detail "the '(' at position $openPosition is not closed.")
+        }
+        $State.Index++
+        return $node
+    }
+
+    throw (New-MtpFilterDiagnostic -Filter $State.Filter -Detail "operator '$($token.Text)' at position $($token.Position) has no left operand.")
+}
+
+function Read-MtpFilterAndExpression {
+    param([Parameter(Mandatory = $true)][pscustomobject]$State)
+
+    $left = Read-MtpFilterAtom -State $State
+    while ($State.Index -lt $State.Tokens.Count -and $State.Tokens[$State.Index].TokenType -eq '&') {
+        $State.Index++
+        $right = Read-MtpFilterAtom -State $State
+        $left = [pscustomobject]@{ NodeType = 'And'; Left = $left; Right = $right }
+    }
+    return $left
+}
+
+function Read-MtpFilterOrExpression {
+    param([Parameter(Mandatory = $true)][pscustomobject]$State)
+
+    $left = Read-MtpFilterAndExpression -State $State
+    while ($State.Index -lt $State.Tokens.Count -and $State.Tokens[$State.Index].TokenType -eq '|') {
+        $State.Index++
+        $right = Read-MtpFilterAndExpression -State $State
+        $left = [pscustomobject]@{ NodeType = 'Or'; Left = $left; Right = $right }
+    }
+    return $left
+}
+
+function Get-MtpFilterOperands {
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Node,
+        [Parameter(Mandatory = $true)][ValidateSet('And', 'Or')][string]$Operator
+    )
+
+    if ($Node.NodeType -eq $Operator) {
+        return @(
+            Get-MtpFilterOperands -Node $Node.Left -Operator $Operator
+            Get-MtpFilterOperands -Node $Node.Right -Operator $Operator
+        )
+    }
+    return @($Node)
+}
+
+function Add-MtpPredicateArguments {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Arguments,
+        [Parameter(Mandatory = $true)][pscustomobject]$Predicate
+    )
+
+    if ($Predicate.Kind -eq 'Class') {
+        $Arguments.Add($(if ($Predicate.IsPositive) { '--filter-class' } else { '--filter-not-class' }))
+        $Arguments.Add("*$($Predicate.Value)*")
+        return
+    }
+    if ($Predicate.Kind -eq 'Method') {
+        $Arguments.Add($(if ($Predicate.IsPositive) { '--filter-method' } else { '--filter-not-method' }))
+        $Arguments.Add("*$($Predicate.Value)*")
+        return
+    }
+    $Arguments.Add('--filter-not-trait')
+    $Arguments.Add("Category=$($Predicate.Value)")
+}
+
+function Convert-MtpOrClause {
+    param(
+        [Parameter(Mandatory = $true)][pscustomobject]$Node,
+        [Parameter(Mandatory = $true)][string]$Filter
+    )
+
+    $positives = [System.Collections.Generic.List[object]]::new()
+    $hoistedExclusions = [System.Collections.Generic.List[object]]::new()
+    foreach ($alternative in @(Get-MtpFilterOperands -Node $Node -Operator Or)) {
+        if ($alternative.NodeType -eq 'Predicate' -and $alternative.IsPositive) {
+            $positives.Add($alternative)
+            continue
+        }
+
+        if ($alternative.NodeType -eq 'And') {
+            $parts = @(Get-MtpFilterOperands -Node $alternative -Operator And)
+            $included = @($parts | Where-Object { $_.NodeType -eq 'Predicate' -and $_.IsPositive })
+            $excluded = @($parts | Where-Object { $_.NodeType -eq 'Predicate' -and -not $_.IsPositive })
+            if ($included.Count -eq 1 -and $included[0].Kind -eq 'Class' -and
+                $excluded.Count -eq $parts.Count - 1 -and
+                @($excluded | Where-Object { $_.Kind -ne 'Class' }).Count -eq 0 -and
+                @($excluded | Where-Object { $_.Value.IndexOf($included[0].Value, [System.StringComparison]::OrdinalIgnoreCase) -lt 0 }).Count -eq 0) {
+                $positives.Add($included[0])
+                foreach ($exclusion in $excluded) {
+                    $hoistedExclusions.Add($exclusion)
+                }
+                continue
+            }
+        }
+
+        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "the '|' alternative cannot be represented by one managed-runner invocation; negative predicates may not be alternatives.")
+    }
+
+    $kinds = @($positives | Select-Object -ExpandProperty Kind -Unique)
+    if ($kinds.Count -ne 1) {
+        $operands = @($positives | ForEach-Object { $_.Text }) -join "' and '"
+        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "the '|' operator joins different predicate kinds ('$operands'); a single invocation can OR only class alternatives or only method alternatives.")
+    }
+
+    return [pscustomobject]@{
+        Kind = $kinds[0]
+        Positives = $positives.ToArray()
+        HoistedExclusions = $hoistedExclusions.ToArray()
+    }
+}
+
+function ConvertTo-MtpFilterArguments {
+    # Filter grammar and symbol/display-name guidance: docs/operator-runbook.md#managed-test-filter-syntax.
+    param([Parameter(Mandatory = $true)][string]$Filter)
+
+    $tokens = @(Get-MtpFilterTokens -Filter $Filter)
+    $state = [pscustomobject]@{ Filter = $Filter; Tokens = $tokens; Index = 0 }
+    $root = Read-MtpFilterOrExpression -State $state
+    if ($state.Index -ne $tokens.Count) {
+        $token = $tokens[$state.Index]
+        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "unexpected token '$($token.Text)' occurs at position $($token.Position).")
+    }
+
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    $positiveKinds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($clause in @(Get-MtpFilterOperands -Node $root -Operator And)) {
+        if ($clause.NodeType -eq 'Predicate') {
+            if ($clause.IsPositive -and -not $positiveKinds.Add($clause.Kind)) {
+                throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "'&' joins two positive $($clause.Kind.ToLowerInvariant()) predicates, but repeated positive arguments of one kind are ORed by the managed runner.")
+            }
+            Add-MtpPredicateArguments -Arguments $arguments -Predicate $clause
+            continue
+        }
+
+        if ($clause.NodeType -eq 'Or') {
+            $group = Convert-MtpOrClause -Node $clause -Filter $Filter
+            if (-not $positiveKinds.Add($group.Kind)) {
+                throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "'&' joins two positive $($group.Kind.ToLowerInvariant()) clauses, but repeated positive arguments of one kind are ORed by the managed runner.")
+            }
+            foreach ($positive in $group.Positives) {
+                Add-MtpPredicateArguments -Arguments $arguments -Predicate $positive
+            }
+            foreach ($exclusion in $group.HoistedExclusions) {
+                Add-MtpPredicateArguments -Arguments $arguments -Predicate $exclusion
+            }
+            continue
+        }
+
+        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "the expression contains a nested '$($clause.NodeType)' clause that cannot be represented by one managed-runner invocation.")
     }
 
     return $arguments.ToArray()
@@ -2231,6 +2457,21 @@ function Invoke-MtpTestRun {
         Write-Host "TARGET FAILURE - $($_.Exception.Message)"
         return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.InvalidTarget -ResultsDirectory $null
     }
+    $filterList = @($Filters)
+    if ($filterList.Count -eq 0) {
+        $filterList = @('')
+    }
+    try {
+        foreach ($filter in $filterList) {
+            if (-not [string]::IsNullOrWhiteSpace($filter)) {
+                [void](ConvertTo-MtpFilterArguments -Filter $filter)
+            }
+        }
+    }
+    catch {
+        Write-Host "FILTER FAILURE - managed build/test processes were not launched: $($_.Exception.Message)"
+        return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -ResultsDirectory $null -RequestedFilters $filterList
+    }
     try {
         $runDirectory = Initialize-MtpResultsDirectory -ResultsRoot $ResultsRoot -RunLabel $RunLabel
     }
@@ -2298,10 +2539,6 @@ function Invoke-MtpTestRun {
             }
         }
 
-        $filterList = @($Filters)
-        if ($filterList.Count -eq 0) {
-            $filterList = @('')
-        }
         $invocationIndex = 0
         foreach ($project in $projects) {
             $projectName = Get-MtpProjectName -Invocation $project
