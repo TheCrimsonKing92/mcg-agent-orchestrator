@@ -13,6 +13,85 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
     }
 
     [Xunit.Fact]
+    public void CompletedCohortRootWithFreshHeartbeatHoldsTrainAndNamesLiveProcess()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "Completed cohort first member");
+        var second = CreateVerifiedSimpleGoal(kernel, "Completed cohort second member");
+        var driver = MakeDriver();
+        driver.PublishCompletedCohortGateRunForTests(CohortSelection(first, second), fault: null);
+        var lifecycleCapacity = driver.GetActiveAcceptanceCohortCapacity();
+        using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            [new GateLoadContextProbe.LiveGateOccupant(4101, first.Id.Value, 0, TimeSpan.Zero)]);
+
+        var census = BuildCensusFromProbe(lifecycleCapacity);
+        var decision = ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, width: 1);
+
+        Assert.Equal(0, lifecycleCapacity.ActiveRootCount);
+        Assert.False(decision.IsAdmitted);
+        Assert.Contains("acceptance width 1 reached", decision.Reason, StringComparison.Ordinal);
+        Assert.Contains($"goal:{first.Id.Value[..8]}", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void OrdinaryAttemptHeartbeatWithoutReservationHoldsCohort()
+    {
+        const string goalId = "87654321-ordinary-attempt";
+        using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            [new GateLoadContextProbe.LiveGateOccupant(4102, goalId, 1, TimeSpan.Zero)]);
+
+        var decision = ConductorBatchLoop.DecideLiveAcceptanceAdmission(
+            BuildCensusFromProbe(),
+            width: 1);
+
+        Assert.False(decision.IsAdmitted);
+        Assert.Contains("goal:87654321", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void StaleHeartbeatDoesNotOccupyAcceptanceCapacity()
+    {
+        using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            [new GateLoadContextProbe.LiveGateOccupant(
+                4103,
+                "stale123-goal",
+                0,
+                GateLoadContextProbe.LiveGateHeartbeatFreshness + TimeSpan.FromSeconds(1))]);
+
+        var census = BuildCensusFromProbe();
+        var decision = ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, width: 1);
+
+        Assert.Equal(0, census.OccupiedCount);
+        Assert.True(decision.IsAdmitted);
+    }
+
+    [Xunit.Fact]
+    public void CensusDescriptionIsIdenticalAcrossAttemptCohortAndTrainOccupants()
+    {
+        const string goalId = "abcdef12-shared-occupant";
+        var attempt = CreateCensusAttempt(goalId, processId: 4104);
+        var ordinary = ConductorBatchLoop.BuildLiveAcceptanceCensus(
+            [attempt],
+            new HashSet<string>([attempt.AttemptId], StringComparer.Ordinal),
+            new ConductorAcceptanceCapacitySnapshot([]),
+            []);
+        var cohort = ConductorBatchLoop.BuildLiveAcceptanceCensus(
+            [],
+            new HashSet<string>(StringComparer.Ordinal),
+            new ConductorAcceptanceCapacitySnapshot(
+                [new ConductorAcceptanceCapacityRoot("cohort-root", new HashSet<string>([goalId], StringComparer.Ordinal))]),
+            []);
+        var train = ConductorBatchLoop.BuildLiveAcceptanceCensus(
+            [],
+            new HashSet<string>(StringComparer.Ordinal),
+            new ConductorAcceptanceCapacitySnapshot([]),
+            [new GateLoadContextProbe.LiveGateOccupant(4104, goalId, 0, TimeSpan.Zero)]);
+
+        Assert.Equal(ordinary.Describe(), cohort.Describe());
+        Assert.Equal(ordinary.Describe(), train.Describe());
+    }
+
+    [Xunit.Fact]
     public void ProductionCohortRunsOneSharedGateAndBypassesOrdinaryMemberGates()
     {
         var root = CreateTempDirectory("mcg-speculative-cohort-advisory");
@@ -589,6 +668,33 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             ],
             []);
     }
+
+    private static ConductorBatchLoop.LiveAcceptanceCensus BuildCensusFromProbe(
+        ConductorAcceptanceCapacitySnapshot? activeCohorts = null) =>
+        ConductorBatchLoop.BuildLiveAcceptanceCensus(
+            [],
+            new HashSet<string>(StringComparer.Ordinal),
+            activeCohorts ?? new ConductorAcceptanceCapacitySnapshot([]),
+            GateLoadContextProbe.CaptureLiveGateOccupants());
+
+    private static ConductorParallelAcceptanceAttempt CreateCensusAttempt(string goalId, int processId) =>
+        new(
+            "attempt-1",
+            goalId,
+            goalId[..8],
+            0,
+            "branch",
+            "main",
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch,
+            processId,
+            ConductorParallelAcceptanceAttemptOutcome.Running,
+            "stdout",
+            "stderr",
+            "exit",
+            "heartbeat",
+            "result",
+            "metadata");
 
     private static GateReadyCandidateProjection ReadyProjection(
         GoalId goalId,
