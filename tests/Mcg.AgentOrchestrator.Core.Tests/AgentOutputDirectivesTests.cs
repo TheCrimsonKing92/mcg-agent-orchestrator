@@ -158,6 +158,21 @@ public sealed class AgentOutputDirectivesTests
             StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void TesterRequirementsUseManagedRunnerMethodSymbolsNotDisplayText()
+    {
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            Assert.Contains("Name~Method-symbol", requirements, StringComparison.Ordinal);
+            Assert.Contains("reject DisplayName text", requirements, StringComparison.Ordinal);
+            Assert.DoesNotContain("DisplayName~Method", requirements, StringComparison.Ordinal);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Researcher_requirements_lead_with_stdout_only_no_plan_file_contract")]
     public void ResearcherRequirementsLeadWithStdoutOnlyNoPlanFileContract()
     {

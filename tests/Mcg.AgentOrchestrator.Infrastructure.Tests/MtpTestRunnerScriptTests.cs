@@ -206,6 +206,160 @@ public sealed class MtpTestRunnerScriptTests
     }
 
     [Xunit.Fact]
+    public void BooleanGrammar_PreservesRepresentableOperatorsAndRejectsLoss()
+    {
+        Assert.Equal(
+            ["--filter-class", "*AlphaTests*", "--filter-class", "*BetaTests*"],
+            TranslateMtpFilter("FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests"));
+        Assert.Equal(
+            ["--filter-class", "*AlphaTests*", "--filter-method", "*SelectsOne*"],
+            TranslateMtpFilter("FullyQualifiedName~AlphaTests&Name~SelectsOne"));
+        Assert.Equal(
+            ["--filter-class", "*AlphaTests*", "--filter-class", "*BetaTests*", "--filter-not-trait", "Category=HostIntegration"],
+            TranslateMtpFilter("(FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests)&Category!=HostIntegration"));
+
+        var crossKind = RejectMtpFilter("FullyQualifiedName~AlphaTests|Name~SelectsOne");
+        Assert.Contains("joins different predicate kinds", crossKind, StringComparison.Ordinal);
+        Assert.Contains("FullyQualifiedName~AlphaTests|Name~SelectsOne", crossKind, StringComparison.Ordinal);
+        Assert.Contains("Supported syntax:", crossKind, StringComparison.Ordinal);
+
+        var sameKindAnd = RejectMtpFilter("FullyQualifiedName~AlphaTests&FullyQualifiedName~BetaTests");
+        Assert.Contains("joins two positive class predicates", sameKindAnd, StringComparison.Ordinal);
+        Assert.Contains("repeated positive arguments of one kind are ORed", sameKindAnd, StringComparison.Ordinal);
+
+        var displayName = RejectMtpFilter("DisplayName~Selects one test");
+        Assert.Contains("filters method symbols", displayName, StringComparison.Ordinal);
+        Assert.Contains("use Name~Method", displayName, StringComparison.Ordinal);
+
+        var unsafeHoist = RejectMtpFilter(
+            "(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild");
+        Assert.Contains("alternative-local exclusion", unsafeHoist, StringComparison.Ordinal);
+        Assert.Contains("would become global", unsafeHoist, StringComparison.Ordinal);
+        Assert.Contains("silently narrowing the requested union", unsafeHoist, StringComparison.Ordinal);
+
+        var unsupportedAlternative = RejectMtpFilter("(Name~Alpha&Name!~Beta)|Name~Gamma");
+        Assert.Contains("each alternative must be one positive predicate", unsupportedAlternative, StringComparison.Ordinal);
+        Assert.DoesNotContain("negative predicates may not be alternatives", unsupportedAlternative, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void UnsupportedFilter_FailsBeforeBuildOrResultCreation()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var buildMarker = Path.Combine(sandbox.Root, "unsupported-filter-build.txt");
+        var fakeDotnet = sandbox.CreateBuildStub(exitCode: 0, buildMarker);
+
+        var result = sandbox.RunSummary(
+            filter: "FullyQualifiedName~AlphaTests|Name~SelectsOne",
+            noBuild: false,
+            dotnetPath: fakeDotnet);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("FILTER FAILURE - managed build/test processes were not launched", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("joins different predicate kinds", result.Stdout, StringComparison.Ordinal);
+        Assert.False(File.Exists(buildMarker));
+        var terminal = TerminalSummary(result);
+        Assert.True(string.IsNullOrWhiteSpace(terminal.GetProperty("resultsDirectory").GetString()));
+        Assert.Empty(terminal.GetProperty("trxPaths").EnumerateArray());
+    }
+
+    [Xunit.Fact]
+    public void BooleanFilters_SelectExactManagedTestSets()
+    {
+        var classA = DiscoverManagedTests("--filter-class", "*ConductorDriverTestsStaleFindingRouting*");
+        var classB = DiscoverManagedTests("--filter-class", "*MtpNoBuildReceiptIdentityTests*");
+        Assert.NotEmpty(classA);
+        Assert.NotEmpty(classB);
+
+        var union = DiscoverManagedTests(TranslateMtpFilter(
+            "FullyQualifiedName~ConductorDriverTestsStaleFindingRouting|FullyQualifiedName~MtpNoBuildReceiptIdentityTests"));
+        Assert.Equal(
+            classA.Keys.Union(classB.Keys).Order(StringComparer.Ordinal),
+            union.Keys.Order(StringComparer.Ordinal));
+
+        var matchingMethods = DiscoverManagedTests("--filter-method", "*StaleTesterFinding*");
+        var intersection = DiscoverManagedTests(TranslateMtpFilter(
+            "FullyQualifiedName~ConductorDriverTestsStaleFindingRouting&Name~StaleTesterFinding"));
+        Assert.Equal(
+            classA.Keys.Intersect(matchingMethods.Keys).Order(StringComparer.Ordinal),
+            intersection.Keys.Order(StringComparer.Ordinal));
+
+        var oldFlattened = DiscoverManagedTests(
+            "--filter-class", "*ConductorDriverTestsStaleFindingRouting*",
+            "--filter-method", "*StaleTesterFinding*");
+        var denotedCrossKindUnion = classA.Keys.Union(matchingMethods.Keys).ToHashSet(StringComparer.Ordinal);
+        Assert.NotEmpty(oldFlattened);
+        Assert.True(
+            oldFlattened.Keys.ToHashSet(StringComparer.Ordinal).IsProperSubsetOf(denotedCrossKindUnion),
+            "The recorded pre-fix argv must select a nonempty strict subset of the requested union.");
+
+        var rejection = RejectMtpFilter(
+            "FullyQualifiedName~ConductorDriverTestsStaleFindingRouting|Name~StaleTesterFinding");
+        Assert.Contains("single invocation can OR only class alternatives or only method alternatives", rejection, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ManifestFilters_TranslateAndKeepExclusionSemantics()
+    {
+        var root = RepositoryRoot();
+        var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+        using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        var engine = manifest.RootElement.GetProperty("engine");
+        var configuredCount = engine.GetProperty("infrastructureTestLanes").GetArrayLength()
+            + engine.GetProperty("localTestPartitions")
+                .EnumerateArray()
+                .Sum(partition => partition.TryGetProperty("additionalFilters", out var filters) ? filters.GetArrayLength() : 0);
+
+        var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var escapedManifest = manifestPath.Replace("'", "''", StringComparison.Ordinal);
+        var command = $"Import-Module '{module}' -Force; " +
+            $"$manifest = Get-Content -LiteralPath '{escapedManifest}' -Raw | ConvertFrom-Json; " +
+            "$filters = @($manifest.engine.infrastructureTestLanes | ForEach-Object { $_.filter }) + " +
+            "@($manifest.engine.localTestPartitions | ForEach-Object { @($_.additionalFilters) }); " +
+            "$result = @($filters | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { " +
+            "[ordered]@{ filter = $_; args = @(ConvertTo-MtpFilterArguments -Filter $_) } }); " +
+            "$result | ConvertTo-Json -Depth 4 -Compress";
+        var result = RunPowerShellCommand(root, command);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var translated = JsonDocument.Parse(result.Stdout.Trim());
+        Assert.Equal(configuredCount, translated.RootElement.GetArrayLength());
+        var universe = DiscoverManagedTestCatalog(allowEmpty: false);
+        foreach (var item in translated.RootElement.EnumerateArray())
+        {
+            var filter = item.GetProperty("filter").GetString()!;
+            var arguments = item.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
+            Assert.NotEmpty(arguments);
+            Assert.True(arguments.Length % 2 == 0, filter);
+
+            var expected = universe
+                .Where(test => ManagedFilterExpressionEvaluator.Evaluate(filter, test))
+                .Select(test => test.Uid)
+                .Order(StringComparer.Ordinal);
+            var actual = DiscoverManagedTests(allowEmpty: true, arguments)
+                .Keys
+                .Order(StringComparer.Ordinal);
+            Assert.Equal(expected, actual);
+        }
+
+        var broadClass = DiscoverManagedTests("--filter-class", "*MtpTestRunnerScriptTests*");
+        var excludedClass = DiscoverManagedTests("--filter-class", "*MtpTestRunnerScriptTestsManagedProjectRebuild*");
+        var withoutRebuild = DiscoverManagedTests(TranslateMtpFilter(
+            "FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild"));
+        Assert.NotEmpty(excludedClass);
+        Assert.Equal(
+            broadClass.Keys.Except(excludedClass.Keys).Order(StringComparer.Ordinal),
+            withoutRebuild.Keys.Order(StringComparer.Ordinal));
+
+        var crossTick = DiscoverManagedTests("--filter-class", "*ConductorCrossTickTests*");
+        Assert.NotEmpty(crossTick);
+        var withoutCrossTickTrait = DiscoverManagedTests(
+            allowEmpty: true,
+            TranslateMtpFilter("FullyQualifiedName~ConductorCrossTickTests&Category!=CrossTick"));
+        Assert.Empty(withoutCrossTickTrait);
+    }
+
+    [Xunit.Fact]
     public void InitializeResultsDirectory_WritesAtomicOwnershipSidecar()
     {
         var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
@@ -1104,6 +1258,219 @@ public sealed class MtpTestRunnerScriptTests
         return Run(startInfo);
     }
 
+    private static string[] TranslateMtpFilter(string filter)
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var escapedFilter = filter.Replace("'", "''", StringComparison.Ordinal);
+        var result = RunPowerShellCommand(
+            RepositoryRoot(),
+            $"Import-Module '{module}' -Force; @(ConvertTo-MtpFilterArguments -Filter '{escapedFilter}') | ConvertTo-Json -Compress");
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        return document.RootElement.EnumerateArray().Select(item => item.GetString()!).ToArray();
+    }
+
+    private static string RejectMtpFilter(string filter)
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var escapedFilter = filter.Replace("'", "''", StringComparison.Ordinal);
+        var result = RunPowerShellCommand(
+            RepositoryRoot(),
+            $"Import-Module '{module}' -Force; ConvertTo-MtpFilterArguments -Filter '{escapedFilter}'");
+        Assert.NotEqual(0, result.ExitCode);
+        return result.Stdout + result.Stderr;
+    }
+
+    private static IReadOnlyDictionary<string, string> DiscoverManagedTests(params string[] filterArguments) =>
+        DiscoverManagedTests(allowEmpty: false, filterArguments);
+
+    private static IReadOnlyDictionary<string, string> DiscoverManagedTests(
+        bool allowEmpty,
+        params string[] filterArguments)
+        => DiscoverManagedTestCatalog(allowEmpty, filterArguments)
+            .ToDictionary(test => test.Uid, test => test.DisplayName, StringComparer.Ordinal);
+
+    private static IReadOnlyList<ManagedTestDescriptor> DiscoverManagedTestCatalog(
+        bool allowEmpty,
+        params string[] filterArguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = RepositoryRoot(),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add(typeof(MtpTestRunnerScriptTests).Assembly.Location);
+        startInfo.ArgumentList.Add("--list-tests");
+        startInfo.ArgumentList.Add("json");
+        foreach (var argument in filterArguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        var result = Run(startInfo, TimeSpan.FromMinutes(2));
+        Assert.True(
+            result.ExitCode == 0 || (allowEmpty && result.ExitCode is 1 or 8),
+            $"exit={result.ExitCode}{Environment.NewLine}{result.Stdout}{result.Stderr}");
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var tests = document.RootElement.GetProperty("tests")
+            .EnumerateArray()
+            .Select(test =>
+            {
+                var type = test.GetProperty("type");
+                var traits = test.TryGetProperty("traits", out var traitElements)
+                    ? traitElements.EnumerateArray()
+                        .Select(trait => new KeyValuePair<string, string>(
+                            trait.GetProperty("key").GetString()!,
+                            trait.GetProperty("value").GetString()!))
+                        .ToArray()
+                    : [];
+                return new ManagedTestDescriptor(
+                    test.GetProperty("uid").GetString()!,
+                    test.GetProperty("displayName").GetString()!,
+                    type.GetProperty("typeName").GetString()!,
+                    type.GetProperty("methodName").GetString()!,
+                    traits);
+            })
+            .ToArray();
+        if (!allowEmpty)
+        {
+            Assert.NotEmpty(tests);
+        }
+        return tests;
+    }
+
+    private sealed record ManagedTestDescriptor(
+        string Uid,
+        string DisplayName,
+        string TypeName,
+        string MethodName,
+        IReadOnlyList<KeyValuePair<string, string>> Traits);
+
+    private sealed class ManagedFilterExpressionEvaluator
+    {
+        private readonly string _filter;
+        private readonly ManagedTestDescriptor _test;
+        private int _index;
+
+        private ManagedFilterExpressionEvaluator(string filter, ManagedTestDescriptor test)
+        {
+            _filter = filter;
+            _test = test;
+        }
+
+        public static bool Evaluate(string filter, ManagedTestDescriptor test)
+        {
+            var evaluator = new ManagedFilterExpressionEvaluator(filter, test);
+            var result = evaluator.ReadOr();
+            evaluator.SkipWhitespace();
+            if (evaluator._index != filter.Length)
+            {
+                throw new InvalidOperationException($"Unexpected manifest filter text at position {evaluator._index}: {filter}");
+            }
+            return result;
+        }
+
+        private bool ReadOr()
+        {
+            var result = ReadAnd();
+            while (TryRead('|'))
+            {
+                result |= ReadAnd();
+            }
+            return result;
+        }
+
+        private bool ReadAnd()
+        {
+            var result = ReadAtom();
+            while (TryRead('&'))
+            {
+                result &= ReadAtom();
+            }
+            return result;
+        }
+
+        private bool ReadAtom()
+        {
+            SkipWhitespace();
+            if (TryRead('('))
+            {
+                var result = ReadOr();
+                if (!TryRead(')'))
+                {
+                    throw new InvalidOperationException($"Unclosed group in manifest filter: {_filter}");
+                }
+                return result;
+            }
+
+            var start = _index;
+            while (_index < _filter.Length && _filter[_index] is not ('&' or '|' or '(' or ')'))
+            {
+                _index++;
+            }
+            var predicate = _filter[start.._index].Trim();
+            return EvaluatePredicate(predicate);
+        }
+
+        private bool EvaluatePredicate(string predicate)
+        {
+            var (property, operation, value) = SplitPredicate(predicate);
+            return (property, operation) switch
+            {
+                ("FullyQualifiedName", "~") => Contains(_test.TypeName, value),
+                ("FullyQualifiedName", "!~") => !Contains(_test.TypeName, value),
+                ("Name", "~") => Contains(_test.MethodName, value),
+                ("Name", "!~") => !Contains(_test.MethodName, value),
+                ("Category", "!=") => !_test.Traits.Any(trait =>
+                    trait.Key.Equals("Category", StringComparison.OrdinalIgnoreCase) &&
+                    trait.Value.Equals(value, StringComparison.OrdinalIgnoreCase)),
+                _ => throw new InvalidOperationException($"Unsupported manifest predicate '{predicate}' in '{_filter}'.")
+            };
+        }
+
+        private static (string Property, string Operation, string Value) SplitPredicate(string predicate)
+        {
+            foreach (var operation in new[] { "!~", "!=", "~" })
+            {
+                var operatorIndex = predicate.IndexOf(operation, StringComparison.Ordinal);
+                if (operatorIndex > 0 && operatorIndex + operation.Length < predicate.Length)
+                {
+                    return (
+                        predicate[..operatorIndex].Trim(),
+                        operation,
+                        predicate[(operatorIndex + operation.Length)..].Trim());
+                }
+            }
+            throw new InvalidOperationException($"Malformed manifest predicate '{predicate}'.");
+        }
+
+        private static bool Contains(string candidate, string value) =>
+            candidate.Contains(value, StringComparison.OrdinalIgnoreCase);
+
+        private bool TryRead(char expected)
+        {
+            SkipWhitespace();
+            if (_index >= _filter.Length || _filter[_index] != expected)
+            {
+                return false;
+            }
+            _index++;
+            return true;
+        }
+
+        private void SkipWhitespace()
+        {
+            while (_index < _filter.Length && char.IsWhiteSpace(_filter[_index]))
+            {
+                _index++;
+            }
+        }
+    }
+
     private static ProcessStartInfo PowerShellStartInfo(string workingDirectory) => new()
     {
         FileName = "powershell.exe",
@@ -1686,11 +2053,17 @@ public sealed class MtpTestRunnerScriptTests
         public ProcessResult RunSummaryPartition(string partition)
             => RunSummary(partition: partition);
 
-        public ProcessResult RunSummary(string? partition = null, string? filter = null)
+        public ProcessResult RunSummary(
+            string? partition = null,
+            string? filter = null,
+            bool noBuild = true,
+            string? dotnetPath = null)
         {
             var startInfo = SandboxPowerShellStartInfo();
             startInfo.ArgumentList.Add("-File");
             startInfo.ArgumentList.Add(Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"));
+            startInfo.ArgumentList.Add("-Target");
+            startInfo.ArgumentList.Add("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
             if (partition is not null)
             {
                 startInfo.ArgumentList.Add("-Partition");
@@ -1701,11 +2074,19 @@ public sealed class MtpTestRunnerScriptTests
                 startInfo.ArgumentList.Add("-Filter");
                 startInfo.ArgumentList.Add(filter);
             }
-            startInfo.ArgumentList.Add("-NoBuild");
+            if (noBuild)
+            {
+                startInfo.ArgumentList.Add("-NoBuild");
+            }
             startInfo.ArgumentList.Add("-ResultsRoot");
             startInfo.ArgumentList.Add(ResultsRoot);
             startInfo.ArgumentList.Add("-RunnerPath");
             startInfo.ArgumentList.Add(RunnerPath);
+            if (dotnetPath is not null)
+            {
+                startInfo.ArgumentList.Add("-DotnetPath");
+                startInfo.ArgumentList.Add(dotnetPath);
+            }
             return Run(startInfo);
         }
 
