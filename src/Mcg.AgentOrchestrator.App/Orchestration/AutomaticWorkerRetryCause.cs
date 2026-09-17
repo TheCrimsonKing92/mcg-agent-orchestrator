@@ -13,9 +13,20 @@ internal static class AutomaticWorkerRetryCause
             return null;
         }
 
+        return Resolve(task, DispatchFailureClassifier.Classify(task, verification));
+    }
+
+    internal static RetryCause? Resolve(TaskSpec task, DispatchOutcome outcome)
+    {
+        var verification = task.LastVerification;
+        if (verification is null)
+        {
+            return null;
+        }
+
         if (TaskOutcomeClassifier.IsIncompleteScopeDeclaration(
             TaskOutcomeClassifier.TryExtractRule(
-                DispatchFailureClassifier.Classify(task, verification).ClassifierReceipt)))
+                outcome.ClassifierReceipt)))
         {
             return RetryCause.ContractClarification;
         }

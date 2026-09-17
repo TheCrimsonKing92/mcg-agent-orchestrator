@@ -9,9 +9,9 @@ internal sealed partial class ConductorDriver
         TaskSpec triggeringTask,
         string blockersText,
         int round,
-        out VerifyingFindingAutoRetryDecision decision)
+        out ObservedFindingRecoveryCandidate decision)
     {
-        decision = VerifyingFindingAutoRetryDecision.None;
+        decision = ObservedFindingRecoveryCandidate.None;
         if (UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(triggeringTask, blockersText) ||
             triggeringTask.RequiredRole != AgentRole.Reviewer ||
             triggeringTask.LastVerification is not { MergedReviewFindings: null } latestVerification ||
@@ -21,7 +21,7 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        decision = VerifyingFindingAutoRetryDecision.Retry(
+        decision = ObservedFindingRecoveryCandidate.Retry(
             triggeringTask,
             $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} " +
             "reported needs-work, but its structured finding result was missing or unparseable and no current open blocking finding exists. " +
