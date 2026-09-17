@@ -25,7 +25,7 @@ internal static class CliCommandHelp
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
-    public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
+    public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
@@ -263,7 +263,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Attention = new(
         AttentionUsage,
-        "Show, dismiss, or answer operator attention items.",
+        "Show, dismiss, or answer operator attention items. Use top-level `answer` when supplying --gate-deliverable evidence.",
         ["--all", "--include-parked", "--goal", "--item", "--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AbandonGoal = new(
