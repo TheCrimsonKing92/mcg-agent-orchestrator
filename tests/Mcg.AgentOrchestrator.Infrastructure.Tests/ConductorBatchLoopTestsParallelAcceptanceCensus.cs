@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -170,4 +171,11 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance
             TryDeleteDirectory(attemptRoot);
         }
     }
+}
+
+internal static class LiveAcceptanceProbeTestIsolation
+{
+    [ModuleInitializer]
+    internal static void Install() =>
+        _ = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
 }
