@@ -5,9 +5,14 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class TrialHarnessComparison(ITrialRootHost host)
+internal sealed class TrialHarnessComparison(
+    ITrialRootHost host,
+    Action<string, byte[]>? publishBytes = null)
 {
     private const int MaximumWorkerResultInspectionBytes = 1024 * 1024;
+    internal const int MaximumRetainedDiagnosticBytes = 64 * 1024;
+    private const string DiagnosticEncoding = "binary; source expected utf-8";
+    private readonly Action<string, byte[]> _publishBytes = publishBytes ?? PublishBytesAtomically;
 
     private static readonly JsonSerializerOptions ReceiptJson = new(JsonSerializerDefaults.Web)
     {
@@ -113,7 +118,8 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                 try
                 {
                     var report = session.Destroy();
-                    state.TeardownReceiptPath = report.ReceiptPath;
+                    state.SourceTeardownReceiptPath = report.ReceiptPath;
+                    PublishTeardownReceipt(state, session, report, failures);
                     if (report.OutsideWrites.Count > 0)
                     {
                         state.Outcome = TrialHarnessOutcome.ProtectedPathModified;
@@ -141,6 +147,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                 }
                 finally
                 {
+                    MarkDiagnosticPublicationFailed(state);
                     try
                     {
                         session.Dispose();
@@ -228,7 +235,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         };
     }
 
-    private static void RunHarness(
+    private void RunHarness(
         HarnessState state,
         ITrialRootSession session,
         TimeSpan timeout,
@@ -248,7 +255,21 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             }
 
             using var launch = session.Start(command);
-            var exited = launch.WaitForExit(ToTimeoutMilliseconds(timeout));
+            var waitCancelled = false;
+            bool exited;
+            try
+            {
+                exited = launch.WaitForExit(ToTimeoutMilliseconds(timeout));
+            }
+            catch (OperationCanceledException ex)
+            {
+                exited = false;
+                waitCancelled = true;
+                state.Outcome = TrialHarnessOutcome.LaunchFailed;
+                state.Diagnostics.Add(ex.Message);
+                failures.Add($"Harness '{state.Spec.Name}' launch failed: {ex.Message}");
+            }
+
             if (exited)
             {
                 state.ExitCode = launch.ExitCode;
@@ -258,6 +279,25 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             {
                 state.StandardOutput = CaptureMetadata(launch.StdoutPath);
                 state.StandardError = CaptureMetadata(launch.StderrPath);
+                var attemptIdentity = Guid.NewGuid().ToString("N");
+                state.StandardOutput = PublishDiagnosticStream(
+                    state,
+                    state.StandardOutput,
+                    launch.StdoutPath,
+                    state.Paths.StandardOutputPath,
+                    "stdout",
+                    attemptIdentity,
+                    exited,
+                    failures);
+                state.StandardError = PublishDiagnosticStream(
+                    state,
+                    state.StandardError,
+                    launch.StderrPath,
+                    state.Paths.StandardErrorPath,
+                    "stderr",
+                    attemptIdentity,
+                    exited,
+                    failures);
                 state.WorkerResult = InspectWorkerResult(launch.StdoutPath);
                 CaptureHermesTerminalReceipt(state, session);
             }
@@ -270,7 +310,7 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                 return;
             }
 
-            if (exited)
+            if (!waitCancelled && exited)
             {
                 if (state.WorkerResult.Status == TrialWorkerResultStatus.Valid)
                 {
@@ -284,13 +324,15 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
                     failures.Add(failure);
                 }
             }
-            else
+            else if (!waitCancelled)
             {
                 state.Outcome = TrialHarnessOutcome.TimedOut;
                 var failure = $"Harness '{state.Spec.Name}' timed out after {timeout}.";
                 state.Diagnostics.Add(failure);
                 failures.Add(failure);
             }
+
+            MarkDiagnosticPublicationFailed(state);
         }
         catch (Exception ex)
         {
@@ -322,8 +364,174 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
-        var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        return new TrialOutputMetadata(stream.Length, digest);
+        var byteCount = stream.Length;
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[81920];
+        var remaining = byteCount;
+        while (remaining > 0)
+        {
+            var read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+            if (read == 0)
+            {
+                throw new EndOfStreamException($"Harness capture file became shorter while hashing: '{path}'.");
+            }
+
+            hasher.AppendData(buffer, 0, read);
+            remaining -= read;
+        }
+
+        var digest = Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
+        return new TrialOutputMetadata(byteCount, digest);
+    }
+
+    private TrialOutputMetadata PublishDiagnosticStream(
+        HarnessState state,
+        TrialOutputMetadata sourceMetadata,
+        string sourcePath,
+        string destinationPath,
+        string artifact,
+        string attemptIdentity,
+        bool sourceStreamComplete,
+        List<string> failures)
+    {
+        try
+        {
+            var retainedBytes = ReadBoundedDiagnostic(sourcePath, sourceMetadata.ByteCount);
+            _publishBytes(destinationPath, retainedBytes.Bytes);
+            var retainedSha256 = Convert.ToHexString(SHA256.HashData(retainedBytes.Bytes)).ToLowerInvariant();
+            return sourceMetadata with
+            {
+                RetainedPath = destinationPath,
+                RetainedByteCount = retainedBytes.Bytes.LongLength,
+                RetainedSha256 = retainedSha256,
+                Encoding = DiagnosticEncoding,
+                Truncated = retainedBytes.Truncated,
+                SourceStreamComplete = sourceStreamComplete,
+                WorkloadIdentity = state.WorkloadIdentity?.Value,
+                ArmIdentity = state.ArmIdentity?.Value,
+                AttemptIdentity = attemptIdentity
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            RecordPublicationFailure(state, failures, artifact, "output-copy", destinationPath, ex.Message);
+            return sourceMetadata with
+            {
+                Encoding = DiagnosticEncoding,
+                Truncated = sourceMetadata.ByteCount > MaximumRetainedDiagnosticBytes,
+                SourceStreamComplete = sourceStreamComplete,
+                WorkloadIdentity = state.WorkloadIdentity?.Value,
+                ArmIdentity = state.ArmIdentity?.Value,
+                AttemptIdentity = attemptIdentity
+            };
+        }
+    }
+
+    private static (byte[] Bytes, bool Truncated) ReadBoundedDiagnostic(string sourcePath, long sourceByteCount)
+    {
+        using var source = new FileStream(
+            sourcePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        if (sourceByteCount <= MaximumRetainedDiagnosticBytes)
+        {
+            var bytes = new byte[checked((int)sourceByteCount)];
+            source.ReadExactly(bytes);
+            return (bytes, false);
+        }
+
+        var omittedByteCount = sourceByteCount - MaximumRetainedDiagnosticBytes;
+        var separator = Array.Empty<byte>();
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            separator = Encoding.UTF8.GetBytes(
+                $"\n[mcg-trial-diagnostic-truncated: omitted {omittedByteCount} source bytes]\n");
+            omittedByteCount = sourceByteCount - (MaximumRetainedDiagnosticBytes - separator.Length);
+        }
+        if (separator.Length >= MaximumRetainedDiagnosticBytes)
+        {
+            throw new InvalidOperationException("The diagnostic truncation marker exceeds the retention limit.");
+        }
+
+        var retained = new byte[MaximumRetainedDiagnosticBytes];
+        var headLength = (MaximumRetainedDiagnosticBytes - separator.Length) / 2;
+        var tailLength = MaximumRetainedDiagnosticBytes - separator.Length - headLength;
+        source.ReadExactly(retained.AsSpan(0, headLength));
+        separator.CopyTo(retained.AsSpan(headLength));
+        source.Seek(sourceByteCount - tailLength, SeekOrigin.Begin);
+        source.ReadExactly(retained.AsSpan(headLength + separator.Length, tailLength));
+        return (retained, true);
+    }
+
+    private void PublishTeardownReceipt(
+        HarnessState state,
+        ITrialRootSession session,
+        TrialTeardownReport report,
+        List<string> failures)
+    {
+        try
+        {
+            if (!File.Exists(report.ReceiptPath))
+            {
+                throw new FileNotFoundException("The teardown receipt was not written.", report.ReceiptPath);
+            }
+
+            var receipt = JsonSerializer.Deserialize<TrialTeardownReport>(File.ReadAllText(report.ReceiptPath), ReceiptJson)
+                ?? throw new InvalidDataException("The teardown receipt was empty.");
+            if (!Path.GetFullPath(receipt.RootPath).Equals(Path.GetFullPath(session.RootPath), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Teardown receipt root identity '{receipt.RootPath}' does not match '{session.RootPath}'.");
+            }
+
+            var bytes = File.ReadAllBytes(report.ReceiptPath);
+            _publishBytes(state.Paths.TeardownReceiptPath, bytes);
+            state.TeardownReceiptPath = state.Paths.TeardownReceiptPath;
+            state.TeardownReceiptSha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            RecordPublicationFailure(
+                state,
+                failures,
+                "teardown-receipt",
+                "teardown-copy",
+                state.Paths.TeardownReceiptPath,
+                ex.Message);
+        }
+    }
+
+    private static void PublishBytesAtomically(string destinationPath, byte[] bytes)
+    {
+        var temporaryPath = $"{destinationPath}.tmp-{Guid.NewGuid():N}";
+        try
+        {
+            File.WriteAllBytes(temporaryPath, bytes);
+            File.Move(temporaryPath, destinationPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private static void RecordPublicationFailure(
+        HarnessState state,
+        List<string> failures,
+        string artifact,
+        string stage,
+        string destinationPath,
+        string message)
+    {
+        var diagnostic = new TrialDiagnosticPublicationFailure(artifact, stage, destinationPath, message);
+        state.PublicationFailures.Add(diagnostic);
+        var failure = $"Harness '{state.Spec.Name}' {artifact} diagnostic publication failed during {stage}: {message}";
+        state.Diagnostics.Add(failure);
+        failures.Add(failure);
     }
 
     private static TrialWorkerResultEvidence InspectWorkerResult(string stdoutPath)
@@ -384,14 +592,29 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
     {
         var directory = Path.Combine(runDirectory, harnessName);
         Directory.CreateDirectory(directory);
-        return new HarnessReceiptPaths(Path.Combine(directory, "result.json"));
+        return new HarnessReceiptPaths(
+            Path.Combine(directory, "result.json"),
+            Path.Combine(directory, "stdout.diagnostic.log"),
+            Path.Combine(directory, "stderr.diagnostic.log"),
+            Path.Combine(directory, "teardown-receipt.json"));
     }
 
     private static void MarkTeardownUnclean(HarnessState state)
     {
-        if (state.Outcome is TrialHarnessOutcome.NotAttempted or TrialHarnessOutcome.Completed)
+        if (state.Outcome is TrialHarnessOutcome.NotAttempted
+            or TrialHarnessOutcome.Completed
+            or TrialHarnessOutcome.DiagnosticPublicationFailed)
         {
             state.Outcome = TrialHarnessOutcome.TeardownUnclean;
+        }
+    }
+
+    private static void MarkDiagnosticPublicationFailed(HarnessState state)
+    {
+        if (state.PublicationFailures.Count > 0
+            && state.Outcome is TrialHarnessOutcome.NotAttempted or TrialHarnessOutcome.Completed)
+        {
+            state.Outcome = TrialHarnessOutcome.DiagnosticPublicationFailed;
         }
     }
 
@@ -410,7 +633,10 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         state.ArmIdentity,
         state.HistoricalTiming,
         state.HermesTerminalReceiptPath,
-        state.HermesTerminalReceipt);
+        state.HermesTerminalReceipt,
+        state.SourceTeardownReceiptPath,
+        state.TeardownReceiptSha256,
+        state.PublicationFailures.ToArray());
 
     private static void Validate(TrialComparisonRequest request)
     {
@@ -499,9 +725,12 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         Mcg.AgentOrchestrator.Core.GoalTimingReportSnapshot? historicalTiming)
     {
         public TrialHarnessSpec Spec { get; } = spec;
+        public HarnessReceiptPaths Paths { get; } = paths;
         public string ReceiptPath { get; } = paths.ReceiptPath;
         public string ResolvedBaseCommit { get; set; } = string.Empty;
         public string? TeardownReceiptPath { get; set; }
+        public string? SourceTeardownReceiptPath { get; set; }
+        public string? TeardownReceiptSha256 { get; set; }
         public int? ExitCode { get; set; }
         public TrialHarnessOutcome Outcome { get; set; } = TrialHarnessOutcome.NotAttempted;
         public List<string> Diagnostics { get; } = [];
@@ -513,7 +742,12 @@ internal sealed class TrialHarnessComparison(ITrialRootHost host)
         public TrialWorkerResultEvidence WorkerResult { get; set; } = new(TrialWorkerResultStatus.NotInspected, 0);
         public string? HermesTerminalReceiptPath { get; set; }
         public HermesAcpTerminalReceipt? HermesTerminalReceipt { get; set; }
+        public List<TrialDiagnosticPublicationFailure> PublicationFailures { get; } = [];
     }
 
-    private sealed record HarnessReceiptPaths(string ReceiptPath);
+    private sealed record HarnessReceiptPaths(
+        string ReceiptPath,
+        string StandardOutputPath,
+        string StandardErrorPath,
+        string TeardownReceiptPath);
 }

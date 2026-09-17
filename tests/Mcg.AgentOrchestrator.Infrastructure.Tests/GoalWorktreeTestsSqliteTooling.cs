@@ -13,7 +13,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 
-public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
+public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "InvokeRepoScript_runs_FindOrchestratorLocks_without_synthetic_argument")]
     public void InvokeRepoScriptRunsFindOrchestratorLocksWithoutSyntheticArgument()
@@ -400,7 +400,9 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         var failure = Record.Exception(() => RunRedirectedProcess(
             startInfo,
             "phase-reporting fixture",
-            timeoutMs: 1000));
+            timeoutMs: 1000,
+            readyProbe: stdout => stdout.Contains("MCG_PHASE=rebuild-and-run-cli", StringComparison.Ordinal),
+            readyTimeoutMs: 30000));
 
         Assert.NotNull(failure);
         Assert.Contains("phase=rebuild-and-run-cli", failure.Message, StringComparison.Ordinal);
@@ -972,15 +974,16 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
     [Xunit.Fact(DisplayName = "Redirected_process_runner_times_out_and_kills_child_tree")]
     public void RedirectedProcessRunnerTimesOutAndKillsChildTree()
     {
+        const int startupReadinessBudgetMs = 30000;
         var marker = $"mcg-redirected-runner-{Guid.NewGuid():N}";
         var childPidPath = Path.Combine(Path.GetTempPath(), marker + ".pid");
         var escapedChildPidPath = childPidPath.Replace("'", "''", StringComparison.Ordinal);
         var escapedMarker = marker.Replace("'", "''", StringComparison.Ordinal);
         var startInfo = CreatePowerShellStartInfo(
             $"$child = Start-Process powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 120 # {escapedMarker}' -WindowStyle Hidden -PassThru; " +
-            $"Set-Content -LiteralPath '{escapedChildPidPath}' -Value $child.Id -NoNewline; " +
+            $"Set-Content -LiteralPath '{escapedChildPidPath}' -Value ($child.Id.ToString([System.Globalization.CultureInfo]::InvariantCulture) + ',' + $child.StartTime.ToFileTimeUtc().ToString([System.Globalization.CultureInfo]::InvariantCulture)) -NoNewline; " +
             "Write-Output ('CHILD_PID=' + $child.Id); Start-Sleep -Seconds 120");
-        int? childPid = null;
+        OwnedProcessIdentity? child = null;
 
         try
         {
@@ -988,22 +991,54 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
                 startInfo,
                 "sleeping-child fixture",
                 timeoutMs: 1000,
-                failOnTimeout: false);
+                failOnTimeout: false,
+                readyProbe: stdout =>
+                {
+                    var candidate = TryReadOwnedProcessIdentity(childPidPath);
+                    if (!stdout.Contains("CHILD_PID=", StringComparison.Ordinal) ||
+                        candidate is not { } ownedChild ||
+                        !IsOwnedProcessRunning(ownedChild))
+                    {
+                        return false;
+                    }
 
+                    child = ownedChild;
+                    return true;
+                },
+                readyTimeoutMs: startupReadinessBudgetMs);
+
+            Assert.True(
+                result.Startup == RedirectedProcessStartup.Ready,
+                $"Sleeping-child fixture did not establish its owned descendant before timed execution; " +
+                $"startup={result.Startup}; pidFilePublished={File.Exists(childPidPath)}; " +
+                $"stdoutChars={result.StdoutChars}; streamsDrained={result.StreamsDrained}.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{result.Stderr}");
             Assert.True(result.TimedOut);
             Assert.True(result.ProcessReaped);
-            Assert.True(result.StreamsDrained);
-            Assert.Contains("CHILD_PID=", result.Stdout, StringComparison.Ordinal);
-            Assert.True(File.Exists(childPidPath), "Sleeping-child fixture did not publish its child pid.");
+            Assert.True(
+                result.StreamsDrained,
+                $"Sleeping-child fixture lost redirected stream drain after readiness; startup={result.Startup}.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{result.Stderr}");
+            Assert.True(
+                result.Stdout.Contains("CHILD_PID=", StringComparison.Ordinal),
+                $"Sleeping-child fixture observed readiness but lost CHILD_PID= after kill and drain; " +
+                $"startup={result.Startup}; pidFilePublished={File.Exists(childPidPath)}; stdoutChars={result.StdoutChars}.{Environment.NewLine}" +
+                $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
+                $"stderr:{Environment.NewLine}{result.Stderr}");
+            Assert.True(child is not null, "Sleeping-child fixture reported readiness without retaining its owned child identity.");
 
-            childPid = int.Parse(File.ReadAllText(childPidPath), CultureInfo.InvariantCulture);
-            Assert.True(WaitForProcessExit(childPid.Value, 5000), $"Child process {childPid} survived the timed-out process-tree kill.");
+            Assert.True(
+                WaitForOwnedProcessExit(child.Value, 5000),
+                $"Child process {child.Value.ProcessId} survived the timed-out process-tree kill.");
         }
         finally
         {
-            if (childPid is int leakedChildPid)
+            var ownedChild = child ?? TryReadOwnedProcessIdentity(childPidPath);
+            if (ownedChild is { } childForCleanup)
             {
-                KillProcessForTestCleanup(leakedChildPid);
+                KillOwnedProcessForTestCleanup(childForCleanup);
             }
 
             File.Delete(childPidPath);
@@ -1083,7 +1118,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         }
         catch
         {
-            _ = GoalWorktrees.DeleteDirectory(appOutput);
+            _ = GoalWorktrees.DeleteDirectoryWithRetry(appOutput);
             throw;
         }
     }
@@ -1115,7 +1150,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         {
             if (Directory.Exists(destination))
             {
-                _ = GoalWorktrees.DeleteDirectory(destination);
+                _ = GoalWorktrees.DeleteDirectoryWithRetry(destination);
             }
             throw;
         }
@@ -1204,7 +1239,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         public void Dispose()
         {
             Assert.True(
-                GoalWorktrees.DeleteDirectory(Path),
+                GoalWorktrees.DeleteDirectoryWithRetry(Path),
                 $"Could not remove prepared App output directory: {Path}");
         }
     }
@@ -1230,9 +1265,16 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         ProcessStartInfo startInfo,
         string displayName,
         int timeoutMs = 30000,
-        bool failOnTimeout = true)
+        bool failOnTimeout = true,
+        Func<string, bool>? readyProbe = null,
+        int readyTimeoutMs = 0)
     {
         const int drainTimeoutMs = 5000;
+        if (readyProbe is null ? readyTimeoutMs != 0 : readyTimeoutMs <= 0)
+        {
+            throw new ArgumentException("Redirected-process readiness requires both a probe and a positive timeout.");
+        }
+
         startInfo.Environment["MCG_PHASE_TRACE"] = "1";
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {displayName}.");
@@ -1241,7 +1283,12 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         var stdoutDrain = DrainAsync(process.StandardOutput, stdout);
         var stderrDrain = DrainAsync(process.StandardError, stderr);
 
-        var timedOut = !process.WaitForExit(timeoutMs);
+        var startup = readyProbe is null
+            ? RedirectedProcessStartup.NotRequested
+            : WaitForStartupReadiness(process, readyProbe, stdout, readyTimeoutMs);
+        var timedOut = startup == RedirectedProcessStartup.NotRequested || startup == RedirectedProcessStartup.Ready
+            ? !process.WaitForExit(timeoutMs)
+            : true;
         var processReaped = true;
         if (timedOut)
         {
@@ -1258,7 +1305,8 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             stderr.TotalChars,
             timedOut,
             processReaped,
-            streamsDrained);
+            streamsDrained,
+            startup);
         var phase = ExtractLastReportedPhase(result.Stdout);
 
         if (timedOut && failOnTimeout)
@@ -1280,6 +1328,37 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         }
 
         return result;
+    }
+
+    private static RedirectedProcessStartup WaitForStartupReadiness(
+        Process process,
+        Func<string, bool> readyProbe,
+        BoundedTextCapture stdout,
+        int timeoutMs)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            if (readyProbe(stdout.Snapshot()))
+            {
+                return RedirectedProcessStartup.Ready;
+            }
+
+            var remainingMs = timeoutMs - (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue);
+            if (remainingMs <= 0)
+            {
+                return readyProbe(stdout.Snapshot())
+                    ? RedirectedProcessStartup.Ready
+                    : RedirectedProcessStartup.TimedOutBeforeReady;
+            }
+
+            if (WaitForProcessExit(process, Math.Min(50, remainingMs)))
+            {
+                return readyProbe(stdout.Snapshot())
+                    ? RedirectedProcessStartup.Ready
+                    : RedirectedProcessStartup.ExitedBeforeReady;
+            }
+        }
     }
 
     private static string ExtractLastReportedPhase(string stdout)
@@ -1363,25 +1442,76 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         }
     }
 
-    private static bool WaitForProcessExit(int processId, int timeoutMs)
+    private static OwnedProcessIdentity? TryReadOwnedProcessIdentity(string path)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            return process.WaitForExit(timeoutMs);
+            var values = File.ReadAllText(path).Split(',', StringSplitOptions.TrimEntries);
+            return values.Length == 2 &&
+                int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var processId) &&
+                long.TryParse(values[1], NumberStyles.None, CultureInfo.InvariantCulture, out var startTimeUtcFileTime)
+                ? new OwnedProcessIdentity(processId, startTimeUtcFileTime)
+                : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsOwnedProcessRunning(OwnedProcessIdentity ownedProcess)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(ownedProcess.ProcessId);
+            return IsOwnedProcess(process, ownedProcess) && !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool WaitForOwnedProcessExit(OwnedProcessIdentity ownedProcess, int timeoutMs)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(ownedProcess.ProcessId);
+            return !IsOwnedProcess(process, ownedProcess) || process.WaitForExit(timeoutMs);
         }
         catch (ArgumentException)
         {
             return true;
         }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // An unreadable process identity is not confirmation that the owned child exited.
+            return false;
+        }
     }
 
-    private static void KillProcessForTestCleanup(int processId)
+    private static void KillOwnedProcessForTestCleanup(OwnedProcessIdentity ownedProcess)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            if (!process.HasExited)
+            using var process = Process.GetProcessById(ownedProcess.ProcessId);
+            if (IsOwnedProcess(process, ownedProcess) && !process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
                 _ = process.WaitForExit(5000);
@@ -1395,6 +1525,16 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         {
             // Natural exit won the cleanup race.
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The process identity could no longer be read safely for owned cleanup.
+        }
+    }
+
+    private static bool IsOwnedProcess(Process process, OwnedProcessIdentity ownedProcess)
+    {
+        return string.Equals(process.ProcessName, "powershell", StringComparison.OrdinalIgnoreCase) &&
+            process.StartTime.ToFileTimeUtc() == ownedProcess.StartTimeUtcFileTime;
     }
 
     private static bool HasExited(Process process)
@@ -1455,6 +1595,16 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         }
     }
 
+    private enum RedirectedProcessStartup
+    {
+        NotRequested,
+        Ready,
+        TimedOutBeforeReady,
+        ExitedBeforeReady
+    }
+
+    private readonly record struct OwnedProcessIdentity(int ProcessId, long StartTimeUtcFileTime);
+
     private sealed record RedirectedProcessResult(
         int? ExitCode,
         string Stdout,
@@ -1463,7 +1613,8 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         long StderrChars,
         bool TimedOut,
         bool ProcessReaped,
-        bool StreamsDrained);
+        bool StreamsDrained,
+        RedirectedProcessStartup Startup);
 
     private const string LockQueryCommandText = "repo-process-info --locks";
 
@@ -1498,7 +1649,6 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
 
 }
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsCleanupHookDelegates : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "DeleteDirectory_removes_tree_containing_read_only_files")]
@@ -1515,7 +1665,7 @@ public sealed class GoalWorktreeTestsCleanupHookDelegates : GoalWorktreeTestBase
 
         try
         {
-            Assert.True(GoalWorktrees.DeleteDirectory(root));
+            Assert.True(GoalWorktrees.DeleteDirectoryWithRetry(root));
             Assert.False(Directory.Exists(root));
         }
         finally

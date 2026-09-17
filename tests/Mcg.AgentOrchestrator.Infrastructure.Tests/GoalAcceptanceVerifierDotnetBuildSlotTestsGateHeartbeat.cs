@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -72,6 +73,91 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
         {
             GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
             GoalAcceptanceVerifier.ProgressInterval = previousProgress;
+            try { DeleteDirectoryWithRetry(root); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_progress_comes_from_live_visible_output")]
+    public async Task GoalAcceptanceVerifierGateHeartbeatProgressComesFromLiveVisibleOutput()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "live output gate receipt", "type": "command", "command": "powershell", "arguments": ["-NoProfile", "-Command", "Write-Output 'heartbeat-visible-output'; Start-Sleep -Seconds 30"], "timeoutMinutes": 1 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var previousHeartbeat = GoalAcceptanceVerifier.HeartbeatInterval;
+        var previousProgress = GoalAcceptanceVerifier.ProgressInterval;
+        var previousCapturePublication = GoalAcceptanceVerifier.CapturePublicationInterval;
+        var observed = new ConcurrentQueue<AcceptanceGateProgress>();
+        var outputObserved = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var unchangedOutputObserved = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        AcceptanceGateProgress? firstOutput = null;
+        try
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            GoalAcceptanceVerifier.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
+            GoalAcceptanceVerifier.ProgressInterval = TimeSpan.FromMilliseconds(200);
+            GoalAcceptanceVerifier.CapturePublicationInterval = TimeSpan.FromMilliseconds(100);
+            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(item =>
+            {
+                observed.Enqueue(item);
+                if (item.CurrentTarget != "live output gate receipt" ||
+                    item.ChildProcessId is null ||
+                    item.OutputBytes <= 0)
+                {
+                    return;
+                }
+
+                var prior = Interlocked.CompareExchange(ref firstOutput, item, null);
+                if (prior is null)
+                {
+                    outputObserved.TrySetResult(item);
+                }
+                else if (item.OutputBytes == prior.OutputBytes &&
+                         item.LastObservedAt > prior.LastObservedAt)
+                {
+                    unchangedOutputObserved.TrySetResult(item);
+                }
+            });
+            using var cancellation = new CancellationTokenSource();
+            var verifier = new GoalAcceptanceVerifier();
+            var run = verifier.RunAsync(
+                root,
+                new GoalId("decafbaddecafbaddecafbaddecafbad"),
+                stableSlotIndex: 0,
+                cancellationToken: cancellation.Token);
+
+            var first = await outputObserved.Task.WaitAsync(TimeSpan.FromSeconds(6));
+            var unchanged = await unchangedOutputObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Xunit.Assert.NotNull(first.ChildProcessId);
+            Xunit.Assert.True(first.OutputBytes > 0);
+            Xunit.Assert.Equal(first.OutputBytes, unchanged.OutputBytes);
+            Xunit.Assert.Equal(first.LastProgressAt, unchanged.LastProgressAt);
+            Xunit.Assert.True(unchanged.LastObservedAt > first.LastObservedAt);
+
+            cancellation.Cancel();
+            await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+            Xunit.Assert.Contains(observed, item =>
+                item.CurrentTarget == "live output gate receipt" &&
+                item.ChildProcessId.HasValue &&
+                item.OutputBytes > 0);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
+            GoalAcceptanceVerifier.ProgressInterval = previousProgress;
+            GoalAcceptanceVerifier.CapturePublicationInterval = previousCapturePublication;
             try { DeleteDirectoryWithRetry(root); } catch { }
         }
     }

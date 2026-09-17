@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_start_dispatch_interactive_and_one_shot_multi_flags_match")]

@@ -70,7 +70,11 @@ internal static class SourceSizeRatchet
             // brought this file to the measured post-merge size.
             // Raised for goal 8263a08c: exited-dispatch reconciliation must precede the existing failure
             // retry ladder and guard the shared dispatch-start boundary before LastProcess is replaced.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6805),
+            // Goal 1592104a extracted acceptance-owned evidence recording and outstanding-obligation diagnostics.
+            // Lowered for goal 5d57fe95: clean-baseline attention subject formatting moved to CleanTestBaseline,
+            // which already owns receipt wire values and journal/attestation text; the driver keeps only the
+            // correlation-key lifecycle and passes its own short-sha rendering to that formatter.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6757),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -81,7 +85,10 @@ internal static class SourceSizeRatchet
             // Tightened after live acceptance reservation logic moved to its partial-class collaborator.
             // Reconciled after integrating main cc4d7b58 and goal f46ecbee at their measured combined size:
             // the goal's state/run-event maintenance leases remain scoped to the active conductor loop.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5192),
+            // Raised for goal ae54b5eb: set-aside fingerprints retain lifecycle rechecks while comparing
+            // retry/candidate task state independently of the kernel goal instance reloaded by admission.
+            // Goal 1592104a moved unloaded-intent disposition to a collaborator that retains reload evidence.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5193),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -100,21 +107,70 @@ internal static class SourceSizeRatchet
             // existing dispatch-completion boundary; projection and classification remain extracted.
             // Goal 17d96426 adds Hermes to the existing provider-to-sandbox mapping and writability
             // decision; both checks belong at this dispatch boundary and add five measured lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 3155),
+            // Goal 3b9d6b12 moved complete-log authority, decision selection, normalization, caching, and
+            // bounded snapshots to ProcessLogReader; the runner now retains only completion sequencing.
+            // Goal b3cba804 adds the authoritative-output-only scope-completion observation at the
+            // existing dispatch-completion boundary; the runner retains output-artifact authority
+            // and verification persistence while parsing stays with WorkerResultBlockers.
+            // Goal 0d92976e adds the BeforeRetryAdmission checkpoint phase to preserve
+            // current-tick evidence before retry admission replaces the goal snapshot; 2669 is
+            // the measured post-change size of the existing dispatch-state contract.
+            // Raised for goal df9ddb05: the Claude credential source the dispatch preflight selected must
+            // be transported from the dispatch record at the single process-start boundary that already
+            // owns the dispatch parameters; selection, validation, and seeding remain in
+            // ClaudeCredentialSource. 2682 is the measured size of that call site.
+            // Goal bb2d2d5a added the typed HumanWaitKind, and goal be5e06b0 adds the typed
+            // EvidenceOwner, so both parts of the planner's evidence obligation survive to the
+            // recording boundary. Each increase is one named argument on the existing
+            // DispatchProcessCompletionState construction; moving that construction would split
+            // the completion contract the runner owns rather than extract independent behavior.
+            // 2684 is the measured post-change size of that contract-preserving handoff.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2684),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
             // repository identities; 3229 is the measured combined post-rebase size.
             // Goal 52049d08 adds profile-aware policy selection, immutable receipt reuse, and compact
             // retry-projection wiring at this package-assembly boundary; each behavior remains extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3270),
+            // Goal df9ddb05 LOWERED this from 3234: ClaudeCliAuthState and ClaudeCliAuthProbe moved out
+            // to ClaudeCredentialSource.cs so the Claude credential selection rule and both consumers'
+            // views of it live in one file and cannot drift apart again. The dispatcher keeps only the
+            // preflight finding call site. 3200 is the measured post-extraction size, and 3241 is that
+            // size plus the preflight-to-dispatch handoff at both preparation paths: one shared auth probe
+            // per prepared task, its injection seam for fixture credential sources, and the reported
+            // credential source carried out of preflight onto the dispatch record so the dispatch start
+            // boundary transports it instead of resolving a second source. Selection, validation, and
+            // seeding all remain in ClaudeCredentialSource.
+            // Raised for goal 7fb91813 by 14 lines: the Claude reasoning-effort vocabulary, the refusal and
+            // warning text, the invocation-time stale-built-in repair, and the decision of whether an
+            // invocation materializes a configured effort all live in ClaudeCliEffortPolicy, beside the
+            // template segment they govern, so a finding cannot drift from the command actually built. The
+            // dispatcher keeps only what it alone holds: the preflight finding call site (the profile,
+            // resolved provider kind, and configured effort meet nowhere else), the refusal code's row in
+            // the preflight error-code priority order, and the one-line resolved-profile call plus its
+            // diagnostic sink at the single command-construction boundary. 3255 is the measured size of
+            // those call sites after that extraction.
+            // Raised by one line for goal bb2d2d5a: when the prerequisite-evidence section was trimmed to fit
+            // the prompt budget, the trimmed request ids must be recorded as a TaskNote against the task that
+            // was actually dispatched. Detection, id selection, note text, and idempotence all live in
+            // PrerequisiteEvidenceTrimNote; the dispatcher keeps only the call site, because this is the one
+            // point that holds the assembled brief, the kernel, and the dispatched goal/task identity
+            // together after the dispatch record is written. The CLI worker-dispatch path is a separate
+            // entry point and carries its own call site. 3256 is the measured size with that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3256),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
             // Reconciled after integrating main e1f6f11c at its measured post-merge size.
             // Goal 9fe7200e journals LOOP_READY at the existing pre-loop orchestration boundary;
             // 4855 is the measured post-merge size after that required readiness signal was wired.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4855),
+            // Goal 1592104a extracted evidence intent submission, status output, and metadata flag parsing.
+            // Goal 5daaa1db passes the operation-owned cleanup context through CLI acceptance and
+            // terminal sweeps; policy and cadence remain in WorktreeCleanupContext, not this runner.
+            // Raised eight lines for metadata-only goals and terminal-sweep caller ownership;
+            // five further lines preserve conduct-loop and global-reconcile scheduler cadence.
+            // The operation owner threads through this runner's own call sites.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4863),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
@@ -128,7 +184,12 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at the measured shared-fixture size.
             // Raised for goal 8263a08c: the shared fixture forwards the exited-dispatch reconciler used by
             // the focused failure-state and dispatch-start invariant tests.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1544),
+            // Lowered after extracting admission-refusal regressions and their fixture to
+            // ConductorDriverTestsAdmissionRefusal; the original assertions and collection are preserved.
+            // Raised by two lines for goal 678fa66f: the shared fixture forwards only the apparatus-RED
+            // gate seam so the re-gate facts can inject a census store; the facts themselves live in
+            // ConductorDriverTestsApparatusRedRegate.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTests.cs", 1510),
             // Goal ce3c3917 keeps acquired, unavailable, and exceptional lease-lifecycle coverage together
             // in the acceptance-coordination owner rather than splitting one behavioral contract.
             // Raised for goal 13630c9f: acceptance coordination owns the structured apparatus cause
@@ -136,7 +197,10 @@ internal static class SourceSizeRatchet
             // Reconciled after main 0d44d054 added the 27-line no-eager-journal-read regression; this is
             // the measured combined test-owner size, not additional goal coverage.
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1279),
+            // Raised by one line for goal 5d57fe95: the observed-correlation control must assert both that
+            // origin stays Unattributed and that the apparatus hold still classifies, because the defect being
+            // guarded is exactly the pair coming apart; splitting them would lose the contract they compare.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1280),
             // Raised for goal 13630c9f: lifecycle coverage keeps unchanged-candidate holds, bounded
             // operator release, and main/candidate HEAD regating in one state-transition decision table.
             // Raised for goal d5fcf981: acceptance attribution controls prove worker retry versus held
@@ -149,7 +213,8 @@ internal static class SourceSizeRatchet
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
             // Raised for goal 52590d3e: the finding-evidence owner now carries both recorded incident shapes,
             // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2713),
+            // Goal aab291fd extracted manifest-declared project resolution controls to their own partial.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1299),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
@@ -182,7 +247,9 @@ internal static class SourceSizeRatchet
             // Reconciled after main 4ba0dba0 added the reviewed target-boundary cancellation regression;
             // 5188 is the measured combined post-rebase size.
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5282),
+            // Goal 5daaa1db replaces ambient build-root mutation with explicit child-launch ownership
+            // and disposes the owned root; the real-process transport assertions remain in this fixture.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5284),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 

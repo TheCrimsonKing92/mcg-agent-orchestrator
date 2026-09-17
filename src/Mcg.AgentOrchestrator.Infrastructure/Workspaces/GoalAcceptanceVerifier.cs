@@ -383,7 +383,7 @@ public interface IGoalAcceptanceVerifier
         CancellationToken cancellationToken = default);
 }
 
-public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
+public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
     public sealed record StartupContract(
         int ManifestCheckCount,
@@ -430,15 +430,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
     private const int MaxFocusedEvidenceFilterLength = 1024;
-    internal const string FocusedEvidenceSupportedProjectForms =
-        "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
-        "Mcg.AgentOrchestrator.Infrastructure.Tests, Dashboard, Dashboard.Tests, " +
-        "Mcg.AgentOrchestrator.Dashboard.Tests, or a full .csproj path ending in " +
-        "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj; " +
-        "extracted Infrastructure test projects registered in engine.mtpInvocations also accept their " +
-        "project label, file name, or full .csproj path";
+    internal static string FocusedEvidenceSupportedProjectForms(
+        AcceptanceGateEngineSettings? engineSettings) =>
+        DeclaredTestProjectInventory.DescribeSupportedProjectForms(engineSettings);
     private const int FocusedEvidenceShortTimeoutTargetLimit = 4;
     internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
@@ -2879,26 +2873,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return true;
         }
 
-        foreach (var invocation in engineSettings?.MtpInvocations ?? [])
-        {
-            var candidate = NormalizePath(invocation.Project)!;
-            if (!IsExtractedInfrastructureProject(candidate) && !IsDashboardTestProject(candidate))
-            {
-                continue;
-            }
-
-            var fileName = Path.GetFileName(candidate);
-            if (normalized.Equals(candidate, StringComparison.OrdinalIgnoreCase) ||
-                normalized.Equals(fileName, StringComparison.OrdinalIgnoreCase) ||
-                normalized.Equals(Path.GetFileNameWithoutExtension(fileName), StringComparison.OrdinalIgnoreCase) ||
-                normalized.Equals(ProjectLabel(candidate), StringComparison.OrdinalIgnoreCase))
-            {
-                project = candidate;
-                return true;
-            }
-        }
-
-        return false;
+        return DeclaredTestProjectInventory.TryResolve(normalized, engineSettings, out project);
     }
 
     private static bool TryNormalizeFocusedEvidenceFilter(
@@ -4369,7 +4344,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : $"'{check.Name}' had selection(s) matching 0 tests: {string.Join(", ", uncoveredSelections)}.";
         var outputTail = zeroTestApparatusFailure
             ? $"Focused evidence selection apparatus failure: {apparatusDetail}"
-            : passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry);
+            : passed
+                ? null
+                : BuildMtpFailureOutput(check.Name, result, telemetry, trxEvidence, completionDecision);
         var resultSummary = zeroTestApparatusFailure
             ? PrefixResultSummary(
                 $"{(unreadableReceipts.Count > 0 ? "focused-selection-receipt-unreadable" : "focused-selection-apparatus-failure")} executed={executedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}",
@@ -5841,7 +5818,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             IReadOnlyList<TestPartitionCoverage> ResolvePartitions()
             {
                 IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
-                    ? ExpandBroadInfrastructureCheck(broadCheck, infrastructureTestLanes)
+                    ? AcceptanceStructuralCoveragePartitionPlan.Resolve(
+                        broadCheck,
+                        effectiveChecks,
+                        infrastructureTestLanes)
                     : effectiveChecks.Where(check =>
                         check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                         string.Equals(NormalizePath(check.Project), NormalizePath(broadCheck.Project), StringComparison.OrdinalIgnoreCase));
@@ -6855,7 +6835,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 return null;
             }
 
-            if (!process.WaitForExit(5000))
+            if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return null;
@@ -7396,56 +7376,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         Console.WriteLine($"TRX_TELEMETRY_UNAVAILABLE paths={QuoteProgressToken(string.Join(";", missing))}");
         Console.Out.Flush();
-    }
-
-    private static string BuildMtpFailureOutput(
-        string checkName,
-        CommandResult result,
-        DotnetTestTelemetry telemetry)
-    {
-        var details = new List<string>();
-        var commandOutput = result.TimedOut
-            ? BuildTimeoutOutput(result)
-            : TailOutput(result.Output);
-        if (!string.IsNullOrWhiteSpace(commandOutput))
-        {
-            details.Add(commandOutput);
-        }
-
-        var trxPaths = telemetry.Paths.Where(File.Exists).ToArray();
-        if (trxPaths.Length == 0)
-        {
-            details.Add(
-                $"[FAIL] {checkName}: failed — no TRX produced (shard was killed or crashed before reporter flushed)");
-            return string.Join(Environment.NewLine, details);
-        }
-
-        var failures = new List<string>();
-        foreach (var trxPath in trxPaths)
-        {
-            try
-            {
-                failures.AddRange(ExtractTrxFailureEvidence(trxPath));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
-            {
-                details.Add(
-                    $"[FAIL] {checkName}: failed — TRX found but could not be read ({FirstNonEmptyLine(ex.Message)})");
-                return string.Join(Environment.NewLine, details);
-            }
-        }
-
-        if (failures.Count == 0)
-        {
-            details.Add(
-                $"[FAIL] {checkName}: failed — TRX found but contained no failure records (process may have exited before tests ran)");
-        }
-        else
-        {
-            details.AddRange(failures);
-        }
-
-        return string.Join(Environment.NewLine, details);
     }
 
     internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath)
@@ -9028,88 +8958,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             try { source.Dispose(); } catch { }
         }
-    }
-
-    internal static async Task<CaptureLimitResult> DrainCappedCaptureAsync(
-        Stream source,
-        string path,
-        long limitBytes,
-        Func<DateTimeOffset> utcNow,
-        Action? onLimitReached,
-        CancellationToken cancellationToken)
-    {
-        var buffer = new byte[64 * 1024];
-        long writtenBytes = 0;
-        long persistedBytes = 0;
-        var limitReached = false;
-        await using (var destination = new FileStream(
-            path,
-            FileMode.Create,
-            FileAccess.Write,
-            FileShare.ReadWrite | FileShare.Delete,
-            buffer.Length,
-            useAsync: true))
-        {
-            try
-            {
-                while (true)
-                {
-                    int read;
-                    try
-                    {
-                        read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (IOException ex) when (IsClosedPipe(ex))
-                    {
-                        break;
-                    }
-                    if (read == 0)
-                        break;
-
-                    writtenBytes = writtenBytes > long.MaxValue - read
-                        ? long.MaxValue
-                        : writtenBytes + read;
-                    var persist = checked((int)Math.Min(read, Math.Max(0, limitBytes - persistedBytes)));
-                    if (persist > 0)
-                    {
-                        await destination.WriteAsync(buffer.AsMemory(0, persist), cancellationToken)
-                            .ConfigureAwait(false);
-                        persistedBytes += persist;
-                    }
-
-                    if (!limitReached && writtenBytes >= limitBytes)
-                    {
-                        limitReached = true;
-                        onLimitReached?.Invoke();
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // A descendant may inherit the pipe after the shell exits. Cancellation ends the
-                // bounded drain; bytes already observed remain valid capture evidence.
-            }
-            catch (Exception ex) when (
-                cancellationToken.IsCancellationRequested &&
-                ex is IOException or ObjectDisposedException)
-            {
-                // Closing the pipe reader is the reliable cancellation mechanism for synchronous
-                // redirected FileStreams on Windows; it can surface either exception.
-            }
-
-            await destination.FlushAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-
-        if (limitReached)
-        {
-            await FinalizeCappedCaptureAsync(
-                path,
-                limitBytes,
-                writtenBytes,
-                utcNow()).ConfigureAwait(false);
-        }
-
-        return new CaptureLimitResult(path, writtenBytes, limitReached);
     }
 
     private static bool IsClosedPipe(IOException exception)

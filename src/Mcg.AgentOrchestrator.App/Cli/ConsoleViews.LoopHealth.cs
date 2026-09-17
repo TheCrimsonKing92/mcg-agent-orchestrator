@@ -22,6 +22,7 @@ internal static partial class ConsoleViews
         Console.WriteLine($"  Legacy same-context observed:   {snapshot.LegacyObservedSameFingerprintRepeatCount}");
         Console.WriteLine($"  Median retry resolution:        {FormatMedianHours(snapshot.MedianRetryResolutionHours)}");
         Console.WriteLine($"  Retry authority unavailable:    fingerprint={snapshot.RetryFingerprintUnavailableCount}, paid={snapshot.RetryPaidAuthorityUnknownCount}, cause={snapshot.RetryCauseUnavailableCount}");
+        Console.WriteLine($"  Focused evidence:               attempts={snapshot.EvidenceAttemptCount}, elapsed_ms={snapshot.EvidenceElapsedMilliseconds?.ToString() ?? "unavailable"}, provider_usage_unavailable={snapshot.EvidenceProviderUsageUnavailableCount}");
 
         Console.WriteLine("  First-pass completion by role:");
         foreach (var role in snapshot.FirstPassCompletionByRole ?? [])

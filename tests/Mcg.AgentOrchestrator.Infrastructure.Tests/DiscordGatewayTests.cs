@@ -190,8 +190,10 @@ public sealed class DiscordGatewayTests
         Assert.Equal("key-001", audit.InteractionId);
     }
 
-    [Xunit.Fact(DisplayName = "DiscordDecisionApplier_recovery_round_trips_through_operator_intent_with_full_audit")]
-    public async Task DiscordDecisionApplierRecoveryRoundTripsThroughOperatorIntentWithFullAudit()
+    [Xunit.Theory(DisplayName = "DiscordDecisionApplier_recovery_round_trips_through_operator_intent_with_full_audit")]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public async Task DiscordDecisionApplierRecoveryRoundTripsThroughOperatorIntentWithFullAudit(bool includeRetryCause)
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -206,13 +208,14 @@ public sealed class DiscordGatewayTests
         await repository.SaveAsync(kernel);
         using var loopLease = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
         var collaborationStore = new CollaborationItemStore(Path.Combine(root, "collaboration-items.db"));
+        var retryCause = includeRetryCause ? " --cause ProviderInterruption" : "";
         await collaborationStore.RaiseWithActionsAsync(
             CollaborationItemType.Decision,
             goal.Id.Value,
             "Retry",
             "Retry failed task",
             "discord-intent-item",
-            [new CollaborationActionBinding("Retry", $"retry {goal.Id.Value[..8]} 1 discord-retry")]);
+            [new CollaborationActionBinding("Retry", $"retry {goal.Id.Value[..8]} 1 discord-retry{retryCause}")]);
         var providers = new InMemoryModelProviderRegistry([]);
 
         var applier = new DiscordDecisionApplier(
@@ -262,7 +265,17 @@ public sealed class DiscordGatewayTests
         coordinator.CompletePersisted([goal.Id]);
 
         var outcome = await intentStore.GetAsync(intent.Id);
-        Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+        Assert.Equal(includeRetryCause ? OperatorIntentStatus.Applied : OperatorIntentStatus.Claimed, outcome!.Status);
+        if (includeRetryCause)
+        {
+            Assert.Equal(RetryCause.ProviderInterruption, liveKernel.GetTask(goal.Id, task.Id).PendingRetryCause);
+            Assert.Empty(liveKernel.GetPendingHumanInput(goal.Id));
+        }
+        else
+        {
+            Assert.Single(liveKernel.GetPendingHumanInput(goal.Id));
+            Assert.DoesNotContain(liveGoal.Timeline, item => item.Kind == ProgressKind.TaskRetried);
+        }
         var audit = Assert.Single(await collaborationStore.ListDecisionAuditAsync());
         Assert.Equal("discord:user1", audit.ActorId);
         Assert.Equal("discord-interaction-key", audit.InteractionId);

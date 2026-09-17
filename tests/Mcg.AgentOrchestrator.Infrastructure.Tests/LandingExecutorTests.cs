@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
+[Xunit.Collection(TestCollections.LandingGitRunner)]
 public sealed class LandingExecutorTests
 {
     [Xunit.Fact(DisplayName = "LandingExecutor_failed_count_excludes_auto_recovered_empty_output_flake")]
@@ -522,24 +522,21 @@ public sealed class LandingExecutorTests
     public void GoalMarkLandedPersistsLandedStateBeforeCleanupNeededEnqueue()
     {
         var repo = CreateGitRepository();
-        var previousWarningSink = GoalWorktrees.CleanupWarningSink;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var innerRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-            var stateRepository = new CountingStateRepository(innerRepository);
             var (kernel, goal) = CreateVerifiedGoal(repo);
+            var hooks = new GoalWorktreeCleanupHooks
+            {
+                // Observe persisted debt irrespective of expiry; this probe tests ordering, not clocks.
+                CleanupUtcNow = static () => DateTimeOffset.UnixEpoch
+            };
+            var stateRepository = new CountingStateRepository(
+                innerRepository,
+                () => GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, hooks) is not null);
             innerRepository.SaveAsync(kernel).GetAwaiter().GetResult();
             stateRepository.ResetSaveCount();
-
-            var saveCountAtCleanupNeeded = 0;
-            GoalWorktrees.CleanupWarningSink = warning =>
-            {
-                if (warning.Operation.Equals("remove:cleanup-needed", StringComparison.OrdinalIgnoreCase))
-                {
-                    saveCountAtCleanupNeeded = stateRepository.SaveCount;
-                }
-            };
 
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
@@ -556,13 +553,17 @@ public sealed class LandingExecutorTests
                 ref currentGoal);
 
             Assert.True(changed);
-            Assert.True(saveCountAtCleanupNeeded > 0, "cleanup-needed was enqueued before a landed-state save");
+            Assert.True(stateRepository.SaveCount > 0, "landed state was not saved");
+            Assert.True(
+                stateRepository.SaveCountBeforeCleanupNeeded > 0,
+                "cleanup-needed was enqueued before a landed-state save");
             var persisted = innerRepository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
             Assert.Equal(GoalStatus.Completed, persisted.Status);
+            // Prove the same predicate eventually sees debt, so an always-false read cannot pass.
+            Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, hooks));
         }
         finally
         {
-            GoalWorktrees.CleanupWarningSink = previousWarningSink;
             TryDeleteDirectory(repo);
         }
     }
@@ -616,7 +617,11 @@ public sealed class LandingExecutorTests
         try
         {
             var (kernel, goal) = CreateCompletedGoalWithLeftoverWorkspace(repo);
-            GoalWorktrees.RecordGoalCleanupNeeded(repo, goal.Id, "remove:simulated-cleanup-failure");
+            GoalWorktrees.RecordGoalCleanupNeeded(
+                repo,
+                goal.Id,
+                "remove:simulated-cleanup-failure",
+                new GoalWorktreeCleanupHooks { CleanupWarningSink = _ => { } });
 
             var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
 
@@ -1305,14 +1310,22 @@ public sealed class LandingExecutorTests
         }
     }
 
-    private sealed class CountingStateRepository(ITransactionalOrchestratorStateRepository inner)
+    private sealed class CountingStateRepository(
+        ITransactionalOrchestratorStateRepository inner,
+        Func<bool>? cleanupNeededExists = null)
         : ITransactionalOrchestratorStateRepository
     {
         private int _saveCount;
+        private int _saveCountBeforeCleanupNeeded;
 
         public int SaveCount => Volatile.Read(ref _saveCount);
+        public int SaveCountBeforeCleanupNeeded => Volatile.Read(ref _saveCountBeforeCleanupNeeded);
 
-        public void ResetSaveCount() => Volatile.Write(ref _saveCount, 0);
+        public void ResetSaveCount()
+        {
+            Volatile.Write(ref _saveCount, 0);
+            Volatile.Write(ref _saveCountBeforeCleanupNeeded, 0);
+        }
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default) =>
             inner.LoadAsync(cancellationToken);
@@ -1325,7 +1338,7 @@ public sealed class LandingExecutorTests
         public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
         {
             await inner.SaveAsync(kernel, cancellationToken).ConfigureAwait(false);
-            Interlocked.Increment(ref _saveCount);
+            RecordSave();
         }
 
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
@@ -1370,7 +1383,16 @@ public sealed class LandingExecutorTests
             await inner.SaveGoalSnapshotsAsync(goals, cancellationToken).ConfigureAwait(false);
             if (goals.Count > 0)
             {
-                Interlocked.Increment(ref _saveCount);
+                RecordSave();
+            }
+        }
+
+        private void RecordSave()
+        {
+            Interlocked.Increment(ref _saveCount);
+            if (cleanupNeededExists?.Invoke() is false)
+            {
+                Interlocked.Increment(ref _saveCountBeforeCleanupNeeded);
             }
         }
 
@@ -1398,7 +1420,7 @@ public sealed class LandingExecutorTests
                 .ConfigureAwait(false);
             if (saved)
             {
-                Interlocked.Increment(ref _saveCount);
+                RecordSave();
             }
 
             return result;

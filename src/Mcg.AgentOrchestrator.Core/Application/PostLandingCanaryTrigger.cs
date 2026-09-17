@@ -17,6 +17,10 @@ public static class AcceptanceEngineSurfaceRegistry
     [
         new("acceptance-verifier", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier"]),
         new("test-impact-planner", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner"]),
+        new("reverse-dependency-index", [
+            "src/Mcg.AgentOrchestrator.Core/Application/ReverseDependencyTestImpactReader",
+            "src/Mcg.AgentOrchestrator.Core/Application/TestClassDeclarationReader"
+        ]),
         new("build-environment", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager"]),
         new("change-classifier", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier"]),
         new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),

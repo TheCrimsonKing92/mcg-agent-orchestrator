@@ -86,7 +86,12 @@ public sealed record TaskVerificationRecord(
     bool StandardErrorIsAuthoritative = true,
     PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null,
     bool CompletionVerdictVerifiedSuccess = false,
-    string? CompletionVerdictRule = null)
+    string? CompletionVerdictRule = null,
+    bool? AssignedScopeComplete = null,
+    // Carried alongside the fingerprints because the directive text is stripped from the recorded
+    // stdout snapshot, so kernel reparse cannot recover the classification on its own.
+    HumanWaitKind? HumanInputKind = null,
+    string? HumanInputEvidenceOwner = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -145,6 +150,8 @@ public sealed record TaskVerificationRecord(
             ReviewFindingTouchProofDiagnostic = preferred.ReviewFindingTouchProofDiagnostic ?? ReviewFindingTouchProofDiagnostic,
             HumanInputQuestionFingerprint = preferred.HumanInputQuestionFingerprint ?? HumanInputQuestionFingerprint,
             HumanInputBlockerFingerprint = preferred.HumanInputBlockerFingerprint ?? HumanInputBlockerFingerprint,
+            HumanInputKind = preferred.HumanInputKind ?? HumanInputKind,
+            HumanInputEvidenceOwner = preferred.HumanInputEvidenceOwner ?? HumanInputEvidenceOwner,
             ObservedRootExitCode = preferred.ObservedRootExitCode ?? ObservedRootExitCode,
             ReconciledToSuccess = ReconciledToSuccess || preferred.ReconciledToSuccess,
             ReconciliationOriginRule = preferred.ReconciliationOriginRule ?? ReconciliationOriginRule,
@@ -166,7 +173,8 @@ public sealed record TaskVerificationRecord(
                 : CompletionVerdictVerifiedSuccess,
             CompletionVerdictRule = preferredHasCompletionVerdict
                 ? preferred.CompletionVerdictRule
-                : CompletionVerdictRule
+                : CompletionVerdictRule,
+            AssignedScopeComplete = preferred.AssignedScopeComplete ?? AssignedScopeComplete
         };
     }
 
@@ -286,7 +294,12 @@ public sealed record TaskDispatchRecord(
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
     int PlannerSampleCount = 1,
     RetryContextFingerprint? RetryContextFingerprint = null,
-    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown)
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown,
+    // The Claude credential source this dispatch's auth preflight selected and reported, carried so the
+    // dispatch start boundary transports that decision to the worker sandbox instead of selecting again.
+    // A directory path and an explicit/default source kind only: never credential material.
+    string? ClaudeCredentialSourceDirectory = null,
+    bool ClaudeCredentialSourceIsExplicit = false)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

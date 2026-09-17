@@ -15,7 +15,8 @@ that separate MTP processes do not share a resource.
 
 | Collection / current key | Guarded identity and lifecycle | Required cross-process invariant | Source boundary | Adjudication | Required negative control |
 | --- | --- | --- | --- | --- | --- |
-| `GoalWorktreeCleanupHooks` / `xunit:GoalWorktreeCleanupHooks` | Static cleanup-hook replacements and acceptance build leases; the collection fixture sets a GUID-rooted dotnet directory for the process and restores it on disposal. | Hook mutation stays process-local; every worktree, build lease, and cleanup target is uniquely rooted or protected by a real cross-process lease for its complete lifetime. | `AssemblyInfo.cs::GoalWorktreeCleanupHooksCollection`, `TestCollections.cs::IsolatedDotnetRootFixture`, `CliCommandTestsGoalLifecycleCleanupHooks*`, `GoalWorktreeTestsCleanupHookDelegates` | **Retain.** The visible slot root is isolated, but the two lane filters lack the required real-process overlap and cleanup receipt covering every member. The pre-split 575.7-second chain is therefore retained as the comparison baseline. | In a disposable worktree under representative host load, run `Goal lifecycle commands` and `Goal worktree cleanup` concurrently for 50-100 clean iterations; require nonzero counts, complete TRX files, overlap, restored environment, released leases, and no worktree/temp-root residue. Any flake retains the key; remove no other key in the same change. |
+| `CliProcessEnvironment` / no cross-shard key | Process-wide environment variables the persistent-runner and dispatch CLI fixtures overwrite: worker sandbox enablement and dispatch-start suppression. No fixture and no static hook replacement remain. | Environment mutation stays process-local and is restored; every repository root, build storage root, and attention store is per-operation. | `AssemblyInfo.cs::CliProcessEnvironmentCollection`, `CliCommandTests.cs::ClearWorkerSandboxEnv`, `CliCommandTestsPersistentRunnerCommands*`, `CliCommandTestsSubscriptionDispatchCommands` | **Keep unkeyed.** All twelve members select into `Goal lifecycle commands` only, so the collection spans one lane and needs no cross-shard key; environment variables are process-local across MTP shards, which the definition declares with `ProcessLocalTestCollection`. This replaces the cleanup-hook row below. | In the full gate, require nonzero `Goal lifecycle commands` count, complete TRX, restored parent environment, and no dispatch started by a suppressed-start test. |
+| ~~`GoalWorktreeCleanupHooks` / `xunit:GoalWorktreeCleanupHooks`~~ | Superseded. Static cleanup-hook replacements became per-operation `WorktreeCleanupContext` ownership, and the GUID-rooted dotnet fixture became an explicit per-operation `DotnetBuildStorageRoot`. | n/a | Removed from `AssemblyInfo.cs` and from both lanes in `config/acceptance-manifest.json` | **Removed.** The guarded state no longer exists, so the removal gate below does not apply to it. What the collection also happened to provide — a bound on how many host-capacity-bound tests ran at once — is not a resource key and is now `HostCapacityTestBudget`. See the goal `5daaa1db` amendment. | n/a |
 | `EnvMutation` / `xunit:EnvMutation` | Process environment and other process-wide test seams, restored by per-test scopes. | Environment, current-directory, and static mutations stay process-local and are restored; every path, port, store, or named OS object visible across processes is unique or independently leased. | `AssemblyInfo.cs::EnvMutationCollection`, `WorkerDispatchTestsDispatchPreparation`, `WorkerDispatchTestsModelSelectionEnvMutation` | **Retain.** Environment variables are process-local across MTP shards, but the complete lane membership has not been cleared of fixed paths, ports, or named OS resources. | In a disposable worktree under representative host load, run `Worker profiles` and `Worker dispatch fixtures` concurrently for 50-100 clean iterations and compare the parent environment before/after; require no fixed-path, process, port, or store leakage. Any flake retains the key; remove no other key in the same change. |
 | `ProcessSpawning` / `xunit:ProcessSpawning` | Child processes plus process registries, launcher configuration, temporary repositories, and any endpoints they own. | Every child, PID registry, launcher file, repository, endpoint, and handle has a unique owning run and is drained, joined, and removed before that run ends. | `AssemblyInfo.cs::ProcessSpawningCollection`, `ConductorDriverTests`, `DispatchProcessHostTests`, `ProcessTreeGuiSuppressionTests` | **Retain.** Process creation is not itself shared state, but the broad collection has not been proven free of shared registries, endpoints, or launcher files across real processes. | In a disposable worktree under representative host load, run each former partner-lane pair concurrently for 50-100 clean iterations; require owned-process exit receipts, drained output, no inherited live handles, complete TRX files, and no repository/port/registry residue. Any flake retains the key; remove no other key in the same change. |
 | `DotnetBuildSlots` / `xunit:DotnetBuildSlots` | Build-slot locks and artifacts beneath the fixture's GUID root, restored and deleted when the collection process exits. | Every slot path, lock, and artifact resolves below the per-process GUID root, including subprocesses; no execution falls back to the host slot root. | `AssemblyInfo.cs::DotnetBuildSlotsCollection`, `TestCollections.cs::IsolatedDotnetRootFixture`, `DotnetBuildEnvironmentManagerTests` | **Retain.** Source shows a run-scoped override, but fallback and subprocess inheritance across every test in the two keyed lanes have not been demonstrated by a real overlap receipt. | In a disposable worktree under representative host load, run `Dotnet build slots` with `Remainder` concurrently for 50-100 clean iterations; require distinct resolved roots, complete TRX files, released locks, and no host-slot artifacts. Any flake retains the key; remove no other key in the same change. |
@@ -116,3 +117,54 @@ idle time above the retained critical chain. With baseline durations, its predic
 between 0 and `595,660 - 575,700 = 19,960 ms` saved (at most 3.35%), for a shard-phase wall clock between
 575,700 and 595,660 ms. A materially larger saving would require changed lane durations or a broken chain
 and must be reconciled from the per-shard receipt rather than attributed to this scheduler change.
+
+### Goal `5daaa1db` amendment: measured overlap cost, cause not established
+
+Removing `xunit:GoalWorktreeCleanupHooks` and its collection let `Goal lifecycle commands` and
+`Goal worktree cleanup` overlap, and let the cleanup lane's own classes overlap each other for the first
+time. The first full gate at that candidate failed one test and produced almost no wall-clock gain.
+
+Measured from the two lane receipts, same lane filter:
+
+```text
+baseline  operator-gate-20260907225105071 ...goal-worktree-cleanup.trx  213 cases, summed 1305.2s, serial
+candidate 5daaa1db-0-20260912152523352    ...goal-worktree-cleanup.trx  232 cases, summed 12925.7s, wall 1237s
+per-case candidate/baseline ratio over the 125 cases at or above one second in the baseline:
+  median 10.53x, mean 12.05x, min 2.09x, max 40.45x
+Cli_acceptance_lands_after_transient_state_write_lock_releases: 3.5-11.8s across five baseline
+  receipts, 100.0s at the candidate, of which 60s was its own WaitAsync hang guard expiring.
+```
+
+That is the whole of what the receipts establish: per-operation ownership made these cases overlap, and at
+this concurrency each case took about ten times as long while the lane wall clock moved 1305s to 1237s —
+5%. The two runs are not a controlled comparison. They differ in case count (213 against 232) and in
+concurrency at the same time, they were taken on an unmeasured host with the gate already running up to
+`maxConcurrentShards` test processes at once (each at xUnit's default `maxParallelThreads` of
+`Environment.ProcessorCount`), and no serialized-versus-concurrent run at a fixed case set and fixed
+concurrency was taken. Host load and a remaining contention path in these fixtures — git subprocesses,
+worktree file I/O and SQLite — are both consistent with these numbers, and nothing here separates them.
+No cause is claimed and no host threshold is asserted. Settling it requires the controlled comparison in
+the criterion 6 paragraph below, run at a recorded concurrency over one case set.
+
+`HostCapacityTestBudget` bounds how many host-capacity-bound tests run at once inside one test process:
+one slot per eight logical processors, clamped to `[2, 4]`, overridable with
+`MCG_TEST_HOST_CAPACITY_SLOTS`. `HostCapacityBoundTestBase` takes a slot for each test body, and the
+`GoalWorktreeTestBase` and `CliCommandTestBase` families derive from it. It is a bounded load cap adopted
+while the cause is unestablished — its own value is unproven until that comparison runs, and its
+`[2, 4]` clamp is a conservative default, not a measured host limit.
+
+This is deliberately **not** an exclusive resource key and **not** a nonparallel collection:
+
+- It admits several tests at once and imposes no ordering, so it protects no shared state and cannot
+  substitute for either mechanism. Fixtures that mutate process-global state keep their collection.
+- It is per-process, so it makes no cross-process claim. The rows above still govern that question.
+- It caps load, so it can only reduce overlap, never introduce an interleaving that did not already occur.
+
+Criterion 6 stays open and operator-owned, and is unmet at the current candidate. The predeclared
+comparison is: rerun both lanes at the delivered candidate with `MCG_TEST_HOST_CAPACITY_SLOTS` and shard
+concurrency held fixed across the compared runs, and report commit identity, runner class, per-lane
+start/end, selected counts, summed case seconds and actual overlap, noting any case-count difference that
+limits comparability. Delivery requires a demonstrable reduction in the affected serial critical path. The
+5% above is the number that must improve; the removed attributes are not themselves the result. The
+focused receipt at 4a96f18f (121/121 over the caller-correction, host-capacity and landing-lock classes)
+is focused evidence of those classes only and contributes nothing to this criterion.

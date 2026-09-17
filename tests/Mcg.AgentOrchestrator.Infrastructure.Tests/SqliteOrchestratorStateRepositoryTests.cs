@@ -691,6 +691,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Status)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Objective)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.UpdatedAt)));
+        Assert.True(listing.All(m => m.CreatedAt is not null));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_list_metadata_surfaces_active_failed_condition")]
@@ -933,6 +934,31 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(HumanInputRequest.BuildQuestionFingerprint("What should I do?"), restoredRequest.QuestionFingerprint);
         Assert.Equal("stable-worker-result", restoredRequest.BlockerFingerprint);
         Assert.Equal(1, restoredRequest.SuppressionCount);
+    }
+
+    [Xunit.Fact]
+    public async Task ProspectiveEvidenceKindAndOwnerRoundtrip()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Persist future operator evidence", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Observe criterion 4 after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence,
+            questionFingerprint: HumanInputRequest.BuildPlannerEvidenceFingerprint(4, "live-observation"),
+            evidenceOwner: "operator").Request;
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        var restoredRequest = restored.GetHumanInputRequest(request.Id);
+        Assert.Equal(HumanWaitKind.ProspectiveAcceptanceEvidence, restoredRequest.Kind);
+        Assert.Equal("operator", restoredRequest.EvidenceOwner);
+        Assert.False(restoredRequest.IsCompleted);
     }
 
     [Xunit.Fact]

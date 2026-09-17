@@ -94,11 +94,11 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     RecordPolicyAllowed(context, goal, policy, AutonomyAction.DispatchStart, commandName);
     var runGoalResult = RunGoal(context, goal, allowLargePaidSubscriptionStart: true);
     Console.WriteLine("Stage run-goal:");
-    ConsoleViews.PrintRunGoalResult(goal, runGoalResult);
+    ConsoleViews.PrintRunGoalResult(goal, runGoalResult, context.Agents);
     if (goal.Status != GoalStatus.Verified)
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "run-goal", runGoalResult.StopReason);
-        var next = BuildLifecycleRunGoalNextCommand(goalPrefix, runGoalResult);
+        var next = BuildLifecycleRunGoalNextCommand(goalPrefix, goal, runGoalResult, context.Agents);
         Console.WriteLine($"Stage run-goal: stopped. Next: {next}");
         if (runGoalResult.Failure is { } runGoalFailure)
         {
@@ -262,7 +262,7 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
                 context.WorkerProfiles,
                 task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, goal, task, context.Agents)),
             costConfirmed);
-        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             context.Kernel,
             context.Workspace,
             goal,
@@ -293,9 +293,14 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
     return applied.Count > 0;
 }
 
-private static string BuildLifecycleRunGoalNextCommand(string goalPrefix, RunGoalService.RunGoalResult result)
+private static string BuildLifecycleRunGoalNextCommand(
+    string goalPrefix,
+    Goal goal,
+    RunGoalService.RunGoalResult result,
+    IReadOnlyList<AgentDefinition>? agents)
 {
-    if (result.BlockingAction?.SuggestedCommand is { Length: > 0 } command)
+    if (result.BlockingAction is { } blockingAction &&
+        ConsoleViews.BuildSuggestedCommand(goal, blockingAction, agents) is { Length: > 0 } command)
     {
         return command;
     }
@@ -312,6 +317,7 @@ internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context,
         context.Kernel,
         context.Workspace.ExecutionDirectory,
         goal.Id,
+        cleanupHooks: context.CleanupContext.Hooks,
         orchestratorDirectory: context.Workspace.OrchestratorDirectory);
     ConsoleViews.PrintTerminalGoalSweep(sweep);
     TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);

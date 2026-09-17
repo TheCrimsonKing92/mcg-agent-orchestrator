@@ -39,6 +39,7 @@ publish/
 **/.scratch/
 i/
 .test-results/
+.mtp-*/
 .build.out
 .build-lock/
 

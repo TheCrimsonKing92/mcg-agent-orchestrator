@@ -118,7 +118,7 @@ internal static class AcceptanceLaneClosureHasher
             return null;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(5000))
+        if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
         {
             try { process.Kill(entireProcessTree: true); } catch { }
             return null;

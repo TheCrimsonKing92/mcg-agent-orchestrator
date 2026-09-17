@@ -77,6 +77,7 @@ internal static class SpecRefinerPlanner
         OUTPUT ONLY a fenced JSON object (```json ... ```) with these fields:
         - "behavioralContract": string — one paragraph: WHAT the system does, observable from the outside
         - "acceptanceCriteria": string array — concrete, testable outcomes
+        - Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.
         - "verificationClass": "TestVerifiable" | "RealWorldDependent"
         - "decisions": array of {question, choice, rationale} — forks you resolved yourself
         - "forks": array of {kind, topicKey, refinerConfidence, blastRadius, question, choice, rationale} — ALL forks

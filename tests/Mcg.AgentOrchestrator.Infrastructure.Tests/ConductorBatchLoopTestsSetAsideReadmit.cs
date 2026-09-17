@@ -853,6 +853,9 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
         kernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Needs operator repair.");
         var escalations = 0;
         var heldAttempts = 0;
+        var snapshotReloaded = false;
+        GoalLifecycleState? staleLifecycleAfterRetry = null;
+        var durableSnapshot = kernel.ExportGoalSnapshot(failedGoal.Id) with { Status = GoalStatus.Verifying };
 
         var driver = MakeDriver(
             getFacts: goal => goal.Id == heldGoal.Id
@@ -868,7 +871,17 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
 
                 return DispatchStartOutcome.Started();
             },
-            writeEscalation: (_, _, _) => escalations++);
+            writeEscalation: (_, _, _) =>
+            {
+                escalations++;
+                kernel.RetryTask(
+                    failedGoal.Id,
+                    failedTask.Id,
+                    "Transient in-memory retry before durable reload.",
+                    RetryCause.EnvironmentApparatusFailure);
+                staleLifecycleAfterRetry = GoalLifecycle.ResolveState(failedGoal, GoalLifecycleFacts.None);
+                kernel.ReplaceGoalWithSnapshot(durableSnapshot);
+            });
 
         var summary = new ConductorBatchLoop().Run(
             kernel,
@@ -877,12 +890,98 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
             NoStopPath(),
             maxIterations: 3,
             watchInterval: TimeSpan.FromMilliseconds(1),
-            sleepFunc: _ => false);
+            sleepFunc: _ =>
+            {
+                if (!snapshotReloaded)
+                {
+                    kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(failedGoal.Id));
+                    snapshotReloaded = true;
+                }
+                return false;
+            });
 
         Assert.Equal(3, summary.Ticks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, escalations);
         Assert.Equal(3, heldAttempts);
+        Assert.NotSame(failedGoal, kernel.GetGoal(failedGoal.Id));
+        Assert.Equal(GoalStatus.Verifying, kernel.GetGoal(failedGoal.Id).Status);
+        Assert.Equal(GoalLifecycleState.Created, staleLifecycleAfterRetry);
+        Assert.Equal(
+            GoalLifecycleState.Verifying,
+            GoalLifecycle.ResolveState(kernel.GetGoal(failedGoal.Id), GoalLifecycleFacts.None));
+        Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(failedGoal.Id, failedTask.Id).Status);
+        Assert.DoesNotContain(kernel.GetGoal(failedGoal.Id).Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void SetAsideFingerprint_EvidenceContextThrows_TickContinues()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "failed goal");
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => throw new InvalidOperationException(
+                "Set-aside fingerprints must not launch evidence discovery."));
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_readmits_snapshot_reloaded_goal_when_durable_task_fields_change")]
+    public void BatchLoopReadmitsSnapshotReloadedGoalWhenDurableTaskFieldsChange()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "failed goal");
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+        var snapshotChanged = false;
+        var workspaceCreates = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            createWorkspace: _ =>
+            {
+                workspaceCreates++;
+                return "C:\\goal";
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                if (!snapshotChanged)
+                {
+                    kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                    kernel.RetryTask(goal.Id, task.Id, "Durable operator repair.", RetryCause.ContractClarification);
+                    snapshotChanged = true;
+                }
+                return false;
+            });
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, workspaceCreates);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_sets_aside_ownership_hold_escalation_without_relanding")]
@@ -1012,5 +1111,42 @@ public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopT
         Assert.Equal(1, escalations);
         Assert.Equal(1, dispatches);
         Assert.True(blockedClarificationPolls >= 3);
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopReadmitsUnresolvedClarificationWhenDurableTaskFieldsChange()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "blocked goal");
+        var task = goal.Tasks.Single();
+        var escalations = 0;
+        var retried = false;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(HasOpenClarification: true),
+            writeEscalation: (_, _, _) => escalations++);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ =>
+            {
+                if (!retried)
+                {
+                    kernel.RetryTask(goal.Id, task.Id, "Durable task state changed while clarification remained open.");
+                    retried = true;
+                }
+                return false;
+            });
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(2, summary.Escalated);
+        Assert.Equal(2, escalations);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("re-admitted escalated goal after state changed", StringComparison.Ordinal));
     }
 }

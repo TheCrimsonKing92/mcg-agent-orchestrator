@@ -12,7 +12,11 @@ internal static class OrchestratorSqliteTools
     private static readonly string[] AllowedGoalStatuses = Enum.GetNames<GoalStatus>();
     private static readonly HashSet<string> AllowedGoalStatusSet = new(AllowedGoalStatuses, StringComparer.Ordinal);
 
-    public static async Task<int> RunAsync(string[] args)
+    public static Task<int> RunAsync(string[] args) => RunAsync(args, beginWriteTransaction: null);
+
+    internal static async Task<int> RunAsync(
+        string[] args,
+        Func<SqliteConnection, Task>? beginWriteTransaction)
     {
         if (args.Length == 0 || IsHelp(args[0]))
         {
@@ -24,8 +28,8 @@ internal static class OrchestratorSqliteTools
         {
             "list-goals" => await ListGoalsAsync(args[1..]),
             "diagnostics" => await DiagnosticsAsync(args[1..]),
-            "set-goal-status" => await SetGoalStatusAsync(args[1..]),
-            "requeue-task" => await RequeueTaskAsync(args[1..]),
+            "set-goal-status" => await SetGoalStatusAsync(args[1..], beginWriteTransaction),
+            "requeue-task" => await RequeueTaskAsync(args[1..], beginWriteTransaction),
             _ => Fail($"Unknown command: {args[0]}")
         };
     }
@@ -222,7 +226,9 @@ internal static class OrchestratorSqliteTools
         return 0;
     }
 
-    private static async Task<int> SetGoalStatusAsync(string[] args)
+    private static async Task<int> SetGoalStatusAsync(
+        string[] args,
+        Func<SqliteConnection, Task>? beginWriteTransaction)
     {
         string? repoRoot = null;
         string? dbPath = null;
@@ -282,20 +288,19 @@ internal static class OrchestratorSqliteTools
             return FailOpen(dbPath, ex);
         }
 
-        var rows = await ResolveGoalsAsync(conn, prefixes);
-        if (rows.Count == 0)
-            return 0;
-
         if (dryRun)
         {
-            foreach (var row in rows)
+            var previewRows = await ResolveGoalsAsync(conn, prefixes);
+            foreach (var row in previewRows)
                 Console.WriteLine($"DRY-RUN {Short(row.Id)}: {row.Status} -> {status}");
             return 0;
         }
 
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE");
+        await BeginWriteTransactionAsync(conn, beginWriteTransaction);
+        List<GoalRow> rows;
         try
         {
+            rows = await ResolveGoalsAsync(conn, prefixes);
             foreach (var row in rows)
             {
                 var snapshot = JsonNode.Parse(row.SnapshotJson)
@@ -318,9 +323,9 @@ internal static class OrchestratorSqliteTools
                 cmd.Parameters.AddWithValue("$status", status);
                 cmd.Parameters.AddWithValue("$snapshot_json", updatedJson);
                 cmd.Parameters.AddWithValue("$updated_at", updatedAt);
-                await cmd.ExecuteNonQueryAsync();
-
-                Console.WriteLine($"UPDATED {Short(row.Id)}: {row.Status} -> {status}");
+                var affectedRows = await cmd.ExecuteNonQueryAsync();
+                if (affectedRows != 1)
+                    throw new InvalidOperationException($"Expected to update exactly one goal row for {row.Id}, but updated {affectedRows}.");
             }
 
             await RunNonQueryAsync(conn, "COMMIT");
@@ -331,10 +336,15 @@ internal static class OrchestratorSqliteTools
             throw;
         }
 
+        foreach (var row in rows)
+            Console.WriteLine($"UPDATED {Short(row.Id)}: {row.Status} -> {status}");
+
         return 0;
     }
 
-    private static async Task<int> RequeueTaskAsync(string[] args)
+    private static async Task<int> RequeueTaskAsync(
+        string[] args,
+        Func<SqliteConnection, Task>? beginWriteTransaction)
     {
         string? repoRoot = null;
         string? dbPath = null;
@@ -400,31 +410,94 @@ internal static class OrchestratorSqliteTools
             return FailOpen(dbPath, ex);
         }
 
-        var rows = await ResolveGoalsAsync(conn, [goalPrefix]);
-        if (rows.Count == 0)
-            return 0;
+        if (dryRun)
+        {
+            var rows = await ResolveGoalsAsync(conn, [goalPrefix]);
+            var previewRow = rows[0];
+            if (!TryBuildRequeuePlan(previewRow, taskNumber.Value, note, DateTimeOffset.UtcNow.ToString("O"), applyMutation: false, out var previewPlan, out var rejection))
+                return Fail(rejection!);
 
-        var row = rows[0];
+            Console.WriteLine($"DRY-RUN {Short(previewRow.Id)} task {taskNumber.Value}: {previewPlan!.PreviousStatus} -> {previewPlan.NextStatus}; clear LastExecution/LastVerification/LastDispatch/LastProcess.");
+            return 0;
+        }
+
+        await BeginWriteTransactionAsync(conn, beginWriteTransaction);
+        RequeuePlan plan;
+        GoalRow row;
+        try
+        {
+            var rows = await ResolveGoalsAsync(conn, [goalPrefix]);
+            row = rows[0];
+            var occurredAt = DateTimeOffset.UtcNow.ToString("O");
+            if (!TryBuildRequeuePlan(row, taskNumber.Value, note, occurredAt, applyMutation: true, out var candidatePlan, out var rejection))
+            {
+                await RunNonQueryAsync(conn, "ROLLBACK");
+                return Fail(rejection!);
+            }
+            plan = candidatePlan!;
+
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE goals
+                SET status = 'Active',
+                    snapshot_json = $snapshot_json,
+                    updated_at = $updated_at,
+                    version = COALESCE(version, 0) + 1
+                WHERE id = $id
+                """;
+            cmd.Parameters.AddWithValue("$id", row.Id);
+            cmd.Parameters.AddWithValue("$snapshot_json", plan.UpdatedJson);
+            cmd.Parameters.AddWithValue("$updated_at", plan.OccurredAt);
+            var affectedRows = await cmd.ExecuteNonQueryAsync();
+            if (affectedRows != 1)
+                throw new InvalidOperationException($"Expected to update exactly one goal row for {row.Id}, but updated {affectedRows}.");
+
+            await RunNonQueryAsync(conn, "COMMIT");
+        }
+        catch
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK"); } catch { }
+            throw;
+        }
+
+        Console.WriteLine($"REQUEUED {Short(row.Id)} task {taskNumber.Value}: {plan.PreviousStatus} -> {plan.NextStatus}");
+        return 0;
+    }
+
+    private static bool TryBuildRequeuePlan(
+        GoalRow row,
+        int taskNumber,
+        string note,
+        string occurredAt,
+        bool applyMutation,
+        out RequeuePlan? plan,
+        out string? rejection)
+    {
         var snapshot = JsonNode.Parse(row.SnapshotJson) as JsonObject
             ?? throw new InvalidOperationException($"Goal {row.Id} has invalid snapshot JSON.");
         var tasks = snapshot["Tasks"] as JsonArray
             ?? throw new InvalidOperationException($"Goal {row.Id} snapshot has no Tasks array.");
-        if (taskNumber.Value > tasks.Count)
-            return Fail($"Task number {taskNumber.Value} is out of range; goal has {tasks.Count} task(s).");
+        if (taskNumber > tasks.Count)
+        {
+            plan = null;
+            rejection = $"Task number {taskNumber} is out of range; goal has {tasks.Count} task(s).";
+            return false;
+        }
 
-        var task = tasks[taskNumber.Value - 1] as JsonObject
-            ?? throw new InvalidOperationException($"Task {taskNumber.Value} snapshot is not an object.");
+        var task = tasks[taskNumber - 1] as JsonObject
+            ?? throw new InvalidOperationException($"Task {taskNumber} snapshot is not an object.");
         var taskId = task["Id"]?.GetValue<string>()
-            ?? throw new InvalidOperationException($"Task {taskNumber.Value} has no Id.");
+            ?? throw new InvalidOperationException($"Task {taskNumber} has no Id.");
         var previousStatus = task["Status"]?.GetValue<string>() ?? "<unknown>";
         var nextStatus = string.IsNullOrWhiteSpace(task["AssignedAgentId"]?.GetValue<string>())
             ? "Pending"
             : "Assigned";
 
-        if (dryRun)
+        if (!applyMutation)
         {
-            Console.WriteLine($"DRY-RUN {Short(row.Id)} task {taskNumber.Value}: {previousStatus} -> {nextStatus}; clear LastExecution/LastVerification/LastDispatch/LastProcess.");
-            return 0;
+            plan = new RequeuePlan(row.SnapshotJson, previousStatus, nextStatus, occurredAt);
+            rejection = null;
+            return true;
         }
 
         task["Status"] = nextStatus;
@@ -437,7 +510,6 @@ internal static class OrchestratorSqliteTools
 
         var timeline = snapshot["Timeline"] as JsonArray
             ?? throw new InvalidOperationException($"Goal {row.Id} snapshot has no Timeline array.");
-        var occurredAt = DateTimeOffset.UtcNow.ToString("O");
         timeline.Add(new JsonObject
         {
             ["GoalId"] = row.Id,
@@ -447,34 +519,9 @@ internal static class OrchestratorSqliteTools
             ["OccurredAt"] = occurredAt
         });
 
-        var updatedJson = snapshot.ToJsonString();
-        await RunNonQueryAsync(conn, "BEGIN IMMEDIATE");
-        try
-        {
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                UPDATE goals
-                SET status = 'Active',
-                    snapshot_json = $snapshot_json,
-                    updated_at = $updated_at,
-                    version = COALESCE(version, 0) + 1
-                WHERE id = $id
-                """;
-            cmd.Parameters.AddWithValue("$id", row.Id);
-            cmd.Parameters.AddWithValue("$snapshot_json", updatedJson);
-            cmd.Parameters.AddWithValue("$updated_at", occurredAt);
-            await cmd.ExecuteNonQueryAsync();
-
-            await RunNonQueryAsync(conn, "COMMIT");
-        }
-        catch
-        {
-            try { await RunNonQueryAsync(conn, "ROLLBACK"); } catch { }
-            throw;
-        }
-
-        Console.WriteLine($"REQUEUED {Short(row.Id)} task {taskNumber.Value}: {previousStatus} -> {nextStatus}");
-        return 0;
+        plan = new RequeuePlan(snapshot.ToJsonString(), previousStatus, nextStatus, occurredAt);
+        rejection = null;
+        return true;
     }
 
     private static async Task<List<GoalRow>> ResolveGoalsAsync(SqliteConnection conn, List<string> prefixes)
@@ -553,6 +600,11 @@ internal static class OrchestratorSqliteTools
         cmd.CommandText = sql;
         await cmd.ExecuteNonQueryAsync();
     }
+
+    private static Task BeginWriteTransactionAsync(
+        SqliteConnection conn,
+        Func<SqliteConnection, Task>? beginWriteTransaction) =>
+        beginWriteTransaction?.Invoke(conn) ?? RunNonQueryAsync(conn, "BEGIN IMMEDIATE");
 
     private static async Task<bool> HasColumnAsync(SqliteConnection conn, string table, string column)
     {
@@ -814,4 +866,6 @@ internal static class OrchestratorSqliteTools
     }
 
     private sealed record GoalRow(string Id, string Status, string SnapshotJson);
+
+    private sealed record RequeuePlan(string UpdatedJson, string PreviousStatus, string NextStatus, string OccurredAt);
 }

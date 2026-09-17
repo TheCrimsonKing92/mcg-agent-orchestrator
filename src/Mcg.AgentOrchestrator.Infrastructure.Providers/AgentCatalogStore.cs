@@ -77,17 +77,18 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
         static ModelProfile OpenAiComplex() =>
             new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, ComplexReasoningEffort, ComplexApiMaxOutputTokens);
 
-        static SubscriptionLaunchProfile Codex(bool useSol = false) =>
-            new("codex-cli", useSol ? OpenAiSolSubscriptionModelAlias : OpenAiSubscriptionModelAlias, RoutineSubscriptionReasoningEffort);
+        static SubscriptionLaunchProfile Codex(bool useTerra = false) =>
+            new("codex-cli", useTerra ? OpenAiTerraSubscriptionModelAlias : OpenAiSubscriptionModelAlias,
+                DefaultSubscriptionReasoningEffort("OpenAI", useTerra ? OpenAiTerraSubscriptionModelAlias : OpenAiSubscriptionModelAlias));
 
         return new AgentCatalog(
         [
-            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useSol: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useTerra: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
             new(new AgentId("openai-ideation"), "OpenAI ideation", AgentRole.Ideation, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
-            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useSol: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
-            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useSol: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
-            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useSol: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
-            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useSol: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false)
+            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useTerra: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useTerra: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useTerra: true), ComplexModel: OpenAiComplex() with { ReasoningEffort = "medium" }, ReasoningEffortPolicy: new(ComplexityEffort: "medium", RetryDepthEffort: "medium", ClassFindingEffort: "medium"), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(useTerra: true), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false)
         ]);
     }
 
@@ -312,20 +313,15 @@ public static class AgentCatalogStore
 
         var subscription = agent.Subscription;
         if (IsOpenAiCodexSubscription(agent, subscription) &&
-            IsSolContextPackageRole(agent.Role) &&
-            (string.Equals(subscription.ModelAlias, AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(subscription.ModelAlias, AgentCatalog.OpenAiSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase)))
+            string.Equals(subscription.ModelAlias, AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
         {
-            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiSolSubscriptionModelAlias };
+            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiTerraSubscriptionModelAlias };
         }
 
         return string.IsNullOrWhiteSpace(subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)
             ? subscription with { ReasoningEffort = AgentCatalog.DefaultSubscriptionReasoningEffort(agent.Model.ProviderName, subscription.ModelAlias) }
             : subscription;
     }
-
-    private static bool IsSolContextPackageRole(AgentRole role) =>
-        role is AgentRole.Researcher or AgentRole.Planner or AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer;
 
     private static bool IsOpenAiCodexSubscription(AgentDefinition agent, SubscriptionLaunchProfile subscription)
     {

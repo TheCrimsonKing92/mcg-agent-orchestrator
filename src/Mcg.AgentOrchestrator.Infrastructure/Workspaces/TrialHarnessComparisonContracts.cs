@@ -129,12 +129,34 @@ internal enum TrialHarnessOutcome
     WorkerResultInvalid,
     TimedOut,
     ProtectedPathModified,
-    TeardownUnclean
+    TeardownUnclean,
+    DiagnosticPublicationFailed
 }
 
 internal sealed record TrialOutputMetadata(
     long ByteCount,
-    string Sha256);
+    string Sha256,
+    string? RetainedPath = null,
+    long? RetainedByteCount = null,
+    string? RetainedSha256 = null,
+    string? Encoding = null,
+    bool? Truncated = null,
+    bool? SourceStreamComplete = null,
+    string? WorkloadIdentity = null,
+    string? ArmIdentity = null,
+    string? AttemptIdentity = null)
+{
+    public bool ContentAvailable =>
+        !string.IsNullOrWhiteSpace(RetainedPath)
+        && RetainedByteCount is not null
+        && !string.IsNullOrWhiteSpace(RetainedSha256);
+}
+
+internal sealed record TrialDiagnosticPublicationFailure(
+    string Artifact,
+    string Stage,
+    string DestinationPath,
+    string Message);
 
 internal enum TrialWorkerResultStatus
 {
@@ -164,7 +186,10 @@ internal sealed record TrialHarnessResult(
     TrialArmIdentity? ArmIdentity,
     GoalTimingReportSnapshot? HistoricalTiming,
     string? HermesTerminalReceiptPath = null,
-    HermesAcpTerminalReceipt? HermesTerminalReceipt = null);
+    HermesAcpTerminalReceipt? HermesTerminalReceipt = null,
+    string? SourceTeardownReceiptPath = null,
+    string? TeardownReceiptSha256 = null,
+    IReadOnlyList<TrialDiagnosticPublicationFailure>? PublicationFailures = null);
 
 internal sealed record TrialComparisonResult(
     string RequestedBaseCommit,

@@ -111,6 +111,156 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
     }
 
     [Xunit.Fact]
+    public async Task ConsumedSubBufferOutputIsPublishedWhileSourceRemainsOpen()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-live-capture-{Guid.NewGuid():N}.out");
+        var payload = Encoding.UTF8.GetBytes("acceptance output is visible before EOF");
+        await using var source = new HeldOpenAfterPayloadStream(payload);
+        var visiblePayload = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = WatchVisiblePayload(path, payload.Length, visiblePayload);
+
+        var drain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            source,
+            path,
+            limitBytes: 1024,
+            utcNow: () => DateTimeOffset.UnixEpoch,
+            onLimitReached: null,
+            CancellationToken.None);
+        try
+        {
+            await source.SecondReadEntered.WaitAsync(TimeSpan.FromSeconds(5));
+            TryReadVisiblePayload(path, payload.Length, visiblePayload);
+
+            var publicationDeadline = Task.Delay(TimeSpan.FromSeconds(3));
+            var completed = await Task.WhenAny(visiblePayload.Task, publicationDeadline);
+            Xunit.Assert.True(
+                ReferenceEquals(completed, visiblePayload.Task),
+                $"Expected {payload.Length} consumed bytes to become externally visible within the 3 second publication bound while EOF was held; observed {GetVisibleLength(path)} bytes.");
+            Xunit.Assert.False(source.EofReleased);
+            Xunit.Assert.Equal(payload, await visiblePayload.Task);
+        }
+        finally
+        {
+            source.ReleaseEof();
+            await drain.WaitAsync(TimeSpan.FromSeconds(5));
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task TerminalOnlyFlushControlWithholdsLiveBytesButPreservesFinalOutput()
+    {
+        var previousInterval = GoalAcceptanceVerifier.CapturePublicationInterval;
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-terminal-flush-control-{Guid.NewGuid():N}.out");
+        var payload = Encoding.UTF8.GetBytes("terminal flush still preserves exact output");
+        await using var source = new HeldOpenAfterPayloadStream(payload);
+        var visiblePayload = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = WatchVisiblePayload(path, payload.Length, visiblePayload);
+        GoalAcceptanceVerifier.CapturePublicationInterval = Timeout.InfiniteTimeSpan;
+        var drain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            source,
+            path,
+            limitBytes: 1024,
+            utcNow: () => DateTimeOffset.UnixEpoch,
+            onLimitReached: null,
+            CancellationToken.None);
+        try
+        {
+            await source.SecondReadEntered.WaitAsync(TimeSpan.FromSeconds(5));
+            TryReadVisiblePayload(path, payload.Length, visiblePayload);
+            var observationBound = Task.Delay(TimeSpan.FromSeconds(3));
+            var completed = await Task.WhenAny(visiblePayload.Task, observationBound);
+            Xunit.Assert.Same(observationBound, completed);
+            Xunit.Assert.Equal(0, GetVisibleLength(path));
+
+            source.ReleaseEof();
+            var result = await drain.WaitAsync(TimeSpan.FromSeconds(5));
+            Xunit.Assert.Equal(payload.Length, result.WrittenBytes);
+            Xunit.Assert.Equal(payload, await File.ReadAllBytesAsync(path));
+        }
+        finally
+        {
+            source.ReleaseEof();
+            GoalAcceptanceVerifier.CapturePublicationInterval = previousInterval;
+            await drain.WaitAsync(TimeSpan.FromSeconds(5));
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ConcurrentStdoutAndStderrPublishIndependentlyWhileBothSourcesRemainOpen()
+    {
+        var previousInterval = GoalAcceptanceVerifier.CapturePublicationInterval;
+        var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-live-stdout-{Guid.NewGuid():N}.out");
+        var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-live-stderr-{Guid.NewGuid():N}.err");
+        var stdoutPayload = Encoding.UTF8.GetBytes("stdout-live-payload");
+        var stderrPayload = Encoding.UTF8.GetBytes("stderr-independent-payload");
+        await using var stdoutSource = new HeldOpenAfterPayloadStream(stdoutPayload);
+        await using var stderrSource = new HeldOpenAfterPayloadStream(stderrPayload);
+        var stdoutVisible = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stderrVisible = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stdoutWatcher = WatchVisiblePayload(stdoutPath, stdoutPayload.Length, stdoutVisible);
+        using var stderrWatcher = WatchVisiblePayload(stderrPath, stderrPayload.Length, stderrVisible);
+        GoalAcceptanceVerifier.CapturePublicationInterval = TimeSpan.FromMilliseconds(50);
+        var stdoutDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            stdoutSource, stdoutPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None);
+        var stderrDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            stderrSource, stderrPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None);
+        try
+        {
+            await Task.WhenAll(stdoutSource.SecondReadEntered, stderrSource.SecondReadEntered)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            var published = await Task.WhenAll(stdoutVisible.Task, stderrVisible.Task)
+                .WaitAsync(TimeSpan.FromSeconds(3));
+            Xunit.Assert.False(stdoutSource.EofReleased);
+            Xunit.Assert.False(stderrSource.EofReleased);
+            Xunit.Assert.Equal(stdoutPayload, published[0]);
+            Xunit.Assert.Equal(stderrPayload, published[1]);
+            Xunit.Assert.NotEqual(published[0], published[1]);
+        }
+        finally
+        {
+            stdoutSource.ReleaseEof();
+            stderrSource.ReleaseEof();
+            GoalAcceptanceVerifier.CapturePublicationInterval = previousInterval;
+            await Task.WhenAll(stdoutDrain, stderrDrain).WaitAsync(TimeSpan.FromSeconds(5));
+            try { File.Delete(stdoutPath); } catch { }
+            try { File.Delete(stderrPath); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task CancellationWhileWaitingForMoreBytesPublishesConsumedBytesAndCompletesNormally()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-cancelled-live-capture-{Guid.NewGuid():N}.out");
+        var payload = Encoding.UTF8.GetBytes("consumed bytes survive drain cancellation");
+        await using var source = new HeldOpenAfterPayloadStream(payload);
+        using var cancellation = new CancellationTokenSource();
+        var drain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+            source,
+            path,
+            limitBytes: 1024,
+            utcNow: () => DateTimeOffset.UnixEpoch,
+            onLimitReached: null,
+            cancellation.Token);
+        try
+        {
+            await source.SecondReadEntered.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+
+            var result = await drain.WaitAsync(TimeSpan.FromSeconds(5));
+            Xunit.Assert.Equal(payload.Length, result.WrittenBytes);
+            Xunit.Assert.Equal(payload, await File.ReadAllBytesAsync(path));
+        }
+        finally
+        {
+            source.ReleaseEof();
+            try { await drain.WaitAsync(TimeSpan.FromSeconds(5)); } catch (OperationCanceledException) { }
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
     public async Task RedirectedProcessKeepsDrainingAfterLimitWhileCaptureStaysBounded()
     {
         const long limitBytes = 512;
@@ -203,4 +353,116 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
 
     private static int CountOccurrences(string value, string needle) =>
         value.Split(needle, StringSplitOptions.None).Length - 1;
+
+    private static long GetVisibleLength(string path)
+    {
+        try { return new FileInfo(path).Length; }
+        catch (IOException) { return -1; }
+    }
+
+    private static IDisposable WatchVisiblePayload(
+        string path,
+        int expectedLength,
+        TaskCompletionSource<byte[]> completion) =>
+        new VisiblePayloadProbe(path, expectedLength, completion);
+
+    private static void TryReadVisiblePayload(
+        string path,
+        int expectedLength,
+        TaskCompletionSource<byte[]> completion)
+    {
+        if (completion.Task.IsCompleted)
+            return;
+
+        try
+        {
+            using var reader = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (reader.Length != expectedLength)
+                return;
+
+            var bytes = new byte[expectedLength];
+            reader.ReadExactly(bytes);
+            completion.TrySetResult(bytes);
+        }
+        catch (IOException)
+        {
+            // A create/change notification can precede the shared handle becoming readable.
+        }
+    }
+
+    private sealed class HeldOpenAfterPayloadStream(byte[] payload) : Stream
+    {
+        private readonly TaskCompletionSource _secondReadEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseEof =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _readCount;
+
+        internal Task SecondReadEntered => _secondReadEntered.Task;
+        internal bool EofReleased => _releaseEof.Task.IsCompleted;
+
+        internal void ReleaseEof() => _releaseEof.TrySetResult();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _readCount) == 1)
+            {
+                payload.CopyTo(buffer);
+                return payload.Length;
+            }
+
+            _secondReadEntered.TrySetResult();
+            await _releaseEof.Task.WaitAsync(cancellationToken);
+            return 0;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class VisiblePayloadProbe : IDisposable
+    {
+        private readonly FileSystemWatcher _watcher;
+        private readonly Timer _timer;
+
+        internal VisiblePayloadProbe(
+            string path,
+            int expectedLength,
+            TaskCompletionSource<byte[]> completion)
+        {
+            void Probe() => TryReadVisiblePayload(path, expectedLength, completion);
+            _watcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path))
+            {
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size
+            };
+            _watcher.Created += (_, _) => Probe();
+            _watcher.Changed += (_, _) => Probe();
+            _watcher.EnableRaisingEvents = true;
+            _timer = new Timer(_ => Probe(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(10));
+        }
+
+        public void Dispose()
+        {
+            _timer.Dispose();
+            _watcher.Dispose();
+        }
+    }
 }

@@ -129,6 +129,20 @@ internal sealed class DashboardContinuationService : IDisposable
         return watch.ToDto();
     }
 
+    /// <summary>
+    /// Returns a task that completes when the continuation watch currently registered for
+    /// <paramref name="goalId"/> leaves the running state, or an already-completed task when no
+    /// watch is registered. The signal is set under the watch lock that clears IsRunning, so a
+    /// resumed waiter observes the final IsRunning, IterationCount, and StopReason together.
+    /// </summary>
+    public Task WaitForWatchCompletionAsync(string goalId)
+    {
+        lock (_gate)
+        {
+            return _watches.TryGetValue(goalId, out var watch) ? watch.Completion : Task.CompletedTask;
+        }
+    }
+
     private async Task RunSubscriptionWatchAsync(DashboardEndpointServices services, ContinuationWatch watch)
     {
         try
@@ -358,6 +372,11 @@ internal sealed class DashboardContinuationService : IDisposable
     {
         private readonly object _gate = new();
 
+        // RunContinuationsAsynchronously is mandatory: the terminal setters complete this source while
+        // holding _gate, and an inline waiter continuation calling GetStatuses would take the service
+        // gate while the watch gate is held, inverting the service-then-watch order GetStatuses uses.
+        private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public ContinuationWatch(string goalId, DateTimeOffset startedAt)
         {
             GoalId = goalId;
@@ -398,6 +417,12 @@ internal sealed class DashboardContinuationService : IDisposable
         public DateTimeOffset? NextCheckAt { get; private set; }
 
         public bool RestoredFromStore { get; }
+
+        /// <summary>
+        /// Completes exactly once when this watch leaves the running state through
+        /// <see cref="Complete"/>, <see cref="PauseForShutdown"/>, or <see cref="Fail"/>.
+        /// </summary>
+        public Task Completion => _completion.Task;
 
         public static ContinuationWatch Restore(ContinuationStoreEntry entry) => new(entry);
 
@@ -441,6 +466,7 @@ internal sealed class DashboardContinuationService : IDisposable
                 LastCheckedAt ??= DateTimeOffset.UtcNow;
                 StopReason = TimelineMessage(stopReason);
                 NextCheckAt = null;
+                _completion.TrySetResult();
             }
         }
 
@@ -451,6 +477,7 @@ internal sealed class DashboardContinuationService : IDisposable
                 IsRunning = false;
                 LastCheckedAt ??= DateTimeOffset.UtcNow;
                 StopReason = TimelineMessage(stopReason);
+                _completion.TrySetResult();
             }
         }
 
@@ -463,6 +490,7 @@ internal sealed class DashboardContinuationService : IDisposable
                 LastError = TimelineMessage(error);
                 StopReason = "Continuation watch failed.";
                 NextCheckAt = null;
+                _completion.TrySetResult();
             }
         }
 

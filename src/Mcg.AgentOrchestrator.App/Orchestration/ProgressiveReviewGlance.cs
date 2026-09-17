@@ -1521,7 +1521,7 @@ Corrective direction:
         var clarifications = kernel.HumanInputRequests
             .Where(request =>
                 request.GoalId == goal.Id &&
-                (request.Kind == HumanWaitKind.SpecClarification || request.OperatorGates.Count > 0) &&
+                (HumanWaitPolicyDefaults.IsSpecClarificationClass(request.Kind) || request.OperatorGates.Count > 0) &&
                 request.IsCompleted &&
                 !request.WasDismissed &&
                 !request.IsSyntheticParkedHumanWaitCompletion &&

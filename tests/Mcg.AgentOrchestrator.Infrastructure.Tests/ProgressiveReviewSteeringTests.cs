@@ -12,12 +12,12 @@ public sealed class ProgressiveReviewSteeringTests
 
     public static TheoryData<string, AgentRole, string> DefaultCatalogFixtureDispatches => new()
     {
-        { "default-planner-dispatch-fixture", AgentRole.Planner, AgentCatalog.OpenAiSolSubscriptionModelAlias },
+        { "default-planner-dispatch-fixture", AgentRole.Planner, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
         { "default-ideation-dispatch-fixture", AgentRole.Ideation, AgentCatalog.OpenAiSubscriptionModelAlias },
-        { "default-researcher-dispatch-fixture", AgentRole.Researcher, AgentCatalog.OpenAiSolSubscriptionModelAlias },
-        { "default-developer-dispatch-fixture", AgentRole.Developer, AgentCatalog.OpenAiSolSubscriptionModelAlias },
-        { "default-tester-dispatch-fixture", AgentRole.Tester, AgentCatalog.OpenAiSolSubscriptionModelAlias },
-        { "default-reviewer-dispatch-fixture", AgentRole.Reviewer, AgentCatalog.OpenAiSolSubscriptionModelAlias }
+        { "default-researcher-dispatch-fixture", AgentRole.Researcher, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
+        { "default-developer-dispatch-fixture", AgentRole.Developer, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
+        { "default-tester-dispatch-fixture", AgentRole.Tester, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
+        { "default-reviewer-dispatch-fixture", AgentRole.Reviewer, AgentCatalog.OpenAiTerraSubscriptionModelAlias }
     };
 
     [Theory(DisplayName = "ProgressiveReviewSteering_each_default_fixture_dispatch_matches_activated_agent_catalog")]
@@ -100,9 +100,9 @@ public sealed class ProgressiveReviewSteeringTests
         const string fixtureName = "negative-control-stale-developer-fixture";
         var catalog = AgentCatalog.Default();
         var expectedAlias = catalog.GetRequired(AgentRole.Developer).Subscription!.ModelAlias;
-        var staleAlias = string.Equals(expectedAlias, AgentCatalog.OpenAiSolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase)
+        var staleAlias = string.Equals(expectedAlias, AgentCatalog.OpenAiTerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase)
             ? AgentCatalog.OpenAiSubscriptionModelAlias
-            : AgentCatalog.OpenAiSolSubscriptionModelAlias;
+            : AgentCatalog.OpenAiTerraSubscriptionModelAlias;
         var staleDispatch = new TaskDispatchRecord(
             "codex-cli",
             "fixture-command",
@@ -1446,7 +1446,7 @@ public sealed class ProgressiveReviewSteeringTests
         string? reviewFindingTouchProofDiagnostic = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
         WorkerContextPackageReceipt? contextPackageReceipt = null,
-        string dispatchedModel = AgentCatalog.OpenAiSolSubscriptionModelAlias)
+        string dispatchedModel = AgentCatalog.OpenAiTerraSubscriptionModelAlias)
     {
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "logs"));
         var clock = new TestClock(dispatchedAt);

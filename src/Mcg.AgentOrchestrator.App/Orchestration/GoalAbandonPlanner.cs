@@ -44,8 +44,10 @@ internal static class GoalAbandonPlanner
         Goal goal,
         OrchestratorWorkspace workspace,
         string reason,
+        GoalWorktreeCleanupHooks cleanupHooks,
         bool dryRun = true)
     {
+        ArgumentNullException.ThrowIfNull(cleanupHooks);
         var stopReason = NormalizeReason(reason);
         var goalPrefix = goal.Id.Value[..8];
         var worktree = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id);
@@ -53,8 +55,14 @@ internal static class GoalAbandonPlanner
         var runningTasks = goal.Tasks
             .Where(task => task.LastProcess is { IsRunning: true })
             .ToList();
-        var lease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
-        var retention = GoalArtifactRetentionPlanner.Build(kernel, goal, workspace);
+        // The reported lease and the lease Apply actually deletes must describe the same
+        // storage namespace, so both read the owner's build storage root.
+        var lease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, cleanupHooks.BuildStorageRoot);
+        var retention = GoalArtifactRetentionPlanner.Build(
+            kernel,
+            goal,
+            workspace,
+            buildStorageRoot: cleanupHooks.BuildStorageRoot);
         var steps = new List<GoalAbandonStep>();
 
         if (goal.Status == GoalStatus.Completed)
@@ -149,9 +157,11 @@ internal static class GoalAbandonPlanner
         AgentOrchestratorKernel kernel,
         Goal goal,
         OrchestratorWorkspace workspace,
-        string reason)
+        string reason,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
-        var before = Build(kernel, goal, workspace, reason);
+        ArgumentNullException.ThrowIfNull(cleanupHooks);
+        var before = Build(kernel, goal, workspace, reason, cleanupHooks);
         if (!before.CanApply)
         {
             return before;
@@ -174,14 +184,18 @@ internal static class GoalAbandonPlanner
                 GoalTerminalDispositionKind.Retired,
                 $"Goal {goal.Id.Value[..8]} was abandoned by operator and is terminal: {before.Reason}"));
 
-        _ = GoalWorktrees.RemoveTerminal(workspace.ExecutionDirectory, goal.Id, kernel);
+        _ = GoalWorktrees.RemoveTerminal(workspace.ExecutionDirectory, goal.Id, kernel, cleanupHooks);
 
-        if (DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id).CanCleanup)
+        if (DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, cleanupHooks.BuildStorageRoot).CanCleanup)
         {
-            _ = DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(goal.Id, out _, out _);
+            _ = DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(
+                goal.Id,
+                out _,
+                out _,
+                cleanupHooks.BuildStorageRoot);
         }
 
-        return Build(kernel, goal, workspace, reason, dryRun: false);
+        return Build(kernel, goal, workspace, reason, cleanupHooks, dryRun: false);
     }
 
     private static string NormalizeReason(string reason)

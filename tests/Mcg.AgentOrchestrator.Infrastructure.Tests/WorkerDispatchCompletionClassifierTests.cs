@@ -310,7 +310,7 @@ public sealed class WorkerDispatchCompletionClassifierTests
         tests: {tests}
         commit: none
         blockers: none
-        model_fit: OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias} - adequate - test fixture
+        model_fit: OpenAI/{AgentCatalog.OpenAiTerraSubscriptionModelAlias} - adequate - test fixture
         skills: none
         confidence: high
         END_WORKER_RESULT

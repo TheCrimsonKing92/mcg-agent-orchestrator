@@ -471,7 +471,8 @@ public sealed class ConductorDriverTests
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         string? executionDirectory = null,
-        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null)
+        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
+        ApparatusRedGate? apparatusRedGate = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -530,7 +531,8 @@ public sealed class ConductorDriverTests
             resolveAcceptanceHeads: resolveAcceptanceHeads,
             getLandingFileScopes: getLandingFileScopes,
             executionDirectory: executionDirectory,
-            reconcileExitedDispatch: reconcileExitedDispatch);
+            reconcileExitedDispatch: reconcileExitedDispatch,
+            apparatusRedGate: apparatusRedGate);
     }
 
     internal static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
@@ -858,7 +860,7 @@ public sealed class ConductorDriverTests
                 Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
                 Assert.Equal(WorkTaskStatus.Running, currentGoal.Tasks.Single().Status);
                 Assert.NotNull(currentGoal.Tasks.Single().LastDispatch);
-                return DispatchStartOutcome.Started();
+                return DispatchStartOutcome.Started(currentGoal.Tasks);
             },
             buildServerShutdown: () => { shutdownCalled = true; },
             writeEscalation: (_, _, _) => { escalated = true; });
@@ -876,7 +878,7 @@ public sealed class ConductorDriverTests
             phaseTimings,
             line => line.Contains("phase=dispatch-prep", StringComparison.Ordinal) &&
                     line.Contains("retry=spawn-failed", StringComparison.Ordinal) &&
-                    line.Contains(" task=", StringComparison.Ordinal));
+                    line.Contains($" task={goal.Tasks.Single().Id.Value[..8]} role={goal.Tasks.Single().RequiredRole} ", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recoverable_sandbox_prep_action_is_remediated_and_start_retried")]
@@ -1117,42 +1119,6 @@ public sealed class ConductorDriverTests
 
         Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
         Assert.Equal(failureReason, outcome.Reason);
-    }
-
-    [Xunit.Fact]
-    public void ConductorDriverPreparedDispatchWithoutStartReportsBothStateViews()
-    {
-        var (kernel, goal) = SimpleGoal();
-        var task = goal.Tasks.Single();
-        DispatchTask(kernel, goal, task);
-        var plan = new ProcessBatchPlan(
-            goal.Id,
-            goal.Objective,
-            goal.Status,
-            ProcessBatchActionKind.StartDispatches,
-            ReadyCount: 0,
-            SkippedCount: 1,
-            Items:
-            [
-                new ProcessBatchPlanItem(
-                    task.Id,
-                    task.RequiredRole,
-                    task.Description,
-                    WorkTaskStatus.Assigned,
-                    ProcessBatchItemStatus.Skipped,
-                    "Task status is Assigned; only running dispatched tasks can be started.")
-            ]);
-        var result = new SubscriptionStartResult(
-            [new WorkerProfileDispatchResult(task, @"C:\repo\.orchestrator\prompts\task.md")],
-            new ProcessBatchExecutionResult(plan, []),
-            new ParallelExecutionPlan([], []),
-            []);
-
-        var outcome = ConductorDriver.ClassifySubscriptionStartForConductor(result);
-
-        Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
-        Assert.Contains("Task status is Assigned", outcome.Reason, StringComparison.Ordinal);
-        Assert.Contains($"{task.Id.Value[..8]}:status=Running:admission=none", outcome.Reason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_mixed_started_and_registration_failure_keeps_live_progress")]

@@ -19,6 +19,8 @@ $script:MtpExitConfirmationSeconds = 10
 $script:MtpOutputDrainSeconds = 10
 $script:MtpClosureMarkerName = '.mcg-mtp-closure.json'
 $script:MtpClosureSchemaVersion = 1
+$script:MtpBuildReceiptName = '.mcg-build-receipt.txt'
+$script:MtpBuildReceiptSchemaVersion = 2
 $script:MtpClosureSnapshotAttempts = 3
 $script:MtpStartupHookSchemaVersion = 1
 $script:MtpStartupHookAssemblyName = 'Mcg.AgentOrchestrator.FaultDialogStartupHook.dll'
@@ -559,13 +561,20 @@ function Get-DefaultMtpResultsRoot {
 function Write-MtpRunOwnershipSidecar {
     param(
         [Parameter(Mandatory = $true)][string]$ResultsDirectory,
-        [Parameter(Mandatory = $true)][string]$RunLabel
+        [Parameter(Mandatory = $true)][string]$RunLabel,
+        # Set-MtpHermeticEnvironment strips MCG_ACCEPTANCE_GATE_ATTEMPT_ID from the process, so any
+        # caller running after it must pass the attempt id captured before the strip. Without it the
+        # sidecar records 'unowned' and the evidence never enters the attributed retention lane.
+        [string]$AttemptId
     )
 
     $receiptPath = Join-Path $ResultsDirectory '.mtp-run-ownership.json'
     $temporaryPath = $receiptPath + ".tmp-$([Guid]::NewGuid().ToString('N'))"
     try {
-        $attemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
+        $attemptId = $AttemptId
+        if ([string]::IsNullOrWhiteSpace($attemptId)) {
+            $attemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
+        }
         if ([string]::IsNullOrWhiteSpace($attemptId)) {
             $attemptId = 'unowned'
         }
@@ -574,7 +583,7 @@ function Write-MtpRunOwnershipSidecar {
             attemptId = $attemptId
             machineName = [System.Environment]::MachineName
             ownerProcessId = $PID
-            createdAt = [DateTimeOffset]::UtcNow
+            createdAt = [DateTimeOffset]::UtcNow.ToString('o')
             runLabel = $RunLabel
         }
         [System.IO.File]::WriteAllText($temporaryPath, ($receipt | ConvertTo-Json -Compress))
@@ -584,6 +593,21 @@ function Write-MtpRunOwnershipSidecar {
     catch {
         Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
         return $false
+    }
+}
+
+function Remove-MtpUnownedDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # A directory under the MTP results root with no ownership sidecar is RetainedUndecidable to every
+    # retention sweep forever, so a caller that reports 'nothing was left behind' must know whether the
+    # removal actually happened. Never swallow this one: return the operator-facing text on failure.
+    try {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        return $null
+    }
+    catch {
+        return "The unowned directory '$Path' could also not be removed, so retention sweeps will report it undecidable until it is deleted by hand: $($_.Exception.Message)"
     }
 }
 
@@ -629,7 +653,13 @@ function Initialize-MtpResultsDirectory {
         Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction Stop
         throw "Results root '$resolvedRoot' is too long for bounded MTP TRX paths. Choose a shorter directory beneath the Low-integrity-writable root."
     }
-    [void](Write-MtpRunOwnershipSidecar -ResultsDirectory $runDirectory -RunLabel $RunLabel)
+    if (-not (Write-MtpRunOwnershipSidecar -ResultsDirectory $runDirectory -RunLabel $RunLabel)) {
+        # An unowned run directory is undecidable to every retention sweep forever. Fail before the
+        # run populates it rather than leaving an orphan the sweep can neither attribute nor reclaim.
+        $orphanWarning = Remove-MtpUnownedDirectory -Path $runDirectory
+        $removalOutcome = if ($null -eq $orphanWarning) { 'No unowned run directory was left behind.' } else { $orphanWarning }
+        throw "Could not write the retention ownership sidecar for invocation results directory '$runDirectory'. Without it the directory is undecidable to retention sweeps, so no run was started. $removalOutcome"
+    }
     return $runDirectory
 }
 
@@ -931,6 +961,18 @@ function Assert-MtpSealedClosure {
         [int]$marker.fileCount -ne $snapshot.FileCount) {
         throw "MTP closure completion marker does not match its recursive payload: $Path"
     }
+    $receipt = Read-MtpBuildReceipt -Path (Get-MtpBuildReceiptPath -Directory $Path)
+    $assemblyPath = Join-Path $Path $ManagedAssemblyLeaf
+    $pdbPath = [System.IO.Path]::ChangeExtension($assemblyPath, '.pdb')
+    foreach ($pair in @(@($assemblyPath, 'assemblySha256'), @($pdbPath, 'pdbSha256'))) {
+        if (-not (Test-Path -LiteralPath $pair[0] -PathType Leaf)) {
+            throw "MTP closure receipt-bound file is missing: $($pair[0])"
+        }
+        $actual = Get-MtpSha256File -Path $pair[0]
+        if (-not $actual.Equals([string]$receipt.Headers[$pair[1]], [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "MTP closure receipt $($pair[1]) mismatch: recorded='$($receipt.Headers[$pair[1]])' actual='$actual' path='$($pair[0])'"
+        }
+    }
 }
 
 function Copy-MtpStableNoBuildClosure {
@@ -980,6 +1022,155 @@ function Copy-MtpStableNoBuildClosure {
         }
     }
     throw "Could not create a stable sealed MTP closure for '$ProjectName'. $lastFailure"
+}
+
+function Get-MtpBuildReceiptPath {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+
+    return Join-Path $Directory $script:MtpBuildReceiptName
+}
+
+function Read-MtpBuildReceipt {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "build receipt is missing: $Path"
+    }
+    $headers = @{}
+    $sources = [System.Collections.Generic.List[object]]::new()
+    $closureFiles = [System.Collections.Generic.List[object]]::new()
+    try {
+        foreach ($line in @(Get-Content -LiteralPath $Path -ErrorAction Stop)) {
+            $parts = @([string]$line -split "`t", 4)
+            if ($parts.Count -eq 3 -and $parts[0] -eq 'K' -and -not [string]::IsNullOrWhiteSpace($parts[1]) -and -not $headers.ContainsKey($parts[1])) {
+                $headers[$parts[1]] = $parts[2]
+                continue
+            }
+            if ($parts.Count -eq 2 -and $parts[0] -eq 'K' -and $parts[1] -eq 'runtimeIdentifier' -and -not $headers.ContainsKey($parts[1])) {
+                $headers[$parts[1]] = ''
+                continue
+            }
+            if ($parts.Count -eq 4 -and $parts[0] -eq 'S' -and $parts[1] -eq 'source' -and -not [string]::IsNullOrWhiteSpace($parts[2])) {
+                $sources.Add([pscustomobject]@{ Path = $parts[2]; Sha256 = $parts[3] })
+                continue
+            }
+            if ($parts.Count -eq 4 -and $parts[0] -eq 'F' -and $parts[1] -eq 'closure' -and -not [string]::IsNullOrWhiteSpace($parts[2])) {
+                $closureFiles.Add([pscustomobject]@{ Path = $parts[2]; Sha256 = $parts[3] })
+                continue
+            }
+            throw "receipt line is malformed: '$line'"
+        }
+    }
+    catch {
+        throw "build receipt is unreadable at '$Path': $($_.Exception.Message)"
+    }
+    foreach ($required in @('schemaVersion', 'project', 'configuration', 'targetFramework', 'runtimeIdentifier', 'repositoryRoot', 'outputDirectory', 'assemblyLeaf', 'assemblySha256', 'pdbSha256')) {
+        if (-not $headers.ContainsKey($required) -or ($required -ne 'runtimeIdentifier' -and [string]::IsNullOrWhiteSpace([string]$headers[$required]))) {
+            throw "build receipt is missing required key '$required': $Path"
+        }
+    }
+    if ([string]$headers['schemaVersion'] -ne [string]$script:MtpBuildReceiptSchemaVersion) {
+        throw "build receipt has unsupported schemaVersion '$($headers['schemaVersion'])': $Path"
+    }
+    if ($closureFiles.Count -eq 0) {
+        throw "build receipt contains no closure files: $Path"
+    }
+    return [pscustomobject]@{ Path = $Path; Headers = $headers; Sources = $sources.ToArray(); ClosureFiles = $closureFiles.ToArray() }
+}
+
+function Assert-MtpBuildReceipt {
+    param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)][string]$ProjectPath,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$TargetFramework,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$RuntimeIdentifier,
+        [string[]]$ExpectedSourcePaths = @(),
+        [string]$RepairCommand
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RepairCommand)) {
+        $RepairCommand = "dotnet build `"$ProjectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+    }
+    $receiptPath = Get-MtpBuildReceiptPath -Directory $Directory
+    try {
+        $receipt = Read-MtpBuildReceipt -Path $receiptPath
+        $expected = @{
+            project = [System.IO.Path]::GetFullPath($ProjectPath)
+            configuration = $Configuration
+            targetFramework = $TargetFramework
+            runtimeIdentifier = $RuntimeIdentifier
+            repositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+            outputDirectory = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+            assemblyLeaf = $ManagedAssemblyLeaf
+        }
+        foreach ($key in $expected.Keys) {
+            if (-not ([string]$receipt.Headers[$key]).Equals([string]$expected[$key], [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt key '$key' does not match: recorded='$($receipt.Headers[$key])' expected='$($expected[$key])'"
+            }
+        }
+        $assemblyPath = Join-Path $Directory $ManagedAssemblyLeaf
+        $pdbPath = [System.IO.Path]::ChangeExtension($assemblyPath, '.pdb')
+        foreach ($pair in @(@($assemblyPath, 'assemblySha256'), @($pdbPath, 'pdbSha256'))) {
+            if (-not (Test-Path -LiteralPath $pair[0] -PathType Leaf)) {
+                throw "receipt-bound file is missing: $($pair[0])"
+            }
+            $actual = Get-MtpSha256File -Path $pair[0]
+            if (-not $actual.Equals([string]$receipt.Headers[$pair[1]], [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt $($pair[1]) mismatch: recorded='$($receipt.Headers[$pair[1]])' actual='$actual' path='$($pair[0])'"
+            }
+        }
+        foreach ($source in @($receipt.Sources)) {
+            if (-not (Test-Path -LiteralPath $source.Path -PathType Leaf)) {
+                throw "receipt source is missing or unverifiable: $($source.Path)"
+            }
+            $actual = Get-MtpSha256File -Path $source.Path
+            if (-not $actual.Equals([string]$source.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt source checksum mismatch: path='$($source.Path)' recorded='$($source.Sha256)' actual='$actual'"
+            }
+        }
+        $expectedDirectoryPrefix = [System.IO.Path]::GetFullPath($Directory).TrimEnd([char]'\', [char]'/') + [System.IO.Path]::DirectorySeparatorChar
+        $recordedClosurePaths = [System.Collections.Generic.List[string]]::new()
+        foreach ($closureFile in @($receipt.ClosureFiles)) {
+            $closurePath = [System.IO.Path]::GetFullPath([string]$closureFile.Path)
+            if (-not $closurePath.StartsWith($expectedDirectoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt closure file escapes its output directory: path='$closurePath' directory='$Directory'"
+            }
+            if (-not (Test-Path -LiteralPath $closurePath -PathType Leaf)) {
+                throw "receipt closure file is missing: $closurePath"
+            }
+            $actual = Get-MtpSha256File -Path $closurePath
+            if (-not $actual.Equals([string]$closureFile.Sha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "receipt closure file checksum mismatch: path='$closurePath' recorded='$($closureFile.Sha256)' actual='$actual'"
+            }
+            $recordedClosurePaths.Add($closurePath)
+        }
+        $currentClosurePaths = @(Get-ChildItem -LiteralPath $Directory -Force -Recurse -File |
+            Where-Object { -not $_.Name.Equals($script:MtpBuildReceiptName, [System.StringComparison]::OrdinalIgnoreCase) -and -not $_.Name.Equals("$script:MtpBuildReceiptName.tmp", [System.StringComparison]::OrdinalIgnoreCase) } |
+            ForEach-Object { [System.IO.Path]::GetFullPath($_.FullName) } |
+            Sort-Object -Unique)
+        $recordedClosurePaths = @($recordedClosurePaths | Sort-Object -Unique)
+        $missingClosureFiles = @($recordedClosurePaths | Where-Object { $_ -notin $currentClosurePaths })
+        $unexpectedClosureFiles = @($currentClosurePaths | Where-Object { $_ -notin $recordedClosurePaths })
+        if ($missingClosureFiles.Count -gt 0 -or $unexpectedClosureFiles.Count -gt 0) {
+            throw "receipt closure file set does not match output: missing='$($missingClosureFiles -join ';')' unexpected='$($unexpectedClosureFiles -join ';')'"
+        }
+        if ($ExpectedSourcePaths.Count -gt 0) {
+            $recordedSources = @($receipt.Sources | ForEach-Object { [System.IO.Path]::GetFullPath([string]$_.Path) } | Sort-Object -Unique)
+            $expectedSources = @($ExpectedSourcePaths | ForEach-Object { [System.IO.Path]::GetFullPath([string]$_) } | Sort-Object -Unique)
+            $missing = @($expectedSources | Where-Object { $_ -notin $recordedSources })
+            $unexpected = @($recordedSources | Where-Object { $_ -notin $expectedSources })
+            if ($missing.Count -gt 0 -or $unexpected.Count -gt 0) {
+                throw "receipt source set does not match evaluated Compile items: missing='$($missing -join ';')' unexpected='$($unexpected -join ';')'"
+            }
+        }
+        return $receipt
+    }
+    catch {
+        throw "No-build build receipt verification failed for '$Directory': $($_.Exception.Message). Repair: $RepairCommand"
+    }
 }
 
 function Get-MtpSha256Text {
@@ -1222,7 +1413,8 @@ function Invoke-MtpBuild {
             '-clp:ErrorsOnly;Summary',
             '-fl',
             "-flp:LogFile=$buildLogPath;Verbosity=Normal",
-            '-nodeReuse:false'
+            '-nodeReuse:false',
+            "-p:McgBuildReceiptProject=$buildTarget"
         )
         try {
             $build = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $captureLogPath -WorkingDirectory $RepositoryRoot -StartupHookPath $StartupHookPath
@@ -1321,6 +1513,181 @@ function Resolve-MtpManagedAssemblyPath {
     return $resolved
 }
 
+function Get-MtpBuildReceiptClosureDigest {
+    param(
+        [Parameter(Mandatory = $true)]$Receipt,
+        [Parameter(Mandatory = $true)][string]$Directory
+    )
+
+    $root = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $entries = [System.Collections.Generic.List[string]]::new()
+    foreach ($closureFile in @($Receipt.ClosureFiles)) {
+        $path = [System.IO.Path]::GetFullPath([string]$closureFile.Path)
+        if (-not $path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "receipt closure file escapes its output directory while computing identity: path='$path' directory='$Directory'"
+        }
+        $entries.Add(($path.Substring($root.Length).Replace('\', '/') + ':' + [string]$closureFile.Sha256))
+    }
+    return Get-MtpSha256Text -Text (($entries | Sort-Object -Unique) -join "`n")
+}
+
+function Resolve-MtpEvaluatedTargetPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]$Invocation,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$DotnetPath,
+        [Parameter(Mandatory = $true)][string]$RunDirectory
+    )
+
+    $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
+    $logPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-target-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.log' -MaximumLength 180)
+    # -getResultOutputFile keeps the evaluation payload out of the capture log, which interleaves the
+    # child's stdout and stderr. Parsing the shared log turns any MSBuild warning on stderr, or a
+    # truncated drain, into an opaque "invalid result" instead of the real failure.
+    $resultPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-identity-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.json' -MaximumLength 180)
+    $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath,TargetFramework,RuntimeIdentifier', '-getItem:Compile', "-getResultOutputFile:$resultPath")
+    $probe = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $logPath -WorkingDirectory $RepositoryRoot
+    if (-not $probe.Started -or -not [string]::IsNullOrWhiteSpace([string]$probe.StartFailureMessage) -or -not [string]::IsNullOrWhiteSpace([string]$probe.MonitoringFailureMessage) -or -not $probe.CleanupConfirmed -or -not $probe.DrainConfirmed -or $probe.ExitCode -ne 0) {
+        throw "MSBuild target-path evaluation failed for '$projectPath'; started=$($probe.Started) exitCode=$($probe.ExitCode) cleanupConfirmed=$($probe.CleanupConfirmed) drainConfirmed=$($probe.DrainConfirmed); diagnostic log: $logPath"
+    }
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        throw "MSBuild build-identity evaluation produced no result file for '$projectPath'; expected '$resultPath'; diagnostic log: $logPath"
+    }
+    try {
+        $payload = Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $properties = $payload.Properties
+        if ($null -eq $properties -or
+            [string]::IsNullOrWhiteSpace([string]$properties.TargetPath) -or
+            [string]::IsNullOrWhiteSpace([string]$properties.TargetFramework) -or
+            $null -eq $properties.PSObject.Properties['RuntimeIdentifier']) {
+            throw 'TargetPath, TargetFramework, or RuntimeIdentifier is missing.'
+        }
+    }
+    catch {
+        throw "MSBuild build-identity evaluation returned an invalid result for '$projectPath'; result file: $resultPath; diagnostic log: $logPath; $($_.Exception.Message)"
+    }
+    $resolved = [System.IO.Path]::GetFullPath([string]$properties.TargetPath)
+    $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "MSBuild target-path evaluation escaped the repository or did not resolve a managed assembly: $resolved"
+    }
+    $compilePaths = [System.Collections.Generic.List[string]]::new()
+    try {
+        $compileItems = @($payload.Items.Compile)
+        if ($compileItems.Count -eq 0) {
+            throw 'Compile items are missing.'
+        }
+        $projectDirectory = Split-Path -Parent $projectPath
+        foreach ($item in $compileItems) {
+            $identity = [string]$item.Identity
+            if ([string]::IsNullOrWhiteSpace($identity)) {
+                throw 'A Compile item has no identity.'
+            }
+            $compilePath = if ([System.IO.Path]::IsPathRooted($identity)) { [System.IO.Path]::GetFullPath($identity) } else { [System.IO.Path]::GetFullPath((Join-Path $projectDirectory $identity)) }
+            $normalizedCompilePath = $compilePath.Replace('/', '\')
+            $normalizedRepositoryRoot = $repositoryPrefix.Replace('/', '\')
+            if ($normalizedCompilePath.StartsWith($normalizedRepositoryRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+                $normalizedCompilePath.IndexOf('\obj\', [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                $compilePaths.Add($compilePath)
+            }
+        }
+        if ($compilePaths.Count -eq 0) {
+            throw 'No worktree Compile items are available for source-set verification.'
+        }
+    }
+    catch {
+        throw "MSBuild build-identity evaluation returned invalid Compile items for '$projectPath'; result file: $resultPath; diagnostic log: $logPath; $($_.Exception.Message)"
+    }
+    return [pscustomobject]@{
+        TargetPath = $resolved
+        TargetFramework = [string]$properties.TargetFramework
+        RuntimeIdentifier = [string]$properties.RuntimeIdentifier
+        CompilePaths = $compilePaths.ToArray()
+    }
+}
+
+function Select-MtpVerifiedBuildOutput {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [Parameter(Mandatory = $true)]$Invocation,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][string]$DotnetPath,
+        [Parameter(Mandatory = $true)][string]$RunDirectory
+    )
+
+    $projectName = Get-MtpProjectName -Invocation $Invocation
+    $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
+    # Identity verification is not free: it spawns an MSBuild evaluation per project and re-hashes the
+    # Compile set plus the whole output closure per candidate. Measure both legs so the cost of the
+    # binding is visible per run instead of being inferred from wall clock.
+    $selectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $evaluationStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $evaluatedIdentity = Resolve-MtpEvaluatedTargetPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $RunDirectory
+    $evaluationStopwatch.Stop()
+    $declaredAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration
+    $declaredDirectory = Split-Path -Parent $declaredAssembly
+    $evaluatedDirectory = Split-Path -Parent $evaluatedIdentity.TargetPath
+    $candidates = @(
+        [pscustomobject]@{
+            Label = 'declared artifact output'
+            Directory = $declaredDirectory
+            Repair = "dotnet build `"$projectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+        },
+        [pscustomobject]@{
+            Label = 'evaluated standard output'
+            Directory = $evaluatedDirectory
+            Repair = "dotnet build `"$projectPath`" --configuration $Configuration"
+        }
+    )
+    $rejections = [System.Collections.Generic.List[string]]::new()
+    $verified = [System.Collections.Generic.List[object]]::new()
+    $verificationStopwatch = [System.Diagnostics.Stopwatch]::new()
+    foreach ($candidate in $candidates) {
+        if (@($verified | Where-Object { $_.Directory.Equals($candidate.Directory, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) {
+            continue
+        }
+        $verificationStopwatch.Start()
+        try {
+            $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $evaluatedIdentity.TargetFramework -RuntimeIdentifier $evaluatedIdentity.RuntimeIdentifier -ExpectedSourcePaths $evaluatedIdentity.CompilePaths -RepairCommand $candidate.Repair
+            $verified.Add([pscustomobject]@{
+                Label = $candidate.Label
+                Directory = $candidate.Directory
+                Receipt = $receipt
+                ClosureSha256 = Get-MtpBuildReceiptClosureDigest -Receipt $receipt -Directory $candidate.Directory
+            })
+        }
+        catch {
+            $rejections.Add("$($candidate.Label) '$($candidate.Directory)': $($_.Exception.Message)")
+        }
+        finally {
+            $verificationStopwatch.Stop()
+        }
+    }
+    if ($verified.Count -eq 0) {
+        throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')"
+    }
+    $closureHashes = @($verified | ForEach-Object { [string]$_.ClosureSha256 } | Sort-Object -Unique)
+    if ($verified.Count -gt 1 -and $closureHashes.Count -gt 1) {
+        $identities = @($verified | ForEach-Object { "path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256']) closureSha256=$($_.ClosureSha256)" })
+        throw "Ambiguous verified no-build outputs for '$projectName'; refusing to select by path layout or timestamp. $($identities -join ' | '). Repair with either: dotnet build `"$projectPath`" --configuration $Configuration OR dotnet build `"$projectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+    }
+    $selected = @($verified | Where-Object { $_.Label -eq 'declared artifact output' } | Select-Object -First 1)
+    if ($selected.Count -eq 0) {
+        $selected = @($verified | Select-Object -First 1)
+    }
+    $rejected = @($rejections) + @($verified | Where-Object { $_.Directory -ne $selected[0].Directory } | ForEach-Object { "verified equivalent candidate path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256']) closureSha256=$($_.ClosureSha256)" })
+    $selectionStopwatch.Stop()
+    $identityCost = [ordered]@{
+        totalMs = [int]$selectionStopwatch.ElapsedMilliseconds
+        evaluateMs = [int]$evaluationStopwatch.ElapsedMilliseconds
+        verifyMs = [int]$verificationStopwatch.ElapsedMilliseconds
+        candidatesVerified = $verified.Count
+    }
+    Write-Host "NO-BUILD BUILD RECEIPT SELECTED - $($selected[0].Label) '$($selected[0].Directory)' assemblySha256=$($selected[0].Receipt.Headers['assemblySha256']) closureSha256=$($selected[0].ClosureSha256) identityCostMs total=$($identityCost.totalMs) evaluate=$($identityCost.evaluateMs) verify=$($identityCost.verifyMs) candidatesVerified=$($identityCost.candidatesVerified) rejected='$($rejected -join ' | ')'"
+    return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected; IdentityCost = $identityCost }
+}
+
 function New-MtpRunnerArguments {
     param(
         [Parameter(Mandatory = $true)]$Invocation,
@@ -1370,7 +1737,7 @@ function ConvertTo-MtpCommandLineArgument {
     }
     $charactersRequiringQuotes = @(' ', "`t", "`n", "`r", '"')
     if ($QuoteCmdMetaCharacters) {
-        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^', ';')
+        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^', ';', '=')
     }
     $requiresQuotes = $Value.Length -eq 0 -or $Value.IndexOfAny([char[]]$charactersRequiringQuotes) -ge 0
     if (-not $requiresQuotes) {
@@ -1723,6 +2090,9 @@ function New-MtpTerminalResult {
         $OwnedProcessId = $null,
         $ExitConfirmed = $null,
         [bool]$ArtifactsRetained = $false,
+        [AllowNull()][string]$RetainedEvidenceDirectory,
+        [string[]]$RequestedFilters = @(),
+        [string[]]$ExecutedTestNames = @(),
         [string[]]$Diagnostics = @()
     )
 
@@ -1743,8 +2113,91 @@ function New-MtpTerminalResult {
         ownedProcessId = $OwnedProcessId
         exitConfirmed = $ExitConfirmed
         artifactsRetained = $ArtifactsRetained
+        retainedEvidenceDirectory = $RetainedEvidenceDirectory
+        requestedFilters = @($RequestedFilters)
+        executedTestNames = @($ExecutedTestNames)
         diagnostics = $terminalDiagnostics
     }
+}
+
+function Write-MtpRunEvidenceReceipt {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [Parameter(Mandatory = $true)][string]$RunLabel,
+        [Parameter(Mandatory = $true)][string[]]$TrxPaths,
+        [string[]]$RequestedFilters = @(),
+        [string[]]$ExecutedTestNames = @(),
+        [object[]]$BuildSelections = @(),
+        [scriptblock]$OwnershipWriter,
+        [string]$AttemptId
+    )
+
+    $resultsRoot = Split-Path -Parent $RunDirectory
+    $evidenceDirectory = Join-Path $resultsRoot (Get-MtpBoundedFileName -Stem "$RunLabel-$([DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfff'))-$([Guid]::NewGuid().ToString('N').Substring(0, 8))" -Suffix '' -MaximumLength 180)
+    [void](New-Item -ItemType Directory -Path $evidenceDirectory -ErrorAction Stop)
+    # Claim retention ownership before populating. A directory under the MTP results root with no
+    # sidecar is undecidable to every sweep, so it must never exist in that state - not even for the
+    # duration of the copies, and not if a later step throws.
+    $ownershipWritten = if ($null -eq $OwnershipWriter) {
+        Write-MtpRunOwnershipSidecar -ResultsDirectory $evidenceDirectory -RunLabel $RunLabel -AttemptId $AttemptId
+    }
+    else {
+        & $OwnershipWriter $evidenceDirectory $RunLabel
+    }
+    if (-not $ownershipWritten) {
+        $orphanWarning = Remove-MtpUnownedDirectory -Path $evidenceDirectory
+        $removalOutcome = if ($null -eq $orphanWarning) { 'No unowned evidence directory was left behind' } else { $orphanWarning }
+        throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. $removalOutcome; the original run directory remains available for diagnosis."
+    }
+    try {
+        $trxEvidence = [System.Collections.Generic.List[object]]::new()
+        foreach ($trxPath in $TrxPaths) {
+            $summary = Read-MtpTrxResult -Path $trxPath
+            $leaf = [System.IO.Path]::GetFileName($trxPath)
+            Copy-Item -LiteralPath $trxPath -Destination (Join-Path $evidenceDirectory $leaf) -Force -ErrorAction Stop
+            $trxEvidence.Add([ordered]@{
+                file = $leaf
+                total = $summary.Total
+                passed = $summary.Passed
+                failed = $summary.Failed
+                skipped = $summary.Skipped
+                executedTestNames = @(if ($null -ne $summary.Document.TestRun.Results -and $null -ne $summary.Document.TestRun.Results.PSObject.Properties['UnitTestResult']) { $summary.Document.TestRun.Results.UnitTestResult | ForEach-Object { [string]$_.testName } | Sort-Object -Unique })
+            })
+        }
+        $selectionEvidence = @($BuildSelections | ForEach-Object {
+            $receipt = $_.Receipt
+            $sources = @($receipt.Sources | ForEach-Object { "$($_.Path):$($_.Sha256)" } | Sort-Object)
+            [ordered]@{
+                project = $_.Project
+                selectedDirectory = $_.Directory
+                assemblySha256 = $receipt.Headers['assemblySha256']
+                pdbSha256 = $receipt.Headers['pdbSha256']
+                sourceSetDigest = Get-MtpSha256Text -Text ($sources -join "`n")
+                receipt = $receipt.Path
+                rejectedCandidates = @($_.Rejections)
+                closureDirectory = $_.ClosureDirectory
+                closureDigest = $_.ClosureDigest
+                launchedAssembly = $_.LaunchedAssembly
+                launchedAssemblySha256 = $_.LaunchedAssemblySha256
+                identityCostMs = $_.IdentityCost
+            }
+        })
+        $evidence = [ordered]@{
+            schemaVersion = 1
+            runLabel = $RunLabel
+            createdAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+            requestedFilters = @($RequestedFilters)
+            executedTestNames = @($ExecutedTestNames | Sort-Object -Unique)
+            selections = $selectionEvidence
+            trx = $trxEvidence.ToArray()
+        }
+        $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'run-identity.json') -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        Remove-Item -LiteralPath $evidenceDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
+    return $evidenceDirectory
 }
 
 function Write-MtpTerminalSummary {
@@ -1767,7 +2220,8 @@ function Invoke-MtpTestRun {
         [string]$RunnerPath,
         [string]$DotnetPath = 'dotnet',
         [switch]$AllowBreakaway,
-        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
+        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
+        [scriptblock]$RetainedEvidenceOwnershipWriter
     )
 
     try {
@@ -1788,10 +2242,15 @@ function Invoke-MtpTestRun {
     $runnerLogPaths = [System.Collections.Generic.List[string]]::new()
     $trxPaths = [System.Collections.Generic.List[string]]::new()
     $expectedTrxPaths = [System.Collections.Generic.List[string]]::new()
+    $executedTestNames = [System.Collections.Generic.List[string]]::new()
+    $buildSelections = [System.Collections.Generic.List[object]]::new()
     $lastOwnedProcessId = $null
     $lastRunnerExitCode = $null
     $allExitsConfirmed = $true
     $environmentSnapshot = Get-MtpEnvironmentSnapshot
+    # Captured before Set-MtpHermeticEnvironment strips it, so retained evidence written after the
+    # strip still lands in the attributed retention lane instead of the 48h unattributed bound.
+    $acceptanceAttemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
     try {
         $startupHookPath = Resolve-MtpFaultDialogStartupHook
     }
@@ -1813,11 +2272,23 @@ function Invoke-MtpTestRun {
         elseif ($usesManagedAssembly) {
             foreach ($project in $projects) {
                 $projectName = Get-MtpProjectName -Invocation $project
-                $sourceAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
-                $sourceDirectory = Split-Path -Parent $sourceAssembly
                 $publishedDirectory = Get-MtpClosureDirectory -RunDirectory $runDirectory -Invocation $project
                 try {
-                    Copy-MtpStableNoBuildClosure -SourceDirectory $sourceDirectory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
+                    $buildSelection = Select-MtpVerifiedBuildOutput -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory
+                    Copy-MtpStableNoBuildClosure -SourceDirectory $buildSelection.Directory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
+                    $closureMarker = Get-Content -LiteralPath (Join-Path $publishedDirectory $script:MtpClosureMarkerName) -Raw | ConvertFrom-Json
+                    $launchedAssembly = Join-Path $publishedDirectory "$projectName.dll"
+                    $buildSelections.Add([pscustomobject]@{
+                        Project = [string]$project.project
+                        Directory = $buildSelection.Directory
+                        Receipt = $buildSelection.Receipt
+                        Rejections = $buildSelection.Rejections
+                        ClosureDirectory = $publishedDirectory
+                        ClosureDigest = [string]$closureMarker.digest
+                        LaunchedAssembly = $launchedAssembly
+                        LaunchedAssemblySha256 = Get-MtpSha256File -Path $launchedAssembly
+                        IdentityCost = $buildSelection.IdentityCost
+                    })
                 }
                 catch {
                     Write-Host "NO-BUILD CLOSURE FAILURE - '$projectName' shared output was not copied or executed: $($_.Exception.Message)"
@@ -1909,7 +2380,7 @@ function Invoke-MtpTestRun {
                     Write-Host "COMPLETED WITH MISSING TRX - managed MTP runner exited $($run.ExitCode) without producing TRX '$trxPath'. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     $exitCode = if ($run.ExitCode -ne 0) { $run.ExitCode } else { $script:ExitCodes.Runner }
-                    return New-MtpTerminalResult -Outcome completed-with-missing-trx -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome completed-with-missing-trx -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
 
                 Write-Host "TRX: $trxPath"
@@ -1919,16 +2390,22 @@ function Invoke-MtpTestRun {
                 catch {
                     Write-Host "RUNNER/TOOLING FAILURE - $($_.Exception.Message) Managed runner exit: $($run.ExitCode). Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 Write-Host ("{0}: total={1} passed={2} failed={3} skipped={4}" -f $trxFileName, $summary.Total, $summary.Passed, $summary.Failed, $summary.Skipped)
+                $unitTestResults = @(if ($null -ne $summary.Document.TestRun.Results -and $null -ne $summary.Document.TestRun.Results.PSObject.Properties['UnitTestResult']) { $summary.Document.TestRun.Results.UnitTestResult })
+                foreach ($executedResult in $unitTestResults) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$executedResult.testName)) {
+                        $executedTestNames.Add([string]$executedResult.testName)
+                    }
+                }
                 if ($summary.Total -le 0) {
                     Write-Host "ZERO TESTS - filter matched no tests. Managed runner exit: $($run.ExitCode). TRX: $trxPath"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.ZeroTests -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.ZeroTests -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 if ($summary.Failed -gt 0) {
-                    foreach ($failedResult in @($summary.Document.TestRun.Results.UnitTestResult | Where-Object outcome -eq 'Failed')) {
+                    foreach ($failedResult in @($unitTestResults | Where-Object outcome -eq 'Failed')) {
                         Write-Host "  FAIL  $($failedResult.testName)"
                         $message = [string]$failedResult.Output.ErrorInfo.Message
                         if (-not [string]::IsNullOrWhiteSpace($message)) {
@@ -1938,17 +2415,26 @@ function Invoke-MtpTestRun {
                     Write-Host "TEST FAILURES - $($summary.Failed) test(s) failed. TRX: $trxPath"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     $exitCode = if ($run.ExitCode -ne 0) { $run.ExitCode } else { 1 }
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 if ($run.ExitCode -ne 0) {
                     Write-Host "RUNNER/TOOLING FAILURE - managed runner exited $($run.ExitCode) although its TRX contains no failing tests. This is not a compile failure. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return New-MtpTerminalResult -Outcome failed -ExitCode $run.ExitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $run.ExitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
                 }
                 }
             }
         }
 
+        try {
+            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter -AttemptId $acceptanceAttemptId
+            Write-Host "Run identity and named TRX evidence retained: $retainedEvidenceDirectory"
+        }
+        catch {
+            Write-Host "EVIDENCE RETENTION FAILURE - clean test identity could not be retained: $($_.Exception.Message)"
+            Write-Host "Retained diagnostic directory: $runDirectory"
+            return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Cleanup -RunnerExitCode $lastRunnerExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $true
+        }
         Write-Host "ALL GREEN - clean-run TRX receipts were under '$runDirectory' and will now be removed."
         try {
             Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction Stop
@@ -1958,7 +2444,7 @@ function Invoke-MtpTestRun {
             Write-Host "Retained diagnostic directory: $runDirectory"
             return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Cleanup -RunnerExitCode $lastRunnerExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $true
         }
-        return New-MtpTerminalResult -Outcome completed -ExitCode 0 -RunnerExitCode $lastRunnerExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $false
+        return New-MtpTerminalResult -Outcome completed -ExitCode 0 -RunnerExitCode $lastRunnerExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $false -RetainedEvidenceDirectory $retainedEvidenceDirectory -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray()
     }
     finally {
         Restore-MtpEnvironment -Snapshot $environmentSnapshot
@@ -1974,9 +2460,15 @@ Export-ModuleMember -Function @(
     'Get-DefaultMtpResultsRoot',
     'Initialize-MtpResultsDirectory',
     'Get-MtpTargetProjects',
+    'Get-MtpBuildReceiptPath',
+    'Read-MtpBuildReceipt',
+    'Assert-MtpBuildReceipt',
+    'Resolve-MtpEvaluatedTargetPath',
+    'Select-MtpVerifiedBuildOutput',
     'New-MtpRunnerArguments',
     'Read-MtpTrxResult',
     'New-MtpTerminalResult',
+    'Write-MtpRunEvidenceReceipt',
     'Write-MtpTerminalSummary',
     'Invoke-MtpTestRun'
 )

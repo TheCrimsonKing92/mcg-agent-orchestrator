@@ -10,6 +10,50 @@ public sealed class GoalRefinementTests
 {
     // --- Binding selection and configuration failures ---
 
+    [Xunit.Fact]
+    public void SpecRefinerPromptRequiresOneToOneDeclaredCriterionMapping()
+    {
+        var prompt = SpecRefinerPlanner.BuildPrompt("Refine these criteria.");
+
+        Xunit.Assert.Contains(
+            "Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.",
+            prompt,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalRefinementServiceKeepsBf434fdbCriterionFiveAsOneRefinedEntry()
+    {
+        const string criterion = "Reviewer evidence that no other shipped caller depends on the automatic DeveloperReviewer result: cite each read of PipelineDecision.Pipeline in src (the planner file has reads around lines 502, 536 and 553) and state whether it is display-only or behavioural.";
+        var objective = $"""
+            Preserve the historical acceptance criterion.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = """
+            ```json
+            {
+              "behavioralContract": "Preserve evidence classification.",
+              "acceptanceCriteria": [
+                "Reviewer evidence that no other shipped caller depends on the automatic DeveloperReviewer result: cite each read of PipelineDecision.Pipeline in src (the planner file has reads around lines 502, 536 and 553)",
+                "and state whether it is display-only or behavioural."
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal([criterion], result.Spec.AcceptanceCriteria);
+        Xunit.Assert.Equal([criterion], kernel.GetGoal(goalId).RefinedSpec!.AcceptanceCriteria);
+    }
+
     [Xunit.Fact(DisplayName = "GoalRefinementService_throws_when_no_refiner_binding")]
     public async Task ThrowsWhenNoRefinerBinding()
     {
@@ -48,11 +92,11 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
 
             Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
             var repeated = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
             Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", repeated.Message, StringComparison.Ordinal);
             Xunit.Assert.Equal(0, provider.InvocationCount);
             var message = Xunit.Assert.Single(
@@ -127,7 +171,7 @@ public sealed class GoalRefinementTests
                         (stored, _) =>
                         {
                             var storedGoal = stored.GetGoal(goal.Id);
-                            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                                 stored,
                                 workspace,
                                 providers,
@@ -141,7 +185,7 @@ public sealed class GoalRefinementTests
                         (stored, _) =>
                         {
                             var storedGoal = stored.GetGoal(goal.Id);
-                            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                                 stored,
                                 workspace,
                                 providers,
@@ -169,7 +213,8 @@ public sealed class GoalRefinementTests
 
         static int ReadCommittedOutboxCount(string databasePath, string messageId)
         {
-            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+            using var connection = new SqliteConnection(
+                $"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM state_outbox WHERE id = $id";
@@ -276,7 +321,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState!.Status);
         Xunit.Assert.Contains("owner=durable-outbox phase=provider-refinement", failedState.Detail, StringComparison.Ordinal);
         var failedConsumer = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                 awaitKernel(repository),
                 workspace,
                 new InMemoryModelProviderRegistry([]),
@@ -305,7 +350,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Quarantined, quarantineState!.Status);
         var loaded = await repository.LoadAsync();
         var quarantineConsumer = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                 loaded,
                 workspace,
                 new InMemoryModelProviderRegistry([]),
@@ -416,7 +461,7 @@ public sealed class GoalRefinementTests
 
         var profile = new WorkerProfile("test-profile", "Write-Output {promptPath}");
         var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
-        _ = GoalManagementCommandService.ProfileDispatchTask(
+        _ = new GoalDispatchOperations().ProfileDispatchTask(
             kernel,
             workspace,
             goal,
@@ -429,7 +474,7 @@ public sealed class GoalRefinementTests
 
         var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.ProfileDispatchTask(
+            new GoalDispatchOperations().ProfileDispatchTask(
                 kernel,
                 workspace,
                 goal,
@@ -483,7 +528,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.NotNull(reloadedResearcher.LastDispatch);
         var reloadedPlanner = reloadedGoal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var preflight = await Xunit.Assert.ThrowsAsync<WorkerSubscriptionPreflightException>(
-            () => Task.Run(() => GoalManagementCommandService.ProfileDispatchTask(
+            () => Task.Run(() => new GoalDispatchOperations().ProfileDispatchTask(
                 reloadedKernel,
                 workspace,
                 reloadedGoal,
@@ -529,7 +574,7 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -542,7 +587,7 @@ public sealed class GoalRefinementTests
                 Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind)).Id);
 
             var again = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -610,7 +655,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.True(processed.Attached);
         Xunit.Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(kernel.GetGoal(goal.Id)));
 
-        GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+        GoalDispatchOperations.EnsureRefinedForSpecConsumer(
             kernel,
             workspace,
             providers,
@@ -1544,7 +1589,7 @@ public sealed class GoalRefinementTests
         var planner = kernel.GetGoal(goalId).Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var brief = kernel.BuildTaskBrief(goalId, planner.Id).Content;
         Xunit.Assert.Equal(
-            declaredCriteria.Select(criterion => $"- {criterion}"),
+            declaredCriteria.Select((criterion, index) => $"{index + 1}. {criterion}"),
             ExtractRenderedAcceptanceCriteria(brief));
 
         var contractRoot = CreateTempDirectory();
@@ -1973,7 +2018,7 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(
-            () => GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+            () => new GoalDispatchOperations().SubscriptionDispatchReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -2165,7 +2210,7 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2467,7 +2512,7 @@ public sealed class GoalRefinementTests
         _ = CreateMigratedStateRepository(workspace.SqliteStatePath);
 
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() =>
-            GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+            new GoalDispatchOperations().SubscriptionDispatchReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -2599,7 +2644,7 @@ public sealed class GoalRefinementTests
         try
         {
             var first = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2615,7 +2660,7 @@ public sealed class GoalRefinementTests
             kernel = await repository.LoadAsync();
 
             var second = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2730,7 +2775,7 @@ public sealed class GoalRefinementTests
     private static string[] ExtractRenderedAcceptanceCriteria(string brief)
     {
         var normalizedBrief = brief.ReplaceLineEndings("\n");
-        const string acceptanceHeading = "Acceptance criteria:\n";
+        const string acceptanceHeading = "Acceptance criteria (authoritative list validated by PlannerOutputContract):\n";
         var acceptanceHeadingIndex = normalizedBrief.IndexOf(acceptanceHeading, StringComparison.Ordinal);
         Xunit.Assert.True(acceptanceHeadingIndex >= 0, "Planner brief is missing its acceptance criteria heading.");
         var acceptanceStart = acceptanceHeadingIndex + acceptanceHeading.Length;

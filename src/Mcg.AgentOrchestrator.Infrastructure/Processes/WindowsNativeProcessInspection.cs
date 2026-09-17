@@ -61,6 +61,116 @@ internal static class WindowsNativeProcessInspection
         return BeginOperation().ReadRequested(ids);
     }
 
+    internal static ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(
+        int expectedProcessId,
+        SafeHandle processHandle)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(expectedProcessId, 1);
+        ArgumentNullException.ThrowIfNull(processHandle);
+        if (!OperatingSystem.IsWindows())
+        {
+            return new(null, null, ProcessInspectionStatus.UnsupportedTarget, 0, "platform-check");
+        }
+
+        if (processHandle.IsClosed || processHandle.IsInvalid)
+        {
+            return new(null, null, ProcessInspectionStatus.NativeFailure, 0, "process-handle-validation");
+        }
+
+        var addedReference = false;
+        try
+        {
+            processHandle.DangerousAddRef(ref addedReference);
+            return ReadLifecycleIdentity(expectedProcessId, processHandle.DangerousGetHandle());
+        }
+        catch (ObjectDisposedException)
+        {
+            return new(null, null, ProcessInspectionStatus.NativeFailure, 0, "process-handle-validation");
+        }
+        finally
+        {
+            if (addedReference)
+            {
+                processHandle.DangerousRelease();
+            }
+        }
+    }
+
+    private static ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(
+        int expectedProcessId,
+        IntPtr processHandle)
+    {
+
+        var actualProcessId = GetProcessId(processHandle);
+        if (actualProcessId == 0)
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-id-read");
+        }
+
+        if (actualProcessId != (uint)expectedProcessId)
+        {
+            return new(null, null, ProcessInspectionStatus.DeadOrRecycled, 0, "process-id-match");
+        }
+
+        if (!GetExitCodeProcess(processHandle, out var exitCode))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-liveness-read-before-identity");
+        }
+
+        if (exitCode != StillActive)
+        {
+            return new(null, null, ProcessInspectionStatus.Exited, 0, "process-liveness-read-before-identity");
+        }
+
+        var capacity = 32768u;
+        var path = new StringBuilder((int)capacity);
+        if (!QueryFullProcessImageName(processHandle, 0, path, ref capacity))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-image-read");
+        }
+
+        if (!GetProcessTimes(processHandle, out var creationTime, out _, out _, out _))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-creation-time-read");
+        }
+
+        DateTimeOffset startedAt;
+        try
+        {
+            startedAt = new DateTimeOffset(DateTime.FromFileTimeUtc(creationTime), TimeSpan.Zero);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return new(null, null, ProcessInspectionStatus.MalformedData, 0, "process-creation-time-conversion");
+        }
+
+        actualProcessId = GetProcessId(processHandle);
+        if (actualProcessId == 0)
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-liveness-read-after-identity");
+        }
+
+        if (actualProcessId != (uint)expectedProcessId)
+        {
+            return new(null, null, ProcessInspectionStatus.DeadOrRecycled, 0, "process-id-match-after-identity");
+        }
+
+        if (!GetExitCodeProcess(processHandle, out exitCode))
+        {
+            var error = Marshal.GetLastWin32Error();
+            return new(null, null, StatusFromError(error), error, "process-liveness-read-after-identity");
+        }
+
+        return exitCode == StillActive
+            ? new(path.ToString(), startedAt, ProcessInspectionStatus.Available, 0, "kernel-lifecycle-identity")
+            : new(null, null, ProcessInspectionStatus.Exited, 0, "process-liveness-read-after-identity");
+    }
+
     public static ProcessInspectionResult ReadByNames(IEnumerable<string> processNames)
     {
         var names = processNames
@@ -72,12 +182,9 @@ internal static class WindowsNativeProcessInspection
 
     internal static IReadOnlyList<int> ListIdentityBoundDescendantProcessIds(int ancestorProcessId)
     {
-        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
-        {
-            return [];
-        }
-
-        return ListIdentityBoundDescendantProcessIds(ancestorProcessId, EnumerateProcesses, ReadOne);
+        return ReadIdentityBoundDescendants(ancestorProcessId).Records.Keys
+            .OrderBy(processId => processId)
+            .ToArray();
     }
 
     internal static IReadOnlyList<int> ListIdentityBoundDescendantProcessIds(
@@ -85,10 +192,39 @@ internal static class WindowsNativeProcessInspection
         Func<ProcessEnumerationResult> enumerate,
         Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
     {
-        var enumeration = enumerate();
-        if (ancestorProcessId <= 0 || enumeration.Failure is not null)
+        return ReadIdentityBoundDescendants(ancestorProcessId, enumerate, readOne).Records.Keys
+            .OrderBy(processId => processId)
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The identity-bound descendant set with each accepted record kept, so a caller can re-check the
+    /// exact identity later instead of re-resolving a bare pid that may have been reassigned.
+    /// </summary>
+    internal static ProcessInspectionResult ReadIdentityBoundDescendants(int ancestorProcessId)
+    {
+        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
         {
-            return [];
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
+        }
+
+        return ReadIdentityBoundDescendants(ancestorProcessId, EnumerateProcesses, ReadOne);
+    }
+
+    internal static ProcessInspectionResult ReadIdentityBoundDescendants(
+        int ancestorProcessId,
+        Func<ProcessEnumerationResult> enumerate,
+        Func<ProcessInspectionSeed, ProcessInspectionRecord> readOne)
+    {
+        var enumeration = enumerate();
+        if (ancestorProcessId <= 0)
+        {
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
+        }
+
+        if (enumeration.Failure is not null)
+        {
+            return ProcessInspectionResult.Failed(enumeration.Failure);
         }
 
         var seedsById = enumeration.Processes
@@ -97,7 +233,7 @@ internal static class WindowsNativeProcessInspection
             .ToDictionary(group => group.Key, group => group.First());
         if (!seedsById.TryGetValue(ancestorProcessId, out var rootSeed))
         {
-            return [];
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
         }
 
         var records = new Dictionary<int, ProcessInspectionRecord>();
@@ -115,14 +251,14 @@ internal static class WindowsNativeProcessInspection
         var root = Read(rootSeed);
         if (!CanEstablishLiveIdentity(root))
         {
-            return [];
+            return ProcessInspectionResult.Success(new Dictionary<int, ProcessInspectionRecord>());
         }
 
         var childrenByParent = enumeration.Processes
             .Where(seed => seed.ProcessId > 0 && seed.ParentProcessId > 0 && seed.ProcessId != ancestorProcessId)
             .GroupBy(seed => seed.ParentProcessId)
             .ToDictionary(group => group.Key, group => group.ToArray());
-        var accepted = new List<int>();
+        var accepted = new Dictionary<int, ProcessInspectionRecord>();
         var queue = new Queue<ProcessInspectionSeed>();
         queue.Enqueue(rootSeed);
         while (queue.TryDequeue(out var parentSeed))
@@ -143,12 +279,12 @@ internal static class WindowsNativeProcessInspection
                     continue;
                 }
 
-                accepted.Add(childSeed.ProcessId);
+                accepted.TryAdd(childSeed.ProcessId, child);
                 queue.Enqueue(childSeed);
             }
         }
 
-        return accepted.Distinct().OrderBy(processId => processId).ToArray();
+        return ProcessInspectionResult.Success(accepted);
     }
 
     internal static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
@@ -544,7 +680,9 @@ internal static class WindowsNativeProcessInspection
         }
     }
 
-    private static ProcessInspectionStatus StatusFromLastError() => Marshal.GetLastWin32Error() switch
+    private static ProcessInspectionStatus StatusFromLastError() => StatusFromError(Marshal.GetLastWin32Error());
+
+    private static ProcessInspectionStatus StatusFromError(int error) => error switch
     {
         ErrorAccessDenied => ProcessInspectionStatus.AccessDenied,
         ErrorInvalidParameter => ProcessInspectionStatus.Exited,
@@ -801,6 +939,12 @@ internal static class WindowsNativeProcessInspection
             new(Array.Empty<ProcessInspectionSeed>(), failure);
     }
     internal readonly record struct ProcessOpenResult(IntPtr Handle, int Error);
+    internal sealed record ProcessLifecycleIdentityReadResult(
+        string? ExecutablePath,
+        DateTimeOffset? StartedAt,
+        ProcessInspectionStatus Status,
+        int NativeError,
+        string Operation);
     internal sealed record OpenedProcessReadResult(
         int ParentProcessId,
         string? ExecutablePath,
@@ -829,6 +973,9 @@ internal static class WindowsNativeProcessInspection
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(IntPtr processHandle, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetProcessId(IntPtr processHandle);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateProcess(IntPtr processHandle, uint exitCode);

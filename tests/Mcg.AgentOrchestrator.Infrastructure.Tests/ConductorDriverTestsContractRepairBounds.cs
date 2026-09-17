@@ -1139,7 +1139,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             var profiles = WorkerProfileCatalog.Default();
             if (path == "ready-batch")
             {
-                var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+                var batch = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(
                     kernel,
                     workspace,
                     goal,
@@ -1149,7 +1149,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             }
             else if (path == "profile")
             {
-                GoalManagementCommandService.ProfileDispatchTask(
+                new GoalDispatchOperations().ProfileDispatchTask(
                     kernel,
                     workspace,
                     goal,
@@ -1159,7 +1159,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             }
             else
             {
-                GoalManagementCommandService.SubscriptionDispatchTask(
+                new GoalDispatchOperations().SubscriptionDispatchTask(
                     kernel,
                     workspace,
                     goal,
@@ -1168,7 +1168,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
                     profiles);
                 if (path == "refresh")
                 {
-                    GoalManagementCommandService.RefreshPreparedDispatchBeforeStart(
+                    new GoalDispatchOperations().RefreshPreparedDispatchBeforeStart(
                         kernel,
                         workspace,
                         goal,

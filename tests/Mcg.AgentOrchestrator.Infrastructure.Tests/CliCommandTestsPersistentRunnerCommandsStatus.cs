@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsStatus : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_status_loads_terminal_goal_on_demand")]

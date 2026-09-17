@@ -1,4 +1,4 @@
-﻿using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -10,7 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsStartupAndMetadata : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_single_goal_conduct_outside_command_transaction")]
@@ -116,7 +116,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsStartupAndMetadata : 
         var orchestratorDirectory = Path.Combine(root, ".orchestrator");
         var statePath = Path.Combine(orchestratorDirectory, "state.db");
         Directory.CreateDirectory(orchestratorDirectory);
-        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={statePath}"))
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={statePath};Pooling=False"))
         {
             connection.Open();
         }

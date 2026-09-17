@@ -244,6 +244,44 @@ public sealed class GoalBriefRevisionTests
     }
 
     [Xunit.Fact]
+    public void ReviseGoalBriefReDerivesRefinedCriteriaFromTheNewAuthoritativeBrief()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("""
+            Original brief.
+
+            ## Acceptance criteria
+
+            1. Original criterion.
+            """);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Original behavior.",
+            ["Original criterion."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+
+        clock.Advance();
+        var result = kernel.ReviseGoalBrief(goal.Id, """
+            Revised brief.
+
+            ## Acceptance criteria
+
+            1. First revised criterion.
+            2. Second revised criterion.
+            """);
+
+        Assert.True(result.RefinedCriteriaReDerived);
+        Assert.Equal(2, result.RefinedCriteriaCount);
+        Assert.Equal(
+            ["First revised criterion.", "Second revised criterion."],
+            goal.RefinedSpec!.AcceptanceCriteria);
+        Assert.Equal(2, goal.RefinedSpecVersions.Count);
+        Assert.Equal(2, goal.AuthoritativeRefinedSpecVersion!.BriefVersion);
+    }
+
+    [Xunit.Fact]
     public void RoleContextLabelsUnstampedLegacyAnswerVersionAsUnknown()
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());

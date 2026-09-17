@@ -2137,7 +2137,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         try
         {
             var pending = Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.ProfileDispatchTask(
+                new GoalDispatchOperations().ProfileDispatchTask(
                     kernel,
                     workspace,
                     kernel.GetGoal(goal.Id),
@@ -2162,7 +2162,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
             kernel = await repository.LoadAsync();
             goal = kernel.GetGoal(goal.Id);
             task = goal.Tasks.Single();
-            var result = GoalManagementCommandService.ProfileDispatchTask(
+            var result = new GoalDispatchOperations().ProfileDispatchTask(
                 kernel,
                 workspace,
                 goal,
@@ -2265,7 +2265,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(root);
+            _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
         }
     }
 

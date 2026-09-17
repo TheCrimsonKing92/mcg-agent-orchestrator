@@ -40,7 +40,10 @@ internal static class GoalsPrunePlanner
         return new GoalsPrunePlan(ClassifyGoals(kernel, executionDirectory), DryRun: true);
     }
 
-    public static GoalsPrunePlan Apply(AgentOrchestratorKernel kernel, string executionDirectory)
+    public static GoalsPrunePlan Apply(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
         var preview = Build(kernel, executionDirectory);
         var applied = new List<GoalPruneItem>();
@@ -53,7 +56,7 @@ internal static class GoalsPrunePlanner
             }
 
             kernel.CancelGoal(item.GoalId, PruneReason);
-            GoalWorktrees.RemoveTerminal(executionDirectory, item.GoalId, kernel);
+            GoalWorktrees.RemoveTerminal(executionDirectory, item.GoalId, kernel, cleanupHooks);
             applied.Add(item with { Disposition = GoalPruneDisposition.Pruned });
         }
 

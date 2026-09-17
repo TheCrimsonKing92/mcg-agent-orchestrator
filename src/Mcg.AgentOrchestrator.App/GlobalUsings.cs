@@ -1,3 +1,4 @@
+global using Mcg.AgentOrchestrator.App.Application;
 global using Mcg.AgentOrchestrator.App.Cli;
 global using Mcg.AgentOrchestrator.App.CostControl;
 global using Mcg.AgentOrchestrator.App.Dashboard.Api;
