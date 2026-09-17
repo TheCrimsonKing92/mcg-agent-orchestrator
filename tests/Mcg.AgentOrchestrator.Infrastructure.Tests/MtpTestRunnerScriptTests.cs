@@ -230,6 +230,16 @@ public sealed class MtpTestRunnerScriptTests
         var displayName = RejectMtpFilter("DisplayName~Selects one test");
         Assert.Contains("filters method symbols", displayName, StringComparison.Ordinal);
         Assert.Contains("use Name~Method", displayName, StringComparison.Ordinal);
+
+        var unsafeHoist = RejectMtpFilter(
+            "(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild");
+        Assert.Contains("alternative-local exclusion", unsafeHoist, StringComparison.Ordinal);
+        Assert.Contains("would become global", unsafeHoist, StringComparison.Ordinal);
+        Assert.Contains("silently narrowing the requested union", unsafeHoist, StringComparison.Ordinal);
+
+        var unsupportedAlternative = RejectMtpFilter("(Name~Alpha&Name!~Beta)|Name~Gamma");
+        Assert.Contains("each alternative must be one positive predicate", unsupportedAlternative, StringComparison.Ordinal);
+        Assert.DoesNotContain("negative predicates may not be alternatives", unsupportedAlternative, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

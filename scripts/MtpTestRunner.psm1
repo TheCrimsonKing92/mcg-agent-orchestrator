@@ -675,13 +675,16 @@ function Convert-MtpOrClause {
                 @($excluded | Where-Object { $_.Value.IndexOf($included[0].Value, [System.StringComparison]::OrdinalIgnoreCase) -lt 0 }).Count -eq 0) {
                 $positives.Add($included[0])
                 foreach ($exclusion in $excluded) {
-                    $hoistedExclusions.Add($exclusion)
+                    $hoistedExclusions.Add([pscustomobject]@{
+                            Predicate = $exclusion
+                            Owner = $included[0]
+                        })
                 }
                 continue
             }
         }
 
-        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "the '|' alternative cannot be represented by one managed-runner invocation; negative predicates may not be alternatives.")
+        throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "the '|' alternative '$($alternative.NodeType)' cannot be represented by one managed-runner invocation; each alternative must be one positive predicate, or one positive class predicate combined only with class exclusions that narrow that class.")
     }
 
     $kinds = @($positives | Select-Object -ExpandProperty Kind -Unique)
@@ -690,10 +693,27 @@ function Convert-MtpOrClause {
         throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "the '|' operator joins different predicate kinds ('$operands'); a single invocation can OR only class alternatives or only method alternatives.")
     }
 
+    foreach ($hoisted in $hoistedExclusions) {
+        foreach ($positive in $positives) {
+            if ([object]::ReferenceEquals($positive, $hoisted.Owner)) {
+                continue
+            }
+
+            $exclusionValue = $hoisted.Predicate.Value
+            $positiveValue = $positive.Value
+            $exclusionMatchesPositive =
+                $exclusionValue.IndexOf($positiveValue, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $positiveValue.IndexOf($exclusionValue, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            if ($exclusionMatchesPositive) {
+                throw (New-MtpFilterDiagnostic -Filter $Filter -Detail "the alternative-local exclusion '$($hoisted.Predicate.Text)' would become global and also match positive alternative '$($positive.Text)', silently narrowing the requested union.")
+            }
+        }
+    }
+
     return [pscustomobject]@{
         Kind = $kinds[0]
         Positives = $positives.ToArray()
-        HoistedExclusions = $hoistedExclusions.ToArray()
+        HoistedExclusions = @($hoistedExclusions | ForEach-Object { $_.Predicate })
     }
 }
 
