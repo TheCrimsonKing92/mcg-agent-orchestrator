@@ -125,7 +125,7 @@ public sealed class AgentOutputDirectivesTests
             Assert.Contains("violated criterion index, normalized file path, line/region, then stable_id", requirements, StringComparison.Ordinal);
             Assert.DoesNotContain("Use only `Core.Tests`", requirements, StringComparison.Ordinal);
             Assert.Contains(
-                "Use any test project declared in `config/acceptance-manifest.json` by label, file name, or repo-relative path",
+                "Use a test project from `config/acceptance-manifest.json` by label, file name, or path",
                 requirements,
                 StringComparison.Ordinal);
         }
