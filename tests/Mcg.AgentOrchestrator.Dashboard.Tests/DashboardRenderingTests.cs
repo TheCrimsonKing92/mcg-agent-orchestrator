@@ -2572,6 +2572,98 @@ public sealed class DashboardRenderingTests
     Assert.False(html.Contains("Test impact: No changed files detected; no build verification required.", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_preview_exposes_reverse_dependency_cache_receipt_without_changing_command")]
+    public void DashboardPreviewExposesReverseDependencyCacheReceiptWithoutChangingCommand()
+{
+    var root = CreateTempDirectory();
+    RunGit(root, "init", "-b", "main");
+    RunGit(root, "config", "user.email", "dashboard-tests@example.com");
+    RunGit(root, "config", "user.name", "Dashboard Tests");
+    void Write(string relativePath, string contents)
+    {
+        var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, contents);
+    }
+
+    Write("src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+    Write(
+        "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+        "<ProjectReference Include=\"../Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
+        "</ItemGroup></Project>");
+    Write(
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+        "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+        "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
+        "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj\" />" +
+        "</ItemGroup></Project>");
+    Write(
+        "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
+        "namespace Mcg.AgentOrchestrator.Core; public sealed class DispatchFailureClassifier { }");
+    Write(
+        "src/Mcg.AgentOrchestrator.App/RunGoalService.cs",
+        "public sealed class RunGoalService { private readonly DispatchFailureClassifier _classifier = new(); }");
+    Write(
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RunGoalServiceTests.cs",
+        "public sealed class RunGoalServiceTests { private readonly RunGoalService _service = new(); " +
+        "[Xunit.Fact] public void Runs() { } }");
+    RunGit(root, "add", "-A");
+    RunGit(root, "commit", "-m", "Seed reverse-dependency fixture");
+
+    var workspace = CreateRefinedWorkspace(root);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Render reverse-dependency cache evidence",
+        [new TaskSpec(TaskId.New(), "Change Core classifier", AgentRole.Developer)]);
+    var worktree = GoalWorktrees.Ensure(workspace.ExecutionDirectory, goal.Id);
+    var changedFile = Path.Combine(
+        worktree,
+        "src",
+        "Mcg.AgentOrchestrator.Core",
+        "Application",
+        "DispatchFailureClassifier.cs");
+    File.AppendAllText(changedFile, Environment.NewLine + "// changed");
+    RunGit(worktree, "add", "-A");
+    RunGit(worktree, "commit", "-m", "Change Core classifier");
+    var dashboardWorkspace = new DashboardWorkspaceContext(
+        workspace.RootDirectory,
+        workspace.SqliteStatePath,
+        workspace.ExecutionDirectory,
+        workspace.PromptDirectory,
+        workspace.LogDirectory,
+        workspace.WorkerProfilePath,
+        workspace.AgentCatalogPath,
+        0);
+
+    var first = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
+        executionDirectory: workspace.ExecutionDirectory);
+    var second = DashboardResponseMapper.ToGoalWorkSummaryDto(
+        kernel,
+        goal,
+        WorkerProfileCatalog.Default(),
+        ProcessCommandLineSnapshot.Empty,
+        executionDirectory: workspace.ExecutionDirectory);
+    var html = DashboardRenderer.Render(kernel, RenderOptions(
+        EnableOperatorControls: true,
+        View: DashboardView.Goal,
+        FocusGoalPrefix: goal.Id.Value[..8],
+        Workspace: dashboardWorkspace));
+    var firstCheck = Assert.Single(first.TestImpact!.Checks, check =>
+        check.Name == "focused reverse-dependent infrastructure tests");
+    var secondCheck = Assert.Single(second.TestImpact!.Checks, check =>
+        check.Name == "focused reverse-dependent infrastructure tests");
+
+    Assert.Equal(firstCheck.CommandLine, secondCheck.CommandLine);
+    Assert.Contains("reverse-dependency-cache=hit", secondCheck.Reason, StringComparison.Ordinal);
+    Assert.Contains("reverse-dependency-cache=hit", html, StringComparison.Ordinal);
+    Assert.Equal(string.Empty, RunGit(worktree, "status", "--porcelain"));
+}
+
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_allow_complex_paid_prepared_dispatch_under_size_threshold")]
     public void DashboardNextActionControlsAllowComplexPaidPreparedDispatchUnderSizeThreshold()
 {
@@ -3716,7 +3808,7 @@ private static void AssertOpenAiModelOrderIsCostAware(string text)
     Assert.True(miniIndex < expensiveIndex);
 }
 
-private static void RunGit(string workingDirectory, params string[] arguments)
+private static string RunGit(string workingDirectory, params string[] arguments)
 {
     var startInfo = new ProcessStartInfo
     {
@@ -3766,6 +3858,8 @@ private static void RunGit(string workingDirectory, params string[] arguments)
     {
         throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {process.ExitCode}: {output}{error}");
     }
+
+    return output;
 }
 
 private static void WriteHeartbeat(

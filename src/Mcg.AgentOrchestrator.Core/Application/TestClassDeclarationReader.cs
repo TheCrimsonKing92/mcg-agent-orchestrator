@@ -37,22 +37,52 @@ internal enum ReverseDependencySelectionOutcome
     Abandoned
 }
 
+internal enum ReverseDependencyCacheDisposition
+{
+    Hit,
+    Miss,
+    Bypass
+}
+
+internal sealed record ReverseDependencyCacheReceipt(
+    ReverseDependencyCacheDisposition Disposition,
+    string Fingerprint,
+    int IndexedFileCount,
+    long IndexedSourceBytes,
+    int ReparsedFileCount,
+    int RetainedSnapshotCount)
+{
+    internal string Render() =>
+        $"reverse-dependency-cache={Disposition.ToString().ToLowerInvariant()} " +
+        $"fingerprint={Fingerprint} indexed-files={IndexedFileCount} " +
+        $"source-bytes={IndexedSourceBytes} reparsed-files={ReparsedFileCount} " +
+        $"retained-snapshots={RetainedSnapshotCount}";
+}
+
 internal sealed record ReverseDependencyTestSelection(
     ReverseDependencySelectionOutcome Outcome,
     IReadOnlyList<string> TestClassNames,
-    string? Reason)
+    string? Reason,
+    ReverseDependencyCacheReceipt? CacheReceipt = null)
 {
-    internal static ReverseDependencyTestSelection Resolved(IEnumerable<string> testClassNames) =>
+    internal static ReverseDependencyTestSelection Resolved(
+        IEnumerable<string> testClassNames,
+        ReverseDependencyCacheReceipt? cacheReceipt = null) =>
         new(
             ReverseDependencySelectionOutcome.Resolved,
             testClassNames.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
-            null);
+            null,
+            cacheReceipt);
 
-    internal static ReverseDependencyTestSelection Unreadable(string reason) =>
-        new(ReverseDependencySelectionOutcome.Unreadable, [], reason);
+    internal static ReverseDependencyTestSelection Unreadable(
+        string reason,
+        ReverseDependencyCacheReceipt? cacheReceipt = null) =>
+        new(ReverseDependencySelectionOutcome.Unreadable, [], reason, cacheReceipt);
 
-    internal static ReverseDependencyTestSelection Abandoned(string reason) =>
-        new(ReverseDependencySelectionOutcome.Abandoned, [], reason);
+    internal static ReverseDependencyTestSelection Abandoned(
+        string reason,
+        ReverseDependencyCacheReceipt? cacheReceipt = null) =>
+        new(ReverseDependencySelectionOutcome.Abandoned, [], reason, cacheReceipt);
 
     internal static ReverseDependencyTestSelection Unavailable { get; } =
         new(ReverseDependencySelectionOutcome.Unavailable, [], "Reverse-dependency evidence is unavailable.");

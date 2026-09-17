@@ -15,6 +15,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         {
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs",
             "src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner.cs",
+            "src/Mcg.AgentOrchestrator.Core/Application/ReverseDependencyTestImpactReader.cs",
+            "src/Mcg.AgentOrchestrator.Core/Application/TestClassDeclarationReader.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
             "src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant.cs",
@@ -31,6 +33,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             [
                 "acceptance-verifier",
                 "test-impact-planner",
+                "reverse-dependency-index",
                 "build-environment",
                 "change-classifier",
                 "gate-settings",
