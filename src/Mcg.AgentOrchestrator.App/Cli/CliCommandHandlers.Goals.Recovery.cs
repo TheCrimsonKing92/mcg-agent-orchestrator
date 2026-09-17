@@ -13,10 +13,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static partial class CliCommandHandlers
 {
 // Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the
-// operator used to memorize. It answers any open human-input requests (which `SubmitHumanInput`
-// flips to Running), normalizes stuck/orphaned tasks to Failed so `RetryTask` accepts them, then
-// retries them back to a dispatchable state — all with the single operator note. Genuinely running
-// tasks (a live process) are left alone.
+// operator used to memorize. It answers blocking human-input requests (which `SubmitHumanInput`
+// flips to Running) while retaining prospective acceptance evidence, normalizes stuck/orphaned tasks
+// to Failed so `RetryTask` accepts them, then retries them back to a dispatchable state — all with the
+// single operator note. Genuinely running tasks (a live process) are left alone.
 private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     if (parts.Count < 3)
@@ -78,7 +78,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             "lifecycle/task desync recovery is unsafe until git status succeeds.");
     }
 
-    foreach (var request in context.Kernel.GetPendingHumanInput(goal.Id).ToList())
+    foreach (var request in context.Kernel.GetPendingBlockingHumanInput(goal.Id).ToList())
     {
         context.Kernel.SubmitHumanInput(request.Id, note);
         Console.WriteLine($"recover: answered human-input request {request.Id.Value[..8]}.");

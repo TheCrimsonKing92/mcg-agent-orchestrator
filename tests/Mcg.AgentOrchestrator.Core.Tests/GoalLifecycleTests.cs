@@ -3,6 +3,134 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Fact]
+    public void RefreshParkedGoal_AllowsPromotionWithOpenProspectiveAcceptanceEvidence()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Resume implementation while preserving future evidence.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var prospective = kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
+        var blocking = kernel.RequestHumanInput(goal.Id, task.Id, "Resume implementation?");
+        kernel.SubmitHumanInput(blocking.Id, "Resume.");
+        var snapshot = kernel.ExportSnapshot();
+        var active = Assert.Single(snapshot.Goals);
+        var resolvedAt = active.Timeline.Last(evt => evt.Kind == ProgressKind.HumanInputReceived).OccurredAt;
+        var legacyParked = active with
+        {
+            Status = GoalStatus.Parked,
+            Tasks = active.Tasks
+                .Select(candidate => candidate.Id == task.Id.Value
+                    ? candidate with { Status = WorkTaskStatus.WaitingForHuman }
+                    : candidate)
+                .ToArray(),
+            Timeline = active.Timeline
+                .Append(new ProgressEventSnapshot(
+                    goal.Id.Value,
+                    null,
+                    ProgressKind.GoalPolicyDecision,
+                    "Goal parked: Pause for an operator decision.",
+                    resolvedAt.AddTicks(-1)))
+                .ToArray()
+        };
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            snapshot with { Goals = [legacyParked] },
+            clock);
+
+        var promoted = restored.RefreshParkedGoalsWithResolvedHumanWaits();
+
+        Assert.Equal(1, promoted);
+        Assert.Equal(GoalStatus.Active, restored.GetGoal(goal.Id).Status);
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, task.Id).Status);
+        Assert.False(restored.GetHumanInputRequest(prospective.Id).IsCompleted);
+    }
+
+    [Xunit.Fact]
+    public void FromSnapshot_WaitingTaskWithOnlyProspectiveEvidenceIsRepaired()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Repair a stale blocking state.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
+        var snapshot = kernel.ExportSnapshot();
+        var stale = Assert.Single(snapshot.Goals) with
+        {
+            Tasks = Assert.Single(snapshot.Goals).Tasks
+                .Select(candidate => candidate.Id == task.Id.Value
+                    ? candidate with { Status = WorkTaskStatus.WaitingForHuman }
+                    : candidate)
+                .ToArray()
+        };
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            snapshot with { Goals = [stale] },
+            clock);
+
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, task.Id).Status);
+        Assert.Single(restored.GetPendingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
+    public void RetryTask_AllowsOpenProspectiveAcceptanceEvidence()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Retry planning without losing future evidence.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Plan complete.");
+        kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
+
+        kernel.RetryTask(goal.Id, task.Id, "Revise the plan.", RetryCause.NewSourceFinding);
+
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(RetryCause.NewSourceFinding, task.PendingRetryCause);
+        Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
+    public void RequeueInterruptedDispatch_AllowsOpenProspectiveAcceptanceEvidence()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Plan.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Recover planning without losing future evidence.", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("planner", "plan", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Observe the candidate after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence);
+
+        kernel.RequeueInterruptedDispatch(
+            goal.Id,
+            task.Id,
+            "Recover the interrupted plan.",
+            RetryCause.ProviderInterruption,
+            "dispatch-1");
+
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
+        Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+    }
+
     [Xunit.Fact(DisplayName = "RetryTask_operator_feedback_replaces_prior_automatic_feedback_without_consuming_automatic_retry_budget")]
     public void RetryTaskOperatorFeedbackReplacesPriorAutomaticFeedback()
     {

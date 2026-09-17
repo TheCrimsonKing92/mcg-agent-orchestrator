@@ -19,4 +19,7 @@ public static class HumanWaitPolicyDefaults
 
     public static bool IsExternallyBlocked(HumanWaitKind kind) =>
         kind is HumanWaitKind.ExternalCredential or HumanWaitKind.ProviderAuth;
+
+    public static bool BlocksActiveWork(HumanWaitKind kind) =>
+        kind != HumanWaitKind.ProspectiveAcceptanceEvidence;
 }

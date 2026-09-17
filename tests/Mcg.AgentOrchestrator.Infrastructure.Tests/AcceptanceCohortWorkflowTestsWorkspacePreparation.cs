@@ -496,4 +496,41 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
         }
     }
 
+    [Fact]
+    public void WorkspaceRemoverOverride_DoesNotLeakIntoConcurrentExecutionContexts()
+    {
+        var defaultRemover = AcceptanceCohortWorkspace.WorkspaceRemover;
+        Action<string, string> throwing = (_, _) =>
+            throw new InvalidOperationException("simulated concurrent cleanup failure");
+        using var overrideApplied = new ManualResetEventSlim();
+        using var siblingObserved = new ManualResetEventSlim();
+        Action<string, string>? observedByMutator = null;
+        Action<string, string>? observedBySibling = null;
+
+        var mutator = Task.Run(() =>
+        {
+            try
+            {
+                AcceptanceCohortWorkspace.WorkspaceRemover = throwing;
+                overrideApplied.Set();
+                siblingObserved.Wait(TimeSpan.FromSeconds(30));
+                observedByMutator = AcceptanceCohortWorkspace.WorkspaceRemover;
+            }
+            finally
+            {
+                AcceptanceCohortWorkspace.WorkspaceRemover = defaultRemover;
+            }
+        });
+        var sibling = Task.Run(() =>
+        {
+            overrideApplied.Wait(TimeSpan.FromSeconds(30));
+            observedBySibling = AcceptanceCohortWorkspace.WorkspaceRemover;
+            siblingObserved.Set();
+        });
+        Task.WaitAll(mutator, sibling);
+
+        Assert.Same(throwing, observedByMutator);
+        Assert.Same(defaultRemover, observedBySibling);
+        Assert.Same(defaultRemover, AcceptanceCohortWorkspace.WorkspaceRemover);
+    }
 }

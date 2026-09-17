@@ -29,8 +29,15 @@ public sealed class AcceptanceCohortWorkspace : IDisposable
     private readonly string _executionDirectory;
     private readonly GoalWorktreeCleanupHooks _cleanupHooks;
     private bool _disposed;
-    internal static Action<string, string> WorkspaceRemover { get; set; } =
+    private static readonly Action<string, string> DefaultWorkspaceRemover =
         GoalWorktrees.RemoveAcceptanceCohortWorkspace;
+    private static readonly AsyncLocal<Action<string, string>?> WorkspaceRemoverOverride = new();
+
+    internal static Action<string, string> WorkspaceRemover
+    {
+        get => WorkspaceRemoverOverride.Value ?? DefaultWorkspaceRemover;
+        set => WorkspaceRemoverOverride.Value = ReferenceEquals(value, DefaultWorkspaceRemover) ? null : value;
+    }
 
     internal AcceptanceCohortWorkspace(
         string executionDirectory,

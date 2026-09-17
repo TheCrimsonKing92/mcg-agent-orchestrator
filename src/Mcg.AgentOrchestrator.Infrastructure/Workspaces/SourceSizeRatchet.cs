@@ -116,13 +116,13 @@ internal static class SourceSizeRatchet
             // be transported from the dispatch record at the single process-start boundary that already
             // owns the dispatch parameters; selection, validation, and seeding remain in
             // ClaudeCredentialSource. 2682 is the measured size of that call site.
-            // Raised by one line for goal bb2d2d5a: the completion state carries the typed
-            // HumanWaitKind the worker's human-input directive declared, so the kind the planner
-            // raised survives to the recording boundary that decides whether an answer is
-            // prerequisite evidence. There is nothing to extract - it is a single named argument on
-            // the existing DispatchProcessCompletionState construction, and moving the construction
-            // itself would split the completion contract the runner owns.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2683),
+            // Goal bb2d2d5a added the typed HumanWaitKind, and goal be5e06b0 adds the typed
+            // EvidenceOwner, so both parts of the planner's evidence obligation survive to the
+            // recording boundary. Each increase is one named argument on the existing
+            // DispatchProcessCompletionState construction; moving that construction would split
+            // the completion contract the runner owns rather than extract independent behavior.
+            // 2684 is the measured post-change size of that contract-preserving handoff.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2684),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
