@@ -668,19 +668,6 @@ public static class FailedGoalRecoveryPolicy
         if (facts.VerifyingFindingObservation is { Kind: not FailedGoalFindingObservationKind.None } finding)
             return DecideFindingObservation(facts, finding, "structured-finding-routing");
 
-        var missing = facts.Tasks.FirstOrDefault(task =>
-            task.Status == WorkTaskStatus.Failed && task.OutcomeKind is null);
-        if (missing is not null)
-        {
-            return Decide(
-                facts,
-                missing,
-                FailedGoalRecoveryAction.Hold,
-                8,
-                "missing-current-failure-evidence",
-                $"Failure handling for task {Short(missing.TaskId)} is held because current attempt evidence is missing; re-observation is required.");
-        }
-
         return new FailedGoalRecoveryDecision(
             FailedGoalRecoveryAction.Escalate,
             new FailedGoalRecoveryIdentity(facts.GoalId, null, null, facts.ContextVersion),

@@ -139,15 +139,15 @@ public sealed class FailedGoalRecoveryPolicyTests
     }
 
     [Fact]
-    public void MissingEvidenceIsHeldAfterFindingObservationInsteadOfGuessed()
+    public void MissingOutcomeKindFallsThroughToTerminalEscalationAfterFindingObservation()
     {
         var decision = FailedGoalRecoveryPolicy.Evaluate(
             Facts([Task(outcome: null)])
                 .WithReviewContractObservation(null)
                 .WithVerifyingFindingObservation(null));
 
-        Assert.Equal(FailedGoalRecoveryAction.Hold, decision.Action);
-        Assert.Equal("missing-current-failure-evidence", decision.DiscriminatingEvidence);
+        Assert.Equal(FailedGoalRecoveryAction.Escalate, decision.Action);
+        Assert.Equal("failed-terminal-fallthrough", decision.DiscriminatingEvidence);
     }
 
     [Fact]

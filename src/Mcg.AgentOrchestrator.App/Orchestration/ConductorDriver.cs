@@ -1544,10 +1544,6 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, sliceBatchParentHold));
         }
 
-        // Empty stdout from a subscription worker means the CLI never produced a worker verdict. Treat
-        // it as provider/startup flake, retry on a dedicated budget, and only escalate after all bounded
-        // auto-recover cycles are spent. Any non-empty stdout resets the task counter in TaskSpec and is
-        // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
             return ExecuteFailedGoalRecovery(goal, goalPrefix, policy, state);
