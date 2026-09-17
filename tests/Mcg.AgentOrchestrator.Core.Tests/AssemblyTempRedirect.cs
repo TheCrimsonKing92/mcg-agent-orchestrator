@@ -7,6 +7,10 @@ using System.Runtime.CompilerServices;
 internal static class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
+    internal const string FixtureParentEnvironmentVariable = "MCG_CORE_TEST_TEMP_FIXTURE_PARENT";
+    internal const string ChildHandshakeEnvironmentVariable = "MCG_CORE_TEST_TEMP_CHILD_HANDSHAKE";
+    internal const string ChildReleaseEnvironmentVariable = "MCG_CORE_TEST_TEMP_CHILD_RELEASE";
+    private static CoreOwnedTempRoot? processTempRoot;
 
     [ModuleInitializer]
     internal static void Install()
@@ -33,8 +37,29 @@ internal static class AssemblyTempRedirect
             return;
         }
 
+        var ownedRoot = AssemblyTempRootOwnership.TryAcquireOwnedRoot(selection.SelectedRoot);
+        if (ownedRoot is null)
+        {
+            Console.Error.WriteLine(
+                $"assembly-temp-redirect lease=unavailable path=\"{AssemblyTempRootOwnership.RootLeasePath(selection.SelectedRoot)}\"");
+            return;
+        }
+
+        processTempRoot = ownedRoot;
         Environment.SetEnvironmentVariable("TMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
         Environment.SetEnvironmentVariable("TEMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
+
+        AssemblyTempRootOwnership.ReapOrphanedRoots(selection.SelectedRoot, Console.Error.WriteLine);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            var outcome = Interlocked.Exchange(ref processTempRoot, null)?.Release();
+            if (outcome?.Status == CoreTempRootDeleteStatus.Failed)
+            {
+                Environment.ExitCode = 1;
+            }
+        };
+
+        RunChildControlIfRequested(selection.SelectedRoot);
     }
 
     internal static TempRootSelectionResult SelectWritableRoot(
@@ -173,8 +198,17 @@ internal static class AssemblyTempRedirect
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null)
     };
 
-    private static IEnumerable<TempRootCandidate> EnumerateCandidateRoots()
+    internal static IEnumerable<TempRootCandidate> EnumerateCandidateRoots()
     {
+        var fixtureParent = Environment.GetEnvironmentVariable(FixtureParentEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(fixtureParent))
+        {
+            yield return new TempRootCandidate(
+                AssemblyTempRootOwnership.BuildProcessTempRoot(fixtureParent, Environment.ProcessId),
+                RequiresLowLabel: false);
+            yield break;
+        }
+
         foreach (var localAppData in new[]
                  {
                      Environment.GetEnvironmentVariable("LOCALAPPDATA"),
@@ -184,14 +218,58 @@ internal static class AssemblyTempRedirect
             if (!string.IsNullOrEmpty(localAppData))
             {
                 yield return new TempRootCandidate(
-                    Path.Combine(localAppData, "Temp", "Low", "mcg-tests"),
+                    AssemblyTempRootOwnership.BuildProcessTempRoot(
+                        Path.Combine(localAppData, "Temp", "Low", "mcg-tests"),
+                        Environment.ProcessId),
                     RequiresLowLabel: true);
             }
         }
 
         yield return new TempRootCandidate(
-            Path.Combine(AppContext.BaseDirectory, ".test-tmp"),
+            AssemblyTempRootOwnership.BuildProcessTempRoot(
+                Path.Combine(AppContext.BaseDirectory, ".test-tmp"),
+                Environment.ProcessId),
             RequiresLowLabel: false);
+    }
+
+    private static void RunChildControlIfRequested(string selectedRoot)
+    {
+        var handshakePath = Environment.GetEnvironmentVariable(ChildHandshakeEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(handshakePath) ||
+            string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(FixtureParentEnvironmentVariable)))
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(handshakePath)!);
+            File.WriteAllText(handshakePath, selectedRoot);
+            var releasePath = Environment.GetEnvironmentVariable(ChildReleaseEnvironmentVariable);
+            if (string.IsNullOrWhiteSpace(releasePath))
+            {
+                return;
+            }
+
+            var releaseDirectory = Path.GetDirectoryName(releasePath)!;
+            Directory.CreateDirectory(releaseDirectory);
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!File.Exists(releasePath) && DateTime.UtcNow < deadline)
+            {
+                using var signal = new ManualResetEvent(initialState: false);
+                signal.WaitOne(TimeSpan.FromMilliseconds(50));
+            }
+
+            if (!File.Exists(releasePath))
+            {
+                Environment.Exit(2);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"assembly-temp-child-control status=failed exceptionType={ex.GetType().Name}");
+            Environment.Exit(2);
+        }
     }
 }
 
