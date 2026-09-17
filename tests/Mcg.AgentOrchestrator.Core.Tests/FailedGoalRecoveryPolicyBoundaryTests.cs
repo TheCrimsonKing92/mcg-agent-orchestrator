@@ -19,7 +19,11 @@ public sealed class FailedGoalRecoveryPolicyBoundaryTests
         var evaluate = typeof(FailedGoalRecoveryPolicy).GetMethod(nameof(FailedGoalRecoveryPolicy.Evaluate))!;
 
         Assert.DoesNotContain(evaluate.GetParameters(), parameter => typeof(Delegate).IsAssignableFrom(parameter.ParameterType));
-        var members = ReadReferencedMembers(evaluate);
+        var members = ReadReferencedMembersTransitive(evaluate);
+        Assert.DoesNotContain(
+            members.OfType<MethodBase>(),
+            method => method.DeclaringType?.Assembly == evaluate.DeclaringType!.Assembly &&
+                method.GetParameters().Any(parameter => typeof(Delegate).IsAssignableFrom(parameter.ParameterType)));
         Assert.DoesNotContain(members, member => IsForbidden(member.DeclaringType));
     }
 
@@ -33,7 +37,29 @@ public sealed class FailedGoalRecoveryPolicyBoundaryTests
             name.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal);
     }
 
-    private static IReadOnlyList<MemberInfo> ReadReferencedMembers(MethodInfo method)
+    private static IReadOnlyList<MemberInfo> ReadReferencedMembersTransitive(MethodInfo root)
+    {
+        var assembly = root.DeclaringType!.Assembly;
+        var pending = new Queue<MethodBase>([root]);
+        var visited = new HashSet<MethodBase>();
+        var members = new List<MemberInfo>();
+        while (pending.TryDequeue(out var method))
+        {
+            if (!visited.Add(method))
+                continue;
+
+            foreach (var member in ReadReferencedMembers(method))
+            {
+                members.Add(member);
+                if (member is MethodBase referenced && referenced.DeclaringType?.Assembly == assembly)
+                    pending.Enqueue(referenced);
+            }
+        }
+
+        return members;
+    }
+
+    private static IReadOnlyList<MemberInfo> ReadReferencedMembers(MethodBase method)
     {
         var body = method.GetMethodBody()?.GetILAsByteArray() ?? [];
         var members = new List<MemberInfo>();
@@ -50,11 +76,13 @@ public sealed class FailedGoalRecoveryPolicyBoundaryTests
                     members.Add(method.Module.ResolveMember(
                         token,
                         method.DeclaringType?.GetGenericArguments(),
-                        method.GetGenericArguments()));
+                        method is MethodInfo methodInfo ? methodInfo.GetGenericArguments() : Type.EmptyTypes));
                 }
-                catch (ArgumentException)
+                catch (ArgumentException ex)
                 {
-                    // Invalid metadata for a generic context is not an effect boundary.
+                    throw new InvalidOperationException(
+                        $"Could not resolve metadata token {token} while walking {method.DeclaringType?.FullName}.{method.Name}.",
+                        ex);
                 }
             }
             index += OperandSize(opCode, body, index);

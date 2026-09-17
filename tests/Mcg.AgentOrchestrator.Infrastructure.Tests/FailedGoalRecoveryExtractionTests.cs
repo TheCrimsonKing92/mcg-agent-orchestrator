@@ -21,6 +21,12 @@ public sealed class FailedGoalRecoveryExtractionTests
 
         Assert.Contains("ExecuteFailedGoalRecovery", driver, StringComparison.Ordinal);
         Assert.Contains("FailedGoalRecoveryPolicy.Evaluate", interpreter, StringComparison.Ordinal);
+        Assert.Contains("FailedGoalRecoveryAction.ObserveReviewContract", interpreter, StringComparison.Ordinal);
+        Assert.Contains("FailedGoalRecoveryAction.ObserveVerifyingFinding", interpreter, StringComparison.Ordinal);
+        Assert.Contains("WithReviewContractObservation", interpreter, StringComparison.Ordinal);
+        Assert.Contains("WithVerifyingFindingObservation", interpreter, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryBuildReviewContractRepairRetry", interpreter, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryBuildVerifyingFindingAutoRetry", interpreter, StringComparison.Ordinal);
         Assert.DoesNotContain("var runningSibling = goal.Tasks.FirstOrDefault", driver, StringComparison.Ordinal);
     }
 }

@@ -103,7 +103,10 @@ public sealed class FailedGoalRecoveryPolicyTests
     [Fact]
     public void MissingEvidenceIsHeldAfterFindingObservationInsteadOfGuessed()
     {
-        var decision = FailedGoalRecoveryPolicy.Evaluate(Facts([Task(outcome: null)]).WithFindingCandidate(null));
+        var decision = FailedGoalRecoveryPolicy.Evaluate(
+            Facts([Task(outcome: null)])
+                .WithReviewContractObservation(null)
+                .WithVerifyingFindingObservation(null));
 
         Assert.Equal(FailedGoalRecoveryAction.Hold, decision.Action);
         Assert.Equal("missing-current-failure-evidence", decision.DiscriminatingEvidence);
@@ -119,26 +122,66 @@ public sealed class FailedGoalRecoveryPolicyTests
             cause: RetryCause.ProviderInterruption);
 
         var first = FailedGoalRecoveryPolicy.Evaluate(Facts([task]));
-        Assert.Equal(FailedGoalRecoveryAction.ObserveFindingDecision, first.Action);
-        AssertDecision(Facts([task]).WithFindingCandidate(null), FailedGoalRecoveryAction.Escalate, 9);
+        Assert.Equal(FailedGoalRecoveryAction.ObserveReviewContract, first.Action);
+        var second = FailedGoalRecoveryPolicy.Evaluate(Facts([task]).WithReviewContractObservation(null));
+        Assert.Equal(FailedGoalRecoveryAction.ObserveVerifyingFinding, second.Action);
+        AssertDecision(
+            Facts([task])
+                .WithReviewContractObservation(null)
+                .WithVerifyingFindingObservation(null),
+            FailedGoalRecoveryAction.Escalate,
+            9);
     }
 
     [Fact]
     public void OperatorDispositionAndFindingAttributionRemainTyped()
     {
-        var candidate = new FailedGoalFindingCandidate(
-            FailedGoalFindingAction.Escalate,
+        var observation = new FailedGoalFindingObservation(
+            FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
             new TaskId("reviewer-task"),
             "verification:42:none",
             "operator disposition required",
             Attribution: "operator-owned-evidence");
 
-        var decision = FailedGoalRecoveryPolicy.Evaluate(Facts([Task()]).WithFindingCandidate(candidate));
+        var decision = FailedGoalRecoveryPolicy.Evaluate(
+            Facts([Task()])
+                .WithReviewContractObservation(null)
+                .WithVerifyingFindingObservation(observation));
 
         Assert.Equal(FailedGoalRecoveryAction.Escalate, decision.Action);
         Assert.Equal(8, decision.DiscriminatingRung);
         Assert.Equal("operator-owned-evidence", decision.DiscriminatingEvidence);
         Assert.Equal(new TaskId("reviewer-task"), decision.Identity.TaskId);
+    }
+
+    [Fact]
+    public void ReviewContractObservationPrecedesVerifyingFindingAndCounterfactualSelectsVerifyingRoute()
+    {
+        var contract = FailedGoalFindingObservation.Observed(
+            FailedGoalFindingObservationKind.ReviewRetryCapReached,
+            "contract repair requires operator evidence");
+        var verifying = FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.FindingRouteObserved,
+            new TaskId("developer-task"),
+            "verification:84:none",
+            "retry routed blocking finding",
+            warningMessage: null,
+            observedCause: RetryCause.NewSourceFinding);
+        var facts = Facts([Task()])
+            .WithReviewContractObservation(contract)
+            .WithVerifyingFindingObservation(verifying);
+
+        var contractDecision = AssertDecision(facts, FailedGoalRecoveryAction.Escalate, 8);
+        Assert.Contains("contract repair", contractDecision.Reason, StringComparison.Ordinal);
+
+        var verifyingDecision = AssertDecision(
+            Facts([Task()])
+                .WithReviewContractObservation(null)
+                .WithVerifyingFindingObservation(verifying),
+            FailedGoalRecoveryAction.FindingRetry,
+            8);
+        Assert.Equal(new TaskId("developer-task"), verifyingDecision.Identity.TaskId);
+        Assert.Equal(RetryCause.NewSourceFinding, verifyingDecision.RetryCause);
     }
 
     [Fact]

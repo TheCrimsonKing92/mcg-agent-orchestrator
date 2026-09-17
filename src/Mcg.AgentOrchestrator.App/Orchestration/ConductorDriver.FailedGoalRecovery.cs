@@ -15,35 +15,59 @@ internal sealed partial class ConductorDriver
         var facts = BuildFailedGoalRecoveryFacts(goal, policy, state);
         var decision = FailedGoalRecoveryPolicy.Evaluate(facts);
         IReadOnlyList<FailedGoalPendingNote> pendingNotes = [];
+        FailedGoalFindingObservation? reviewContractObservation = null;
+        FailedGoalFindingObservation? verifyingFindingObservation = null;
+        var reviewContractObservationCompleted = false;
+        var verifyingFindingObservationCompleted = false;
 
-        if (decision.Action == FailedGoalRecoveryAction.ObserveFindingDecision)
+        while (decision.Action is FailedGoalRecoveryAction.ObserveReviewContract or
+               FailedGoalRecoveryAction.ObserveVerifyingFinding)
         {
-            var landingFileScopes = _getLandingFileScopes(goal);
-            ObservedFindingRecoveryCandidate findingDecision;
-            var hasFindingDecision = TryBuildReviewContractRepairRetry(goal, out findingDecision) ||
-                TryBuildVerifyingFindingAutoRetry(goal, policy, landingFileScopes, out findingDecision);
-            if (hasFindingDecision)
+            FailedGoalFindingObservation observation;
+            bool hasObservation;
+            if (decision.Action == FailedGoalRecoveryAction.ObserveReviewContract)
             {
-                pendingNotes = findingDecision.PendingNotes;
-                goal = GetCurrentGoal(goal);
-                state = GoalLifecycle.ResolveState(goal, GetFacts(goal));
-                if (state != GoalLifecycleState.Failed)
-                {
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            state,
-                            "Failed-goal observation changed lifecycle authority; recovery will be re-observed on the next tick (stale-recovery-facts)."));
-                }
-                facts = BuildFailedGoalRecoveryFacts(goal, policy, state)
-                    .WithFindingCandidate(ToFindingCandidate(findingDecision));
+                if (reviewContractObservationCompleted)
+                    throw new InvalidOperationException("Review-contract observation repeated after it was fulfilled.");
+                hasObservation = TryObserveReviewContractRecovery(goal, out observation);
+                reviewContractObservationCompleted = true;
+                reviewContractObservation = hasObservation ? observation : null;
             }
             else
             {
-                facts = facts.WithFindingCandidate(null);
+                if (verifyingFindingObservationCompleted)
+                    throw new InvalidOperationException("Verifying-finding observation repeated after it was fulfilled.");
+                var landingFileScopes = _getLandingFileScopes(goal);
+                hasObservation = TryObserveVerifyingFindingRecovery(
+                    goal,
+                    policy,
+                    landingFileScopes,
+                    out observation);
+                verifyingFindingObservationCompleted = true;
+                verifyingFindingObservation = hasObservation ? observation : null;
             }
+
+            if (hasObservation && !observation.PendingNotes.IsDefaultOrEmpty)
+                pendingNotes = pendingNotes.Concat(observation.PendingNotes).ToArray();
+
+            goal = GetCurrentGoal(goal);
+            state = GoalLifecycle.ResolveState(goal, GetFacts(goal));
+            if (state != GoalLifecycleState.Failed)
+            {
+                return MakeResult(
+                    goal.Id.Value,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        state,
+                        "Failed-goal observation changed lifecycle authority; recovery will be re-observed on the next tick (stale-recovery-facts)."));
+            }
+
+            facts = BuildFailedGoalRecoveryFacts(goal, policy, state);
+            if (reviewContractObservationCompleted)
+                facts = facts.WithReviewContractObservation(reviewContractObservation);
+            if (verifyingFindingObservationCompleted)
+                facts = facts.WithVerifyingFindingObservation(verifyingFindingObservation);
             decision = FailedGoalRecoveryPolicy.Evaluate(facts);
         }
 
@@ -74,9 +98,6 @@ internal sealed partial class ConductorDriver
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return Escalate(goal, goalPrefix, policy, state, decision.Reason);
         }
-
-        if (decision.Action == FailedGoalRecoveryAction.ObserveFindingDecision)
-            throw new InvalidOperationException("Failed-goal finding observation repeated after it was fulfilled.");
 
         if (decision.Backoff > TimeSpan.Zero)
             _emptyOutputBackoffDelay(decision.Backoff);
@@ -289,23 +310,6 @@ internal sealed partial class ConductorDriver
         return false;
     }
 
-    private static FailedGoalFindingCandidate ToFindingCandidate(ObservedFindingRecoveryCandidate decision)
-    {
-        var action = decision.ShouldHold
-            ? FailedGoalFindingAction.Hold
-            : decision.ShouldEscalate
-                ? FailedGoalFindingAction.Escalate
-                : FailedGoalFindingAction.Retry;
-        return new FailedGoalFindingCandidate(
-            action,
-            decision.TargetTask?.Id,
-            decision.TargetTask is null ? null : BuildFailedGoalAttemptIdentity(decision.TargetTask),
-            decision.Message,
-            decision.RoundKind,
-            decision.Cause,
-            decision.WarningMessage);
-    }
-
     private void ApplyPendingFailedGoalNotes(Goal goal, IReadOnlyList<FailedGoalPendingNote> notes)
     {
         foreach (var note in notes)
@@ -346,5 +350,4 @@ internal sealed partial class ConductorDriver
 
     private static string ShortTaskId(TaskId taskId) => taskId.Value[..Math.Min(8, taskId.Value.Length)];
 
-    private sealed record FailedGoalPendingNote(TaskId TaskId, string Message);
 }

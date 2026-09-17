@@ -10,7 +10,8 @@ public enum FailedGoalRecoveryAction
     RetryStale,
     CriterionRetry,
     FindingRetry,
-    ObserveFindingDecision,
+    ObserveReviewContract,
+    ObserveVerifyingFinding,
     Escalate
 }
 
@@ -21,11 +22,25 @@ public enum FailedGoalStaleRecoveryDisposition
     Escalate
 }
 
-public enum FailedGoalFindingAction
+public enum FailedGoalFindingObservationKind
 {
-    Hold,
-    Retry,
-    Escalate
+    None,
+    ReviewContractLedgerUnavailable,
+    ReviewRetryCapReached,
+    ReviewTouchProofUnavailable,
+    ReviewContractRepairLimitReached,
+    ReviewContractRepairEnvelopeAvailable,
+    FindingOperatorEvidenceRequired,
+    FindingRouteUnavailable,
+    FindingRetryCapReached,
+    FindingConvergenceViolation,
+    FindingEvidencePending,
+    FindingEvidenceReceiptPersistenceFailed,
+    FindingActionableRedRouteUnavailable,
+    FindingActionableRed,
+    FindingEvidenceDeliveryRecorded,
+    FindingResultMissing,
+    FindingRouteObserved
 }
 
 public sealed record FailedGoalRecoveryIdentity(
@@ -55,15 +70,49 @@ public sealed record FailedGoalRecoveryTaskFacts(
     string? Command,
     TimeSpan RetryBackoff);
 
-public sealed record FailedGoalFindingCandidate(
-    FailedGoalFindingAction Action,
+public sealed record FailedGoalPendingNote(TaskId TaskId, string Message);
+
+public sealed record FailedGoalFindingObservation(
+    FailedGoalFindingObservationKind Kind,
     TaskId? TargetTaskId,
     string? AttemptIdentity,
-    string Reason,
+    string Evidence,
     RetryRoundKind? RoundKind = null,
-    RetryCause? Cause = null,
+    RetryCause? ObservedCause = null,
     string? WarningMessage = null,
-    string Attribution = "structured-finding-routing");
+    string Attribution = "structured-finding-routing",
+    ImmutableArray<FailedGoalPendingNote> PendingNotes = default)
+{
+    public static FailedGoalFindingObservation None { get; } = new(
+        FailedGoalFindingObservationKind.None,
+        null,
+        null,
+        string.Empty);
+
+    public static FailedGoalFindingObservation Observed(
+        FailedGoalFindingObservationKind kind,
+        string evidence) => new(
+        kind,
+        null,
+        null,
+        evidence);
+
+    public static FailedGoalFindingObservation Routed(
+        FailedGoalFindingObservationKind kind,
+        TaskId targetTaskId,
+        string attemptIdentity,
+        string evidence,
+        string? warningMessage,
+        RetryRoundKind? roundKind = null,
+        RetryCause? observedCause = null) => new(
+            kind,
+            targetTaskId,
+            attemptIdentity,
+            evidence,
+            roundKind,
+            observedCause,
+            warningMessage);
+}
 
 public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts>
 {
@@ -76,8 +125,10 @@ public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts
         string contextVersion,
         IEnumerable<FailedGoalRecoveryTaskFacts> tasks,
         string terminalEscalationReason,
-        bool findingObservationCompleted = false,
-        FailedGoalFindingCandidate? findingCandidate = null,
+        bool reviewContractObservationCompleted = false,
+        FailedGoalFindingObservation? reviewContractObservation = null,
+        bool verifyingFindingObservationCompleted = false,
+        FailedGoalFindingObservation? verifyingFindingObservation = null,
         int transientAttemptsPerCycle = 1,
         int transientRecoveryCycles = 1)
     {
@@ -89,8 +140,10 @@ public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts
         ContextVersion = contextVersion;
         Tasks = tasks.ToImmutableArray();
         TerminalEscalationReason = terminalEscalationReason;
-        FindingObservationCompleted = findingObservationCompleted;
-        FindingCandidate = findingCandidate;
+        ReviewContractObservationCompleted = reviewContractObservationCompleted;
+        ReviewContractObservation = reviewContractObservation;
+        VerifyingFindingObservationCompleted = verifyingFindingObservationCompleted;
+        VerifyingFindingObservation = verifyingFindingObservation;
         TransientAttemptsPerCycle = Math.Max(1, transientAttemptsPerCycle);
         TransientRecoveryCycles = Math.Max(1, transientRecoveryCycles);
     }
@@ -103,12 +156,14 @@ public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts
     public string ContextVersion { get; }
     public ImmutableArray<FailedGoalRecoveryTaskFacts> Tasks { get; }
     public string TerminalEscalationReason { get; }
-    public bool FindingObservationCompleted { get; }
-    public FailedGoalFindingCandidate? FindingCandidate { get; }
+    public bool ReviewContractObservationCompleted { get; }
+    public FailedGoalFindingObservation? ReviewContractObservation { get; }
+    public bool VerifyingFindingObservationCompleted { get; }
+    public FailedGoalFindingObservation? VerifyingFindingObservation { get; }
     public int TransientAttemptsPerCycle { get; }
     public int TransientRecoveryCycles { get; }
 
-    public FailedGoalRecoveryFacts WithFindingCandidate(FailedGoalFindingCandidate? candidate) =>
+    public FailedGoalRecoveryFacts WithReviewContractObservation(FailedGoalFindingObservation? observation) =>
         new(
             GoalId,
             State,
@@ -118,8 +173,27 @@ public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts
             ContextVersion,
             Tasks,
             TerminalEscalationReason,
-            findingObservationCompleted: true,
-            candidate,
+            reviewContractObservationCompleted: true,
+            observation,
+            VerifyingFindingObservationCompleted,
+            VerifyingFindingObservation,
+            TransientAttemptsPerCycle,
+            TransientRecoveryCycles);
+
+    public FailedGoalRecoveryFacts WithVerifyingFindingObservation(FailedGoalFindingObservation? observation) =>
+        new(
+            GoalId,
+            State,
+            AutomaticAcceptanceRetryCount,
+            MaxCriterionRetries,
+            MaxTransientAttempts,
+            ContextVersion,
+            Tasks,
+            TerminalEscalationReason,
+            ReviewContractObservationCompleted,
+            ReviewContractObservation,
+            verifyingFindingObservationCompleted: true,
+            observation,
             TransientAttemptsPerCycle,
             TransientRecoveryCycles);
 
@@ -132,10 +206,12 @@ public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts
         MaxTransientAttempts == other.MaxTransientAttempts &&
         string.Equals(ContextVersion, other.ContextVersion, StringComparison.Ordinal) &&
         string.Equals(TerminalEscalationReason, other.TerminalEscalationReason, StringComparison.Ordinal) &&
-        FindingObservationCompleted == other.FindingObservationCompleted &&
+        ReviewContractObservationCompleted == other.ReviewContractObservationCompleted &&
+        VerifyingFindingObservationCompleted == other.VerifyingFindingObservationCompleted &&
         TransientAttemptsPerCycle == other.TransientAttemptsPerCycle &&
         TransientRecoveryCycles == other.TransientRecoveryCycles &&
-        Equals(FindingCandidate, other.FindingCandidate) &&
+        Equals(ReviewContractObservation, other.ReviewContractObservation) &&
+        Equals(VerifyingFindingObservation, other.VerifyingFindingObservation) &&
         Tasks.SequenceEqual(other.Tasks);
 
     public override bool Equals(object? obj) => Equals(obj as FailedGoalRecoveryFacts);
@@ -150,10 +226,12 @@ public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts
         hash.Add(MaxTransientAttempts);
         hash.Add(ContextVersion, StringComparer.Ordinal);
         hash.Add(TerminalEscalationReason, StringComparer.Ordinal);
-        hash.Add(FindingObservationCompleted);
+        hash.Add(ReviewContractObservationCompleted);
+        hash.Add(VerifyingFindingObservationCompleted);
         hash.Add(TransientAttemptsPerCycle);
         hash.Add(TransientRecoveryCycles);
-        hash.Add(FindingCandidate);
+        hash.Add(ReviewContractObservation);
+        hash.Add(VerifyingFindingObservation);
         foreach (var task in Tasks)
             hash.Add(task);
         return hash.ToHashCode();
@@ -386,37 +464,31 @@ public static class FailedGoalRecoveryPolicy
                 backoff: flake.RetryBackoff);
         }
 
-        if (!facts.FindingObservationCompleted)
+        if (!facts.ReviewContractObservationCompleted)
         {
             return new FailedGoalRecoveryDecision(
-                FailedGoalRecoveryAction.ObserveFindingDecision,
+                FailedGoalRecoveryAction.ObserveReviewContract,
                 new FailedGoalRecoveryIdentity(facts.GoalId, null, null, facts.ContextVersion),
                 8,
-                "structured-finding-observation-required",
+                "review-contract-observation-required",
+                "Observe current review-contract evidence before selecting finding recovery.");
+        }
+
+        if (facts.ReviewContractObservation is { Kind: not FailedGoalFindingObservationKind.None } contract)
+            return DecideFindingObservation(facts, contract, "review-contract-routing");
+
+        if (!facts.VerifyingFindingObservationCompleted)
+        {
+            return new FailedGoalRecoveryDecision(
+                FailedGoalRecoveryAction.ObserveVerifyingFinding,
+                new FailedGoalRecoveryIdentity(facts.GoalId, null, null, facts.ContextVersion),
+                8,
+                "verifying-finding-observation-required",
                 "Observe current structured finding and operator-disposition evidence before selecting recovery.");
         }
 
-        if (facts.FindingCandidate is { } finding)
-        {
-            var action = finding.Action switch
-            {
-                FailedGoalFindingAction.Hold => FailedGoalRecoveryAction.Hold,
-                FailedGoalFindingAction.Retry => FailedGoalRecoveryAction.FindingRetry,
-                FailedGoalFindingAction.Escalate => FailedGoalRecoveryAction.Escalate,
-                _ => throw new InvalidOperationException($"Unknown finding action {finding.Action}.")
-            };
-            if (action == FailedGoalRecoveryAction.FindingRetry && finding.Cause is null)
-                throw new InvalidOperationException("A finding retry candidate must carry a typed retry cause.");
-            return new FailedGoalRecoveryDecision(
-                action,
-                new FailedGoalRecoveryIdentity(facts.GoalId, finding.TargetTaskId, finding.AttemptIdentity, facts.ContextVersion),
-                8,
-                finding.Attribution,
-                finding.Reason,
-                finding.Cause,
-                finding.RoundKind,
-                WarningMessage: finding.WarningMessage);
-        }
+        if (facts.VerifyingFindingObservation is { Kind: not FailedGoalFindingObservationKind.None } finding)
+            return DecideFindingObservation(facts, finding, "structured-finding-routing");
 
         var missing = facts.Tasks.FirstOrDefault(task =>
             task.Status == WorkTaskStatus.Failed && task.OutcomeKind is null);
@@ -462,6 +534,64 @@ public static class FailedGoalRecoveryPolicy
             backoff,
             feedbackCommand,
             feedbackEvidence);
+
+    private static FailedGoalRecoveryDecision DecideFindingObservation(
+        FailedGoalRecoveryFacts facts,
+        FailedGoalFindingObservation observation,
+        string defaultAttribution)
+    {
+        var (action, cause, roundKind) = observation.Kind switch
+        {
+            FailedGoalFindingObservationKind.FindingEvidencePending =>
+                (FailedGoalRecoveryAction.Hold, (RetryCause?)null, (RetryRoundKind?)null),
+            FailedGoalFindingObservationKind.ReviewContractRepairEnvelopeAvailable =>
+                (FailedGoalRecoveryAction.FindingRetry, RetryCause.CriterionEvidenceOwnerMismatch, RetryRoundKind.Mechanical),
+            FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded =>
+                (FailedGoalRecoveryAction.FindingRetry, RetryCause.CriterionEvidenceOwnerMismatch, RetryRoundKind.Mechanical),
+            FailedGoalFindingObservationKind.FindingResultMissing =>
+                (FailedGoalRecoveryAction.FindingRetry, RetryCause.EnvironmentApparatusFailure, RetryRoundKind.Mechanical),
+            FailedGoalFindingObservationKind.FindingActionableRed =>
+                (FailedGoalRecoveryAction.FindingRetry, RetryCause.NewSourceFinding, (RetryRoundKind?)null),
+            FailedGoalFindingObservationKind.FindingRouteObserved =>
+                (FailedGoalRecoveryAction.FindingRetry, observation.ObservedCause, observation.RoundKind),
+            FailedGoalFindingObservationKind.ReviewContractLedgerUnavailable or
+            FailedGoalFindingObservationKind.ReviewRetryCapReached or
+            FailedGoalFindingObservationKind.ReviewTouchProofUnavailable or
+            FailedGoalFindingObservationKind.ReviewContractRepairLimitReached or
+            FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired or
+            FailedGoalFindingObservationKind.FindingRouteUnavailable or
+            FailedGoalFindingObservationKind.FindingRetryCapReached or
+            FailedGoalFindingObservationKind.FindingConvergenceViolation or
+            FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed or
+            FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable =>
+                (FailedGoalRecoveryAction.Escalate, (RetryCause?)null, (RetryRoundKind?)null),
+            FailedGoalFindingObservationKind.None => throw new InvalidOperationException(
+                "An empty finding observation cannot select a recovery action."),
+            _ => throw new InvalidOperationException($"Unknown finding observation {observation.Kind}.")
+        };
+        if (action == FailedGoalRecoveryAction.FindingRetry &&
+            (observation.TargetTaskId is null ||
+             string.IsNullOrWhiteSpace(observation.AttemptIdentity) ||
+             cause is null))
+        {
+            throw new InvalidOperationException(
+                "A finding retry observation must carry target attempt identity and a typed retry cause.");
+        }
+
+        return new FailedGoalRecoveryDecision(
+            action,
+            new FailedGoalRecoveryIdentity(
+                facts.GoalId,
+                observation.TargetTaskId,
+                observation.AttemptIdentity,
+                facts.ContextVersion),
+            8,
+            string.IsNullOrWhiteSpace(observation.Attribution) ? defaultAttribution : observation.Attribution,
+            observation.Evidence,
+            cause,
+            roundKind,
+            WarningMessage: observation.WarningMessage);
+    }
 
     private static string Short(TaskId taskId) => taskId.Value[..Math.Min(8, taskId.Value.Length)];
 }

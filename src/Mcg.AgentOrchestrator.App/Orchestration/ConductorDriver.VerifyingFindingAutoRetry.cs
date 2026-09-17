@@ -9,9 +9,9 @@ internal sealed partial class ConductorDriver
         TaskSpec triggeringTask,
         string blockersText,
         int round,
-        out ObservedFindingRecoveryCandidate decision)
+        out FailedGoalFindingObservation observation)
     {
-        decision = ObservedFindingRecoveryCandidate.None;
+        observation = FailedGoalFindingObservation.None;
         if (UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(triggeringTask, blockersText) ||
             triggeringTask.RequiredRole != AgentRole.Reviewer ||
             triggeringTask.LastVerification is not { MergedReviewFindings: null } latestVerification ||
@@ -21,14 +21,14 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        decision = ObservedFindingRecoveryCandidate.Retry(
-            triggeringTask,
+        observation = FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.FindingResultMissing,
+            triggeringTask.Id,
+            BuildFailedGoalAttemptIdentity(triggeringTask),
             $"auto-review-retry round {round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} " +
             "reported needs-work, but its structured finding result was missing or unparseable and no current open blocking finding exists. " +
             "Re-run the verifying role against the current Developer output; do not reopen the Developer from superseded finding history.",
-            null,
-            RetryRoundKind.Mechanical,
-            RetryCause.EnvironmentApparatusFailure);
+            null);
         return true;
     }
 }
