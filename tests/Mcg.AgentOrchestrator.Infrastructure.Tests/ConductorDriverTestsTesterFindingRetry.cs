@@ -9,12 +9,46 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsTesterFindingRetry
 {
-    [Xunit.Theory]
+    private const string CandidateSha = "abc1234";
+    private const string OldCandidateSha = "0ldc0de";
+
+    [Xunit.Theory(DisplayName = "Developer_owned_finding_without_a_request_is_a_current_writable_defect")]
     [Xunit.InlineData(FindingCategory.Correctness)]
     [Xunit.InlineData(FindingCategory.TestCoverage)]
     [Xunit.InlineData(FindingCategory.SpecCompliance)]
     [Xunit.InlineData(FindingCategory.CodeQuality)]
-    public void DeveloperOwnedTesterFindingPreemptsItsEvidenceRequest(FindingCategory category)
+    public void DeveloperOwnedFindingWithoutARequestIsACurrentWritableDefect(FindingCategory category)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        RecordTesterFinding(kernel, goal, tester, category, includeEvidenceRequest: false);
+
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, harness.FocusedRuns);
+        Assert.Equal(developer.Id, harness.RetriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        // The writable decision carries the same identities as the two evidence-bound branches: the
+        // Developer is told which finding it owns, and nothing claims a run produced this routing.
+        Assert.Contains("stable_id: T-FINDING", harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.Contains("location: src/Test.cs::Test.T-FINDING", harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain("ACTIONABLE_CANDIDATE_RED", harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            goal.Timeline,
+            evt => evt.Message.Contains("disposition=pending-execution-gate", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory(DisplayName = "Developer_owned_finding_awaiting_its_request_runs_that_evidence_before_Developer")]
+    [Xunit.InlineData(FindingCategory.Correctness)]
+    [Xunit.InlineData(FindingCategory.TestCoverage)]
+    [Xunit.InlineData(FindingCategory.SpecCompliance)]
+    [Xunit.InlineData(FindingCategory.CodeQuality)]
+    public void DeveloperOwnedFindingAwaitingItsRequestRunsThatEvidenceBeforeDeveloper(FindingCategory category)
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -22,28 +56,133 @@ public sealed class ConductorDriverTestsTesterFindingRetry
         PassVerification(kernel, goal, developer, hasCommittedChanges: true);
         RecordTesterFinding(kernel, goal, tester, category, includeEvidenceRequest: true);
 
-        TaskId? retriedTaskId = null;
-        var focusedRuns = 0;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            runFocusedEvidence: (_, request) =>
-            {
-                focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, "abc1234");
-            },
-            dispatchAndStart: _ => DispatchStartOutcome.Started(),
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-            {
-                retriedTaskId = taskId;
-                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
-            });
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(0, focusedRuns);
-        Assert.Equal(developer.Id, retriedTaskId);
-        Assert.NotEqual(tester.Id, retriedTaskId);
+        // The scheduled execution is the next proof-producing action; the Developer is not paid for
+        // a round on a candidate that nobody has measured yet.
+        Assert.Equal(1, harness.FocusedRuns);
+        Assert.Equal(tester.Id, harness.RetriedTaskId);
+        Assert.NotEqual(developer.Id, harness.RetriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == tester.Id &&
+            evt.Message.Contains("disposition=pending-execution-gate", StringComparison.Ordinal) &&
+            evt.Message.Contains("finding_ids=T-FINDING", StringComparison.Ordinal) &&
+            evt.Message.Contains($"candidate_sha={CandidateSha}", StringComparison.Ordinal) &&
+            evt.Message.Contains($"deferred_developer_task_id={developer.Id}", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "One_writable_finding_in_a_mixed_round_keeps_Developer_precedence")]
+    public void OneWritableFindingInAMixedRoundKeepsDeveloperPrecedence()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        RecordTesterFindings(
+            kernel,
+            goal,
+            tester,
+            TesterFinding("T-FINDING", FindingCategory.Correctness, includeEvidenceRequest: true),
+            TesterFinding("T-WRITABLE", FindingCategory.Correctness, includeEvidenceRequest: false));
+
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, harness.FocusedRuns);
+        Assert.Equal(developer.Id, harness.RetriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "Receipt_already_taken_at_this_candidate_routes_the_blocker_to_Developer")]
+    public void ReceiptAlreadyTakenAtThisCandidateRoutesTheBlockerToDeveloper()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+        AttachFindingEvidenceReceipt(kernel, goal, tester, "seeded-current", CandidateSha);
+
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        // One focused run per candidate per request: the finding survived its own evidence, so it is
+        // now a demonstrated current blocker and the same-candidate request is not repeated.
+        Assert.Equal(0, harness.FocusedRuns);
+        Assert.Equal(developer.Id, harness.RetriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "Receipt_from_an_older_candidate_cannot_suppress_the_pending_run")]
+    public void ReceiptFromAnOlderCandidateCannotSuppressThePendingRun()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+        AttachFindingEvidenceReceipt(kernel, goal, tester, "seeded-old", OldCandidateSha);
+
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, harness.FocusedRuns);
+        Assert.Equal(tester.Id, harness.RetriedTaskId);
+        Assert.NotEqual(developer.Id, harness.RetriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "Candidate_RED_routes_the_concrete_defect_upstream_with_stable_identities")]
+    public void CandidateRedRoutesTheConcreteDefectUpstreamWithStableIdentities()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(candidateRed: true);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, harness.FocusedRuns);
+        Assert.Equal(developer.Id, harness.RetriedTaskId);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        // Stable finding identity and the exact candidate survive the owner change.
+        Assert.Contains("ACTIONABLE_CANDIDATE_RED", harness.RetryMessage, StringComparison.Ordinal);
+        Assert.Contains("finding_ids=T-FINDING", harness.RetryMessage, StringComparison.Ordinal);
+        Assert.Contains($"candidate_sha={CandidateSha}", harness.RetryMessage, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Unavailable_candidate_keeps_the_blocker_with_Developer")]
+    public void UnavailableCandidateKeepsTheBlockerWithDeveloper()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(
+            baselineDisposition: FindingEvidenceArmDisposition.Red,
+            candidateShaOverride: "unavailable");
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, harness.FocusedRuns);
+        Assert.Equal(developer.Id, harness.RetriedTaskId);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -58,27 +197,15 @@ public sealed class ConductorDriverTestsTesterFindingRetry
         PassVerification(kernel, goal, developer, hasCommittedChanges: false);
         RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
 
-        TaskId? retriedTaskId = null;
-        var focusedRuns = 0;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            runFocusedEvidence: (_, request) =>
-            {
-                focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, "abc1234");
-            },
-            dispatchAndStart: _ => DispatchStartOutcome.Started(),
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-            {
-                retriedTaskId = taskId;
-                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
-            });
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(0, focusedRuns);
-        Assert.Equal(developer.Id, retriedTaskId);
+        // The Developer's retry was consumed and produced no commit, so the candidate is settled and
+        // the pending request is measurable now.
+        Assert.Equal(1, harness.FocusedRuns);
+        Assert.Equal(tester.Id, harness.RetriedTaskId);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -148,7 +275,7 @@ public sealed class ConductorDriverTestsTesterFindingRetry
             {
                 if (!capacityAvailable)
                     return DispatchStartOutcome.EmptyBatch("Fixture provider capacity temporarily unavailable.");
-                var batch = GoalManagementCommandService.BuildReadyTaskParallelPlan(dispatchGoal, DefaultAgents())
+                var batch = DispatchReadinessRules.BuildReadyTaskParallelPlan(dispatchGoal, DefaultAgents())
                     .Batches.FirstOrDefault();
                 var started = dispatchGoal.Tasks.Where(task =>
                     batch?.IntentIds.Contains(task.Id.Value) == true).ToArray();
@@ -247,87 +374,141 @@ public sealed class ConductorDriverTestsTesterFindingRetry
         PassVerification(kernel, goal, developer, hasCommittedChanges: true);
         RecordTesterFinding(kernel, goal, tester, FindingCategory.TestEvidence, includeEvidenceRequest: true);
 
-        TaskId? retriedTaskId = null;
-        var focusedRuns = 0;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            runFocusedEvidence: (_, request) =>
-            {
-                focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, "abc1234");
-            },
-            dispatchAndStart: _ => DispatchStartOutcome.Started(),
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-            {
-                retriedTaskId = taskId;
-                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
-            },
-            recordFindingEvidenceRequest: (goalId, taskId, message) =>
-                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
-            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(1, focusedRuns);
-        Assert.Equal(tester.Id, retriedTaskId);
-        Assert.NotEqual(developer.Id, retriedTaskId);
+        Assert.Equal(1, harness.FocusedRuns);
+        Assert.Equal(tester.Id, harness.RetriedTaskId);
+        Assert.NotEqual(developer.Id, harness.RetriedTaskId);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
-    [Xunit.Fact]
-    public void DeveloperOwnedTesterFindingWithoutCommittedDeveloperEscalates()
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void DeveloperOwnedTesterFindingWithoutCommittedDeveloperEscalates(bool includeEvidenceRequest)
     {
         var (kernel, goal) = SoftwareGoal();
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
-        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest: true);
+        RecordTesterFinding(kernel, goal, tester, FindingCategory.Correctness, includeEvidenceRequest);
 
-        var retried = false;
-        string? escalation = null;
-        var focusedRuns = 0;
-        var driver = MakeDriver(
-            getFacts: _ => GoalLifecycleFacts.None,
-            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            runFocusedEvidence: (_, request) =>
-            {
-                focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, "abc1234");
-            },
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-            {
-                retried = true;
-                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
-            },
-            writeEscalation: (_, _, message) => escalation = message);
+        var harness = new RetryHarness(kernel);
+        var driver = harness.Driver(baselineDisposition: FindingEvidenceArmDisposition.Red);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(0, focusedRuns);
-        Assert.False(retried);
-        Assert.Contains("could not be routed to an upstream Developer task", escalation, StringComparison.Ordinal);
+        // With no feasible upstream Developer there is nothing to defer, so the unchanged escalation
+        // stands and no paid focused round is spent.
+        Assert.Equal(0, harness.FocusedRuns);
+        Assert.Null(harness.RetriedTaskId);
+        Assert.Contains("could not be routed to an upstream Developer task", harness.Escalation, StringComparison.Ordinal);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
+
+    private sealed class RetryHarness(AgentOrchestratorKernel kernel)
+    {
+        public int FocusedRuns { get; private set; }
+
+        public TaskId? RetriedTaskId { get; private set; }
+
+        public string? RetryMessage { get; private set; }
+
+        public string? Escalation { get; private set; }
+
+        public ConductorDriver Driver(
+            FindingEvidenceArmDisposition baselineDisposition = FindingEvidenceArmDisposition.Red,
+            bool candidateRed = false,
+            string candidateShaOverride = CandidateSha) =>
+            MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateShaOverride),
+                runFocusedEvidence: (_, request) =>
+                {
+                    FocusedRuns++;
+                    return candidateRed
+                        ? CandidateRedFindingEvidence(request, CandidateSha)
+                        : DualArmFindingEvidence(request, baselineDisposition, CandidateSha);
+                },
+                dispatchAndStart: _ => DispatchStartOutcome.Started(),
+                retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                {
+                    RetriedTaskId = taskId;
+                    RetryMessage = message;
+                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+                },
+                writeEscalation: (_, _, message) => Escalation = message,
+                recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                    kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+                recordFindingEvidenceRun: (goalId, taskId, message) =>
+                    kernel.RecordFindingEvidenceRun(goalId, taskId, message),
+                recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+    }
+
+    private static FindingEvidenceRequest TesterEvidenceRequest() =>
+        new([new FindingEvidenceSelection("Infrastructure.Tests", "ConductorDriverTests")]);
+
+    private static ReviewFinding TesterFinding(
+        string stableId,
+        FindingCategory category,
+        bool includeEvidenceRequest) =>
+        new(
+            stableId,
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Test.cs", $"Test.{stableId}"),
+            "The candidate requires a finding-specific response.",
+            FindingSeverity.Blocking,
+            category,
+            includeEvidenceRequest ? TesterEvidenceRequest() : null);
+
+    private static void AttachFindingEvidenceReceipt(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec tester,
+        string receiptId,
+        string candidateSha) =>
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            tester.Id,
+            "T-FINDING",
+            new FindingEvidenceOutcome(
+                Honoured: true,
+                ReceiptId: receiptId,
+                ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            new FindingEvidenceReceipt(
+                receiptId,
+                candidateSha,
+                TesterEvidenceRequest(),
+                Accepted: true,
+                Passed: true,
+                $"seeded focused evidence receipt at {candidateSha}",
+                RequestDispositions:
+                [
+                    new FindingEvidenceRequestDisposition(
+                        "T-FINDING",
+                        "Infrastructure.Tests:ConductorDriverTests",
+                        "executed-standalone",
+                        "only-request")
+                ]));
 
     private static void RecordTesterFinding(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec tester,
         FindingCategory category,
-        bool includeEvidenceRequest)
+        bool includeEvidenceRequest) =>
+        RecordTesterFindings(
+            kernel, goal, tester, TesterFinding("T-FINDING", category, includeEvidenceRequest));
+
+    private static void RecordTesterFindings(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec tester,
+        params ReviewFinding[] findings)
     {
         DispatchTask(kernel, goal, tester, "test");
-        var finding = new ReviewFinding(
-            "T-FINDING",
-            ReviewFindingState.Open,
-            new ReviewFindingLocation("src/Test.cs", "Test.Run"),
-            "The candidate requires a finding-specific response.",
-            FindingSeverity.Blocking,
-            category,
-            includeEvidenceRequest
-                ? new FindingEvidenceRequest(
-                    [new FindingEvidenceSelection("Infrastructure.Tests", "ConductorDriverTests")])
-                : null);
         var stdout = string.Join(
             Environment.NewLine,
             "WORKER_RESULT:",
@@ -336,7 +517,7 @@ public sealed class ConductorDriverTestsTesterFindingRetry
             "tests: deferred - acceptance owns the focused execution",
             "commit: none",
             "blockers: none",
-            $"findings: {JsonSerializer.Serialize(new[] { finding })}",
+            $"findings: {JsonSerializer.Serialize(findings)}",
             "touched_anchors: []",
             "verdict: needs-work",
             "model_fit: fixture/model - adequate - source verification",

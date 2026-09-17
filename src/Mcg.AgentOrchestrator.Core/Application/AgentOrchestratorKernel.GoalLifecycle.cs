@@ -538,7 +538,11 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request => request.GoalId == goalId && request.TaskId == taskId && !request.IsCompleted))
+            _humanInputRequests.Values.Any(request =>
+                request.GoalId == goalId &&
+                request.TaskId == taskId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
@@ -643,7 +647,10 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (_humanInputRequests.Values.Any(candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted))
+        if (_humanInputRequests.Values.Any(candidate =>
+                candidate.GoalId == goal.Id &&
+                !candidate.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
         {
             return false;
         }
@@ -744,7 +751,11 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request => request.GoalId == goalId && request.TaskId == taskId && !request.IsCompleted))
+            _humanInputRequests.Values.Any(request =>
+                request.GoalId == goalId &&
+                request.TaskId == taskId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
@@ -1075,7 +1086,10 @@ public sealed partial class AgentOrchestratorKernel
         var promoted = 0;
         foreach (var goal in _goals.Values.Where(goal => goal.Status == GoalStatus.Parked).ToArray())
         {
-            if (_humanInputRequests.Values.Any(request => request.GoalId == goal.Id && !request.IsCompleted) ||
+            if (_humanInputRequests.Values.Any(request =>
+                    request.GoalId == goal.Id &&
+                    !request.IsCompleted &&
+                    HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)) ||
                 !HasHumanInputResolvedAfterLatestParkDecision(goal))
             {
                 continue;
@@ -1528,7 +1542,8 @@ public sealed partial class AgentOrchestratorKernel
         string? blockerFingerprint = null,
         int? completedRound = null,
         string? workerResultLogReference = null,
-        bool recordDuplicateSuppression = true)
+        bool recordDuplicateSuppression = true,
+        string? evidenceOwner = null)
     {
         var goal = GetGoal(goalId);
         if (taskId is not null)
@@ -1546,6 +1561,7 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(candidate =>
                     candidate.GoalId == goalId &&
                     candidate.TaskId == taskId &&
+                    candidate.Kind == kind &&
                     string.Equals(candidate.QuestionFingerprint, effectiveQuestionFingerprint, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
@@ -1558,7 +1574,7 @@ public sealed partial class AgentOrchestratorKernel
                     ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
                 }
 
-                HoldTaskForExistingHumanInput(goal, taskId);
+                HoldTaskForExistingHumanInput(goal, taskId, open.Kind);
                 if (recordDuplicateSuppression)
                 {
                     open.IncrementSuppressionCount();
@@ -1630,10 +1646,11 @@ public sealed partial class AgentOrchestratorKernel
                 suggestedDefaultAnswer,
                 resumeCommand ?? HumanInputRequest.BuildDefaultResumeCommand(id),
                 effectiveQuestionFingerprint,
-                blockerFingerprint);
+                blockerFingerprint,
+                evidenceOwner: evidenceOwner);
             _humanInputRequests.Add(request.Id, request);
 
-            HoldTaskForExistingHumanInput(goal, taskId);
+            HoldTaskForExistingHumanInput(goal, taskId, request.Kind);
             Append(goal, taskId, ProgressKind.HumanInputRequested, question);
             AppendContradictoryRecordAdvisoryIfNeeded(goal, request);
             return new HumanInputRequestCreationResult(request, WasReused: false, WasSuppressedByAnswer: false);
@@ -1691,8 +1708,13 @@ public sealed partial class AgentOrchestratorKernel
             $"alreadyAnsweredRequest={answeredRequest?.Id.Value ?? "none"}");
     }
 
-    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId)
+    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId, HumanWaitKind kind)
     {
+        if (!HumanWaitPolicyDefaults.BlocksActiveWork(kind))
+        {
+            return;
+        }
+
         if (taskId is not null)
         {
             goal.FindTask(taskId).SetStatus(WorkTaskStatus.WaitingForHuman);
@@ -1820,6 +1842,7 @@ public sealed partial class AgentOrchestratorKernel
                     candidate.Id != request.Id &&
                     candidate.GoalId == request.GoalId &&
                     candidate.TaskId == request.TaskId &&
+                    candidate.Kind == request.Kind &&
                     !candidate.IsCompleted &&
                     string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.RequestedAt)
@@ -1833,13 +1856,14 @@ public sealed partial class AgentOrchestratorKernel
                     goal.AuthoritativeBrief.Version);
             }
 
-            if (request.TaskId is not null)
+            if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             {
                 var task = goal.FindTask(request.TaskId);
                 if (!_humanInputRequests.Values.Any(candidate =>
                         candidate.GoalId == goal.Id &&
                         candidate.TaskId == task.Id &&
-                        !candidate.IsCompleted))
+                        !candidate.IsCompleted &&
+                        HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
                     RestoreTaskAfterHumanInput(goal, task);
                 }
@@ -1877,6 +1901,7 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(candidate =>
                     candidate.GoalId == goal.Id &&
                     candidate.Id != request.Id &&
+                    candidate.Kind == request.Kind &&
                     string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
@@ -1934,7 +1959,8 @@ public sealed partial class AgentOrchestratorKernel
                 if (!_humanInputRequests.Values.Any(candidate =>
                         candidate.GoalId == goal.Id &&
                         candidate.TaskId == task.Id &&
-                        !candidate.IsCompleted))
+                        !candidate.IsCompleted &&
+                        HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
                     RestoreTaskAfterHumanInput(goal, task);
                 }
@@ -2149,7 +2175,10 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(goalId);
         var completed = 0;
         foreach (var request in _humanInputRequests.Values
-            .Where(request => request.GoalId == goalId && !request.IsCompleted)
+            .Where(request =>
+                request.GoalId == goalId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             .OrderBy(request => request.RequestedAt)
             .ToList())
         {
@@ -2169,7 +2198,8 @@ public sealed partial class AgentOrchestratorKernel
                      !_humanInputRequests.Values.Any(request =>
                          request.GoalId == goal.Id &&
                          request.TaskId == task.Id &&
-                         !request.IsCompleted)))
+                         !request.IsCompleted &&
+                         HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))))
         {
             RestoreTaskAfterHumanInput(goal, task);
         }
@@ -2395,6 +2425,13 @@ public sealed partial class AgentOrchestratorKernel
         return _humanInputRequests.Values
             .Where(request => request.GoalId == goalId && !request.IsCompleted)
             .OrderBy(request => request.RequestedAt)
+            .ToList();
+    }
+
+    public IReadOnlyList<HumanInputRequest> GetPendingBlockingHumanInput(GoalId goalId)
+    {
+        return GetPendingHumanInput(goalId)
+            .Where(request => HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             .ToList();
     }
 

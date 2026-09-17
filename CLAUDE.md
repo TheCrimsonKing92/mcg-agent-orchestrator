@@ -7,6 +7,7 @@ Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CL
 Operator procedure home: docs/operator-runbook.md owns harness-neutral operate/observe/recover procedures, including conductor stop and relaunch semantics; counterpart files point there instead of duplicating them.
 Landing progress home: docs/operator-runbook.md#landing-progress-discipline owns stalled-landing diagnosis, dependent repair integration, evidence ownership, and review convergence; both harnesses follow it.
 Managed .NET test execution home: docs/operator-runbook.md owns the repository-safe managed-runner command and the native-apphost prohibition; counterpart files and worker skills point there instead of inventing test launch commands.
+Managed .NET build execution home: docs/operator-runbook.md owns the bounded worker-build helper, durable diagnostic-output contract, and exceptional diagnostic wrapper; counterpart files and worker skills point there instead of inventing build launch commands.
 Role capability home: docs/role-capability-matrix.md owns the enforcement-sourced worker capability and acceptance-criterion routing matrix; counterpart files point there instead of duplicating it.
 Repository conventions home: docs/repository-conventions.md owns test-source layout and repository-root conventions that protect test selection and isolated verification; counterpart files point there instead of duplicating them.
 Shared anchors:

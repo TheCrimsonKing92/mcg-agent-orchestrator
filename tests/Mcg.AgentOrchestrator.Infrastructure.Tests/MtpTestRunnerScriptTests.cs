@@ -227,6 +227,61 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.True(document.RootElement.GetProperty("ownerProcessId").GetInt32() > 0);
     }
 
+    [Xunit.Fact(DisplayName = "MTP_results_directory_reports_removal_of_the_unowned_run_directory_when_the_sidecar_write_fails")]
+    public void InitializeResultsDirectory_RemovesAndReportsRunDirectoryWhenOwnershipWriteFails()
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var nonce = Guid.NewGuid().ToString("N");
+        var command = $"$module = Import-Module '{module}' -Force -PassThru; " +
+            "& $module { Set-Item -Path 'function:script:Write-MtpRunOwnershipSidecar' -Value { param([string]$ResultsDirectory, [string]$RunLabel, [string]$AttemptId) return $false } }; " +
+            $"$root = Join-Path (Get-DefaultMtpResultsRoot) 'sidecar-reject-{nonce}'; " +
+            "try { $message = ''; " +
+            "try { [void](Initialize-MtpResultsDirectory -ResultsRoot $root -RunLabel 'ownership') } catch { $message = $_.Exception.Message } " +
+            "$leftovers = @(if (Test-Path -LiteralPath $root) { Get-ChildItem -LiteralPath $root -Force | ForEach-Object { $_.Name } }); " +
+            "[ordered]@{ message = $message; leftovers = $leftovers } | ConvertTo-Json -Compress } " +
+            "finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }";
+
+        var result = RunPowerShellCommand(RepositoryRoot(), command);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var message = document.RootElement.GetProperty("message").GetString();
+        Xunit.Assert.Contains("undecidable to retention sweeps, so no run was started", message, StringComparison.Ordinal);
+        // The removal outcome is stated, never assumed: a swallowed failure here would claim the
+        // orphan was cleaned up while leaving a directory every retention sweep must call undecidable.
+        Xunit.Assert.Contains("No unowned run directory was left behind.", message, StringComparison.Ordinal);
+        Xunit.Assert.Empty(document.RootElement.GetProperty("leftovers").EnumerateArray());
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_results_directory_names_the_surviving_unowned_orphan_when_its_removal_also_fails")]
+    public void InitializeResultsDirectory_NamesOrphanWhenRemovalAlsoFails()
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var nonce = Guid.NewGuid().ToString("N");
+        // The sidecar writer leaves an exclusively opened file behind, so the orphan removal is forced
+        // to fail. Silence here would report a clean failure while a sweep-undecidable directory lives on.
+        var command = $"$module = Import-Module '{module}' -Force -PassThru; " +
+            "$global:McgLockStream = $null; " +
+            "& $module { Set-Item -Path 'function:script:Write-MtpRunOwnershipSidecar' -Value { " +
+            "param([string]$ResultsDirectory, [string]$RunLabel, [string]$AttemptId) " +
+            "$global:McgLockStream = [System.IO.File]::Open((Join-Path $ResultsDirectory 'locked.bin'), 'CreateNew', 'Write', 'None'); return $false } }; " +
+            $"$root = Join-Path (Get-DefaultMtpResultsRoot) 'sidecar-locked-{nonce}'; " +
+            "try { $message = ''; " +
+            "try { [void](Initialize-MtpResultsDirectory -ResultsRoot $root -RunLabel 'ownership') } catch { $message = $_.Exception.Message } " +
+            "[ordered]@{ message = $message } | ConvertTo-Json -Compress } " +
+            "finally { if ($null -ne $global:McgLockStream) { $global:McgLockStream.Dispose() } " +
+            "Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }";
+
+        var result = RunPowerShellCommand(RepositoryRoot(), command);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var message = document.RootElement.GetProperty("message").GetString();
+        Xunit.Assert.Contains("could also not be removed", message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("until it is deleted by hand", message, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("No unowned run directory was left behind", message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_partition_validation_comes_from_manifest_and_precedes_build")]
     public void MtpPartitionValidationComesFromManifestAndPrecedesBuild()
     {
@@ -333,6 +388,24 @@ public sealed class MtpTestRunnerScriptTests
         Assert.Equal(expectedOutcome, terminal.GetProperty("outcome").GetString());
         Assert.True(terminal.GetProperty("artifactsRetained").GetBoolean());
         Assert.True(terminal.GetProperty("exitConfirmed").GetBoolean());
+        // A failing summary must still separate what coverage was requested from what actually ran;
+        // otherwise a zero-test or failed partition reports neither, and the distinction only exists
+        // on green runs where it is least needed.
+        var requestedFilters = terminal.GetProperty("requestedFilters").EnumerateArray()
+            .Select(filter => filter.GetString())
+            .ToArray();
+        Assert.Equal(["FullyQualifiedName~GoalWorktreeTests"], requestedFilters);
+        var executedTestNames = terminal.GetProperty("executedTestNames").EnumerateArray()
+            .Select(name => name.GetString())
+            .ToArray();
+        if (behavior == "failed")
+        {
+            Assert.Equal(["stub failure"], executedTestNames);
+        }
+        else
+        {
+            Assert.Empty(executedTestNames);
+        }
     }
 
     [Xunit.Fact]
@@ -542,6 +615,11 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.StartsWith("-flp:LogFile=", arguments[11], StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.EndsWith(";Verbosity=Normal", arguments[11], StringComparison.Ordinal);
         Xunit.Assert.Equal("-nodeReuse:false", arguments[12]);
+        Xunit.Assert.True(
+            arguments.Any(argument => argument.Equals(
+                $"-p:McgBuildReceiptProject={project}",
+                StringComparison.OrdinalIgnoreCase)),
+            string.Join(Environment.NewLine, arguments));
         Xunit.Assert.Contains("compiler diagnostic from stub", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("Build succeeded.", result.Stdout, StringComparison.Ordinal);
     }
@@ -632,10 +710,8 @@ public sealed class MtpTestRunnerScriptTests
 
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("NO-BUILD CLOSURE FAILURE", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains(
-            Path.Combine("bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll"),
-            result.Stdout,
-            StringComparison.Ordinal);
+        Xunit.Assert.Contains("No verified no-build output exists", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("Repair: dotnet build", result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.Contains("was not copied or executed", result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
     }
@@ -670,6 +746,167 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("MISSING APPHOST", result.Stdout, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "MTP_no_build_requires_a_matching_build_receipt_before_launch")]
+    public void MtpNoBuildRequiresMatchingBuildReceiptBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        File.Delete(Path.Combine(Path.GetDirectoryName(managedAssembly)!, ".mcg-build-receipt.txt"));
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("build receipt verification failed", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("McgIsolatedArtifactsPath", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_source_changed_after_receipted_build")]
+    public void MtpNoBuildRejectsSourceChangedAfterReceiptedBuild()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        File.AppendAllText(Path.Combine(Path.GetDirectoryName(managedAssembly)!, "receipt-source.cs"), "// changed after build");
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("receipt source checksum mismatch", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_two_receipt_verified_candidates_with_different_assemblies")]
+    public void MtpNoBuildRejectsAmbiguousVerifiedCandidatesBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var declaredAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var declaredDirectory = Path.GetDirectoryName(declaredAssembly)!;
+        var evaluatedDirectory = Path.Combine(
+            sandbox.Root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "bin",
+            "Debug",
+            "net10.0");
+        Directory.CreateDirectory(evaluatedDirectory);
+        foreach (var source in Directory.EnumerateFiles(declaredDirectory))
+        {
+            File.Copy(source, Path.Combine(evaluatedDirectory, Path.GetFileName(source)), overwrite: true);
+        }
+
+        var evaluatedAssembly = Path.Combine(evaluatedDirectory, Path.GetFileName(declaredAssembly));
+        using (var stream = new FileStream(evaluatedAssembly, FileMode.Append, FileAccess.Write, FileShare.None))
+        {
+            stream.WriteByte(0);
+        }
+        var receiptPath = Path.Combine(evaluatedDirectory, ".mcg-build-receipt.txt");
+        var receipt = File.ReadAllText(receiptPath)
+            .Replace(declaredDirectory + Path.DirectorySeparatorChar, evaluatedDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            .Replace(
+                $"S\tsource\t{Path.Combine(evaluatedDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                $"S\tsource\t{Path.Combine(declaredDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                StringComparison.Ordinal)
+            .Replace(
+                $"K\tassemblySha256\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(declaredAssembly)))}",
+                $"K\tassemblySha256\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(evaluatedAssembly)))}",
+                StringComparison.Ordinal)
+            .Replace(
+                $"F\tclosure\t{evaluatedAssembly}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(declaredAssembly)))}",
+                $"F\tclosure\t{evaluatedAssembly}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(evaluatedAssembly)))}",
+                StringComparison.Ordinal);
+        File.WriteAllText(receiptPath, receipt);
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("ambiguous verified no-build outputs", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(declaredDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(evaluatedDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch an ambiguous build output.");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_two_receipt_verified_candidates_with_different_closure_dependencies")]
+    public void MtpNoBuildRejectsAmbiguousVerifiedCandidatesWithDifferentCopiedDependenciesBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var declaredAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var declaredDirectory = Path.GetDirectoryName(declaredAssembly)!;
+        var evaluatedDirectory = Path.Combine(
+            sandbox.Root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "bin",
+            "Debug",
+            "net10.0");
+        Directory.CreateDirectory(evaluatedDirectory);
+        foreach (var source in Directory.EnumerateFiles(declaredDirectory))
+        {
+            File.Copy(source, Path.Combine(evaluatedDirectory, Path.GetFileName(source)), overwrite: true);
+        }
+
+        var evaluatedDependency = Path.Combine(evaluatedDirectory, "Mcg.AgentOrchestrator.App.dll");
+        using (var stream = new FileStream(evaluatedDependency, FileMode.Append, FileAccess.Write, FileShare.None))
+        {
+            stream.WriteByte(0);
+        }
+
+        var receiptPath = Path.Combine(evaluatedDirectory, ".mcg-build-receipt.txt");
+        var receipt = File.ReadAllText(receiptPath)
+            .Replace(declaredDirectory + Path.DirectorySeparatorChar, evaluatedDirectory + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            .Replace(
+                $"S\tsource\t{Path.Combine(evaluatedDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                $"S\tsource\t{Path.Combine(declaredDirectory, "receipt-source.cs")}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "receipt-source.cs"))))}",
+                StringComparison.Ordinal)
+            .Replace(
+                $"F\tclosure\t{evaluatedDependency}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(declaredDirectory, "Mcg.AgentOrchestrator.App.dll"))))}",
+                $"F\tclosure\t{evaluatedDependency}\t{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(evaluatedDependency)))}",
+                StringComparison.Ordinal);
+        File.WriteAllText(receiptPath, receipt);
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("ambiguous verified no-build outputs", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(declaredDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(evaluatedDirectory, result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("closureSha256=", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch a closure whose copied dependencies identify a different build.");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_receipt_for_a_different_target_framework_before_launch")]
+    public void MtpNoBuildRejectsReceiptForDifferentTargetFrameworkBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var receiptPath = Path.Combine(Path.GetDirectoryName(managedAssembly)!, ".mcg-build-receipt.txt");
+        File.WriteAllText(
+            receiptPath,
+            File.ReadAllText(receiptPath).Replace("K\ttargetFramework\tnet10.0", "K\ttargetFramework\tnet9.0", StringComparison.Ordinal));
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("receipt key 'targetFramework' does not match: recorded='net9.0' expected='net10.0'", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch a receipt for a different target framework.");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_receipt_for_a_different_runtime_identifier_before_launch")]
+    public void MtpNoBuildRejectsReceiptForDifferentRuntimeIdentifierBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var receiptPath = Path.Combine(Path.GetDirectoryName(managedAssembly)!, ".mcg-build-receipt.txt");
+        File.WriteAllText(
+            receiptPath,
+            File.ReadAllText(receiptPath).Replace("K\truntimeIdentifier\t", "K\truntimeIdentifier\twin-x64", StringComparison.Ordinal));
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath, runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.Contains("receipt key 'runtimeIdentifier' does not match: recorded='win-x64' expected=''", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The runner must not launch a receipt for a different runtime identifier.");
+    }
+
     [Xunit.Fact(DisplayName = "MTP_closure_no_build_never_launches_mixed_or_unversioned_repository_closure")]
     public void MtpNoBuildNeverLaunchesMixedOrUnversionedRepositoryClosure()
     {
@@ -687,8 +924,29 @@ public sealed class MtpTestRunnerScriptTests
 
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("NO-BUILD CLOSURE FAILURE", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("has no ProductVersion and is not trusted", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("receipt closure file checksum mismatch", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The fake dotnet runner must not be launched for an unsealed closure.");
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_no_build_rejects_a_receipt_verified_output_with_a_changed_copied_dependency_before_launch")]
+    public void MtpNoBuildRejectsVerifiedOutputWithChangedCopiedDependencyBeforeLaunch()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var managedAssembly = sandbox.CreateManagedAssemblyPlaceholder();
+        var outputDirectory = Path.GetDirectoryName(managedAssembly)!;
+        var copiedDependency = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.App.dll");
+        var differentValidDependency = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.Core.dll");
+        Xunit.Assert.True(File.Exists(copiedDependency));
+        Xunit.Assert.True(File.Exists(differentValidDependency));
+        File.Copy(differentValidDependency, copiedDependency, overwrite: true);
+
+        var result = sandbox.RunPartition(
+            "GoalWorktree",
+            dotnetPath: sandbox.RunnerPath,
+            runnerOverride: false);
+
+        Xunit.Assert.Equal(24, result.ExitCode);
+        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog), "The fake dotnet runner must not launch a closure with a changed copied dependency.");
     }
 
     [Xunit.Fact(DisplayName = "MTP_medium_integrity_results_override_fails_before_runner_launch")]
@@ -1164,7 +1422,40 @@ public sealed class MtpTestRunnerScriptTests
             var escapedReadyPath = readyPath.Replace("'", "''");
             var escapedReleasePath = releasePath.Replace("'", "''");
             File.WriteAllText(fakeRunnerScript, $$"""
-                param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+                # powershell.exe -File binds script parameters, which mangles MSBuild-style argument
+                # tokens: '-getResultOutputFile:<path>' arrives as two argv entries and a bare '-p'
+                # is swallowed by common-parameter prefix matching. Real dotnet.exe receives each
+                # token whole, so the stub collects $args (no param block, nothing is swallowed) and
+                # rejoins the known '-switch' + value pairs before matching them.
+                $mcgRaw = @($args)
+                $mcgArguments = [System.Collections.Generic.List[string]]::new()
+                $mcgSplitSwitches = @('-p', '-getProperty', '-getItem', '-getResultOutputFile')
+                for ($mcgIndex = 0; $mcgIndex -lt $mcgRaw.Count; $mcgIndex++) {
+                    $mcgToken = [string]$mcgRaw[$mcgIndex]
+                    if ($mcgSplitSwitches -contains $mcgToken -and ($mcgIndex + 1) -lt $mcgRaw.Count) {
+                        $mcgArguments.Add($mcgToken + ':' + [string]$mcgRaw[$mcgIndex + 1])
+                        $mcgIndex++
+                        continue
+                    }
+                    $mcgArguments.Add($mcgToken)
+                }
+                $Arguments = $mcgArguments.ToArray()
+                if ($Arguments.Count -gt 0 -and $Arguments[0] -eq 'msbuild') {
+                    $targetPath = '{{Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.Infrastructure.Tests.dll")}}'
+                    $sourcePath = '{{Path.Combine(root, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "receipt-source.cs")}}'
+                    $open = [char]123
+                    $close = [char]125
+                    $payload = ($open + '"Properties":' + $open + '"TargetPath":' + ($targetPath | ConvertTo-Json -Compress) + ',"TargetFramework":"net10.0","RuntimeIdentifier":""' + $close + ',"Items":' + $open + '"Compile":[' + $open + '"Identity":' + ($sourcePath | ConvertTo-Json -Compress) + $close + ']' + $close + $close)
+                    # Real MSBuild writes the evaluation payload to -getResultOutputFile, never to the
+                    # shared stdout/stderr capture. Fail loudly if the caller stops isolating it.
+                    $resultFile = @($Arguments | Where-Object { $_ -like '-getResultOutputFile:*' })
+                    if ($resultFile.Count -ne 1) {
+                        [Console]::Error.WriteLine('stub msbuild requires exactly one -getResultOutputFile argument')
+                        exit 9
+                    }
+                    Set-Content -LiteralPath $resultFile[0].Substring('-getResultOutputFile:'.Length) -Value $payload -Encoding utf8
+                    exit 0
+                }
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
                 Write-Output 'stub stdout'
                 Write-Output "stub temp=$env:TEMP tmp=$env:TMP tmpdir=$env:TMPDIR"
@@ -1290,9 +1581,34 @@ public sealed class MtpTestRunnerScriptTests
                 Path.Combine(outputDirectory, depsLeaf),
                 overwrite: true);
             var path = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.dll");
+            var pdbPath = Path.ChangeExtension(path, ".pdb");
+            File.Copy(Path.ChangeExtension(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.dll"), ".pdb"), pdbPath, overwrite: true);
+            var sourcePath = Path.Combine(outputDirectory, "receipt-source.cs");
+            File.WriteAllText(sourcePath, "// receipt source");
+            var receiptLines = new[]
+            {
+                "K\tschemaVersion\t2",
+                $"K\tproject\t{Path.Combine(Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")}",
+                "K\tconfiguration\tDebug",
+                "K\ttargetFramework\tnet10.0",
+                "K\truntimeIdentifier\t",
+                $"K\trepositoryRoot\t{Root}{Path.DirectorySeparatorChar}",
+                $"K\toutputDirectory\t{outputDirectory}{Path.DirectorySeparatorChar}",
+                "K\tassemblyLeaf\tMcg.AgentOrchestrator.Infrastructure.Tests.dll",
+                $"K\tassemblySha256\t{Sha256(path)}",
+                $"K\tpdbSha256\t{Sha256(pdbPath)}",
+                $"S\tsource\t{sourcePath}\t{Sha256(sourcePath)}"
+            }.Concat(Directory.EnumerateFiles(outputDirectory)
+                .Where(path => !Path.GetFileName(path).Equals(".mcg-build-receipt.txt", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Select(path => $"F\tclosure\t{path}\t{Sha256(path)}"));
+            File.WriteAllLines(Path.Combine(outputDirectory, ".mcg-build-receipt.txt"), receiptLines);
             Xunit.Assert.True(File.Exists(path), $"Expected managed test assembly fixture at '{path}'.");
             return path;
         }
+
+        private static string Sha256(string path)
+            => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
 
         public ProcessResult RunPartition(
             string partition,
@@ -1309,6 +1625,17 @@ public sealed class MtpTestRunnerScriptTests
                 runnerOverride,
                 resultsRoot,
                 testHostTimeoutSeconds);
+            return Run(startInfo);
+        }
+
+        public ProcessResult RunPartitionUnderAcceptanceAttempt(string partition, string attemptId)
+        {
+            var startInfo = PartitionStartInfo(
+                partition,
+                noBuild: true,
+                dotnetPath: RunnerPath,
+                runnerOverride: false);
+            startInfo.Environment["MCG_ACCEPTANCE_GATE_ATTEMPT_ID"] = attemptId;
             return Run(startInfo);
         }
 
@@ -1379,6 +1706,28 @@ public sealed class MtpTestRunnerScriptTests
             startInfo.ArgumentList.Add(ResultsRoot);
             startInfo.ArgumentList.Add("-RunnerPath");
             startInfo.ArgumentList.Add(RunnerPath);
+            return Run(startInfo);
+        }
+
+        public ProcessResult RunPartitionWithRejectedEvidenceOwnership()
+        {
+            var module = Path.Combine(Root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+            var manifest = Path.Combine(Root, "config", "acceptance-manifest.json").Replace("'", "''", StringComparison.Ordinal);
+            var root = Root.Replace("'", "''", StringComparison.Ordinal);
+            var resultsRoot = ResultsRoot.Replace("'", "''", StringComparison.Ordinal);
+            var runner = RunnerPath.Replace("'", "''", StringComparison.Ordinal);
+            var command =
+                $"Import-Module '{module}' -Force; " +
+                $"$manifest = Read-MtpTestManifest '{manifest}'; " +
+                "$ownershipWriter = { param($directory, $label) $false }; " +
+                $"$run = Invoke-MtpTestRun -RepositoryRoot '{root}' -Manifest $manifest " +
+                "-Target 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj' " +
+                "-Filters 'FullyQualifiedName~GoalWorktreeTests' -RunLabel 'ownership-failure' -NoBuild " +
+                $"-ResultsRoot '{resultsRoot}' -RunnerPath '{runner}' -RetainedEvidenceOwnershipWriter $ownershipWriter; " +
+                "$run | ConvertTo-Json -Compress";
+            var startInfo = SandboxPowerShellStartInfo();
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(command);
             return Run(startInfo);
         }
 

@@ -929,12 +929,21 @@ public sealed partial class AgentOrchestratorKernel
                 ? $"- {check}"
                 : $"- {check} [{FormatAcceptanceFailureOrigin(attribution.Origin)}: {attribution.Evidence}]";
         }));
-        if (failure.CheckAttributions is { Count: > 0 } attributions &&
+        var attributions = failure.CheckAttributions;
+        if (attributions is { Count: > 0 } &&
             failure.FailedChecks.All(check => attributions.Any(item =>
                 item.CheckName.Equals(check, StringComparison.Ordinal) &&
-                item.Origin == AcceptanceFailureOrigin.Inherited)))
+                item.Origin == AcceptanceFailureOrigin.Inherited &&
+                item.Cause == AcceptanceFailureCause.EnvironmentalApparatus)))
         {
             lines.Add("Do NOT attempt to fix these; they are not attributable to your diff. Report them and address only the introduced/unattributed checks.");
+        }
+        else if (attributions is { Count: > 0 } && failure.FailedChecks.Any(check => attributions.Any(item =>
+                     item.CheckName.Equals(check, StringComparison.Ordinal) &&
+                     item.Origin == AcceptanceFailureOrigin.Unattributed &&
+                     item.Cause == AcceptanceFailureCause.NotClassified)))
+        {
+            lines.Add("One or more failure origins remain unproven. Report them and request exact baseline/run evidence; do not assume they are introduced or inherited or make a blind fix.");
         }
 
         lines.AddRange(BuildStructuredFailureReceiptLines(
@@ -1048,6 +1057,7 @@ public sealed partial class AgentOrchestratorKernel
                 (verification.MergedReviewFindings ?? []).Select(finding => new
                 {
                     candidate.RequiredRole,
+                    OwningTask = candidate,
                     verification.CompletedAt,
                     Finding = finding
                 })))
@@ -1083,9 +1093,19 @@ public sealed partial class AgentOrchestratorKernel
                         : outcome?.ResultReason is { } resultReason
                             ? $"; reason={FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(resultReason)}"
                             : string.Empty;
+                    // state= and candidate_sha= are the point-of-decision distinction: verdict=
+                    // alone cannot separate "no run has happened yet" from "this candidate was
+                    // measured". A missing or old-candidate run reads pending-execution, never a pass.
+                    var briefCandidateSha = string.IsNullOrWhiteSpace(targetHeadCommit)
+                        ? null
+                        : targetHeadCommit.Trim();
+                    var executionState = FindingEvidenceExecutionClassifier.Classify(
+                        item.OwningTask, item.Finding, briefCandidateSha);
                     lines.Add(
                         $"  evidence_index: selection={selection}; verdict={disposition}; " +
-                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}");
+                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}; " +
+                        $"state={FindingEvidenceExecutionClassifier.ToWireValue(executionState)}; " +
+                        $"candidate_sha={briefCandidateSha ?? FindingEvidenceExecutionClassifier.UnavailableCandidateSha}");
 
                     if (task.RequiredRole == item.RequiredRole && outcome?.ReceiptId is { } receiptId)
                     {

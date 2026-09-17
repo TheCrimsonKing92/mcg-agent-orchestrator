@@ -224,4 +224,406 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             TryDeleteDirectory(root);
         }
     }
+
+    [Xunit.Fact]
+    public void CohortGateFault_HoldsBothMembersAndKeepsTheTickAlive()
+    {
+        var faulted = RunCohortFaultTicks(CaptureGateEngineFault, runs: 1);
+        var control = RunCohortFaultTicks(fault: null, runs: 1);
+
+        Assert.Null(faulted.LoopException);
+        var exitTokens = faulted.Lines
+            .Single(line => line.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal))
+            .Detail
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("outcome=gate-fault", exitTokens);
+        Assert.Contains("fault=AcceptanceGateEngineException", exitTokens);
+
+        foreach (var goalId in faulted.MemberGoalIds)
+        {
+            var memberLine = faulted.Lines.Single(line =>
+                line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
+                line.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
+            Assert.Contains("result=held", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("fault=AcceptanceGateEngineException", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("classification=transient", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("failures=1/3", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("worker-process-registration-failed", memberLine.Detail, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(faulted.StatusesBefore, faulted.StatusesAfter);
+        Assert.Equal(control.StopReason, faulted.StopReason);
+    }
+
+    // The 2026-09-15 daemon exits: the exception was raised on the cohort gate's background thread and
+    // reached a later tick through the driver's completion. This drives that arrival end to end.
+    [Xunit.Fact]
+    public void FaultedBackgroundCohortCompletion_IsResolvedInsideTheTickInsteadOfEndingIt()
+    {
+        var faulted = RunCohortFaultTicks(
+            CaptureGateEngineFault,
+            runs: 1,
+            arrival: CohortFaultArrival.BackgroundCompletion);
+        var control = RunCohortFaultTicks(fault: null, runs: 1);
+
+        Assert.Null(faulted.LoopException);
+        var exitTokens = faulted.Lines
+            .Single(line => line.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal))
+            .Detail
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Contains("outcome=gate-fault", exitTokens);
+        Assert.Contains("fault=AcceptanceGateEngineException", exitTokens);
+        // The injected cohort runner was on its control-hold path, so the fault the tick resolved came from
+        // the driver returning the faulted background completion, not from a throw at the call site.
+        Assert.DoesNotContain(
+            faulted.Lines,
+            line => line.Detail.Contains("outcome=control-hold", StringComparison.Ordinal));
+
+        foreach (var goalId in faulted.MemberGoalIds)
+        {
+            var memberLine = faulted.Lines.Single(line =>
+                line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
+                line.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
+            Assert.Contains("result=held", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("fault=AcceptanceGateEngineException", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("classification=transient", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("failures=1/3", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("worker-process-registration-failed", memberLine.Detail, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(faulted.StatusesBefore, faulted.StatusesAfter);
+        Assert.Equal(control.StopReason, faulted.StopReason);
+    }
+
+    [Xunit.Fact]
+    public void FaultedBackgroundCohortCompletion_EscalatesBothMembersOnlyAtTheTransientFailureCap()
+    {
+        var faulted = RunCohortFaultTicks(
+            CaptureGateEngineFault,
+            runs: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap,
+            arrival: CohortFaultArrival.BackgroundCompletion);
+
+        Assert.Null(faulted.LoopException);
+        var memberLines = faulted.Lines
+            .Where(line => line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal))
+            .Select(line => line.Detail)
+            .ToArray();
+        Assert.Contains(memberLines, detail =>
+            detail.Contains("result=held", StringComparison.Ordinal) &&
+            detail.Contains("failures=1/3", StringComparison.Ordinal));
+        foreach (var goalId in faulted.MemberGoalIds)
+        {
+            Assert.Contains(memberLines, detail =>
+                detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal) &&
+                detail.Contains("result=escalated", StringComparison.Ordinal) &&
+                detail.Contains("failures=3/3", StringComparison.Ordinal));
+        }
+    }
+
+    [Xunit.Fact]
+    public void CohortGateFault_EscalatesBothMembersOnlyAtTheTransientFailureCap()
+    {
+        var faulted = RunCohortFaultTicks(
+            CaptureGateEngineFault,
+            runs: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap);
+
+        Assert.Null(faulted.LoopException);
+        var memberLines = faulted.Lines
+            .Where(line => line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal))
+            .Select(line => line.Detail)
+            .ToArray();
+        Assert.Contains(memberLines, detail =>
+            detail.Contains("result=held", StringComparison.Ordinal) &&
+            detail.Contains("failures=1/3", StringComparison.Ordinal));
+        Assert.DoesNotContain(memberLines, detail =>
+            detail.Contains("result=escalated", StringComparison.Ordinal) &&
+            detail.Contains("failures=1/3", StringComparison.Ordinal));
+        foreach (var goalId in faulted.MemberGoalIds)
+        {
+            Assert.Contains(memberLines, detail =>
+                detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal) &&
+                detail.Contains("result=escalated", StringComparison.Ordinal) &&
+                detail.Contains("failures=3/3", StringComparison.Ordinal));
+        }
+    }
+
+    [Xunit.Fact]
+    public void CohortGateFault_NonTransientFaultEscalatesBothMembersWithoutEndingTheTick()
+    {
+        var faulted = RunCohortFaultTicks(
+            () => new InvalidOperationException("Acceptance cohort workspace ownership was already transferred."),
+            runs: 1);
+
+        Assert.Null(faulted.LoopException);
+        foreach (var goalId in faulted.MemberGoalIds)
+        {
+            var memberLine = faulted.Lines.Single(line =>
+                line.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
+                line.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
+            Assert.Contains("result=escalated", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("classification=non-transient", memberLine.Detail, StringComparison.Ordinal);
+            Assert.Contains("fault=InvalidOperationException", memberLine.Detail, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FaultedBackgroundCohortCompletion_ReturnsTypedFaultInsteadOfThrowing()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "First background fault member");
+        var second = CreateVerifiedSimpleGoal(kernel, "Second background fault member");
+        var driver = MakeDriver();
+        var selection = CohortSelection(first, second);
+        var fault = CaptureGateEngineFault();
+        driver.PublishCompletedCohortGateRunForTests(selection, fault);
+
+        ConductorAcceptanceCohortRunOutcome? outcome = null;
+        var thrown = Record.Exception(() => outcome = driver.RunAcceptanceCohortForTick(
+            selection,
+            [first, second],
+            ConductorAutonomyPolicy.Conservative,
+            runGateInBackground: true));
+
+        Assert.Null(thrown);
+        Assert.NotNull(outcome);
+        Assert.NotNull(outcome!.Fault);
+        Assert.Same(fault, outcome.Fault!.Fault);
+        Assert.Equal("AcceptanceGateEngineException", outcome.Fault.FaultType);
+        Assert.Contains("worker-process-registration-failed", outcome.Fault.Message, StringComparison.Ordinal);
+        var result = outcome.Run;
+        Assert.Contains("outcome=gate-fault", result.Detail, StringComparison.Ordinal);
+        Assert.Contains("fault=AcceptanceGateEngineException", result.Detail, StringComparison.Ordinal);
+        Assert.Equal(2, result.MemberResults.Count);
+        Assert.All(
+            result.MemberResults.Values,
+            member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
+
+        // The fault is drained once: the next call no longer reports it and resumes the ordinary path,
+        // which for this dependency-free test driver is the production-dependency guard.
+        var afterDrain = Record.Exception(() => driver.RunAcceptanceCohortForTick(
+            selection,
+            [first, second],
+            ConductorAutonomyPolicy.Conservative,
+            runGateInBackground: true));
+        Assert.IsType<InvalidOperationException>(afterDrain);
+        Assert.Contains("Production acceptance cohort dependencies", afterDrain.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FaultedBackgroundCohortCompletion_IsDrainedBeforeDifferentPairSelection()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "First completed background member");
+        var second = CreateVerifiedSimpleGoal(kernel, "Second completed background member");
+        var third = CreateVerifiedSimpleGoal(kernel, "Newly selected cohort member");
+        var driver = MakeDriver();
+        var completedSelection = CohortSelection(first, second);
+        var currentSelection = CohortSelection(second, third);
+        var fault = CaptureGateEngineFault();
+        driver.PublishCompletedCohortGateRunForTests(completedSelection, fault);
+
+        ConductorAcceptanceCohortRunOutcome? outcome = null;
+        var thrown = Record.Exception(() => outcome = driver.RunAcceptanceCohortForTick(
+            currentSelection,
+            [first, second, third],
+            ConductorAutonomyPolicy.Conservative,
+            runGateInBackground: true));
+
+        Assert.Null(thrown);
+        Assert.NotNull(outcome);
+        Assert.NotNull(outcome!.Fault);
+        Assert.Same(fault, outcome.Fault!.Fault);
+        Assert.Equal(
+            new[] { first.Id.Value, second.Id.Value }.OrderBy(value => value, StringComparer.Ordinal),
+            outcome.Run.MemberResults.Keys.OrderBy(value => value, StringComparer.Ordinal));
+        Assert.DoesNotContain(third.Id.Value, outcome.Run.MemberResults.Keys);
+    }
+
+    // How the cohort gate fault reaches the tick: thrown by the cohort run itself, or parked by a background
+    // cohort gate thread whose completion the driver observes on a later tick.
+    private enum CohortFaultArrival
+    {
+        SynchronousThrow,
+        BackgroundCompletion
+    }
+
+    private sealed record CohortFaultTickObservation(
+        Exception? LoopException,
+        string? StopReason,
+        IReadOnlyList<ConductEventRecord> Lines,
+        IReadOnlyList<string> MemberGoalIds,
+        IReadOnlyList<GoalStatus> StatusesBefore,
+        IReadOnlyList<GoalStatus> StatusesAfter);
+
+    // Drives production cohort selection into a gate run that faults. A null fault is the held control.
+    // With CohortFaultArrival.BackgroundCompletion the cohort run itself never throws: a completed gate run
+    // whose completion carries the exception is published on the driver first, exactly as the background
+    // gate thread's SetException leaves it, and the tick has to reach that fault through the driver's own
+    // drain. A faulted tick ends the loop with no progress, so repeat faults are driven as successive
+    // one-tick runs over the same driver, which is where the per-pair transient-fault count lives.
+    private static CohortFaultTickObservation RunCohortFaultTicks(
+        Func<Exception>? fault,
+        int runs,
+        CohortFaultArrival arrival = CohortFaultArrival.SynchronousThrow)
+    {
+        var root = CreateTempDirectory("mcg-cohort-gate-fault");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "First gate fault member");
+        var second = CreateVerifiedSimpleGoal(kernel, "Second gate fault member");
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstGateFault.razor"],
+            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondGateFaultTests.cs"]
+        };
+        var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+
+        try
+        {
+            var statusesBefore = new[]
+            {
+                kernel.GetGoal(first.Id).Status,
+                kernel.GetGoal(second.Id).Status
+            };
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                land: goal => new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "ok"),
+                classifyRisk: _ => ChangeRiskTier.DocsOnly,
+                getLandingFileScopes: goal => paths[goal.Id],
+                isVerificationGateSatisfied: _ => true,
+                gateReadyCandidateProjector: projector,
+                // The synchronous-throw arrival throws from here; the background arrival leaves this runner
+                // on the control-hold path, so a tick that reports a gate fault can only have got it from
+                // the driver's own observation of the faulted background completion.
+                runAcceptanceCohort: (selection, goals, policy) =>
+                    fault is null || arrival == CohortFaultArrival.BackgroundCompletion
+                    ? new ConductorAcceptanceCohortRunResult(
+                        Receipt: null,
+                        goals
+                            .Where(goal => selection.Members.Any(member => member.GoalId == goal.Id))
+                            .ToDictionary(
+                                goal => goal.Id.Value,
+                                goal => new ConductorAdvanceResult(
+                                    goal.Id.Value,
+                                    goal.Id.Value[..8],
+                                    policy.Name,
+                                    new ConductorAdvanceOutcome.Held(
+                                        GoalLifecycleState.Verified,
+                                        "control hold")),
+                                StringComparer.Ordinal),
+                        "outcome=control-hold")
+                    : throw fault());
+
+            var backgroundSelection = new ConductorAcceptanceCohortSelection(
+                [
+                    ReadyProjection(
+                        first.Id,
+                        first.Id.Value.PadRight(40, 'b')[..40],
+                        mainRevision,
+                        paths[first.Id][0]),
+                    ReadyProjection(
+                        second.Id,
+                        second.Id.Value.PadRight(40, 'b')[..40],
+                        mainRevision,
+                        paths[second.Id][0])
+                ],
+                []);
+
+            BatchLoopSummary? summary = null;
+            Exception? loopException = null;
+            for (var run = 0; run < runs && loopException is null; run++)
+            {
+                if (fault is not null && arrival == CohortFaultArrival.BackgroundCompletion)
+                {
+                    driver.PublishCompletedCohortGateRunForTests(backgroundSelection, fault());
+                }
+
+                loopException = Record.Exception(() => summary = new ConductorBatchLoop(
+                    conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1));
+            }
+
+            var lines = File.ReadAllLines(logPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .ToArray();
+            return new CohortFaultTickObservation(
+                loopException,
+                summary?.StopReason,
+                lines,
+                [first.Id.Value, second.Id.Value],
+                statusesBefore,
+                [kernel.GetGoal(first.Id).Status, kernel.GetGoal(second.Id).Status]);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private static ConductorAcceptanceCohortSelection CohortSelection(Goal first, Goal second)
+    {
+        var mainRevision = new string('c', 40);
+        return new ConductorAcceptanceCohortSelection(
+            [
+                ReadyProjection(first.Id, new string('a', 40), mainRevision, "src/First.cs"),
+                ReadyProjection(second.Id, new string('b', 40), mainRevision, "tests/SecondTests.cs")
+            ],
+            []);
+    }
+
+    private static GateReadyCandidateProjection ReadyProjection(
+        GoalId goalId,
+        string branchRevision,
+        string mainRevision,
+        string landingPath) =>
+        new(
+            goalId,
+            GoalLifecycleState.Verified,
+            GateReadyVerificationState.Satisfied,
+            ChangeRiskTier.DocsOnly,
+            ConductorTransitionDecision.Auto,
+            [landingPath],
+            [$"production:{goalId.Value[..8]}"],
+            new GateReadyMergeEvidence(
+                branchRevision,
+                mainRevision,
+                GateReadyMergeStatus.Clean,
+                GateReadyMergeReason.NoConflictsDetected));
+
+    // The production shape of the 2026-09-15 daemon exits: a worker-process registration refusal
+    // captured as a gate-engine fault on the cohort gate's background thread.
+    private static AcceptanceGateEngineException CaptureGateEngineFault()
+    {
+        try
+        {
+            throw new InvalidOperationException(
+                "worker-process-registration-failed pid=38220 stage=protected-process-boundary " +
+                "cleanup=refused-protected-process");
+        }
+        catch (InvalidOperationException exception)
+        {
+            return AcceptanceGateEngineException.Capture(
+                exception,
+                new AcceptanceGateDiagnosticSnapshot("check-execution", "focused cohort tests"));
+        }
+    }
 }

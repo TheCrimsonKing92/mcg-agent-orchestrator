@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -14,6 +15,37 @@ public sealed class AdvanceLoopTests
         SeedLocalSkillCatalog(path);
         _ = StateDbMigrations.EnsureUpToDate(OrchestratorWorkspace.ForDirectory(path).SqliteStatePath);
         return path;
+    }
+
+    private static readonly TimeSpan WatchCompletionTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Awaits the per-watch completion signal instead of polling IsRunning against a wall clock.
+    /// On timeout the failure names IterationCount, elapsed milliseconds, and StopReason so a gate
+    /// TRX distinguishes a watch that never stopped from one that stopped late.
+    /// </summary>
+    private static async Task AwaitWatchCompletionAsync(
+        DashboardContinuationService service,
+        string goalId,
+        Stopwatch clock)
+    {
+        try
+        {
+            await service.WaitForWatchCompletionAsync(goalId).WaitAsync(WatchCompletionTimeout);
+        }
+        catch (TimeoutException)
+        {
+            var elapsedMs = clock.ElapsedMilliseconds;
+            var statuses = service.GetStatuses();
+            var status = statuses.FirstOrDefault(row =>
+                string.Equals(row.GoalId, goalId, StringComparison.OrdinalIgnoreCase));
+            var prefix = goalId.Length <= 8 ? goalId : goalId[..8];
+            Assert.Fail(status is null
+                ? $"no continuation status row for goal {prefix} after {elapsedMs} ms; rows present: {statuses.Count}"
+                : $"continuation watch for goal {prefix} did not stop within {WatchCompletionTimeout.TotalSeconds:0} s: " +
+                  $"IsRunning={status.IsRunning}, IterationCount={status.IterationCount}, " +
+                  $"elapsed={elapsedMs} ms, StopReason='{status.StopReason}'");
+        }
     }
 
     private const string BlockingCodexProfileCommand =
@@ -46,7 +78,7 @@ public sealed class AdvanceLoopTests
             "Start subscription handoff on create",
             workspace,
             providers);
-        var advancement = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+        var advancement = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
             kernel,
             agents,
             profiles,
@@ -108,7 +140,7 @@ public sealed class AdvanceLoopTests
     var provider = new FakeSmokeProvider();
     var providers = new InMemoryModelProviderRegistry([provider]);
 
-    var result = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
+    var result = await new GoalAdvancementOperations().AdvanceGoalUntilBlockedAsync(
         kernel,
         [agent],
         providers,
@@ -142,10 +174,9 @@ public sealed class AdvanceLoopTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var provider = new FakeSmokeProvider();
 
-    var result = await GoalManagementCommandService.AdvanceGoalAsync(
+    var result = await new GoalAdvancementOperations().AdvanceGoalAsync(
         kernel,
         [agent],
-        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([provider]),
         workspace,
         goal);
@@ -179,10 +210,9 @@ public sealed class AdvanceLoopTests
         task.Id,
         new TaskDispatchRecord("codex-cli", "Write-Output ok", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
 
-    var result = await GoalManagementCommandService.AdvanceGoalAsync(
+    var result = await new GoalAdvancementOperations().AdvanceGoalAsync(
         kernel,
         [agent],
-        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([]),
         workspace,
         goal);
@@ -193,6 +223,68 @@ public sealed class AdvanceLoopTests
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
     Assert.True(task.LastProcess is null);
+}
+
+    [Xunit.Fact(DisplayName = "Advance_action_reports_dispatch_state_captured_before_the_refresh")]
+    public async Task AdvanceActionReportsDispatchStateCapturedBeforeTheRefresh()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Watch a short local process", AgentRole.Developer, "Record explicit verification.");
+    var goal = CreateRefinedGoal(kernel, "Advance refreshes a finished process", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-developer"),
+        "Subscription developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("local", "Write-Output ok", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
+    new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
+
+    var startedProcess = task.LastProcess!;
+    Assert.True(startedProcess.IsRunning);
+
+    // Event gate: the wrapper writes the exit artifact when the child exits. No wall-clock pacing.
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+    while (DateTimeOffset.UtcNow < deadline && !File.Exists(startedProcess.ExitCodePath))
+    {
+        await Task.Delay(25);
+    }
+
+    Assert.True(File.Exists(startedProcess.ExitCodePath));
+
+    var pendingItem = kernel.BuildNextActions(goal.Id).Items.First();
+    Assert.Equal(NextActionKind.RefreshRunningProcess, pendingItem.Kind);
+    Assert.NotNull(DispatchRecoveryView.EvaluateState(goal, pendingItem, commandLineSnapshot: null));
+
+    var outcome = await new GoalAdvancementOperations().AdvanceGoalAsync(
+        kernel,
+        [agent],
+        new InMemoryModelProviderRegistry([]),
+        workspace,
+        goal);
+
+    Assert.True(outcome.Executed);
+    Assert.Equal(NextActionAutomationKind.RefreshRunningProcess, outcome.AutomationKind);
+    Assert.True(task.LastProcess?.CompletedAt is not null);
+
+    // The refresh is exactly what invalidates the evaluation, so a renderer reading the live goal
+    // after the step reports no dispatch state at all. The operation must carry the state it saw.
+    Assert.Null(DispatchRecoveryView.EvaluateState(goal, outcome.Action!, commandLineSnapshot: null));
+    Assert.NotNull(outcome.ActionDispatchState);
+
+    var dto = GoalManagementCommandService.ToAdvanceResultDto(
+        goal, outcome, WorkerProfileCatalog.Default(), [agent]);
+    Assert.NotNull(dto.Action);
+    Assert.NotNull(dto.Action!.DispatchState);
+    Assert.NotNull(dto.Action.Recovery);
+    Assert.Equal(outcome.ActionDispatchState!.Kind, dto.Action.DispatchState!.Kind);
 }
 
     [Xunit.Fact(DisplayName = "Advance_results_trim_verbose_automation_failures")]
@@ -213,10 +305,9 @@ public sealed class AdvanceLoopTests
         Subscription: new SubscriptionLaunchProfile(profileName));
     kernel.ActivateGoal(goal.Id, [agent]);
 
-    var single = await GoalManagementCommandService.AdvanceGoalAsync(
+    var single = await new GoalAdvancementOperations().AdvanceGoalAsync(
         kernel,
         [agent],
-        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([]),
         workspace,
         goal);
@@ -224,14 +315,21 @@ public sealed class AdvanceLoopTests
     Assert.False(single.Executed);
     Assert.Contains("profile-start", single.Message, StringComparison.Ordinal);
     Assert.Contains("profile-tail", single.Message, StringComparison.Ordinal);
-    Assert.Contains("[truncated", single.Message, StringComparison.Ordinal);
-    Assert.True(!single.Message.Contains(new string('p', 2000), StringComparison.Ordinal));
     Assert.True(task.LastDispatch is null);
+
+    // Timeline trimming is the transport's text policy, so the adapter owns it after the move.
+    // The application keeps the full failure text; the dashboard DTO must still be trimmed.
+    var singleDto = GoalManagementCommandService.ToAdvanceResultDto(
+        goal, single, WorkerProfileCatalog.Default(), [agent]);
+    Assert.Contains("profile-start", singleDto.Message, StringComparison.Ordinal);
+    Assert.Contains("profile-tail", singleDto.Message, StringComparison.Ordinal);
+    Assert.Contains("[truncated", singleDto.Message, StringComparison.Ordinal);
+    Assert.True(!singleDto.Message.Contains(new string('p', 2000), StringComparison.Ordinal));
 
     var loopKernel = new AgentOrchestratorKernel();
     var loopTask = new TaskSpec(TaskId.New(), "Run missing subscription profile", AgentRole.Developer, "Record explicit verification.");
     var loopGoal = CreateRefinedGoal(loopKernel, "Trim advance loop automation failure", [loopTask]);
-    var loop = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
+    var loop = await new GoalAdvancementOperations().AdvanceGoalUntilBlockedAsync(
         loopKernel,
         [agent],
         new InMemoryModelProviderRegistry([]),
@@ -242,9 +340,14 @@ public sealed class AdvanceLoopTests
     Assert.Equal(1, loop.StepCount);
     Assert.Contains("profile-start", loop.StopReason, StringComparison.Ordinal);
     Assert.Contains("profile-tail", loop.StopReason, StringComparison.Ordinal);
-    Assert.Contains("[truncated", loop.StopReason, StringComparison.Ordinal);
-    Assert.True(!loop.StopReason.Contains(new string('p', 2000), StringComparison.Ordinal));
     Assert.True(loopTask.LastDispatch is null);
+
+    var loopDto = GoalManagementCommandService.ToAdvanceLoopResultDto(
+        loopGoal, loop, WorkerProfileCatalog.Default(), [agent]);
+    Assert.Contains("profile-start", loopDto.StopReason, StringComparison.Ordinal);
+    Assert.Contains("profile-tail", loopDto.StopReason, StringComparison.Ordinal);
+    Assert.Contains("[truncated", loopDto.StopReason, StringComparison.Ordinal);
+    Assert.True(!loopDto.StopReason.Contains(new string('p', 2000), StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_blocks_prefer_subscription_before_api_fallback")]
@@ -268,7 +371,7 @@ public sealed class AdvanceLoopTests
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     var provider = new FakeSmokeProvider();
 
-    var result = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
+    var result = await new GoalAdvancementOperations().AdvanceGoalUntilBlockedAsync(
         kernel,
         [agent],
         new InMemoryModelProviderRegistry([provider]),
@@ -309,7 +412,7 @@ public sealed class AdvanceLoopTests
 
     var provider = new FakeSmokeProvider();
 
-    var result = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(
+    var result = await new GoalAdvancementOperations().AdvanceGoalUntilBlockedAsync(
         kernel,
         [agent],
         new InMemoryModelProviderRegistry([provider]),
@@ -351,10 +454,9 @@ public sealed class AdvanceLoopTests
     EnsureGoalWorktree(root, goal.Id);
     var provider = new FakeSmokeProvider();
 
-    var result = await GoalManagementCommandService.AdvanceGoalAsync(
+    var result = await new GoalAdvancementOperations().AdvanceGoalAsync(
         kernel,
         [agent],
-        WorkerProfileCatalog.Default(),
         new InMemoryModelProviderRegistry([provider]),
         workspace,
         goal);
@@ -423,7 +525,7 @@ public sealed class AdvanceLoopTests
     EnsureGoalWorktree(root, goal.Id);
     var provider = new FakeSmokeProvider();
 
-    GoalManagementCommandService.SubscriptionDispatchTask(
+    new GoalDispatchOperations().SubscriptionDispatchTask(
         kernel,
         workspace,
         goal,
@@ -512,7 +614,7 @@ public sealed class AdvanceLoopTests
 
     try
     {
-        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -577,33 +679,24 @@ public sealed class AdvanceLoopTests
     task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
 
-    var previousLiveness = GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch;
-    GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = _ => false;
-    try
-    {
-        var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
-            kernel,
-            workspace,
-            goal,
-            [agent],
-            profiles);
+    var batch = new GoalDispatchOperations(isProcessRunning: _ => false).SubscriptionDispatchReadyBatch(
+        kernel,
+        workspace,
+        goal,
+        [agent],
+        profiles);
 
-        Assert.Empty(batch.Dispatches);
-        var reconciledTask = kernel.GetTask(goal.Id, task.Id);
-        Assert.True(reconciledTask.LastProcess is { IsRunning: false });
-        Assert.NotNull(reconciledTask.LastDispatch);
-        Assert.Equal("old dispatch", reconciledTask.LastDispatch!.Command);
-        var verification = Assert.IsType<TaskVerificationRecord>(reconciledTask.LastVerification);
-        Assert.Contains("done", verification.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, evt =>
-            evt.TaskId == task.Id &&
-            evt.Kind == ProgressKind.TaskNote &&
-            evt.Message.Contains("Reconciled completed dispatch before preparing another dispatch", StringComparison.Ordinal));
-    }
-    finally
-    {
-        GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = previousLiveness;
-    }
+    Assert.Empty(batch.Dispatches);
+    var reconciledTask = kernel.GetTask(goal.Id, task.Id);
+    Assert.True(reconciledTask.LastProcess is { IsRunning: false });
+    Assert.NotNull(reconciledTask.LastDispatch);
+    Assert.Equal("old dispatch", reconciledTask.LastDispatch!.Command);
+    var verification = Assert.IsType<TaskVerificationRecord>(reconciledTask.LastVerification);
+    Assert.Contains("done", verification.StandardOutput, StringComparison.Ordinal);
+    Assert.Contains(kernel.GetGoal(goal.Id).Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Reconciled completed dispatch before preparing another dispatch", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_preserves_synthetic_exit_for_typed_reconciliation")]
@@ -646,31 +739,22 @@ public sealed class AdvanceLoopTests
     task = goal.Tasks.Single();
     var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
 
-    var previousLiveness = GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch;
-    GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = _ => false;
-    try
-    {
-        var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
-            kernel,
-            workspace,
-            goal,
-            [agent],
-            profiles);
+    var batch = new GoalDispatchOperations(isProcessRunning: _ => false).SubscriptionDispatchReadyBatch(
+        kernel,
+        workspace,
+        goal,
+        [agent],
+        profiles);
 
-        Assert.Empty(batch.Dispatches);
-        var preservedTask = kernel.GetTask(goal.Id, task.Id);
-        Assert.Equal(WorkTaskStatus.Assigned, preservedTask.Status);
-        Assert.True(preservedTask.LastProcess is { IsRunning: true });
-        Assert.Equal("old dispatch", preservedTask.LastDispatch!.Command);
-        Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt =>
-            evt.TaskId == task.Id &&
-            evt.Kind == ProgressKind.TaskNote &&
-            evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal));
-    }
-    finally
-    {
-        GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = previousLiveness;
-    }
+    Assert.Empty(batch.Dispatches);
+    var preservedTask = kernel.GetTask(goal.Id, task.Id);
+    Assert.Equal(WorkTaskStatus.Assigned, preservedTask.Status);
+    Assert.True(preservedTask.LastProcess is { IsRunning: true });
+    Assert.Equal("old dispatch", preservedTask.LastDispatch!.Command);
+    Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_does_not_clear_live_child_pid_with_exit_artifact")]
@@ -705,33 +789,24 @@ public sealed class AdvanceLoopTests
         "{\"pid\":28516,\"childPid\":28517,\"ownedPids\":[28517],\"ownedProcessIdentities\":[{\"processId\":28517,\"startedAt\":\"2026-07-11T01:52:20Z\",\"imagePath\":\"C:\\\\workers\\\\child.exe\"}],\"state\":\"running\",\"lastObservedAt\":\"2026-07-11T01:52:19Z\",\"lastProgressAt\":\"2026-07-11T01:52:19Z\",\"stdoutBytes\":4,\"stderrBytes\":0,\"ownedCpuMs\":1}");
     var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
 
-    var previousLiveness = GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch;
-    var previousIdentityReader = GoalManagementCommandService.ReadTrackedProcessIdentityForReadyBatch;
-    GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = pid => pid == 28517;
-    GoalManagementCommandService.ReadTrackedProcessIdentityForReadyBatch = pid => pid == 28517 ? childIdentity : null;
-    try
-    {
-        var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+    var batch = new GoalDispatchOperations(
+            isProcessRunning: pid => pid == 28517,
+            readProcessIdentity: pid => pid == 28517 ? childIdentity : null)
+        .SubscriptionDispatchReadyBatch(
             kernel,
             workspace,
             kernel.GetGoal(goal.Id),
             [agent],
             profiles);
 
-        Assert.Empty(batch.Dispatches);
-        var heldTask = kernel.GetTask(goal.Id, task.Id);
-        Assert.NotNull(heldTask.LastProcess);
-        Assert.True(heldTask.LastProcess!.IsRunning);
-        Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt =>
-            evt.TaskId == task.Id &&
-            evt.Kind == ProgressKind.TaskNote &&
-            evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal));
-    }
-    finally
-    {
-        GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = previousLiveness;
-        GoalManagementCommandService.ReadTrackedProcessIdentityForReadyBatch = previousIdentityReader;
-    }
+    Assert.Empty(batch.Dispatches);
+    var heldTask = kernel.GetTask(goal.Id, task.Id);
+    Assert.NotNull(heldTask.LastProcess);
+    Assert.True(heldTask.LastProcess!.IsRunning);
+    Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_leaves_dead_pid_without_exit_artifact_for_reap_watchdog")]
@@ -763,30 +838,21 @@ public sealed class AdvanceLoopTests
         new TaskProcessRecord(28516, "old dispatch", root, stdout, stderr, exit, clock, null, null));
     var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
 
-    var previousLiveness = GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch;
-    GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = _ => false;
-    try
-    {
-        var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
-            kernel,
-            workspace,
-            kernel.GetGoal(goal.Id),
-            [agent],
-            profiles);
+    var batch = new GoalDispatchOperations(isProcessRunning: _ => false).SubscriptionDispatchReadyBatch(
+        kernel,
+        workspace,
+        kernel.GetGoal(goal.Id),
+        [agent],
+        profiles);
 
-        Assert.Empty(batch.Dispatches);
-        var heldTask = kernel.GetTask(goal.Id, task.Id);
-        Assert.NotNull(heldTask.LastProcess);
-        Assert.True(heldTask.LastProcess!.IsRunning);
-        Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt =>
-            evt.TaskId == task.Id &&
-            evt.Kind == ProgressKind.TaskNote &&
-            evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal));
-    }
-    finally
-    {
-        GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = previousLiveness;
-    }
+    Assert.Empty(batch.Dispatches);
+    var heldTask = kernel.GetTask(goal.Id, task.Id);
+    Assert.NotNull(heldTask.LastProcess);
+    Assert.True(heldTask.LastProcess!.IsRunning);
+    Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskNote &&
+        evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_uses_parallel_planner_first_safe_batch")]
@@ -813,7 +879,7 @@ public sealed class AdvanceLoopTests
 
     try
     {
-        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -877,7 +943,7 @@ public sealed class AdvanceLoopTests
 
     try
     {
-        var first = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var first = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -915,7 +981,7 @@ public sealed class AdvanceLoopTests
                 DateTimeOffset.UtcNow,
                 StandardOutputPath: researchPath));
 
-        var second = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var second = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -952,7 +1018,7 @@ public sealed class AdvanceLoopTests
                 DateTimeOffset.UtcNow,
                 StandardOutputPath: planPath));
 
-        var third = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var third = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -1030,7 +1096,7 @@ public sealed class AdvanceLoopTests
 
     try
     {
-        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             loopKernel,
             workspace,
             loopGoal,
@@ -1080,7 +1146,7 @@ public sealed class AdvanceLoopTests
 
     try
     {
-        var first = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var first = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -1091,7 +1157,7 @@ public sealed class AdvanceLoopTests
         Assert.Equal(task.Id, first.Dispatches[0].Task.Id);
         Assert.True(task.LastProcess is { IsRunning: true });
 
-        var second = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var second = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -1122,7 +1188,7 @@ public sealed class AdvanceLoopTests
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
 
-    var plan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal);
+    var plan = DispatchReadinessRules.BuildReadyTaskParallelPlan(goal);
     Assert.Equal(1, plan.Batches.Count);
     var firstBatch = plan.Batches[0];
 
@@ -1163,7 +1229,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         $"ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again at {retryTime:h:mm tt}.",
         now));
 
-    var result = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+    var result = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
         kernel,
         agents,
         WorkerProfileCatalog.Default(),
@@ -1175,7 +1241,9 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     Assert.Equal(NextActionKind.RunAssignedTask, result.BlockingAction!.Kind);
     Assert.Contains("Subscription retry window is deferred", result.StopReason, StringComparison.Ordinal);
     Assert.Equal(task.SubscriptionRetryAfter, result.ContinueAfter);
-    Assert.True(DashboardContinuationService.ShouldContinueWatching(result));
+    // The dashboard adapter must still classify this outcome as watchable after the ownership move.
+    Assert.True(DashboardContinuationService.ShouldContinueWatching(
+        GoalManagementCommandService.ToAdvanceLoopResultDto(goal, result, WorkerProfileCatalog.Default(), agents)));
 }
     [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_continues_prompt_below_new_large_threshold")]
     public void AdvanceGoalWithSubscriptionsUntilBlockedContinuesPromptBelowNewLargeThreshold()
@@ -1201,7 +1269,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     EnsureGoalWorktree(root, goal.Id);
     var promptCharacters = kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length;
 
-    var blocked = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+    var blocked = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
         kernel,
         [agent],
         WorkerProfileCatalog.Default(),
@@ -1258,21 +1326,18 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         lifetime,
         service);
 
+    var clock = Stopwatch.StartNew();
     var started = service.StartSubscriptionWatch(services, goal.Id.Value);
 
     Assert.True(started.IsRunning);
 
-    var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
-    while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Single().IsRunning)
-    {
-        await Task.Delay(75);
-    }
+    await AwaitWatchCompletionAsync(service, goal.Id.Value, clock);
 
     var status = service.GetStatuses().Single();
     var restored = await repository.LoadAsync();
     var restoredTask = restored.GetTask(goal.Id, task.Id);
-    Assert.False(status.IsRunning);
-    Assert.True(status.IterationCount > 0);
+    Assert.False(status.IsRunning, $"watch still running after completion signal; StopReason='{status.StopReason}'");
+    Assert.True(status.IterationCount > 0, $"expected at least one iteration; StopReason='{status.StopReason}'");
     Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
     Assert.True(restoredTask.LastVerification?.Succeeded is true);
 }
@@ -1324,19 +1389,16 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         lifetime,
         service);
 
+    var clock = Stopwatch.StartNew();
     var started = service.StartSubscriptionWatch(services, goal.Id.Value);
     Assert.True(started.IsRunning);
 
-    var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-    while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Single().IsRunning)
-    {
-        await Task.Delay(25);
-    }
+    await AwaitWatchCompletionAsync(service, goal.Id.Value, clock);
 
     var restored = await repository.LoadAsync();
     var restoredTask = restored.GetTask(goal.Id, task.Id);
     var status = service.GetStatuses().Single();
-    Assert.False(status.IsRunning);
+    Assert.False(status.IsRunning, $"watch still running after completion signal; StopReason='{status.StopReason}'");
     Assert.Equal(alternate.Id, restoredTask.AssignedAgentId);
     Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
     Assert.True(restored.GetTimeline(goal.Id).Any(evt =>

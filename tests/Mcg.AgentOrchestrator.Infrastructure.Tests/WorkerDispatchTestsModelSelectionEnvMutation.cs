@@ -47,7 +47,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     [
         new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
     ]);
-    var prepared = GoalManagementCommandService.ProfileDispatchTask(
+    var prepared = new GoalDispatchOperations().ProfileDispatchTask(
         kernel,
         workspace,
         goal,
@@ -58,7 +58,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     var missingProfiles = new WorkerProfileCatalog([]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
-        GoalManagementCommandService.StartDispatches(
+        new GoalDispatchOperations().StartDispatches(
             kernel,
             workspace,
             goal,
@@ -175,7 +175,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
 
     var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
     var readiness = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
-    var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+    var batch = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(
         kernel,
         CreateRefinedWorkspace(root),
         goal,

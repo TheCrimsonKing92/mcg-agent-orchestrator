@@ -403,7 +403,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DirectConsumers.cs",
             string.Join(
                 Environment.NewLine,
-                Enumerable.Range(1, 33).Select(index =>
+                Enumerable.Range(1, ReverseDependencyTestImpactReader.MaximumSelectedTestClasses + 1).Select(index =>
                     $"public sealed class DirectConsumer{index}Tests {{ " +
                     "private readonly DispatchFailureClassifier _classifier = new(); " +
                     "[Xunit.Fact] public void Runs() { } }")));
@@ -417,7 +417,10 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             check.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
         Assert.DoesNotContain("--filter", infrastructureCheck.Command);
-        Assert.Contains("32-test-class bound", infrastructureCheck.Reason, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{ReverseDependencyTestImpactReader.MaximumSelectedTestClasses}-test-class bound",
+            infrastructureCheck.Reason,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

@@ -159,7 +159,9 @@ public sealed partial class AgentOrchestratorKernel
                         accompanyingBlocker),
                 completedRound: verification.WorkerResultPresent ? completedRound : null,
                 workerResultLogReference: verification.StandardOutputPath,
-                recordDuplicateSuppression: verification.WorkerResultPresent);
+                recordDuplicateSuppression: verification.WorkerResultPresent,
+                evidenceOwner: verification.HumanInputEvidenceOwner
+                    ?? parsedHumanInput.Directive?.EvidenceOwner);
             if (verification.WorkerResultPresent &&
                 requestResult.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
@@ -172,7 +174,8 @@ public sealed partial class AgentOrchestratorKernel
                     completedRound,
                     verification.StandardOutputPath);
             }
-            if (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer)
+            if (HumanWaitPolicyDefaults.BlocksActiveWork(requestResult.Request.Kind) &&
+                (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer))
             {
                 return;
             }
@@ -1726,7 +1729,11 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (_humanInputRequests.Values.Any(request => request.GoalId == goal.Id && request.TaskId == task.Id && !request.IsCompleted))
+        if (_humanInputRequests.Values.Any(request =>
+                request.GoalId == goal.Id &&
+                request.TaskId == task.Id &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             return false;
         }

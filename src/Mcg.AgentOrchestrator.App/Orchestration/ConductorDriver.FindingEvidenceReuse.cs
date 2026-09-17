@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -44,8 +45,66 @@ internal sealed partial class ConductorDriver
             finding,
             [],
             upstreamDeveloper,
-            RequiresCommittedTarget: true);
+            RequiresCommittedTarget: true,
+            DeveloperOwnedFindings: developerOwnedFindings);
     }
+
+    /// <summary>
+    /// A Tester round whose Developer-owned findings are ALL still waiting on the focused execution
+    /// the conductor itself scheduled is pending verification, not a demonstrated writable defect.
+    /// Run that scheduled execution once for the exact candidate before spending a paid Developer
+    /// round on a candidate nobody has measured. A single writable finding in the round - no typed
+    /// request, a receipt already taken at this candidate, a permanent refusal, or an unknown
+    /// candidate - keeps today's immediate Developer dispatch with zero focused runs.
+    /// </summary>
+    private bool TryRouteTesterFindingToPendingEvidence(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        VerifyingFindingTrigger trigger,
+        out VerifyingFindingAutoRetryDecision decision)
+    {
+        decision = VerifyingFindingAutoRetryDecision.None;
+        if (!_focusedEvidenceRunnerConfigured ||
+            trigger.DeveloperOwnedFindings is not { Count: > 0 } developerOwnedFindings ||
+            // No feasible upstream Developer: today's escalation is the correct unchanged outcome.
+            trigger.TargetTask is not { } upstreamDeveloper ||
+            // An un-consumed Developer retry is already going to change the candidate, so evidence
+            // taken now would be spent on a superseded candidate.
+            HasUnconsumedRetry(upstreamDeveloper))
+        {
+            return false;
+        }
+
+        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        if (!ConductorGitRevisionReader.IsValid(candidateSha) ||
+            !FindingEvidenceExecutionClassifier.IsPendingExecutionOnly(
+                developerOwnedFindings, trigger.TriggeringTask, candidateSha))
+        {
+            return false;
+        }
+
+        if (!TryBuildFindingEvidenceRequest(goal, trigger.TriggeringTask, policy, out decision))
+        {
+            // The evidence path declined to act; fall through to the unchanged Developer dispatch.
+            decision = VerifyingFindingAutoRetryDecision.None;
+            return false;
+        }
+
+        _recordFindingEvidenceRequest(
+            goal.Id,
+            trigger.TriggeringTask.Id,
+            $"finding-evidence disposition=pending-execution-gate; role={trigger.TriggeringTask.RequiredRole}; " +
+            $"task_id={trigger.TriggeringTask.Id}; " +
+            $"finding_ids={string.Join(",", developerOwnedFindings.Select(item => item.StableId))}; " +
+            $"candidate_sha={candidateSha}; deferred_developer_task_id={upstreamDeveloper.Id}");
+        return true;
+    }
+
+    private static bool HasUnconsumedRetry(TaskSpec task) =>
+        task.LatestRetryAt is not null &&
+        task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned &&
+        task.LastDispatch is null &&
+        task.LastVerification is null;
 
     private static bool HasCurrentFindingEvidenceReceipt(
         TaskSpec requestingTask,
@@ -239,26 +298,7 @@ internal sealed partial class ConductorDriver
             .ToLowerInvariant()[..24];
     }
 
-    private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome)
-    {
-        if (!string.IsNullOrWhiteSpace(outcome.ReceiptId))
-        {
-            return false;
-        }
-
-        return outcome.Reason switch
-        {
-            FindingEvidenceNotHonouredReason.Unknown => true, // Permanent default: no typed retry signal exists.
-            FindingEvidenceNotHonouredReason.UnsupportedProject => true, // Permanent until the request changes.
-            FindingEvidenceNotHonouredReason.UnparseableSelection => true, // Permanent until the request changes.
-            FindingEvidenceNotHonouredReason.CandidateShaMissing => false, // Transient: a later candidate may have a sha.
-            FindingEvidenceNotHonouredReason.ExecutorUnavailable => false, // Transient: the executor may recover.
-            FindingEvidenceNotHonouredReason.SelectionApparatusFailure => false, // Transient: source discovery may recover.
-            FindingEvidenceNotHonouredReason.RunFailed => false, // Transient: the focused run may succeed later.
-            FindingEvidenceNotHonouredReason.SupersededByActionableRed => true, // Permanent for this unchanged request.
-            FindingEvidenceNotHonouredReason.PerRoundCap => true, // Retired persisted disposition; preserve suppression.
-            null => true, // Persisted outcomes without a reason are unclassified and fail safe.
-            _ => true // Future or unrecognized reasons fail safe against verbatim replay.
-        };
-    }
+    // One refusal truth: routing and the worker-visible execution state read the same rule.
+    private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome) =>
+        FindingEvidenceExecutionClassifier.IsPermanentRefusal(outcome);
 }

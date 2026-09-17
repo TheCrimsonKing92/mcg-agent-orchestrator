@@ -92,11 +92,11 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
 
             Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
             var repeated = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
             Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", repeated.Message, StringComparison.Ordinal);
             Xunit.Assert.Equal(0, provider.InvocationCount);
             var message = Xunit.Assert.Single(
@@ -171,7 +171,7 @@ public sealed class GoalRefinementTests
                         (stored, _) =>
                         {
                             var storedGoal = stored.GetGoal(goal.Id);
-                            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                                 stored,
                                 workspace,
                                 providers,
@@ -185,7 +185,7 @@ public sealed class GoalRefinementTests
                         (stored, _) =>
                         {
                             var storedGoal = stored.GetGoal(goal.Id);
-                            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                                 stored,
                                 workspace,
                                 providers,
@@ -321,7 +321,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState!.Status);
         Xunit.Assert.Contains("owner=durable-outbox phase=provider-refinement", failedState.Detail, StringComparison.Ordinal);
         var failedConsumer = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                 awaitKernel(repository),
                 workspace,
                 new InMemoryModelProviderRegistry([]),
@@ -350,7 +350,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Quarantined, quarantineState!.Status);
         var loaded = await repository.LoadAsync();
         var quarantineConsumer = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                 loaded,
                 workspace,
                 new InMemoryModelProviderRegistry([]),
@@ -461,7 +461,7 @@ public sealed class GoalRefinementTests
 
         var profile = new WorkerProfile("test-profile", "Write-Output {promptPath}");
         var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
-        _ = GoalManagementCommandService.ProfileDispatchTask(
+        _ = new GoalDispatchOperations().ProfileDispatchTask(
             kernel,
             workspace,
             goal,
@@ -474,7 +474,7 @@ public sealed class GoalRefinementTests
 
         var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.ProfileDispatchTask(
+            new GoalDispatchOperations().ProfileDispatchTask(
                 kernel,
                 workspace,
                 goal,
@@ -528,7 +528,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.NotNull(reloadedResearcher.LastDispatch);
         var reloadedPlanner = reloadedGoal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var preflight = await Xunit.Assert.ThrowsAsync<WorkerSubscriptionPreflightException>(
-            () => Task.Run(() => GoalManagementCommandService.ProfileDispatchTask(
+            () => Task.Run(() => new GoalDispatchOperations().ProfileDispatchTask(
                 reloadedKernel,
                 workspace,
                 reloadedGoal,
@@ -574,7 +574,7 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -587,7 +587,7 @@ public sealed class GoalRefinementTests
                 Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind)).Id);
 
             var again = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -655,7 +655,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.True(processed.Attached);
         Xunit.Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(kernel.GetGoal(goal.Id)));
 
-        GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+        GoalDispatchOperations.EnsureRefinedForSpecConsumer(
             kernel,
             workspace,
             providers,
@@ -2018,7 +2018,7 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(
-            () => GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+            () => new GoalDispatchOperations().SubscriptionDispatchReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -2210,7 +2210,7 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2512,7 +2512,7 @@ public sealed class GoalRefinementTests
         _ = CreateMigratedStateRepository(workspace.SqliteStatePath);
 
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() =>
-            GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+            new GoalDispatchOperations().SubscriptionDispatchReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -2644,7 +2644,7 @@ public sealed class GoalRefinementTests
         try
         {
             var first = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2660,7 +2660,7 @@ public sealed class GoalRefinementTests
             kernel = await repository.LoadAsync();
 
             var second = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,

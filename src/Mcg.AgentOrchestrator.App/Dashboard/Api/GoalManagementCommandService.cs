@@ -1,9 +1,15 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
+/// <summary>
+/// Dashboard transport adapter for goal commands. It parses request bodies, routes to the UI-free
+/// application operations under <see cref="Mcg.AgentOrchestrator.App.Application"/>, and maps their
+/// results to dashboard DTOs. It owns no goal execution behavior.
+/// </summary>
 internal static partial class GoalManagementCommandService
 {
 public static bool IsGoalBatchOperation(string operation)
@@ -25,14 +31,15 @@ public static BatchActionResultDto ApplyGoalBatchAction(
     OrchestratorWorkspace workspace,
     IModelProviderRegistry? providers = null)
 {
+    var dispatches = new GoalDispatchOperations();
     return operation.ToLowerInvariant() switch
     {
         "profile-dispatch-ready" => ApplyProfileDispatchReady(kernel, workspace, agents, goal, body, providers),
         "subscription-dispatch-ready" => ApplySubscriptionDispatchReady(kernel, workspace, agents, goal, providers),
         "start-subscription-ready" => ApplyStartSubscriptionReady(kernel, workspace, agents, goal, providers),
-        "start-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "start-dispatches", StartDispatches(kernel, workspace, goal)),
-        "refresh-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "refresh-dispatches", RefreshDispatches(kernel, goal)),
-        "cancel-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "cancel-dispatches", CancelDispatches(kernel, goal)),
+        "start-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "start-dispatches", dispatches.StartDispatches(kernel, workspace, goal)),
+        "refresh-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "refresh-dispatches", dispatches.RefreshDispatches(kernel, goal)),
+        "cancel-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "cancel-dispatches", dispatches.CancelDispatches(kernel, goal)),
         _ => throw new ArgumentException("Goal batch operation must be profile-dispatch-ready, subscription-dispatch-ready, start-subscription-ready, start-dispatches, refresh-dispatches, or cancel-dispatches.")
     };
 }
@@ -47,7 +54,7 @@ public static BatchActionResultDto ApplyProfileDispatchReady(
 {
     var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
     var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
-    var results = ProfileDispatchReadyTasks(kernel, workspace, goal, profile, agents, providers);
+    var results = new GoalDispatchOperations().ProfileDispatchReadyTasks(kernel, workspace, goal, profile, agents, providers);
     return DashboardResponseMapper.ToBatchActionResultDto(goal, "profile-dispatch-ready", results.Select(result => result.Task).ToList(), results);
 }
 
@@ -59,7 +66,7 @@ public static BatchActionResultDto ApplySubscriptionDispatchReady(
     IModelProviderRegistry? providers = null)
 {
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var results = SubscriptionDispatchReadyBatch(kernel, workspace, goal, agents, profiles, providers);
+    var results = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(kernel, workspace, goal, agents, profiles, providers);
     return DashboardResponseMapper.ToBatchActionResultDto(
         goal,
         "subscription-dispatch-ready",
@@ -76,10 +83,8 @@ public static BatchActionResultDto ApplyStartSubscriptionReady(
     IModelProviderRegistry? providers = null)
 {
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var result = StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles, providers);
+    var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles, providers);
     return DashboardResponseMapper.ToSubscriptionStartActionResultDto(goal, result);
 }
 
 }
-
-

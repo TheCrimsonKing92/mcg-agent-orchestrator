@@ -1802,6 +1802,7 @@ public sealed class BackgroundDispatchRunner
             HumanInputQuestionFingerprint: humanInputDirective.Directive?.QuestionFingerprint,
             HumanInputBlockerFingerprint: humanInputDirective.Directive?.BlockerFingerprint,
             HumanInputKind: humanInputDirective.Directive?.Kind,
+            HumanInputEvidenceOwner: humanInputDirective.Directive?.EvidenceOwner,
             ObservedRootExitCode: observedExitCode,
             ReconciledToSuccess: wrapperExitReconciled,
             ReconciliationOriginRule: wrapperExitReconciled ? reconciliationOriginRule : null,

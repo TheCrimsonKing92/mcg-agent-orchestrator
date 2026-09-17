@@ -29,6 +29,10 @@ public sealed class OperatorIntentStoreTestsManualVerificationRequest
             var intent = Xunit.Assert.Single(await store.ListForGoalAsync(goal.Id.Value));
             Xunit.Assert.Equal("api-replay-key", intent.IdempotencyKey);
             Xunit.Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
+            // Provenance is now supplied by the calling adapter; the dashboard row must be unchanged.
+            Xunit.Assert.Equal("operator", intent.Actor);
+            Xunit.Assert.Equal("dashboard", intent.Channel);
+            Xunit.Assert.Equal("dashboard-operator-control", intent.AuthenticationAssurance);
             Xunit.Assert.Equal(initialStatus, task.Status);
             Xunit.Assert.Null(task.LastVerification);
             var payload = JsonSerializer.Deserialize<ManualVerificationOperatorIntentPayload>(intent.PayloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;

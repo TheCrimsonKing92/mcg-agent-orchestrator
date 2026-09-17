@@ -12,10 +12,10 @@ public sealed class AcceptanceGateEngineSettingsTests
         var settings = AcceptanceGateEngineSettings.Load(repositoryRoot);
         var startupContract = GoalAcceptanceVerifier.ValidateStartupContract(repositoryRoot);
 
-        Xunit.Assert.Equal(6, settings.MaxConcurrentShards);
+        Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(20, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(22, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(7, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
@@ -71,18 +71,20 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
         Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
         Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
-        Xunit.Assert.Empty(
-            settings.InfrastructureTestLanes
-                .Single(lane => lane.Name == "Goal lifecycle commands")
-                .ExclusiveResourceKeys);
-        Xunit.Assert.Empty(
-            settings.InfrastructureTestLanes
-                .Single(lane => lane.Name == "Goal worktree cleanup")
-                .ExclusiveResourceKeys);
-        AssertLanePairPreservesCoverage(
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal lifecycle commands")
+            .ExclusiveResourceKeys);
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal worktree cleanup")
+            .ExclusiveResourceKeys);
+        AssertLaneSetPreservesCoverage(
             settings,
-            "Worker profiles",
-            "Worker dispatch fixtures",
+            [
+                "Worker profiles",
+                "Worker dispatch fixtures A",
+                "Worker dispatch fixtures B",
+                "Worker dispatch fixtures C"
+            ],
             [
                 "AdvanceLoopTests",
                 "ConductLoopLockTests",

@@ -82,7 +82,7 @@ public sealed class ConductorDriverTestsAdmissionRefusal
             PaidRoute: PaidRouteClassification.Paid);
         kernel.RecordTaskDispatch(goal.Id, task.Id, preparedDispatch);
         var prepared = new WorkerProfileDispatchResult(preparedTask, @"C:\repo\.orchestrator\prompts\task.md");
-        var processes = GoalManagementCommandService.StartDispatches(
+        var processes = new GoalDispatchOperations().StartDispatches(
             kernel,
             seeded.Workspace,
             kernel.GetGoal(goal.Id),
@@ -141,7 +141,7 @@ public sealed class ConductorDriverTestsAdmissionRefusal
                     PaidRoute: PaidRouteClassification.Paid);
                 kernel.RecordTaskDispatch(currentGoal.Id, task.Id, preparedDispatch);
                 var preparedTask = kernel.GetTask(currentGoal.Id, task.Id);
-                var processes = GoalManagementCommandService.StartDispatches(kernel, seeded.Workspace,
+                var processes = new GoalDispatchOperations().StartDispatches(kernel, seeded.Workspace,
                     kernel.GetGoal(currentGoal.Id),
                     refreshBeforeStart: false,
                     checkpointBeforeWorkerStart: (checkpointKernel, checkpointGoalId, checkpointTaskId, phase) =>

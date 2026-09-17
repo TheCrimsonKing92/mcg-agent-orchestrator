@@ -443,7 +443,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [
         new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
     ]);
-    var prepared = GoalManagementCommandService.ProfileDispatchTask(
+    var prepared = new GoalDispatchOperations().ProfileDispatchTask(
         kernel,
         workspace,
         goal,
@@ -455,7 +455,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     kernel.RecordTaskNote(goal.Id, developer.Id, lateState);
 
     Assert.ThrowsAny<InvalidOperationException>(() =>
-        GoalManagementCommandService.StartDispatches(
+        new GoalDispatchOperations().StartDispatches(
             kernel,
             workspace,
             goal,
@@ -510,7 +510,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             .GetAwaiter()
             .GetResult();
 
-        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+        var prepared = new GoalDispatchOperations().ProfileDispatchTask(
             kernel,
             workspace,
             goal,
@@ -521,7 +521,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         Assert.Equal(PaidRouteClassification.Paid, prepared.Task.LastDispatch!.PaidRoute);
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.StartDispatches(
+            new GoalDispatchOperations().StartDispatches(
                 kernel,
                 workspace,
                 goal,
@@ -573,7 +573,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             reservationOwnerId: "owner-a",
             reservationLeaseExpiresAt: at.AddMinutes(1)));
 
-        Assert.False(GoalManagementCommandService.ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+        Assert.False(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
         Assert.Equal(at, task.LastDispatch!.DispatchedAt);
     }
 
@@ -615,7 +615,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         [
             new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
         ]);
-        _ = GoalManagementCommandService.ProfileDispatchTask(
+        _ = new GoalDispatchOperations().ProfileDispatchTask(
             kernel,
             workspace,
             goal,
@@ -627,7 +627,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         Assert.ThrowsAny<InvalidOperationException>(() =>
         {
-            _ = GoalManagementCommandService.StartDispatches(
+            _ = new GoalDispatchOperations().StartDispatches(
                 kernel,
                 workspace,
                 goal,
@@ -664,7 +664,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     var checkpointCalls = 0;
 
     var ex = Assert.Throws<InvalidOperationException>(() =>
-        GoalManagementCommandService.StartSubscriptionReadyTasks(
+        new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -718,7 +718,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var checkpointCalls = 0;
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.StartSubscriptionReadyTasks(
+            new GoalDispatchOperations().StartSubscriptionReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -820,7 +820,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel).GetAwaiter().GetResult();
         var checkpointCalls = 0;
 
-        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel,
             workspace,
             goal,
@@ -997,7 +997,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         try
         {
             var exception = Record.Exception(() =>
-                GoalManagementCommandService.StartSubscriptionReadyTasks(
+                new GoalDispatchOperations().StartSubscriptionReadyTasks(
                     kernel,
                     workspace,
                     goal,
@@ -1116,7 +1116,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         kernel.ReassignTaskAgent(goal.Id, second.Id, alternate);
         var starts = 0;
         var checkpoints = 0;
-        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, kernel.GetGoal(goal.Id),
+        var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(kernel, workspace, kernel.GetGoal(goal.Id),
             agents, DispatchTestProfiles(), checkpointBeforeWorkerStart: (_, _, _, _) => checkpoints++,
             readCurrentInterruptedDispatchState: (_, _) => new InterruptedDispatchStateRead(GoalStatus.Cancelled, WorkTaskStatus.Cancelled),
             runner: new BackgroundDispatchRunner(startProcess: _ => { starts++; return null; }), sandboxOptions: DisabledSandbox);
@@ -1163,7 +1163,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         kernel.ReassignTaskAgent(goal.Id, first.Id, openAi);
         kernel.ReassignTaskAgent(goal.Id, second.Id, anthropic);
         goal = kernel.GetGoal(goal.Id);
-        var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+        var parallelPlan = DispatchReadinessRules.BuildReadyTaskParallelPlan(goal, agents);
         Assert.True(parallelPlan.Batches.Count == 1, JsonSerializer.Serialize(parallelPlan));
         Assert.Equal(2, parallelPlan.Batches[0].IntentIds.Count);
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
@@ -1173,7 +1173,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var checkpoints = 0;
         const string between = "evidence-recorded-between-paid-reservations";
         var error = Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, DispatchTestProfiles(),
+            new GoalDispatchOperations().StartSubscriptionReadyTasks(kernel, workspace, goal, agents, DispatchTestProfiles(),
                 checkpointBeforeWorkerStart: (current, id, _, phase) =>
                 {
                     if (phase == DispatchRecordCheckpointPhase.BeforeRetryAdmission)
@@ -1230,7 +1230,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         kernel.RetryTask(goal.Id, planner.Id, "Retry with new evidence.",
             retryCause: RetryCause.ProviderInterruption);
         if (!readyBatch)
-            _ = GoalManagementCommandService.ProfileDispatchTask(kernel, workspace, goal, planner,
+            _ = new GoalDispatchOperations().ProfileDispatchTask(kernel, workspace, goal, planner,
                 DispatchTestProfiles().GetRequired("codex-cli"), agents, sandboxOptions: DisabledSandbox);
         Assert.NotNull(kernel.GetTask(goal.Id, planner.Id).LatestRetryAt);
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
@@ -1258,11 +1258,11 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var exception = Assert.Throws<InvalidOperationException>(() =>
         {
             if (readyBatch)
-                GoalManagementCommandService.StartSubscriptionReadyTasks(kernel, workspace, goal, agents, DispatchTestProfiles(),
+                new GoalDispatchOperations().StartSubscriptionReadyTasks(kernel, workspace, goal, agents, DispatchTestProfiles(),
                     checkpointBeforeWorkerStart: checkpoint, runner: runner, sandboxOptions: DisabledSandbox,
                     recordDurableGoalBaseline: snapshot => baselines[snapshot.Id] = snapshot);
             else
-                GoalManagementCommandService.StartDispatches(kernel, workspace, goal, refreshBeforeStart: false,
+                new GoalDispatchOperations().StartDispatches(kernel, workspace, goal, refreshBeforeStart: false,
                     checkpointBeforeWorkerStart: checkpoint, runner: runner, sandboxOptions: DisabledSandbox,
                     recordDurableGoalBaseline: snapshot => baselines[snapshot.Id] = snapshot);
         });
@@ -1305,7 +1305,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         kernel.RecordTaskNote(goal.Id, planner.Id, note);
         var checkpoints = 0;
         var starts = 0;
-        var result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+        var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
             kernel, workspace, goal, agents, DispatchTestProfiles(),
             checkpointBeforeWorkerStart: (current, id, _, _) =>
             {
@@ -1365,7 +1365,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             });
 
         var conflict = Assert.Throws<DispatchCheckpointConflictException>(() =>
-            GoalManagementCommandService.StartSubscriptionReadyTasks(
+            new GoalDispatchOperations().StartSubscriptionReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -1451,7 +1451,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         try
         {
             var exception = Record.Exception(() =>
-                GoalManagementCommandService.StartSubscriptionReadyTasks(
+                new GoalDispatchOperations().StartSubscriptionReadyTasks(
                     kernel,
                     workspace,
                     goal,
@@ -1586,7 +1586,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             var reloadedReceipt = Assert.Single(reloadedTask.RetryAdmissionHistory);
             Assert.NotNull(reloadedReceipt.WorkerStartClaimedAt);
             Assert.Null(reloadedReceipt.WorkerStartedAt);
-            Assert.False(GoalManagementCommandService.ShouldRefreshPreparedDispatchBeforeStart(reloadedTask, true));
+            Assert.False(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(reloadedTask, true));
 
             var recovery = RetryAdmissionReservationStore.TryReserveAsync(
                     workspace.SqliteStatePath, goal.Id, task.Id, fingerprint,
@@ -1694,7 +1694,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             Assert.NotNull(reloaded.Tasks.Single().LastProcess);
             var reloadedKernel = new AgentOrchestratorKernel();
             reloadedKernel.ReplaceGoalWithSnapshot(reloaded);
-            Assert.True(GoalManagementCommandService.ShouldRefreshPreparedDispatchBeforeStart(
+            Assert.True(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(
                 reloadedKernel.GetTask(goal.Id, task.Id),
                 true));
 
@@ -1819,7 +1819,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var phases = new List<(TaskId TaskId, DispatchRecordCheckpointPhase Phase)>();
 
         var conflict = Assert.Throws<DispatchCheckpointConflictException>(() =>
-            GoalManagementCommandService.StartDispatches(
+            new GoalDispatchOperations().StartDispatches(
                 kernel,
                 workspace,
                 goal,
@@ -4015,7 +4015,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     RunGit(root, ["add", "main-profile-only.txt"], DateTimeOffset.Parse("2026-07-15T18:56:00Z"));
     RunGit(root, ["commit", "-m", "Advance main for profile dispatch"], DateTimeOffset.Parse("2026-07-15T18:56:00Z"));
 
-    var result = GoalManagementCommandService.ProfileDispatchTask(
+    var result = new GoalDispatchOperations().ProfileDispatchTask(
         kernel,
         workspace,
         goal,
@@ -4502,7 +4502,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             request.Id,
             $"Runs 20260906T1200Z and 20260906T1830Z. Receipts at {receiptPath} with sha256:3f9a1c2b4d5e6f70.");
 
-        var dispatch = GoalManagementCommandService.ProfileDispatchTask(
+        var dispatch = new GoalDispatchOperations().ProfileDispatchTask(
             kernel,
             workspace,
             goal,
@@ -4576,7 +4576,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var trimmedRequestIds = kernel.BuildTaskBrief(goal.Id, developer.Id).TrimmedPrerequisiteEvidenceRequestIds;
         Assert.NotEmpty(trimmedRequestIds ?? []);
 
-        var dispatch = GoalManagementCommandService.ProfileDispatchTask(
+        var dispatch = new GoalDispatchOperations().ProfileDispatchTask(
             kernel,
             workspace,
             goal,

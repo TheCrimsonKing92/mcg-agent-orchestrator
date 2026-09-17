@@ -68,7 +68,7 @@ public sealed record CanonicalReviewFindingEntry(
     [property: JsonPropertyName("verdict_identity")] string VerdictIdentity,
     [property: JsonPropertyName("evidence_identity")] string? EvidenceIdentity,
     [property: JsonIgnore] FindingEvidenceRequest? EvidenceRequest,
-    [property: JsonIgnore] FindingEvidenceOutcome? EvidenceOutcome,
+    [property: JsonPropertyName("evidence_outcome")] FindingEvidenceOutcome? EvidenceOutcome,
     [property: JsonPropertyName("round")] ReviewFindingContentReference Round,
     [property: JsonPropertyName("receipt_bodies")] IReadOnlyList<ReviewFindingContentReference> ReceiptBodies,
     [property: JsonPropertyName("resolution_proof")] ReviewFindingResolutionProof? ResolutionProof,

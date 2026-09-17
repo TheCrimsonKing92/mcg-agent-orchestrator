@@ -430,15 +430,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
     private const int MaxFocusedEvidenceFilterLength = 1024;
-    internal const string FocusedEvidenceSupportedProjectForms =
-        "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
-        "Mcg.AgentOrchestrator.Infrastructure.Tests, Dashboard, Dashboard.Tests, " +
-        "Mcg.AgentOrchestrator.Dashboard.Tests, or a full .csproj path ending in " +
-        "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj; " +
-        "extracted Infrastructure test projects registered in engine.mtpInvocations also accept their " +
-        "project label, file name, or full .csproj path";
+    internal static string FocusedEvidenceSupportedProjectForms(
+        AcceptanceGateEngineSettings? engineSettings) =>
+        DeclaredTestProjectInventory.DescribeSupportedProjectForms(engineSettings);
     private const int FocusedEvidenceShortTimeoutTargetLimit = 4;
     internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
@@ -2879,26 +2873,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return true;
         }
 
-        foreach (var invocation in engineSettings?.MtpInvocations ?? [])
-        {
-            var candidate = NormalizePath(invocation.Project)!;
-            if (!IsExtractedInfrastructureProject(candidate) && !IsDashboardTestProject(candidate))
-            {
-                continue;
-            }
-
-            var fileName = Path.GetFileName(candidate);
-            if (normalized.Equals(candidate, StringComparison.OrdinalIgnoreCase) ||
-                normalized.Equals(fileName, StringComparison.OrdinalIgnoreCase) ||
-                normalized.Equals(Path.GetFileNameWithoutExtension(fileName), StringComparison.OrdinalIgnoreCase) ||
-                normalized.Equals(ProjectLabel(candidate), StringComparison.OrdinalIgnoreCase))
-            {
-                project = candidate;
-                return true;
-            }
-        }
-
-        return false;
+        return DeclaredTestProjectInventory.TryResolve(normalized, engineSettings, out project);
     }
 
     private static bool TryNormalizeFocusedEvidenceFilter(
@@ -6860,7 +6835,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 return null;
             }
 
-            if (!process.WaitForExit(5000))
+            if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { }
                 return null;

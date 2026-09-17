@@ -274,7 +274,7 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
             task = goal.Tasks.Single();
             var gitStatusBefore = ReadGit(root, ["status", "--short"]);
 
-            var dispatch = GoalManagementCommandService.ProfileDispatchTask(
+            var dispatch = new GoalDispatchOperations().ProfileDispatchTask(
                 kernel,
                 workspace,
                 goal,

@@ -40,6 +40,19 @@ public sealed class MtpTestRunnerScriptTestsSandboxCleanup
     }
 
     [Fact]
+    public void SandboxRootsAreIgnoredBeforeCleanup()
+    {
+        var repositoryRoot = MtpTestRunnerScriptTests.RepositoryRoot();
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
+        File.WriteAllText(Path.Combine(sandbox.Root, "untracked-probe.txt"), "probe");
+
+        var status = ReadGitStatus(repositoryRoot);
+
+        Assert.DoesNotContain(Path.GetFileName(sandbox.Root), status, StringComparison.Ordinal);
+        Assert.DoesNotContain(Path.GetFileName(sandbox.LocalApplicationDataRoot), status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UndeletableRootThrowsDiagnosticNamingPathAndReason()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), ".mtp-sandbox-undel"));

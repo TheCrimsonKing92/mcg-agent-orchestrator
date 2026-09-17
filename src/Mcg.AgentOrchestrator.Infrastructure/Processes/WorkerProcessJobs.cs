@@ -22,6 +22,11 @@ internal sealed record OwnedChildStartMetadata(
     IReadOnlyList<string> ArgumentList,
     string WorkingDirectory);
 
+internal sealed record WorkerProcessJobReleaseEvidence(
+    bool RegistrationFound,
+    bool TerminationRequested,
+    bool JobExitConfirmed);
+
 internal sealed class RegisteredJob
 {
     internal RegisteredJob(
@@ -690,11 +695,16 @@ public static class WorkerProcessJobs
             lifecycleAuthority);
     }
 
+    /// <param name="inheritableWindowObserver">
+    /// Invoked while this launch's inheritable capture duplicates exist, immediately before
+    /// CreateProcessW. Per-launch; production callers leave it null.
+    /// </param>
     internal static Process StartRegisteredWithFileCaptureOrThrow(
         ProcessStartInfo startInfo,
         string stdoutPath,
         string stderrPath,
-        string? ownerId = null)
+        string? ownerId = null,
+        Action? inheritableWindowObserver = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
@@ -703,7 +713,11 @@ public static class WorkerProcessJobs
         }
 
         return StartRegisteredWindows(
-            () => OwnedProcessGroup.StartSuspendedWithFileCapture(startInfo, stdoutPath, stderrPath),
+            () => OwnedProcessGroup.StartSuspendedWithFileCapture(
+                startInfo,
+                stdoutPath,
+                stderrPath,
+                inheritableWindowObserver),
             ownerId);
     }
 
@@ -1514,6 +1528,52 @@ public static class WorkerProcessJobs
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
     }
 
+    /// <summary>
+    /// Releases a registration and reports what was actually proven about its termination, so a caller
+    /// that must decide whether it still owns anything can say so instead of assuming it.
+    /// </summary>
+    internal static WorkerProcessJobReleaseEvidence ReleaseWithCompletionEvidence(
+        int processId,
+        out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal != StaticRegistrationRemoval.Removed)
+        {
+            if (removal == StaticRegistrationRemoval.Missing)
+            {
+                Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+            }
+
+            return new WorkerProcessJobReleaseEvidence(
+                RegistrationFound: false,
+                TerminationRequested: false,
+                JobExitConfirmed: false);
+        }
+
+        WorkerProcessJobReleaseEvidence evidence;
+        try
+        {
+            Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+        }
+        finally
+        {
+            var terminationRequested = ReadAccountingAndDispose(
+                job,
+                kill: true,
+                captureAccounting: true,
+                preferDuplicate: false,
+                out accounting,
+                out var jobExitConfirmed);
+            evidence = new WorkerProcessJobReleaseEvidence(
+                RegistrationFound: true,
+                TerminationRequested: terminationRequested,
+                JobExitConfirmed: jobExitConfirmed);
+        }
+
+        return evidence;
+    }
+
     internal static RegisteredJob GetRegisteredJobOrThrow(int processId, object lifecycleAuthority)
     {
         if (Jobs.TryGetValue(processId, out var job) &&
@@ -1748,7 +1808,25 @@ public static class WorkerProcessJobs
         bool preferDuplicate,
         out WorkerProcessJobAccounting? accounting)
     {
+        return ReadAccountingAndDispose(
+            job,
+            kill,
+            captureAccounting,
+            preferDuplicate,
+            out accounting,
+            out _);
+    }
+
+    private static bool ReadAccountingAndDispose(
+        RegisteredJob? job,
+        bool kill,
+        bool captureAccounting,
+        bool preferDuplicate,
+        out WorkerProcessJobAccounting? accounting,
+        out bool jobExitConfirmed)
+    {
         accounting = null;
+        jobExitConfirmed = false;
         if (job is null)
         {
             return !kill;
@@ -1798,7 +1876,9 @@ public static class WorkerProcessJobs
                 job.Group.Kill();
                 if (job.DuplicateAccountingHandle is not null)
                 {
-                    OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
+                    jobExitConfirmed = OwnedProcessGroup.WaitForJobExit(
+                        job.DuplicateAccountingHandle,
+                        TimeSpan.FromSeconds(5));
                 }
 
                 EmitTempRootReapResults(ReapOwnedTempRoots(ownedTempRoots));
@@ -2115,9 +2195,25 @@ public static class WorkerProcessJobs
         }
     }
 
+    // Parent pid plus start time for one process. Windows keeps a dead parent's pid in its children's
+    // Toolhelp32 records and recycles pids, so a parent pid alone does not establish ancestry.
+    internal readonly record struct ProcessAncestryFacts(int ParentProcessId, DateTime StartTimeUtc);
+
+    internal delegate bool ProcessAncestryLookup(int processId, out ProcessAncestryFacts facts);
+
     private static bool IsProtectedProcessOrAncestor(int processId)
     {
-        return IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId);
+        return TryGetProtectedPid(out var protectedPid) &&
+            IsProtectedProcessOrAncestor(processId, protectedPid, ReadProcessAncestryFacts);
+    }
+
+    internal static bool IsProtectedProcessOrAncestor(
+        int processId,
+        int protectedProcessId,
+        ProcessAncestryLookup readAncestryFacts)
+    {
+        return processId == protectedProcessId ||
+            IsDescendantOf(protectedProcessId, processId, readAncestryFacts);
     }
 
     private static bool CanKillProcess(int processId, bool allowProtectedDescendant)
@@ -2181,15 +2277,39 @@ public static class WorkerProcessJobs
 
     private static bool IsDescendantOf(int processId, int ancestorProcessId)
     {
-        if (!OperatingSystem.IsWindows())
+        return OperatingSystem.IsWindows() &&
+            IsDescendantOf(processId, ancestorProcessId, ReadProcessAncestryFacts);
+    }
+
+    // Walks parent pids from processId looking for ancestorProcessId. A hop is credited only when the
+    // parent pid still names a live process that started earlier than the child it claims; anything
+    // that cannot be verified ends the walk as "not an ancestor". Without that check a pid Windows has
+    // just handed to a freshly spawned child is indistinguishable from a long-dead ancestor whose pid
+    // still sits in its children's parent-pid records.
+    internal static bool IsDescendantOf(
+        int processId,
+        int ancestorProcessId,
+        ProcessAncestryLookup readAncestryFacts)
+    {
+        ArgumentNullException.ThrowIfNull(readAncestryFacts);
+        if (processId <= 0 ||
+            ancestorProcessId <= 0 ||
+            !readAncestryFacts(processId, out var child))
         {
             return false;
         }
 
-        var current = processId;
+        var childProcessId = processId;
         for (var i = 0; i < 64; i++)
         {
-            if (!TryGetParentProcessId(current, out var parentProcessId))
+            var parentProcessId = child.ParentProcessId;
+            if (parentProcessId <= 0 || parentProcessId == childProcessId)
+            {
+                return false;
+            }
+
+            if (!readAncestryFacts(parentProcessId, out var parent) ||
+                parent.StartTimeUtc >= child.StartTimeUtc)
             {
                 return false;
             }
@@ -2199,31 +2319,55 @@ public static class WorkerProcessJobs
                 return true;
             }
 
-            current = parentProcessId;
+            childProcessId = parentProcessId;
+            child = parent;
         }
 
         return false;
     }
 
-    private static bool IsDescendantOf(int processId, int ancestorProcessId, IReadOnlyDictionary<int, int> parentByProcessId)
+    // The production lookup: Toolhelp32 for the parent pid, Process.StartTime for liveness plus ordering.
+    internal static ProcessAncestryLookup ReadProcessAncestryFactsForTests => ReadProcessAncestryFacts;
+
+    private static bool ReadProcessAncestryFacts(int processId, out ProcessAncestryFacts facts)
     {
-        var current = processId;
-        for (var i = 0; i < 64; i++)
+        facts = default;
+        if (!TryGetParentProcessId(processId, out var parentProcessId) ||
+            !TryGetProcessStartTimeUtc(processId, out var startTimeUtc))
         {
-            if (!parentByProcessId.TryGetValue(current, out var parentProcessId))
+            return false;
+        }
+
+        facts = new ProcessAncestryFacts(parentProcessId, startTimeUtc);
+        return true;
+    }
+
+    private static bool TryGetProcessStartTimeUtc(int processId, out DateTime startTimeUtc)
+    {
+        startTimeUtc = default;
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited)
             {
                 return false;
             }
 
-            if (parentProcessId == ancestorProcessId)
-            {
-                return true;
-            }
-
-            current = parentProcessId;
+            startTimeUtc = process.StartTime.ToUniversalTime();
+            return true;
         }
-
-        return false;
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static bool TryGetParentProcessId(int processId, out int parentProcessId)

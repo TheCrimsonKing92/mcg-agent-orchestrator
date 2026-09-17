@@ -538,7 +538,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         ConductorAutonomyPolicy? conductorPolicy)
     {
         _ = guidanceText;
-        GoalManagementCommandService.SubscriptionDispatchTask(
+        new GoalDispatchOperations().SubscriptionDispatchTask(
             kernel,
             _workspace,
             goal,

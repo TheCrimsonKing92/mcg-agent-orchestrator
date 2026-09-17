@@ -9,7 +9,7 @@ internal sealed class WorkerSkillSelector
         new(
             "dotnet-windows-build-hygiene",
             Path.Combine(".agents", "skills", "dotnet-windows-build-hygiene", "SKILL.md"),
-            "Use for .NET build/test work, CS2012 file locks, VBCSCompiler/MSBuild server cleanup, dashboard apphost locks, and Windows PowerShell verification hygiene."),
+            "Use Invoke-WorkerBuildCheck.ps1 for normal .NET builds, Invoke-TestSummary.ps1 for tests, and the bounded diagnostic wrapper only for unsupported argument shapes; also covers CS2012/file-lock and Windows PowerShell hygiene."),
         new(
             "orchestrator-dogfood",
             Path.Combine(".agents", "skills", "orchestrator-dogfood", "SKILL.md"),

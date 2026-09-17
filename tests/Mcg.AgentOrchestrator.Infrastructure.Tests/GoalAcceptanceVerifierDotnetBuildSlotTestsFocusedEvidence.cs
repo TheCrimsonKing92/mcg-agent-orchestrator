@@ -967,6 +967,83 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
     }
 
     [Xunit.Fact]
+    public void FocusedEvidence_DeclaredProjectOutsideInfrastructureTestsRootResolvesWithoutANewAlias()
+    {
+        const string standaloneCliProject =
+            "tests/Mcg.AgentOrchestrator.Cli.Tests/Mcg.AgentOrchestrator.Cli.Tests.csproj";
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations = [new AcceptanceMtpInvocation { Project = standaloneCliProject }]
+        };
+
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "Mcg.AgentOrchestrator.Cli.Tests",
+            settings,
+            out var resolved));
+        Assert.Equal(standaloneCliProject, resolved);
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            standaloneCliProject,
+            settings,
+            out resolved));
+        Assert.Equal(standaloneCliProject, resolved);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Unsupported.Tests")]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.App")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj")]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.RealProcessShardProbe")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj")]
+    [Xunit.InlineData("../../../evil/tests/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj")]
+    [Xunit.InlineData("C:/attacker/tests/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj")]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("   ")]
+    public void FocusedEvidence_UnknownNonTestTraversalAndAbsoluteAliasesAreRefused(string alias)
+    {
+        const string cliProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
+            "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
+        const string probeProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/" +
+            "Mcg.AgentOrchestrator.RealProcessShardProbe.csproj";
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations =
+            [
+                new AcceptanceMtpInvocation { Project = cliProject },
+                new AcceptanceMtpInvocation { Project = probeProject }
+            ]
+        };
+
+        Assert.False(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(alias, settings, out var resolved));
+        Assert.Equal(string.Empty, resolved);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_AbsoluteLegacyProjectPathKeepsCandidateRelativeAttribution()
+    {
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations =
+            [
+                new AcceptanceMtpInvocation
+                {
+                    Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+            ]
+        };
+
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "C:\\repo\\tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            settings,
+            out var resolved));
+        Assert.Equal(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            resolved);
+        Assert.Equal("Infrastructure.Tests", GoalAcceptanceVerifier.ProjectLabel(resolved));
+    }
+
+    [Xunit.Fact]
     public async Task FocusedEvidence_UmbrellaAliasRoutesMovedClassOnlyToOwningExtractedProject()
     {
         var calls = new List<string[]>();

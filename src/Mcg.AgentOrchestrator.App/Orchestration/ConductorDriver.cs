@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -268,6 +267,12 @@ internal sealed partial class ConductorDriver
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
             runInline: runAcceptanceAttemptsInCurrentProcess,
             buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
+        _apparatusRedGate = new ApparatusRedGate(
+            Path.Combine(
+                workspace.OrchestratorDirectory,
+                "acceptance-gate-attempts",
+                AcceptanceFailingTestIndex.FileName),
+            goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
@@ -395,7 +400,7 @@ internal sealed partial class ConductorDriver
             SubscriptionStartResult result;
             try
             {
-                result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+                result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
                     kernel,
                     workspace,
                     goal,
@@ -473,7 +478,7 @@ internal sealed partial class ConductorDriver
             ProcessBatchExecutionResult result;
             try
             {
-                result = GoalManagementCommandService.StartDispatches(
+                result = new GoalDispatchOperations().StartDispatches(
                     kernel,
                     workspace,
                     goal,
@@ -695,7 +700,7 @@ internal sealed partial class ConductorDriver
             {
                 try
                 {
-                    checkAttributions = CleanTestBaseline.Attribute(
+                    (baselineReceipt, checkAttributions) = AttributeAcceptanceFailureWithExecutedBaseline(
                         baselineReceipt,
                         failedChecks,
                         baselineEvidence,
@@ -1297,8 +1302,10 @@ internal sealed partial class ConductorDriver
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
         Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null,
-        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null)
+        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
+        ApparatusRedGate? apparatusRedGate = null)
     {
+        _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
@@ -1386,7 +1393,7 @@ internal sealed partial class ConductorDriver
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
         _evaluateReadiness = evaluateReadiness ?? (goal =>
-            GoalManagementCommandService.HasAssignedDispatchCandidates(goal)
+            DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
@@ -1987,6 +1994,12 @@ internal sealed partial class ConductorDriver
                     goal,
                     candidate.TriggeringTask,
                     candidate.TriggeringTask.LastVerification!));
+        if (trigger is not null &&
+            TryRouteTesterFindingToPendingEvidence(goal, policy, trigger, out decision))
+        {
+            return true;
+        }
+
         if (trigger is null)
         {
             foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
@@ -2745,7 +2758,7 @@ internal sealed partial class ConductorDriver
                 refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
                 refusalDetail =
                     $"Focused evidence does not support test project '{project}'. Accepted forms: " +
-                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms}.";
+                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms(engineSettings)}.";
                 return false;
             }
 
@@ -2853,7 +2866,7 @@ internal sealed partial class ConductorDriver
         selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
-        string.Join("|", (request.Selections ?? []).Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+        FindingEvidenceExecutionClassifier.BuildRequestIdentity(request);
 
     private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
     {
@@ -3287,7 +3300,8 @@ internal sealed partial class ConductorDriver
         string Finding,
         IReadOnlyList<string> SuppressedFindings,
         TaskSpec? TargetTask,
-        bool RequiresCommittedTarget = false);
+        bool RequiresCommittedTarget = false,
+        IReadOnlyList<ReviewFinding>? DeveloperOwnedFindings = null);
 
     private sealed record FindingEvidenceRequestGroup(
         string Identity,
@@ -3602,6 +3616,30 @@ internal sealed partial class ConductorDriver
         {
             return _runAcceptanceCohortOverride(selection, orderedGoals, policy);
         }
+        var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
+            selection.Members[0],
+            selection.Members[1]);
+        var memberPairKey = CohortGateMemberPairKey(selection);
+        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun) &&
+            !currentRun.Completion.Task.IsCompleted)
+        {
+            return CohortInFlight(
+                selection,
+                orderedGoals,
+                policy,
+                currentRun.PairFingerprint,
+                currentRun.StartedAt);
+        }
+
+        // Drained ahead of the production-dependency check so a faulted background completion is always
+        // reported as data; describing the fault needs the selection only, not the cohort dependencies.
+        // A direct caller that did not come through RunAcceptanceCohortForTick still gets the held result
+        // rather than the background thread's exception.
+        if (TakeCohortGateFault(selection) is { } backgroundFault)
+        {
+            return CohortGateFaulted(orderedGoals, policy, backgroundFault);
+        }
+
         if (_cohortKernel is null ||
             _cohortWorkspace is null ||
             _cohortAcceptanceVerifier is null ||
@@ -3609,27 +3647,6 @@ internal sealed partial class ConductorDriver
         {
             throw new InvalidOperationException("Production acceptance cohort dependencies are unavailable.");
         }
-
-        var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
-            selection.Members[0],
-            selection.Members[1]);
-        var memberPairKey = CohortGateMemberPairKey(selection);
-        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun))
-        {
-            if (!currentRun.Completion.Task.IsCompleted)
-            {
-                return CohortInFlight(
-                    selection,
-                    orderedGoals,
-                    policy,
-                    currentRun.PairFingerprint,
-                    currentRun.StartedAt);
-            }
-
-            _cohortGateRuns.TryRemove(memberPairKey, out _);
-            currentRun.Completion.Task.GetAwaiter().GetResult();
-        }
-        SweepCompletedCohortGateRuns();
 
         var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
         var goals = selection.Members.Select(member =>
@@ -4114,20 +4131,6 @@ internal sealed partial class ConductorDriver
             testResultPaths);
     }
 
-    private void SweepCompletedCohortGateRuns()
-    {
-        foreach (var pair in _cohortGateRuns)
-        {
-            if (!pair.Value.Completion.Task.IsCompleted ||
-                !_cohortGateRuns.TryRemove(pair.Key, out var completed))
-            {
-                continue;
-            }
-
-            completed.Completion.Task.GetAwaiter().GetResult();
-        }
-    }
-
     private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>
         string.Join(
             ":",
@@ -4492,51 +4495,6 @@ internal sealed partial class ConductorDriver
         string.IsNullOrWhiteSpace(recorded) ||
         string.IsNullOrWhiteSpace(current) ||
         recorded.Equals(current, StringComparison.OrdinalIgnoreCase);
-
-    internal static void ReconcileCleanBaselineAttention(
-        ICollaborationItemStore store,
-        Goal goal,
-        string? mainHeadSha,
-        CleanTestBaselineReceipt receipt)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(goal);
-        ArgumentNullException.ThrowIfNull(receipt);
-
-        var currentCorrelationKey =
-            CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
-        var activeCorrelationKey = receipt.Attestation == CleanBaselineAttestation.AttestedRed
-            ? currentCorrelationKey
-            : null;
-        if (activeCorrelationKey is not null)
-        {
-            store.RaiseAsync(
-                CollaborationItemType.Decision,
-                goal.Id.Value,
-                $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
-                CleanTestBaseline.FormatJournalDetail(receipt),
-                activeCorrelationKey,
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-
-        var staleItems = store.ListAsync(cancellationToken: CancellationToken.None)
-            .GetAwaiter()
-            .GetResult()
-            .Where(item =>
-                item.CorrelationKey is { Length: > 0 } key &&
-                key.StartsWith(CleanBaselineRedCorrelationKeyPrefix, StringComparison.Ordinal) &&
-                !string.Equals(key, activeCorrelationKey, StringComparison.Ordinal) &&
-                (receipt.Attestation != CleanBaselineAttestation.Unattested ||
-                 !string.Equals(key, currentCorrelationKey, StringComparison.Ordinal)))
-            .ToArray();
-        foreach (var item in staleItems)
-        {
-            store.TryResolveAsync(
-                item.CorrelationKey!,
-                $"clean-test baseline no longer active at main {FormatShortSha(mainHeadSha)}",
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
-    }
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
         ConductorParallelAcceptanceCandidate candidate,
@@ -5668,7 +5626,7 @@ internal sealed partial class ConductorDriver
             task.RequiredRole == AgentRole.Developer &&
             task.Status == WorkTaskStatus.Assigned &&
             !goal.Tasks.Any(candidate =>
-                GoalManagementCommandService.IsEarlierSdlcStageOf(
+                DispatchReadinessRules.IsEarlierSdlcStageOf(
                     candidate.RequiredRole,
                     task.RequiredRole) &&
                 candidate.Status != WorkTaskStatus.Completed));
@@ -5774,7 +5732,7 @@ internal sealed partial class ConductorDriver
         }
 
         var predecessor = goal.Tasks.FirstOrDefault(candidate =>
-            GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+            DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
             candidate.Status != WorkTaskStatus.Completed);
         if (predecessor is not null)
         {
@@ -5798,7 +5756,7 @@ internal sealed partial class ConductorDriver
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
         {
             var predecessor = goal.Tasks.FirstOrDefault(candidate =>
-                GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+                DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
                 candidate.Status == WorkTaskStatus.Cancelled);
             if (predecessor is null)
             {
@@ -6089,6 +6047,11 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
+        // Census the failing tests at the handler's single entry so every gate completion is recorded,
+        // including the apparatus and unattributable early returns below. Lazy keeps the changed-path
+        // git call at exactly one per advance and off gate completions that never need it.
+        var landingFileScopes = new Lazy<IReadOnlyList<string>>(() => _getLandingFileScopes(goal));
+        var apparatusRedReading = _apparatusRedGate?.RecordGateCompletion(goal, acceptance, landingFileScopes);
         if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
             var failedChecks = acceptance.FailedChecks is { Count: > 0 }
@@ -6153,7 +6116,6 @@ internal sealed partial class ConductorDriver
             }
         }
 
-        var landingFileScopes = _getLandingFileScopes(goal);
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
             var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
@@ -6190,6 +6152,11 @@ internal sealed partial class ConductorDriver
                             branchHeadSha,
                             mainHeadSha,
                             retryDisposition.ExcludedFailures)));
+            }
+
+            if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
+            {
+                return apparatusRed;
             }
 
             if (retryDisposition.ExcludedFailures.Count > 0)
@@ -6279,7 +6246,7 @@ internal sealed partial class ConductorDriver
             // Main has already advanced, so losing this receipt would permanently miss the relaunch.
             SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                 goal.Id.Value,
-                landResult.ChangedFiles ?? landingFileScopes,
+                landResult.ChangedFiles ?? landingFileScopes.Value,
                 landResult.MergeCommitSha));
 
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and

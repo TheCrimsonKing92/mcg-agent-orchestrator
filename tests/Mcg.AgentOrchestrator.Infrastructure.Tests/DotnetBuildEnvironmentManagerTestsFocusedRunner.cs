@@ -10,6 +10,11 @@ using static DotnetBuildEnvironmentManagerTests;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
 {
+    // Failsafe budget for FocusedRunner_AllSlotsHeld_ReportsNoSlotWithoutStartingDotnet. It is
+    // inside the script's documented 1-to-300 BudgetSeconds range and exists only so a genuine
+    // hang still terminates; the fact asserts nothing about elapsed time.
+    private const int NoSlotBudgetFailsafeSeconds = 120;
+
     private static (int ExitCode, string Stdout, string Stderr) RunFocusedScript(
         string scriptPath,
         string workDirectory,
@@ -901,9 +906,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             return;
         }
 
-        // This is a conservative setup/cleanup ceiling, not a measured setup-latency percentile.
-        // The lease phase remains the one-second condition exercised by this fixture.
-        const int totalBudgetSeconds = 8;
+        // The budget is a failsafe that bounds a genuine hang; it is not a deadline this fact
+        // asserts against, and it must stay far above any setup latency a loaded gate machine can
+        // produce so the receipt reports no-slot rather than budget-exceeded. The one-second lease
+        // wait is the condition under test: it is the only phase allowed to decide the outcome.
         const int leaseWaitSeconds = 1;
 
         var repoRoot = ResolveRepositoryRoot();
@@ -951,7 +957,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
                 receiptPath,
                 logPath,
                 "no-slot-test",
-                budgetSeconds: totalBudgetSeconds,
+                budgetSeconds: NoSlotBudgetFailsafeSeconds,
                 leaseWaitSeconds: leaseWaitSeconds,
                 projectFile);
 

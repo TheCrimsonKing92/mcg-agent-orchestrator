@@ -12,7 +12,7 @@ using System.Xml.Linq;
 using static ConductorDriverTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class ConductorDriverTestsFindingEvidence
+public sealed partial class ConductorDriverTestsFindingEvidence
 {
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_evidence_request_runs_focused_evidence_and_retries_reviewer_only")]
     public void ConductorDriverReviewerEvidenceRequestRunsFocusedEvidenceAndRetriesReviewerOnly()
@@ -737,6 +737,16 @@ public sealed class ConductorDriverTestsFindingEvidence
         Assert.Contains("evidence_index:", nonRequesterBrief, StringComparison.Ordinal);
         Assert.DoesNotContain("evidence_receipt:", nonRequesterBrief, StringComparison.Ordinal);
         Assert.DoesNotContain("tester requested evidence passed", nonRequesterBrief, StringComparison.Ordinal);
+        // The point-of-decision fields on that line: a passing receipt reads as measured only at the
+        // exact candidate it was taken on. An unknown candidate, or a later one, stays unmeasured
+        // even though the same honoured receipt is attached to the finding.
+        Assert.Equal("state=candidate-unknown; candidate_sha=unavailable", EvidenceIndexState(nonRequesterBrief));
+        Assert.Equal(
+            "state=executed-on-candidate; candidate_sha=abc1234",
+            EvidenceIndexState(kernel.BuildTaskBrief(goal.Id, developer.Id, targetHeadCommit: "abc1234").Content));
+        Assert.Equal(
+            "state=pending-execution; candidate_sha=def5678",
+            EvidenceIndexState(kernel.BuildTaskBrief(goal.Id, developer.Id, targetHeadCommit: "def5678").Content));
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == tester.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
@@ -1004,6 +1014,17 @@ public sealed class ConductorDriverTestsFindingEvidence
                     requestedClass));
 
         Assert.Equal("Infrastructure.Tests:ThisClassIsNotDeclaredAnywhereTests", request);
+    }
+
+    // The trailing `state=...; candidate_sha=...` of the single evidence_index line in a brief.
+    private static string EvidenceIndexState(string brief)
+    {
+        var line = Assert.Single(
+            brief.Split(Environment.NewLine),
+            candidate => candidate.Contains("evidence_index:", StringComparison.Ordinal));
+        var start = line.IndexOf("state=", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"evidence_index line carried no state=: {line}");
+        return line[start..];
     }
 
     private static string CaptureNormalizedFindingEvidenceRequest(
@@ -2267,51 +2288,6 @@ public sealed class ConductorDriverTestsFindingEvidence
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("reason=unsupported-project", retryBrief, StringComparison.Ordinal);
         Assert.Contains("valid evidence passed", retryBrief, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact]
-    public void FindingEvidenceRequestAcceptsRegisteredCliInfrastructureProject()
-    {
-        const string cliProject =
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
-            "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
-        var (kernel, goal) = SoftwareGoal();
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
-        var finding = EvidenceFindingWithRequest(
-            "The extracted CLI project needs focused evidence.",
-            id: "cli-extracted-project",
-            project: "Infrastructure.Cli.Tests",
-            classes: ["CliArgumentNormalizationTests", "CliCommandTestsAddTaskCommands"]);
-        FailReviewerNeedsWork(kernel, goal, reviewer, "registered extracted project", findings: [finding]);
-        string? request = null;
-        var driver = MakeDriver(
-            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            getFindingEvidenceEngineSettings: _ => new AcceptanceGateEngineSettings
-            {
-                MtpInvocations = [new AcceptanceMtpInvocation { Project = cliProject }]
-            },
-            runFocusedEvidence: (_, value) =>
-            {
-                request = value;
-                return new FocusedEvidenceRunResult(value, true, true, "registered project passed", []);
-            },
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
-            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(
-            "Infrastructure.Cli.Tests:CliArgumentNormalizationTests; Infrastructure.Cli.Tests:CliCommandTestsAddTaskCommands",
-            request);
-        var recorded = reviewer.VerificationHistory.Last().MergedReviewFindings!;
-        Assert.True(recorded.Single(item => item.StableId == "cli-extracted-project").EvidenceOutcome?.Honoured);
     }
 
     [Xunit.Fact]
