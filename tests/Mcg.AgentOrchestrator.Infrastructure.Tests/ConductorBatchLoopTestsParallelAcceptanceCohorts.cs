@@ -16,36 +16,138 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
     public void CompletedCohortRootWithFreshHeartbeatHoldsTrainAndNamesLiveProcess()
     {
         var kernel = new AgentOrchestratorKernel();
-        var first = CreateVerifiedSimpleGoal(kernel, "Completed cohort first member");
-        var second = CreateVerifiedSimpleGoal(kernel, "Completed cohort second member");
-        var driver = MakeDriver();
-        driver.PublishCompletedCohortGateRunForTests(CohortSelection(first, second), fault: null);
+        var goals = Enumerable.Range(0, 3)
+            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Completed cohort train member {index}"))
+            .ToArray();
+        const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/CompletedCohortTrainFirst.cs"],
+            [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CompletedCohortTrainSecond.cs"],
+            [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/CompletedCohortTrainThird.cs"]
+        };
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var trainCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: goal => paths[goal.Id],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            runMergeTrain: (selection, _, policy) =>
+            {
+                trainCalls++;
+                return new ConductorMergeTrainRunResult(
+                    null,
+                    selection.Members.ToDictionary(
+                        member => member.GoalId.Value,
+                        member => new ConductorAdvanceResult(
+                            member.GoalId.Value,
+                            member.GoalId.Value[..8],
+                            policy.Name,
+                            new ConductorAdvanceOutcome.Executed(
+                                GoalLifecycleState.Verified,
+                                "unexpected train admission")),
+                        StringComparer.Ordinal),
+                    [],
+                    "outcome=passed");
+            });
+        driver.PublishCompletedCohortGateRunForTests(CohortSelection(goals[0], goals[1]), fault: null);
         var lifecycleCapacity = driver.GetActiveAcceptanceCohortCapacity();
         using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
-            [new GateLoadContextProbe.LiveGateOccupant(4101, first.Id.Value, 0, TimeSpan.Zero)]);
+            [new GateLoadContextProbe.LiveGateOccupant(4101, goals[0].Id.Value, 0, TimeSpan.Zero)]);
+        BatchTickSummary? tick = null;
 
-        var census = BuildCensusFromProbe(lifecycleCapacity);
-        var decision = ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, width: 1);
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 },
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: current => tick = current);
 
         Assert.Equal(0, lifecycleCapacity.ActiveRootCount);
-        Assert.False(decision.IsAdmitted);
-        Assert.Contains("acceptance width 1 reached", decision.Reason, StringComparison.Ordinal);
-        Assert.Contains($"goal:{first.Id.Value[..8]}", decision.Reason, StringComparison.Ordinal);
+        Assert.Equal(0, trainCalls);
+        Assert.Equal(3, summary.Held);
+        Assert.Contains(tick!.ProgressLines!, line =>
+            line.Contains("acceptance_width_1_reached", StringComparison.Ordinal) &&
+            line.Contains($"goal:{goals[0].Id.Value[..8]}", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
     public void OrdinaryAttemptHeartbeatWithoutReservationHoldsCohort()
     {
         const string goalId = "87654321-ordinary-attempt";
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, 2)
+            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Heartbeat cohort member {index}"))
+            .ToArray();
+        const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [goals[0].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/HeartbeatFirst.razor"],
+            [goals[1].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/HeartbeatSecond.cs"]
+        };
+        var projector = new GateReadyCandidateProjector(
+            candidateGoalId => new GateReadyCandidateRevisionPair(
+                candidateGoalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            candidateGoalId => new GateReadyLandingScopeObservation(true, paths[candidateGoalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var cohortCalls = 0;
+        var ordinaryCalls = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                ordinaryCalls++;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: goal => paths[goal.Id],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            runAcceptanceCohort: (selection, _, policy) =>
+            {
+                cohortCalls++;
+                return new ConductorAcceptanceCohortRunResult(
+                    null,
+                    selection.Members.ToDictionary(
+                        member => member.GoalId.Value,
+                        member => new ConductorAdvanceResult(
+                            member.GoalId.Value,
+                            member.GoalId.Value[..8],
+                            policy.Name,
+                            new ConductorAdvanceOutcome.Executed(
+                                GoalLifecycleState.Verified,
+                                "unexpected cohort admission")),
+                        StringComparer.Ordinal),
+                    "outcome=passed");
+            });
         using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
             [new GateLoadContextProbe.LiveGateOccupant(4102, goalId, 1, TimeSpan.Zero)]);
+        BatchTickSummary? tick = null;
 
-        var decision = ConductorBatchLoop.DecideLiveAcceptanceAdmission(
-            BuildCensusFromProbe(),
-            width: 1);
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 },
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: current => tick = current);
 
-        Assert.False(decision.IsAdmitted);
-        Assert.Contains("goal:87654321", decision.Reason, StringComparison.Ordinal);
+        Assert.Equal(0, cohortCalls);
+        Assert.Equal(0, ordinaryCalls);
+        Assert.Equal(2, summary.Held);
+        Assert.Contains(tick!.ProgressLines!, line =>
+            line.Contains("acceptance_width_1_reached", StringComparison.Ordinal) &&
+            line.Contains("goal:87654321", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
