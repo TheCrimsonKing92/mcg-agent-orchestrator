@@ -158,7 +158,7 @@ public sealed record FailedGoalVerifyingFindingRouteFacts(
     int WarningRound,
     bool MissingFindingResult,
     RetryCause? ObservedCause,
-    IEnumerable<FailedGoalFindingRouteTask> PriorTasks);
+    ImmutableArray<FailedGoalFindingRouteTask> PriorTasks);
 
 public sealed record FailedGoalVerifyingFindingRouteSelection(
     FailedGoalVerifyingFindingRouteKind Kind,
@@ -375,7 +375,7 @@ public static class FailedGoalRecoveryPolicy
         FailedGoalVerifyingFindingRouteFacts facts)
     {
         ArgumentNullException.ThrowIfNull(facts);
-        var priorTasks = facts.PriorTasks.ToArray();
+        var priorTasks = facts.PriorTasks;
         var targetRole = facts.TriggeringRole == AgentRole.Tester
             ? AgentRole.Developer
             : facts.ReviewerTargetRole ?? AgentRole.Developer;
@@ -591,7 +591,7 @@ public static class FailedGoalRecoveryPolicy
                 6,
                 "real-worker-or-command-failure",
                 $"Auto-retry real worker/command failure for task {Short(realFailure.TaskId)} " +
-                $"(attempt {realFailure.CriterionRetryCount + 1}/{facts.MaxCriterionRetries}); {command}; {evidence}",
+                $"(attempt {facts.AutomaticAcceptanceRetryCount + 1}/{facts.MaxCriterionRetries}); {command}; {evidence}",
                 realFailure.AutomaticRetryCause,
                 feedbackCommand: command,
                 feedbackEvidence: evidence);

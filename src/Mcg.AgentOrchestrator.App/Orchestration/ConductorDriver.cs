@@ -1777,7 +1777,8 @@ internal sealed partial class ConductorDriver
                 AutomaticWorkerRetryCause.Resolve(triggeringTask),
                 goal.Tasks
                     .TakeWhile(task => task.Id != triggeringTask.Id)
-                    .Select(task => new FailedGoalFindingRouteTask(task.Id, task.RequiredRole))));
+                    .Select(task => new FailedGoalFindingRouteTask(task.Id, task.RequiredRole))
+                    .ToImmutableArray()));
 
         if (route.Kind == FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired)
         {

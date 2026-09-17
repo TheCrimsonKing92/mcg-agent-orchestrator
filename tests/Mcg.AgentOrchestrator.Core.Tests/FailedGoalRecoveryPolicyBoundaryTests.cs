@@ -38,6 +38,10 @@ public sealed class FailedGoalRecoveryPolicyBoundaryTests
         return name.StartsWith("System.IO.", StringComparison.Ordinal) ||
             name.StartsWith("System.Diagnostics.Process", StringComparison.Ordinal) ||
             name.StartsWith("System.Console", StringComparison.Ordinal) ||
+            name.StartsWith("System.DateTime", StringComparison.Ordinal) ||
+            name.StartsWith("System.Environment", StringComparison.Ordinal) ||
+            name.StartsWith("System.Net.", StringComparison.Ordinal) ||
+            name.StartsWith("System.Random", StringComparison.Ordinal) ||
             name.StartsWith("System.Threading.Thread", StringComparison.Ordinal) ||
             name.StartsWith("System.Threading.Tasks.Task", StringComparison.Ordinal);
     }

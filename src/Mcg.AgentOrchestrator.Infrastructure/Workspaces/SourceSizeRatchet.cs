@@ -78,8 +78,8 @@ internal static class SourceSizeRatchet
             // driver retains attributed observation, stale-authority revalidation, and effect application.
             // Review correction moved rung-8 candidate, route, target, cap, and retry-cause selection
             // behind the policy; Driver retains evidence observation and effect-payload formatting.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6435),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 353),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6436),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 357),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
@@ -223,15 +223,15 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1299),
-            // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1190),
+            // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1228),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),
             // Goal 42115646 pins pure-policy precedence/equality separately from the Driver effect seam.
             // Review correction adds the rung-8 phase counterfactual and walks policy-owned helper IL
             // transitively so an effect hidden behind Decide or a future helper cannot evade the boundary.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyTests.cs", 323),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyBoundaryTests.cs", 110),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailedGoalRecoveryExtractionTests.cs", 58),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyTests.cs", 366),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyBoundaryTests.cs", 114),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailedGoalRecoveryExtractionTests.cs", 59),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFailedGoalRecoveryInterpreter.cs", 149),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1489),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs", 697),

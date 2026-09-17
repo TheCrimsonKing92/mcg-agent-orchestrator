@@ -91,6 +91,26 @@ public sealed class FailedGoalRecoveryPolicyTests
     }
 
     [Fact]
+    public void CriterionRetryReasonUsesGoalScopedAutomaticAcceptanceCount()
+    {
+        var task = Task(
+            recommendation: RecoveryRecommendation.AutoRetry,
+            outcomeClass: TaskOutcomeClass.RealFailure,
+            cause: RetryCause.NewSourceFinding) with
+        {
+            CriterionRetryCount = 0
+        };
+
+        var decision = AssertDecision(
+            Facts([task], automaticRetryCount: 1, maxCriterionRetries: 3),
+            FailedGoalRecoveryAction.CriterionRetry,
+            6);
+
+        Assert.Contains("attempt 2/3", decision.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("attempt 1/3", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SharedTransientBudgetRetriesAtBoundaryAndEscalatesAboveIt()
     {
         var atBoundary = Task(outcome: DispatchOutcomeKind.EmptyOutputFlake, retries: 2);
@@ -152,6 +172,27 @@ public sealed class FailedGoalRecoveryPolicyTests
         Assert.Equal(8, decision.DiscriminatingRung);
         Assert.Equal("operator-owned-evidence", decision.DiscriminatingEvidence);
         Assert.Equal(new TaskId("reviewer-task"), decision.Identity.TaskId);
+    }
+
+    [Fact]
+    public void FindingRetryCarriesEscalationWarningForTheEffectInterpreter()
+    {
+        const string warning = "auto-review-retry escalation-warning round 4/6";
+        var observation = FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.FindingRouteObserved,
+            new TaskId("developer-task"),
+            "verification:42:none",
+            "retry routed blocking finding",
+            warning,
+            observedCause: RetryCause.NewSourceFinding);
+
+        var decision = FailedGoalRecoveryPolicy.Evaluate(
+            Facts([Task()])
+                .WithReviewContractObservation(null)
+                .WithVerifyingFindingObservation(observation));
+
+        Assert.Equal(FailedGoalRecoveryAction.FindingRetry, decision.Action);
+        Assert.Equal(warning, decision.WarningMessage);
     }
 
     [Fact]
@@ -279,12 +320,14 @@ public sealed class FailedGoalRecoveryPolicyTests
 
     private static FailedGoalRecoveryFacts Facts(
         IEnumerable<FailedGoalRecoveryTaskFacts> tasks,
-        int maxTransient = 2) =>
+        int maxTransient = 2,
+        int automaticRetryCount = 0,
+        int maxCriterionRetries = 2) =>
         new(
             new GoalId("goal-policy"),
             GoalLifecycleState.Failed,
-            automaticAcceptanceRetryCount: 0,
-            maxCriterionRetries: 2,
+            automaticAcceptanceRetryCount: automaticRetryCount,
+            maxCriterionRetries,
             maxTransient,
             contextVersion: "context-v1",
             tasks,

@@ -25,9 +25,10 @@ public sealed class FailedGoalRecoveryExtractionTests
         Assert.Contains("FailedGoalRecoveryAction.ObserveVerifyingFinding", interpreter, StringComparison.Ordinal);
         Assert.Contains("WithReviewContractObservation", interpreter, StringComparison.Ordinal);
         Assert.Contains("WithVerifyingFindingObservation", interpreter, StringComparison.Ordinal);
-        Assert.DoesNotContain("TryBuildReviewContractRepairRetry", interpreter, StringComparison.Ordinal);
-        Assert.DoesNotContain("TryBuildVerifyingFindingAutoRetry", interpreter, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryBuildReviewContractRepairRetry", driver, StringComparison.Ordinal);
+        Assert.DoesNotContain("TryBuildVerifyingFindingAutoRetry", driver, StringComparison.Ordinal);
         Assert.DoesNotContain("var runningSibling = goal.Tasks.FirstOrDefault", driver, StringComparison.Ordinal);
+        Assert.Contains("decision.WarningMessage", interpreter, StringComparison.Ordinal);
     }
 
     [Fact]

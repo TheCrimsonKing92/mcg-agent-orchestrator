@@ -54,6 +54,7 @@ internal sealed partial class ConductorDriver
             state = GoalLifecycle.ResolveState(goal, GetFacts(goal));
             if (state != GoalLifecycleState.Failed)
             {
+                ApplyPendingFailedGoalNotes(goal, pendingNotes);
                 return MakeResult(
                     goal.Id.Value,
                     goalPrefix,
@@ -104,6 +105,7 @@ internal sealed partial class ConductorDriver
 
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
         {
+            ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return MakeResult(
                 goal.Id.Value,
                 goalPrefix,
@@ -114,6 +116,8 @@ internal sealed partial class ConductorDriver
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var targetTaskId = decision.Identity.TaskId ??
             throw new InvalidOperationException($"Recovery action {decision.Action} must identify a target task.");
+        if (!string.IsNullOrWhiteSpace(decision.WarningMessage))
+            _recordTaskNote(goal.Id, targetTaskId, decision.WarningMessage);
         if (decision.Action == FailedGoalRecoveryAction.CriterionRetry)
         {
             _recordCriterionRetryFeedback(
@@ -150,7 +154,7 @@ internal sealed partial class ConductorDriver
 
         var refreshedGoal = GetCurrentGoal(goal);
         var refreshedTarget = refreshedGoal.Tasks.FirstOrDefault(task => task.Id == targetTaskId);
-        if (refreshedTarget is null || refreshedTarget.Status != WorkTaskStatus.Assigned ||
+        if (refreshedTarget is null || refreshedTarget.Status is not (WorkTaskStatus.Assigned or WorkTaskStatus.Pending) ||
             refreshedGoal.Tasks.Any(task => task.LastProcess is { IsRunning: true }))
         {
             return MakeResult(
