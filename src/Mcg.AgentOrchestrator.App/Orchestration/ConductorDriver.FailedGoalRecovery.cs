@@ -195,10 +195,22 @@ internal sealed partial class ConductorDriver
             goal = GetCurrentGoal(goal);
             if (taskId != exitedTaskIds[^1])
             {
+                var currentState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
+                if (currentState != GoalLifecycleState.Failed)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            currentState,
+                            "Exited-dispatch reconciliation changed lifecycle authority; recovery will be re-observed on the next tick (stale-recovery-facts)."));
+                }
+
                 facts = BuildFailedGoalRecoveryFacts(
                     goal,
                     policy,
-                    GoalLifecycle.ResolveState(goal, GetFacts(goal)));
+                    currentState);
                 decision = FailedGoalRecoveryPolicy.Evaluate(facts);
                 if (decision.Action != FailedGoalRecoveryAction.ReconcileExitedDispatch)
                     break;

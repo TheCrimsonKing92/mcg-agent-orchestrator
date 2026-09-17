@@ -91,6 +91,24 @@ public sealed class FailedGoalRecoveryPolicyTests
     }
 
     [Fact]
+    public void MissingTypedCauseEscalationExplicitlyAttributesNoBudgetSpend()
+    {
+        var facts = Facts(
+            [Task(
+                recommendation: RecoveryRecommendation.AutoRetry,
+                outcomeClass: TaskOutcomeClass.RealFailure,
+                cause: null)],
+            automaticRetryCount: 1,
+            maxCriterionRetries: 3);
+
+        var decision = AssertDecision(facts, FailedGoalRecoveryAction.Escalate, 6);
+
+        Assert.Equal("real-failure-missing-typed-cause-no-budget-spend", decision.DiscriminatingEvidence);
+        Assert.Equal(1, facts.AutomaticAcceptanceRetryCount);
+        Assert.Equal(0, facts.Tasks.Single().CriterionRetryCount);
+    }
+
+    [Fact]
     public void CriterionRetryReasonUsesGoalScopedAutomaticAcceptanceCount()
     {
         var task = Task(

@@ -118,6 +118,49 @@ public sealed class ConductorDriverTestsFailedGoalRecoveryInterpreter
         Assert.Equal(0, dispatchCalls);
     }
 
+    [Xunit.Fact]
+    public void MissingTypedCauseEscalatesWithoutSpendingCriterionRetryBudget()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "test.exe",
+                "C:\\tmp",
+                1,
+                string.Empty,
+                "ParserError: Unexpected token in worker command.",
+                DateTimeOffset.UtcNow));
+        var feedbackCalls = 0;
+        var retryCalls = 0;
+        string? escalationReason = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            recordCriterionRetryFeedback: (_, _, _) =>
+            {
+                feedbackCalls++;
+                return -1;
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryCalls++;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            writeEscalation: (_, _, reason) => escalationReason = reason);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Contains("without a typed retry cause", escalationReason, StringComparison.Ordinal);
+        Assert.Equal(0, feedbackCalls);
+        Assert.Equal(0, retryCalls);
+        Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        Assert.Equal(0, task.CriterionRetryCount);
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec FailedTask) FailedLaunchGoal()
     {
         var (kernel, goal) = SimpleGoal();

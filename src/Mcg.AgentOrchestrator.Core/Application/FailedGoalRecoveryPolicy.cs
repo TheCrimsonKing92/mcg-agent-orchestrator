@@ -577,7 +577,7 @@ public static class FailedGoalRecoveryPolicy
                     realFailure,
                     FailedGoalRecoveryAction.Escalate,
                     6,
-                    "real-failure-missing-typed-cause",
+                    "real-failure-missing-typed-cause-no-budget-spend",
                     $"Task {Short(realFailure.TaskId)} has a real failure without a typed retry cause; " +
                     "automatic redispatch was held for operator classification.");
             }
