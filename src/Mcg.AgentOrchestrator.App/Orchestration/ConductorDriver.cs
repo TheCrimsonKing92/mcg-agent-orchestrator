@@ -4634,6 +4634,10 @@ internal sealed partial class ConductorDriver
             }
         }
 
+        if (TryRunDeveloperCompletionStructuralPreflight(goal, goalPrefix, policy, fromState, out var structuralPrecheck))
+        {
+            return structuralPrecheck;
+        }
         if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
         {
             return preReviewResult;
