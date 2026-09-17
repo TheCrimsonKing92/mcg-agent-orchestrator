@@ -6,7 +6,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
-    internal sealed record LiveAcceptanceCensus(IReadOnlyList<string> Occupants)
+    internal sealed record LiveAcceptanceCensus(
+        IReadOnlyList<string> Occupants,
+        Exception? CaptureFailure = null)
     {
         internal int OccupiedCount => Occupants.Count;
 
@@ -116,22 +118,32 @@ internal sealed partial class ConductorBatchLoop
 
     internal static LiveAcceptanceAdmissionDecision DecideLiveAcceptanceAdmission(
         LiveAcceptanceCensus census,
-        int width) =>
-        census.OccupiedCount < width
+        int width)
+    {
+        if (census.CaptureFailure is { } captureFailure)
+        {
+            return new LiveAcceptanceAdmissionDecision(
+                false,
+                $"live acceptance census unavailable: {SanitizeReason(captureFailure.Message)}; retry on next conduct tick");
+        }
+
+        return census.OccupiedCount < width
             ? new LiveAcceptanceAdmissionDecision(true, string.Empty)
             : new LiveAcceptanceAdmissionDecision(
                 false,
                 $"acceptance width {width} reached; {census.Describe()}; retry on next conduct tick");
+    }
 
     private static LiveAcceptanceCensus CaptureLiveAcceptanceCensus(
         IReadOnlyList<ConductorParallelAcceptanceAttempt> activeAttempts,
         IReadOnlySet<string> activeAttemptIds,
         ConductorAcceptanceCapacitySnapshot activeCohorts,
-        out Exception? failure)
+        int tick,
+        List<string> changedGoalLines,
+        bool blockAdmissionOnFailure)
     {
         try
         {
-            failure = null;
             return BuildLiveAcceptanceCensus(
                 activeAttempts,
                 activeAttemptIds,
@@ -140,8 +152,13 @@ internal sealed partial class ConductorBatchLoop
         }
         catch (Exception ex) when (ex is GateLoadContextProbe.LoadProbeUnavailableException or IOException or UnauthorizedAccessException)
         {
-            failure = ex;
-            return BuildLiveAcceptanceCensus(activeAttempts, activeAttemptIds, activeCohorts, []);
+            RecordParallelAcceptanceProgress(
+                $"ADMISSION tick={tick} detail=live-census-unavailable error={SanitizeReason(ex.Message)}",
+                changedGoalLines);
+            var lifecycleCensus = BuildLiveAcceptanceCensus(activeAttempts, activeAttemptIds, activeCohorts, []);
+            return blockAdmissionOnFailure
+                ? lifecycleCensus with { CaptureFailure = ex }
+                : lifecycleCensus;
         }
     }
 

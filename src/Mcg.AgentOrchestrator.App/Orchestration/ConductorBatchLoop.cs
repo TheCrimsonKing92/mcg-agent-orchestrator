@@ -2964,13 +2964,9 @@ internal sealed partial class ConductorBatchLoop
             liveAttempts,
             activeAttemptIds,
             activeCohortCapacity,
-            out var liveCensusFailure);
-        if (liveCensusFailure is not null)
-        {
-            RecordParallelAcceptanceProgress(
-                $"ADMISSION tick={tick} detail=live-census-unavailable error={SanitizeReason(liveCensusFailure.Message)}",
-                changedGoalLines);
-        }
+            tick,
+            changedGoalLines,
+            blockAdmissionOnFailure: false);
         var cohortEligible = orderedEligible
             .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value))
             .ToArray();
@@ -3102,7 +3098,9 @@ internal sealed partial class ConductorBatchLoop
                     liveAttempts,
                     activeAttemptIds,
                     activeCohortCapacity,
-                    out _);
+                    tick,
+                    changedGoalLines,
+                    blockAdmissionOnFailure: true);
             }
             else if (cohortDecision.Exclusions.Count > 0)
             {
@@ -3480,7 +3478,9 @@ internal sealed partial class ConductorBatchLoop
                 liveAttempts,
                 activeAttemptIds,
                 activeCohortCapacity,
-                out _);
+                tick,
+                changedGoalLines,
+                blockAdmissionOnFailure: true);
             }
             catch (AcceptanceArtifactWriterLeaseBusyException ex)
             {

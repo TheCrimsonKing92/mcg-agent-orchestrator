@@ -13,6 +13,145 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
     }
 
     [Xunit.Fact]
+    public void LiveCensusFailureAfterAttemptBlocksFurtherAdmissionAndRecordsReason()
+    {
+        using var isolatedRoot = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
+        using var release = new ManualResetEventSlim(false);
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, 2)
+            .Select(index => CreateVerifiedSimpleGoal(
+                kernel,
+                $"Update src/Mcg.AgentOrchestrator.App/Orchestration/CensusFailure{index}.cs"))
+            .ToArray();
+        var attemptRoot = CreateTempDirectory("mcg-acceptance-census-failure");
+        Action waitForAttempts = () => { };
+        var probeCalls = 0;
+
+        try
+        {
+            var coordinator = ConductorBatchLoopTestsParallelAcceptance.ThreadedAcceptanceAttemptCoordinator(
+                attemptRoot,
+                out waitForAttempts);
+            using var liveGateProbe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            {
+                if (Interlocked.Increment(ref probeCalls) == 1)
+                {
+                    return [];
+                }
+
+                throw new GateLoadContextProbe.LoadProbeUnavailableException("test-refresh-unavailable");
+            });
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    release.Wait(TestContext.Current.CancellationToken);
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                getLandingFileScopes: goal =>
+                    [$"src/Mcg.AgentOrchestrator.App/Orchestration/{goal.Id.Value[..8]}.cs"],
+                parallelAcceptanceAttemptCoordinator: coordinator);
+            BatchTickSummary? tick = null;
+
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 },
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: current => tick = current);
+
+            Assert.Single(coordinator.GetCapacityReservingAttempts(goals.Select(goal => goal.Id.Value)));
+            Assert.Contains(tick!.ProgressLines!, line =>
+                line.Contains("detail=live-census-unavailable", StringComparison.Ordinal) &&
+                line.Contains("test-refresh-unavailable", StringComparison.Ordinal));
+        }
+        finally
+        {
+            release.Set();
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
+    public void LiveCensusFailureAfterCohortBlocksOrdinaryAdmissionAndRecordsReason()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, 3)
+            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Census failure cohort member {index}"))
+            .ToArray();
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/CensusFailureFirst.cs"],
+            [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CensusFailureSecond.cs"],
+            [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/CensusFailureThird.cs"]
+        };
+        const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var cohortCalls = 0;
+        var ordinaryCalls = 0;
+        var probeCalls = 0;
+        using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+        {
+            if (Interlocked.Increment(ref probeCalls) == 1)
+            {
+                return [];
+            }
+
+            throw new GateLoadContextProbe.LoadProbeUnavailableException("test-cohort-refresh-unavailable");
+        });
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                ordinaryCalls++;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: goal => paths[goal.Id],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            runAcceptanceCohort: (selection, _, policy) =>
+            {
+                cohortCalls++;
+                return new ConductorAcceptanceCohortRunResult(
+                    null,
+                    selection.Members.ToDictionary(
+                        member => member.GoalId.Value,
+                        member => new ConductorAdvanceResult(
+                            member.GoalId.Value,
+                            member.GoalId.Value[..8],
+                            policy.Name,
+                            new ConductorAdvanceOutcome.Executed(
+                                GoalLifecycleState.Verified,
+                                "cohort completed before census refresh")),
+                        StringComparer.Ordinal),
+                    "outcome=passed");
+            });
+        BatchTickSummary? tick = null;
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 },
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: current => tick = current);
+
+        Assert.Equal(1, cohortCalls);
+        Assert.Equal(0, ordinaryCalls);
+        Assert.Contains(tick!.ProgressLines!, line =>
+            line.Contains("detail=live-census-unavailable", StringComparison.Ordinal) &&
+            line.Contains("test-cohort-refresh-unavailable", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void CompletedCohortRootWithFreshHeartbeatHoldsTrainAndNamesLiveProcess()
     {
         var kernel = new AgentOrchestratorKernel();

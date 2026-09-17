@@ -4233,12 +4233,12 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    private static EnvVarScope IsolatedDotnetRootScope() =>
+    internal static EnvVarScope IsolatedDotnetRootScope() =>
         new EnvVarScope(
             DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
             Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-batch-loop-{Guid.NewGuid():N}"));
 
-    private sealed class EnvVarScope : IDisposable
+    internal sealed class EnvVarScope : IDisposable
     {
         private readonly string _name;
         private readonly string? _previousValue;
@@ -4265,7 +4265,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(
+    internal static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(
         string attemptRoot,
         out Action waitForAttempts,
         ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null,
