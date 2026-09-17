@@ -139,7 +139,11 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     string? FocusedEvidenceReceiptId = null,
     string? PolicyJson = null,
     AcceptanceStableSlotExhaustionPolicy? StableSlotExhaustionPolicy = null,
-    string ExecutionProtocol = "out-of-process")
+    string ExecutionProtocol = "out-of-process",
+    // The conductor generation that started this attempt, and the one that later adopted it across a
+    // renewal. Null means an attempt written before generation identity was recorded: unknown, not mine.
+    int? ConductorGenerationId = null,
+    int? AdoptedByGenerationId = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -356,6 +360,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Action<TimeSpan>? _buildPermitSleep;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly DotnetBuildStorageRoot? _buildStorageRoot;
+    private readonly int _conductorGenerationId;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -378,7 +383,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Action? attemptWriterLeaseAcquiringForTests = null,
         IReadOnlyDictionary<string, TextWriter>? attemptLogWriters = null,
         Action<ConductorParallelAcceptanceAttempt>? resultPublishedForTests = null,
-        DotnetBuildStorageRoot? buildStorageRoot = null)
+        DotnetBuildStorageRoot? buildStorageRoot = null,
+        // Each conductor renewal is a fresh child process, so the loop pid is a sound generation
+        // identity and the driver needs no threading change to supply one.
+        int? conductorGenerationId = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -410,6 +418,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _buildStorageRoot = buildStorageRoot;
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
         _buildPermitSleep = buildPermitSleep;
+        _conductorGenerationId = conductorGenerationId ?? Environment.ProcessId;
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -557,6 +566,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         if (current is not null && (IsLiveInvalidatedAttempt(current) || IsLiveAttempt(current)))
         {
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+
+        // Before any path that can reach Launch: an attempt left running by a dead generation whose gate
+        // child is still alive is adopted, not replaced. Its verdict is applied from artifacts by the
+        // existing completion path once the child publishes them, so the retry budget is charged once.
+        if (current is not null &&
+            MatchesCandidate(current, candidate, dispatchKind, focusedEvidenceRequest, requestContext) &&
+            TryAdoptOrphanAttempt(current) is { } adopted)
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(adopted);
         }
 
         _attemptWriterLeaseAcquiringForTests?.Invoke();
@@ -1994,7 +2013,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions,
             PolicyJson: policy.ToJson(),
             StableSlotExhaustionPolicy: stableSlotExhaustionPolicy,
-            ExecutionProtocol: _runInline ? "in-process" : "out-of-process");
+            ExecutionProtocol: _runInline ? "in-process" : "out-of-process",
+            ConductorGenerationId: _conductorGenerationId);
     }
 
     private static int AllocateOrdinal(string directory)
@@ -2316,6 +2336,72 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var updated = current with
             {
                 OwnerProcessId = ownerProcessId,
+                LastHeartbeatAt = _utcNow()
+            };
+            WriteAttemptFile(updated);
+            return updated;
+        }
+    }
+
+    /// <summary>
+    /// Adopts an orphan gate attempt left running by another conductor generation, returning the adopted
+    /// attempt, or null when the attempt is not an orphan of a dead generation. Adoption refreshes the
+    /// heartbeat every tick so the attempt does not read stale to any other observer, and records the
+    /// adopting generation at most once, best-effort, for the reason given below.
+    /// </summary>
+    private ConductorParallelAcceptanceAttempt? TryAdoptOrphanAttempt(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (!ConductorOrphanGateAttemptAdoption.ShouldAdopt(
+                attempt,
+                _conductorGenerationId,
+                _isProcessAlive,
+                File.Exists))
+        {
+            return null;
+        }
+
+        var adopted = ConductorOrphanGateAttemptAdoption.NeedsAdoptionRecord(attempt, _conductorGenerationId)
+            ? TryPersistAdoption(attempt) ?? attempt
+            : attempt;
+        WriteHeartbeat(adopted, "adopted");
+        return adopted;
+    }
+
+    /// <summary>
+    /// Records the adopting generation on the attempt, or returns null when the writer lease is held.
+    ///
+    /// The running gate child holds that lease for its whole run, and the in-process metadata gate cannot
+    /// order a write against another process. The adoption record is evidence, not the fence — the fence
+    /// is the decision above, which does not depend on it — so a busy lease skips the record and retries
+    /// on a later tick rather than racing the child's terminal write and clobbering a published verdict.
+    /// </summary>
+    private ConductorParallelAcceptanceAttempt? TryPersistAdoption(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var goalDirectory = Path.GetDirectoryName(attempt.MetadataPath);
+        if (string.IsNullOrWhiteSpace(goalDirectory))
+        {
+            return null;
+        }
+
+        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        if (artifactLease is null)
+        {
+            return null;
+        }
+
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath);
+            if (current is null ||
+                !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal) ||
+                current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                return null;
+            }
+
+            var updated = current with
+            {
+                AdoptedByGenerationId = _conductorGenerationId,
                 LastHeartbeatAt = _utcNow()
             };
             WriteAttemptFile(updated);

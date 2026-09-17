@@ -643,12 +643,7 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (task.Status is WorkTaskStatus.WaitingForHuman or
-                                   WorkTaskStatus.Failed or
-                                   WorkTaskStatus.Cancelled ||
-                    process is null ||
-                    process.WasCancelled ||
-                    DispatchProcessCompletionState.HasAlreadyBeenApplied(task, process))
+                if (!DispatchExitSweepEligibility.IsEligibleForExitSweep(task, process))
                 {
                     continue;
                 }
@@ -679,6 +674,7 @@ public sealed class BackgroundDispatchRunner
                         verdict.RecoveryDecision)
                     : new DispatchRefreshOutcome(process, null, RecoveryDecision: verdict.RecoveryDecision);
 
+                outcome = DispatchExitSweepEligibility.FenceAutoRequeue(task, outcome);
                 ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome, processInspection.Get);
                 if (outcome.RecoveryDecision?.Action != DispatchRecoveryAction.Hold)
                 {

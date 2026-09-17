@@ -1839,7 +1839,7 @@ internal sealed partial class ConductorBatchLoop
             return;
 
         var required = kind is "loop-start-deferred" or "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
-            "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
+            "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or "exit-unapplied" or
             "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
@@ -1878,6 +1878,8 @@ internal sealed partial class ConductorBatchLoop
             "ACCEPTANCE_LEASE_RELEASE" => "acceptance-lease",
             "ACCEPTANCE_LEASE_YIELD" or "ACCEPTANCE_LEASE_DEGRADE" => "acceptance-lease",
             "BUILD_LOCK_BLOCKED" => "lock-blocker",
+            // Named from the emitter so the operator-visible token and its classification cannot drift.
+            ConductorUnappliedExitWatch.EventName => "exit-unapplied",
             "GOAL" => ClassifyGoalEvent(line),
             "GOAL_STALLED" => "goal-stalled",
             "LOCK" => "lock-blocker",
