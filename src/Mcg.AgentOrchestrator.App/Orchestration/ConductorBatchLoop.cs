@@ -2769,7 +2769,7 @@ internal sealed partial class ConductorBatchLoop
             return results;
         }
 
-        var liveAttempts = activeReservations.Attempts;
+        var liveAttempts = activeReservations.Attempts.ToList();
         var activeCandidates = activeReservations.Candidates;
         var activeAttemptIds = activeReservations.AttemptIds;
         var activeAttemptSlotIndexes = activeReservations.StableSlotIndexes;
@@ -3384,6 +3384,7 @@ internal sealed partial class ConductorBatchLoop
                     ReserveParallelAcceptanceCandidate(
                         candidate,
                         decision.Attempt,
+                        liveAttempts,
                         activeCandidates,
                         activeAttemptIds,
                         activeAttemptSlotIndexes);
@@ -3413,6 +3414,7 @@ internal sealed partial class ConductorBatchLoop
                     ReserveParallelAcceptanceCandidate(
                         candidate,
                         decision.Attempt,
+                        liveAttempts,
                         activeCandidates,
                         activeAttemptIds,
                         activeAttemptSlotIndexes);

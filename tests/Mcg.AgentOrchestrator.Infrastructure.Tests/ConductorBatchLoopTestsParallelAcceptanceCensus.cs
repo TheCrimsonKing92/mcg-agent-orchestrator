@@ -6,6 +6,61 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed partial class ConductorBatchLoopTestsParallelAcceptance
 {
     [Xunit.Fact]
+    public void FreshHeartbeatForNewlyStartedAttemptDoesNotDoubleCountReservation()
+    {
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        using var release = new ManualResetEventSlim(false);
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, 2)
+            .Select(index => CreateVerifiedSimpleGoal(
+                kernel,
+                $"Update src/Mcg.AgentOrchestrator.App/Orchestration/FreshHeartbeat{index}.cs"))
+            .ToArray();
+        var attemptRoot = CreateTempDirectory("mcg-acceptance-fresh-heartbeat");
+        Action waitForAttempts = () => { };
+
+        try
+        {
+            var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts);
+            using var liveGateProbe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+                coordinator.GetCapacityReservingAttempts(goals.Select(goal => goal.Id.Value))
+                    .Select(attempt => new GateLoadContextProbe.LiveGateOccupant(
+                        attempt.OwnerProcessId,
+                        attempt.GoalId,
+                        attempt.SlotIndex,
+                        TimeSpan.Zero))
+                    .ToArray());
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    release.Wait(TestContext.Current.CancellationToken);
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                getLandingFileScopes: goal =>
+                    [$"src/Mcg.AgentOrchestrator.App/Orchestration/{goal.Id.Value[..8]}.cs"],
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 },
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(
+                2,
+                coordinator.GetCapacityReservingAttempts(goals.Select(goal => goal.Id.Value)).Count);
+        }
+        finally
+        {
+            release.Set();
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
     public void AcceptanceWidthOneStartsExactlyOneAttemptAndHoldsTheOtherAtPolicyCap()
     {
         using var isolatedRoot = IsolatedDotnetRootScope();

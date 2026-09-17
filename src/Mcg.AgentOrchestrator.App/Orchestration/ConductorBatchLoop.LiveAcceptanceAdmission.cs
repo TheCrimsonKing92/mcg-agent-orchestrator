@@ -212,6 +212,7 @@ internal sealed partial class ConductorBatchLoop
     private static void ReserveParallelAcceptanceCandidate(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorParallelAcceptanceAttempt attempt,
+        List<ConductorParallelAcceptanceAttempt> activeAttempts,
         List<ConductorParallelAcceptanceCandidate> activeCandidates,
         HashSet<string> activeAttemptIds,
         HashSet<int> activeAttemptSlotIndexes)
@@ -221,6 +222,7 @@ internal sealed partial class ConductorBatchLoop
             return;
         }
 
+        activeAttempts.Add(attempt);
         activeCandidates.Add(candidate);
         activeAttemptSlotIndexes.Add(candidate.SlotIndex);
     }
