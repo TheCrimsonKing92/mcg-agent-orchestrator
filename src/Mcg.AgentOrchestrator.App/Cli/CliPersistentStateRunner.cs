@@ -2855,8 +2855,8 @@ internal static partial class CliPersistentStateRunner
         Action<TimeSpan>? wait = null)
     {
         ArgumentNullException.ThrowIfNull(resolveCurrentClaim);
-        timeProvider ??= TimeProvider.System;
-        wait ??= Thread.Sleep;
+        timeProvider ??= GoalReplacementTransferLeaseClock.Current;
+        wait ??= GoalReplacementTransferLeaseClock.CurrentWait;
         var store = new ReconcileSweepRemediationStore(stateDbPath);
         var owner = $"goal-replace:{Environment.ProcessId}:{Guid.NewGuid():N}";
         var deadline = timeProvider.GetUtcNow().AddSeconds(15);
