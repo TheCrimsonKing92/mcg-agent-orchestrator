@@ -74,7 +74,13 @@ internal static class SourceSizeRatchet
             // Lowered for goal 5d57fe95: clean-baseline attention subject formatting moved to CleanTestBaseline,
             // which already owns receipt wire values and journal/attestation text; the driver keeps only the
             // correlation-key lifecycle and passes its own short-sha rendering to that formatter.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6757),
+            // Goal 42115646 extracted Failed-lifecycle selection to a deterministic Core policy; the
+            // driver retains attributed observation, stale-authority revalidation, and effect application.
+            // Review correction moved rung-8 candidate, route, target, cap, and retry-cause selection
+            // behind the policy; the split effect owner is pinned at its measured 369-line size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6436),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -217,9 +223,16 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1299),
-            // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1190),
+            // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1228),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),
+            // Goal 42115646 pins pure-policy precedence/equality separately from the Driver effect seam.
+            // Review correction adds the rung-8 phase counterfactual, walks policy-owned helper IL
+            // transitively, and pins the policy/interpreter owners at measured post-review sizes.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyTests.cs", 384),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyBoundaryTests.cs", 114),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailedGoalRecoveryExtractionTests.cs", 59),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFailedGoalRecoveryInterpreter.cs", 192),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1489),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs", 697),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs", 817),

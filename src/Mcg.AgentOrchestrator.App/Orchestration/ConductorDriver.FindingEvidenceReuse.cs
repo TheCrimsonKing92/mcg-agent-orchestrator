@@ -61,9 +61,9 @@ internal sealed partial class ConductorDriver
         Goal goal,
         ConductorAutonomyPolicy policy,
         VerifyingFindingTrigger trigger,
-        out VerifyingFindingAutoRetryDecision decision)
+        out FailedGoalFindingObservation observation)
     {
-        decision = VerifyingFindingAutoRetryDecision.None;
+        observation = FailedGoalFindingObservation.None;
         if (!_focusedEvidenceRunnerConfigured ||
             trigger.DeveloperOwnedFindings is not { Count: > 0 } developerOwnedFindings ||
             // No feasible upstream Developer: today's escalation is the correct unchanged outcome.
@@ -83,10 +83,10 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        if (!TryBuildFindingEvidenceRequest(goal, trigger.TriggeringTask, policy, out decision))
+        if (!TryBuildFindingEvidenceRequest(goal, trigger.TriggeringTask, policy, out observation))
         {
             // The evidence path declined to act; fall through to the unchanged Developer dispatch.
-            decision = VerifyingFindingAutoRetryDecision.None;
+            observation = FailedGoalFindingObservation.None;
             return false;
         }
 
