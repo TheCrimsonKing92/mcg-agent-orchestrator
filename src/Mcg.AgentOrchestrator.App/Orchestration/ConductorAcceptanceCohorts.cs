@@ -440,11 +440,20 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    internal IReadOnlySet<string> GetActiveCohortGateMemberGoalIds()
+    internal IReadOnlySet<string> GetActiveCohortGateMemberGoalIds(
+        Action<IReadOnlySet<string>, string>? observeActiveRun = null)
     {
         SweepCompletedCohortGateRuns();
-        return _cohortGateRuns.Values
+        var activeRuns = _cohortGateRuns.Values
             .Where(run => !run.Completion.Task.IsCompleted)
+            .OrderBy(run => run.PairFingerprint, StringComparer.Ordinal)
+            .ToArray();
+        foreach (var run in activeRuns)
+        {
+            observeActiveRun?.Invoke(run.MemberGoalIds, FormatCohortGateInFlightDetail(run, _utcNow()));
+        }
+
+        return activeRuns
             .SelectMany(run => run.MemberGoalIds)
             .ToHashSet(StringComparer.Ordinal);
     }
