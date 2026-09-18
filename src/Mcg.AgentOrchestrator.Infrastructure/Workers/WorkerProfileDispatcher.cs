@@ -2657,6 +2657,10 @@ public static class WorkerProfileDispatcher
                 reviewerMergeTreeTotalConflictPathCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles);
         AddSource(WorkerContextSemanticSource.CurrentBrief, "brief/current.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(residualBrief));
 
+        if (typedSource is null &&
+            reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair)
+            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts);
+
         var builder = new WorkerContextPackageBuilder();
         var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts) with
         {

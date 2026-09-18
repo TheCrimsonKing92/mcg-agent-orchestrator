@@ -3171,9 +3171,17 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             workingDirectory: workingDirectory,
             contextDirectory: contextDirectory,
             emitTypedSourceBoundaries: true).Content;
+        var typedSource = kernel.BuildTaskBriefSource(
+            goal.Id,
+            developer.Id,
+            modelFitTarget: $"OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias}",
+            workingDirectory: workingDirectory,
+            contextDirectory: contextDirectory,
+            measureWithTypedSourceBoundaries: true);
         var residualBrief = WorkerContextProjectionResidual
             .ParseLegacyMarkedTextV1(rawBrief, AgentRole.Developer)
             .CurrentBrief;
+        var typedBrief = WorkerContextRenderer.CreateCurrentBrief(typedSource);
 
         Assert.Contains("RESEARCH-PRODUCTION-SENTINEL", rawBrief, StringComparison.Ordinal);
         Assert.Contains("PLANNER-PRODUCTION-SENTINEL", rawBrief, StringComparison.Ordinal);
@@ -3208,8 +3216,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Equal(ContextDeliveryMode.MandatoryFile, planSection.DeliveryMode);
         Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativeResearch)), researchSection.ContentHash);
         Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativePlan)), planSection.ContentHash);
-        Assert.Equal(Encoding.UTF8.GetByteCount(residualBrief), briefSection.ByteCount);
-        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(residualBrief)), briefSection.ContentHash);
+        Assert.Equal(Encoding.UTF8.GetByteCount(typedBrief), briefSection.ByteCount);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(typedBrief)), briefSection.ContentHash);
         Assert.Equal(authoritativeResearch, File.ReadAllText(Path.Combine(
             workingDirectory,
             researchSection.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));

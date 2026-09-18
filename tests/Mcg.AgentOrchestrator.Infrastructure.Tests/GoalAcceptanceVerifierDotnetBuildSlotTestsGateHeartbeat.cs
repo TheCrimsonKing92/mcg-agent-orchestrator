@@ -98,10 +98,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
         var previousProgress = GoalAcceptanceVerifier.ProgressInterval;
         var previousCapturePublication = GoalAcceptanceVerifier.CapturePublicationInterval;
         var observed = new ConcurrentQueue<AcceptanceGateProgress>();
+        var commandStarted = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var outputObserved = new TaskCompletionSource<AcceptanceGateProgress>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var unchangedOutputObserved = new TaskCompletionSource<AcceptanceGateProgress>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        Task<AcceptanceVerificationResult>? run = null;
         AcceptanceGateProgress? firstOutput = null;
         try
         {
@@ -113,8 +117,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             {
                 observed.Enqueue(item);
                 if (item.CurrentTarget != "live output gate receipt" ||
-                    item.ChildProcessId is null ||
-                    item.OutputBytes <= 0)
+                    item.ChildProcessId is null)
+                {
+                    return;
+                }
+
+                commandStarted.TrySetResult(item);
+                if (item.OutputBytes <= 0)
                 {
                     return;
                 }
@@ -130,14 +139,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
                     unchangedOutputObserved.TrySetResult(item);
                 }
             });
-            using var cancellation = new CancellationTokenSource();
             var verifier = new GoalAcceptanceVerifier();
-            var run = verifier.RunAsync(
+            run = verifier.RunAsync(
                 root,
                 new GoalId("decafbaddecafbaddecafbaddecafbad"),
                 stableSlotIndex: 0,
                 cancellationToken: cancellation.Token);
 
+            await commandStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
             var first = await outputObserved.Task.WaitAsync(TimeSpan.FromSeconds(6));
             var unchanged = await unchangedOutputObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Xunit.Assert.NotNull(first.ChildProcessId);
@@ -155,6 +164,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
         }
         finally
         {
+            cancellation.Cancel();
+            if (run is not null)
+            {
+                try { await run.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            }
             GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
             GoalAcceptanceVerifier.ProgressInterval = previousProgress;
             GoalAcceptanceVerifier.CapturePublicationInterval = previousCapturePublication;
