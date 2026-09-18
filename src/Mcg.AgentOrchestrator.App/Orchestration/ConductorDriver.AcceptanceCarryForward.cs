@@ -9,12 +9,92 @@ internal sealed partial class ConductorDriver
     private const string AcceptanceMainAdvanceOperation = "conductor:acceptance-main-advance";
     private const string AcceptanceMainAdvanceCarryOperation = "conductor:acceptance-main-advance-carry";
 
+    private ConductorAdvanceResult? RebaseBeforeAcceptance(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        bool applySideEffects,
+        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
+    {
+        // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
+        // criteria, landing) operates on the ACTUAL integrated result that will land — not the
+        // pre-integration branch. A goal can pass its own tests yet break once integrated with changes
+        // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
+        // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
+        // a wasted (expensive) acceptance run when the branch cannot integrate at all.
+        return RebaseOrRetire(
+            goal,
+            goalPrefix,
+            policy,
+            "pre-landing",
+            applySideEffects,
+            out earlyOutcome,
+            out _);
+    }
+
+    private ConductorAdvanceResult? RebaseBeforeMerge(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        out GoalWorktreeRebaseStatus rebaseStatus)
+    {
+        // In a parallel acceptance batch, a sibling goal may advance main after this goal's
+        // acceptance finished. Re-check the branch immediately before the serialized merge.
+        return RebaseOrRetire(
+            goal,
+            goalPrefix,
+            policy,
+            "pre-merge",
+            applySideEffects: true,
+            out _,
+            out rebaseStatus);
+    }
+
+    private ConductorAdvanceResult CompleteParallelLandingAfterPreMergeRebase(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        AcceptanceVerificationSummary acceptance)
+    {
+        var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy, out var rebaseStatus);
+        if (rebase is not null)
+        {
+            return rebase;
+        }
+
+        return rebaseStatus == GoalWorktreeRebaseStatus.Rebased
+            ? CompleteLandingAfterRacingLandingCarryForward(candidate, policy, acceptance)
+            : CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+    }
+
     private ConductorAdvanceResult CompleteLandingAfterRacingLandingCarryForward(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        _ = CarryForwardGreenVerdict(candidate, acceptance);
+        var disposition = CarryForwardGreenVerdict(candidate, acceptance);
+        if (disposition is not (
+            AcceptanceMainAdvanceDisposition.Disjoint or
+            AcceptanceMainAdvanceDisposition.Unchanged))
+        {
+            var reason = disposition switch
+            {
+                AcceptanceMainAdvanceDisposition.Overlap =>
+                    "Main advanced with overlapping changes; revalidation required before landing.",
+                AcceptanceMainAdvanceDisposition.Unknown =>
+                    "Acceptance candidate relationship could not be classified; revalidation required before landing.",
+                _ => throw new InvalidOperationException(
+                    $"Unsupported acceptance main-advance disposition {disposition.GetType().Name}.")
+            };
+            return MakeResult(
+                candidate.Goal.Id.Value,
+                candidate.GoalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"{reason} {disposition.FormatReceipt()}",
+                    StableIdentity: BuildRevalidationHoldIdentity(candidate)));
+        }
+
         return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
     }
 
@@ -154,6 +234,21 @@ internal sealed partial class ConductorDriver
 
     private static bool GitSucceeded(GitCli.GitResult result) =>
         result.Succeeded && !result.DrainTimedOut;
+
+    private string BuildRevalidationHoldIdentity(ConductorParallelAcceptanceCandidate candidate)
+    {
+        try
+        {
+            var current = _resolveAcceptanceHeads(candidate.Goal);
+            return $"acceptance-revalidation:" +
+                $"{current.BranchHeadSha ?? candidate.BranchHeadSha ?? "unknown"}:" +
+                $"{current.MainHeadSha ?? candidate.MainHeadSha ?? "unknown"}";
+        }
+        catch
+        {
+            return $"acceptance-revalidation:{candidate.CandidateKey}";
+        }
+    }
 
     private static string BuildCarryForwardReceipt(
         AcceptanceMainAdvanceDisposition disposition,

@@ -4064,8 +4064,7 @@ internal sealed partial class ConductorDriver
             return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
         }
 
-        var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy);
-        return rebase ?? CompleteLandingAfterRacingLandingCarryForward(candidate, policy, acceptance);
+        return CompleteParallelLandingAfterPreMergeRebase(candidate, policy, acceptance);
     }
 
     internal ConductorAdvanceResult EscalateParallelLandingAcceptance(
@@ -5693,29 +5692,6 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private ConductorAdvanceResult? RebaseBeforeAcceptance(
-        Goal goal,
-        string goalPrefix,
-        ConductorAutonomyPolicy policy,
-        bool applySideEffects,
-        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
-    {
-        // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
-        // criteria, landing) operates on the ACTUAL integrated result that will land — not the
-        // pre-integration branch. A goal can pass its own tests yet break once integrated with changes
-        // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
-        // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
-        // a wasted (expensive) acceptance run when the branch cannot integrate at all.
-        return RebaseOrRetire(goal, goalPrefix, policy, "pre-landing", applySideEffects, out earlyOutcome);
-    }
-
-    private ConductorAdvanceResult? RebaseBeforeMerge(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
-    {
-        // In a parallel acceptance batch, a sibling goal may advance main after this goal's
-        // acceptance finished. Re-check the branch immediately before the serialized merge.
-        return RebaseOrRetire(goal, goalPrefix, policy, "pre-merge", applySideEffects: true, out _);
-    }
-
     internal LandingEscalationRecheckResult RecheckPreLandingRebaseConflict(Goal goal)
         => _recheckPreLandingRebaseConflict(goal);
 
@@ -5725,10 +5701,12 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         string phase,
         bool applySideEffects,
-        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
+        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome,
+        out GoalWorktreeRebaseStatus rebaseStatus)
     {
         earlyOutcome = null;
         var rebase = _rebaseOntoMain(goal);
+        rebaseStatus = rebase.Status;
 
         // No retry here, deliberately. An earlier version of this method retried a non-conflict failure once,
         // on the theory that those failures were transient races against main advancing. That theory was
