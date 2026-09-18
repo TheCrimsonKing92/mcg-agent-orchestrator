@@ -66,6 +66,29 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Equal(1, restored.PlannerSampleCount);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_acceptance_width_defaults_round_trips_and_validates_range")]
+    public void ConductorAutonomyPolicyAcceptanceWidthDefaultsRoundTripsAndValidatesRange()
+    {
+        var legacyJson = string.Join(
+            Environment.NewLine,
+            ConductorAutonomyPolicy.Conservative.ToJson()
+                .Split(["\r\n", "\n"], StringSplitOptions.None)
+                .Where(line => !line.Contains("\"acceptanceWidth\"", StringComparison.Ordinal)));
+
+        Assert.Equal(2, ConductorAutonomyPolicy.ParseJson(legacyJson).AcceptanceWidth);
+
+        var restored = ConductorAutonomyPolicy.ParseJson(
+            (ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 }).ToJson());
+        Assert.Equal(1, restored.AcceptanceWidth);
+
+        Assert.Contains(
+            (ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 0 }).Validate(),
+            error => error.Contains("acceptanceWidth", StringComparison.Ordinal));
+        Assert.Contains(
+            (ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 5 }).Validate(),
+            error => error.Contains("acceptanceWidth", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_contain_all_lifecycle_states")]
     public void ConductorAutonomyPolicyPresetsContainAllLifecycleStates()
     {

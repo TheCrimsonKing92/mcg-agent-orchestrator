@@ -355,7 +355,8 @@ internal sealed partial class ConductorBatchLoop
             $"LOOP_START policy={Sanitize(policy.Name)} policySource={SanitizeReason(policySource)} maxIterations={maxIterations?.ToString() ?? "none"} " +
             $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
-            $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap}" +
+            $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
+            $"acceptanceWidth={policy.AcceptanceWidth}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
         while (true)
@@ -2732,8 +2733,8 @@ internal sealed partial class ConductorBatchLoop
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds)
     {
-        var configuredAcceptanceWidth = DefaultParallelAcceptanceCapacity;
-        if (configuredAcceptanceWidth < 2)
+        var configuredAcceptanceWidth = policy.AcceptanceWidth;
+        if (configuredAcceptanceWidth < ConductorAutonomyPolicy.MinimumAcceptanceWidth)
         {
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         }
@@ -2768,7 +2769,7 @@ internal sealed partial class ConductorBatchLoop
             return results;
         }
 
-        var liveAttempts = activeReservations.Attempts;
+        var liveAttempts = activeReservations.Attempts.ToList();
         var activeCandidates = activeReservations.Candidates;
         var activeAttemptIds = activeReservations.AttemptIds;
         var activeAttemptSlotIndexes = activeReservations.StableSlotIndexes;
@@ -2959,13 +2960,21 @@ internal sealed partial class ConductorBatchLoop
             .Select(attempt => attempt.GoalId)
             .ToHashSet(StringComparer.Ordinal);
         var activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+        var acceptanceCensus = CaptureLiveAcceptanceCensus(
+            liveAttempts,
+            activeAttemptIds,
+            activeCohortCapacity,
+            tick,
+            changedGoalLines,
+            blockAdmissionOnFailure: true);
         var cohortEligible = orderedEligible
             .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value))
             .ToArray();
         var productionCandidates = speculativeCandidates
             .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
             .ToArray();
-        if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount < configuredAcceptanceWidth &&
+        var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
+        if (trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -2996,7 +3005,8 @@ internal sealed partial class ConductorBatchLoop
                 .ToArray();
         }
         GoalId? forcedCohortCandidate = null;
-        if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount < configuredAcceptanceWidth &&
+        var cohortAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
+        if (cohortAdmission.IsAdmitted &&
             driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -3084,6 +3094,13 @@ internal sealed partial class ConductorBatchLoop
                     $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]))} {cohortRun.Detail}",
                     changedGoalLines);
                 activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+                acceptanceCensus = CaptureLiveAcceptanceCensus(
+                    liveAttempts,
+                    activeAttemptIds,
+                    activeCohortCapacity,
+                    tick,
+                    changedGoalLines,
+                    blockAdmissionOnFailure: true);
             }
             else if (cohortDecision.Exclusions.Count > 0)
             {
@@ -3165,6 +3182,7 @@ internal sealed partial class ConductorBatchLoop
                     throw new InvalidDataException(
                         $"Acceptance slot count {acceptanceSlotCount} must be between 1 and maximum {MaxParallelAcceptanceCapacity}.");
                 }
+                acceptanceSlotCount = Math.Min(acceptanceSlotCount, configuredAcceptanceWidth);
             }
             catch (Exception ex)
             {
@@ -3180,14 +3198,15 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount >= acceptanceSlotCount)
+            var ordinaryAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, acceptanceSlotCount);
+            if (!ordinaryAdmission.IsAdmitted)
             {
                 deferredByAdmission++;
                 results[goal.Id.Value] = new ParallelLandingOutcome(
                     ParallelAcceptanceHeld(
                         goal,
                         policy,
-                        $"candidate manifest slot cap {acceptanceSlotCount} reached; retry on next conduct tick"),
+                        ordinaryAdmission.Reason),
                     null);
                 continue;
             }
@@ -3363,6 +3382,7 @@ internal sealed partial class ConductorBatchLoop
                     ReserveParallelAcceptanceCandidate(
                         candidate,
                         decision.Attempt,
+                        liveAttempts,
                         activeCandidates,
                         activeAttemptIds,
                         activeAttemptSlotIndexes);
@@ -3392,6 +3412,7 @@ internal sealed partial class ConductorBatchLoop
                     ReserveParallelAcceptanceCandidate(
                         candidate,
                         decision.Attempt,
+                        liveAttempts,
                         activeCandidates,
                         activeAttemptIds,
                         activeAttemptSlotIndexes);
@@ -3453,6 +3474,13 @@ internal sealed partial class ConductorBatchLoop
                         changedGoalLines);
                     break;
             }
+            acceptanceCensus = CaptureLiveAcceptanceCensus(
+                liveAttempts,
+                activeAttemptIds,
+                activeCohortCapacity,
+                tick,
+                changedGoalLines,
+                blockAdmissionOnFailure: true);
             }
             catch (AcceptanceArtifactWriterLeaseBusyException ex)
             {
