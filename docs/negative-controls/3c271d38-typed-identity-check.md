@@ -1,6 +1,6 @@
 # Negative control: typed identity-bound hash validation
 
-Goal: `29423867` / backlog slice `3c271d38`  
+Goal: `29423867` / backlog slice `3c271d38`
 Control: `WorkerContextRendererDispatchPathTests.MandatoryArtifactWithMismatchedStoredHashIsRejectedBeforeRendering`
 
 ## Mutation

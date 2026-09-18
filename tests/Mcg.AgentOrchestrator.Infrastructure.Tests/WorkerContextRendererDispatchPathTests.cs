@@ -33,10 +33,17 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
 
         var prompt = File.ReadAllText(prepared.PromptPath);
         var receipt = prepared.Task.LastDispatch!.ContextPackageReceipt!;
-        foreach (var section in receipt.Sections.Where(section =>
-                     section.DeliveryMode != ContextDeliveryMode.HistoricalFile))
+        var expectedIdentities = ExpectedRequiredArtifactIdentities(fixture, path);
+        Assert.Equal(
+            expectedIdentities,
+            receipt.Sections.Select(section => section.LogicalIdentity).ToHashSet(StringComparer.Ordinal));
+        foreach (var expectedIdentity in expectedIdentities)
         {
-            Assert.Equal(1, CountOccurrences(prompt, $"identity={section.LogicalIdentity};"));
+            var section = Assert.Single(receipt.Sections, candidate =>
+                candidate.LogicalIdentity.Equals(expectedIdentity, StringComparison.Ordinal));
+            Assert.Equal(
+                section.DeliveryMode == ContextDeliveryMode.HistoricalFile ? 0 : 1,
+                CountOccurrences(prompt, $"identity={expectedIdentity};"));
         }
 
         Assert.DoesNotContain(WorkerContextProjectionBoundary.StartPrefix, prompt, StringComparison.Ordinal);
@@ -49,6 +56,14 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
                 WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes("changed retry feedback")),
                 receipt.RetryFeedbackPromptReceipt!.AcceptedFeedbackSha256);
         }
+
+        Assert.Equal(
+            path == DispatchPath.CompactRepair
+                ? ReviewFindingHistoryProjectionMode.ContractRepair
+                : path == DispatchPath.RetryFeedback
+                    ? ReviewFindingHistoryProjectionMode.FullInspection
+                    : null,
+            receipt.ReviewFindingProjectionMode);
     }
 
     [Xunit.Fact]
@@ -182,7 +197,7 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
     [Xunit.InlineData(AgentRole.Developer)]
     [Xunit.InlineData(AgentRole.Tester)]
     [Xunit.InlineData(AgentRole.Reviewer)]
-    public void TypedAndLegacyPathsDeliverIdenticalArtifactIdentitySets(AgentRole role)
+    public void TypedAndLegacyPathsPreserveIdentityRoleAndBudgetSelections(AgentRole role)
     {
         var root = CreateTempDirectory();
         var workingDirectory = Path.Combine(root, "repo");
@@ -219,12 +234,26 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
             .ToHashSet();
 
         Assert.Equal(typedIdentities, parsed.ProjectedIdentities.ToHashSet());
-        Assert.All(source.Segments, segment => Assert.Contains(role, segment.RoleVisibility!));
+        Assert.All(source.Segments, segment => Assert.Equal([role], segment.RoleVisibility));
         Assert.Equal(
             typedIdentities,
             source.BudgetDecisions.Select(decision => decision.Identity).ToHashSet());
-        Assert.All(source.BudgetDecisions, decision =>
-            Assert.True(Enum.IsDefined(decision.Disposition)));
+        foreach (var decision in source.BudgetDecisions)
+        {
+            var selectedSegment = Assert.Single(source.Segments, segment =>
+                segment.TypedProjectionIdentity == decision.Identity);
+            var expectedLegacyBlock = string.Join(
+                Environment.NewLine,
+                new[] { WorkerContextProjectionBoundary.Start(decision.Identity) }
+                    .Concat(selectedSegment.Lines.Select(WorkerContextProjectionBoundary.EscapeReservedLiteral))
+                    .Append(WorkerContextProjectionBoundary.End(decision.Identity)));
+
+            Assert.Contains(expectedLegacyBlock, legacy.Content, StringComparison.Ordinal);
+            Assert.Equal(
+                decision.Disposition == TaskBriefBudgetDisposition.Collapsed,
+                selectedSegment.Lines.Any(line =>
+                    line.Contains("collapsed to stay under", StringComparison.Ordinal)));
+        }
     }
 
     private static DispatchFixture CreateDispatchFixture(
@@ -234,6 +263,7 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
         var root = CreateTempDirectory();
         var workingDirectory = Path.Combine(root, "repo");
         Directory.CreateDirectory(workingDirectory);
+        var headCommit = InitializeRepository(workingDirectory);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Render typed worker context.", AgentRole.Developer);
         var objective = "Render the worker context exactly once." +
@@ -242,7 +272,6 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         if (path != DispatchPath.Initial)
         {
-            var candidateSha = new string('a', 40);
             var location = new ReviewFindingLocation("src/Worker.cs", "Worker.Render");
             kernel.RecordTaskVerification(
                 goal.Id,
@@ -255,7 +284,7 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
                     string.Empty,
                     DateTimeOffset.UtcNow,
                     ReviewFindingTouchedAnchors: [location],
-                    ReviewedCommit: candidateSha,
+                    ReviewedCommit: headCommit,
                     MergedReviewFindings:
                     [
                         new ReviewFinding("stable-render", ReviewFindingState.Open, location, "render once")
@@ -275,11 +304,98 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
                     : RetryRoundKind.Standard);
         }
 
-        return new DispatchFixture(root, workingDirectory, kernel, goal, task);
+        return new DispatchFixture(root, workingDirectory, kernel, goal, task, headCommit);
     }
 
     private static WorkerProfile FakeHarnessProfile() =>
         new("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}");
+
+    private static HashSet<string> ExpectedRequiredArtifactIdentities(
+        DispatchFixture fixture,
+        DispatchPath path)
+    {
+        var expected = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "goal/objective.md",
+            "task/description.md",
+            "task/metadata.json",
+            "task/criterion-retry-feedback.json",
+            "goal/timeline.json",
+            "brief/header-residual.md",
+            "brief/current.md",
+            "context/manifest.v1.json"
+        };
+        var contextDirectory = Path.Combine(
+            fixture.WorkingDirectory,
+            ".orchestrator-context",
+            fixture.Goal.Id.Value);
+        using var registry = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(contextDirectory, "artifact-registry.json")));
+        foreach (var artifact in registry.RootElement.GetProperty("artifacts").EnumerateArray())
+        {
+            var pathValue = artifact.GetProperty("path").GetString()!;
+            var visible = artifact.GetProperty("roleVisibility").EnumerateArray()
+                .Select(item => item.GetString())
+                .Contains(fixture.Task.RequiredRole.ToString(), StringComparer.Ordinal);
+            if (visible && WorkerProfileDispatcher.DeliverableRegistryArtifactPaths.Contains(
+                    pathValue,
+                    StringComparer.Ordinal))
+            {
+                expected.Add($"context/{pathValue}");
+            }
+        }
+
+        if (path == DispatchPath.Initial)
+        {
+            return expected;
+        }
+
+        var projection = ReviewFindingContextProjector.Project(
+            fixture.Goal,
+            fixture.Task,
+            fixture.HeadCommit,
+            fixture.HeadCommit);
+        expected.Add("goal/review-finding-history.json");
+        expected.UnionWith(projection.RoundBodies.Concat(projection.ReceiptBodies)
+            .Select(body => body.LogicalIdentity));
+        if (fixture.Task.LastVerification is { } lastVerification)
+        {
+            expected.Add("task/last-verification/stdout");
+            if (lastVerification.AuthoritativeStandardError is not null)
+            {
+                expected.Add("task/last-verification/stderr");
+            }
+        }
+
+        if (path != DispatchPath.CompactRepair)
+        {
+            return expected;
+        }
+
+        Assert.Equal(ReviewFindingHistoryProjectionMode.ContractRepair, projection.Metrics.Mode);
+        expected.Add("task/review-contract-repair-envelope.json");
+        return expected;
+    }
+
+    private static string InitializeRepository(string workingDirectory)
+    {
+        AssertGitSucceeded(GitCli.Run(workingDirectory, "init", "--initial-branch=main"));
+        File.WriteAllText(Path.Combine(workingDirectory, "fixture.txt"), "worker context fixture");
+        AssertGitSucceeded(GitCli.Run(workingDirectory, "add", "fixture.txt"));
+        AssertGitSucceeded(GitCli.Run(
+            workingDirectory,
+            "-c", "user.name=Worker Context Tests",
+            "-c", "user.email=worker-context-tests@example.invalid",
+            "commit", "--quiet", "-m", "fixture"));
+        var head = GitCli.Run(workingDirectory, "rev-parse", "HEAD");
+        AssertGitSucceeded(head);
+        return head.Output.Trim();
+    }
+
+    private static void AssertGitSucceeded(GitCli.GitResult result) =>
+        Assert.True(
+            result.Succeeded && !result.DrainTimedOut,
+            $"git fixture command failed: exit={result.ExitCode}; stderr={result.Error}");
 
     private static int CountOccurrences(string content, string value)
     {
@@ -313,5 +429,6 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
         string WorkingDirectory,
         AgentOrchestratorKernel Kernel,
         Goal Goal,
-        TaskSpec Task);
+        TaskSpec Task,
+        string HeadCommit);
 }
