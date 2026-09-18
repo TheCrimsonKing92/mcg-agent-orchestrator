@@ -199,41 +199,81 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
     [Xunit.InlineData(AgentRole.Reviewer)]
     public void TypedAndLegacyPathsPreserveIdentityRoleAndBudgetSelections(AgentRole role)
     {
-        var root = CreateTempDirectory();
-        var workingDirectory = Path.Combine(root, "repo");
-        Directory.CreateDirectory(workingDirectory);
-        var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), $"Exercise {role} typed selection parity.", role);
-        var goal = kernel.CreateGoal("Compare typed and legacy artifact identity sets.", [task]);
-        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var fixture = CreateDispatchFixture(DispatchPath.Initial, role: role);
         var contextDirectory = WorkerContextArtifacts.Write(
-            goal,
-            task,
-            workingDirectory,
+            fixture.Goal,
+            fixture.Task,
+            fixture.WorkingDirectory,
             providerName: "OpenAI",
             modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
 
-        var source = kernel.BuildTaskBriefSource(
-            goal.Id,
-            task.Id,
-            workingDirectory: workingDirectory,
+        var source = fixture.Kernel.BuildTaskBriefSource(
+            fixture.Goal.Id,
+            fixture.Task.Id,
+            workingDirectory: fixture.WorkingDirectory,
             contextDirectory: contextDirectory,
+            reviewerScopeChangedFiles: role == AgentRole.Reviewer ? [] : null,
+            reviewerScopeMergeBase: role == AgentRole.Reviewer ? fixture.HeadCommit : null,
+            reviewerScopeTotalChangedFileCount: role == AgentRole.Reviewer ? 0 : null,
+            reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
+            reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
+            reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null,
             measureWithTypedSourceBoundaries: true);
-        var legacy = kernel.BuildTaskBrief(
-            goal.Id,
-            task.Id,
-            workingDirectory: workingDirectory,
-            contextDirectory: contextDirectory,
-            emitTypedSourceBoundaries: true);
+        var legacy = source.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: true);
+        var legacyPackage = WorkerProfileDispatcher.BuildContextPackage(
+            fixture.Goal,
+            fixture.Task,
+            fixture.WorkingDirectory,
+            contextDirectory,
+            legacy,
+            reviewerScopeChangedFiles: role == AgentRole.Reviewer ? [] : null,
+            reviewerScopeMergeBase: role == AgentRole.Reviewer ? fixture.HeadCommit : null,
+            reviewerScopeTotalChangedFileCount: role == AgentRole.Reviewer ? 0 : null,
+            reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
+            reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
+            reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null,
+            workerProfile: FakeHarnessProfile());
+        var legacyPrompt = WorkerContextPackageBuilder.Render(legacyPackage);
         var parsed = WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(
             legacy.Content,
             role);
+        var prepared = WorkerProfileDispatcher.PrepareTask(
+            fixture.Kernel,
+            fixture.Goal,
+            fixture.Task,
+            FakeHarnessProfile(),
+            Path.Combine(fixture.Root, "prompts"),
+            fixture.WorkingDirectory,
+            DateTimeOffset.UtcNow,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            reviewerScopeChangedFiles: role == AgentRole.Reviewer ? [] : null,
+            reviewerScopeMergeBase: role == AgentRole.Reviewer ? fixture.HeadCommit : null,
+            reviewerScopeTotalChangedFileCount: role == AgentRole.Reviewer ? 0 : null,
+            reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
+            reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
+            reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null);
+        var typedPrompt = File.ReadAllText(prepared.PromptPath);
+        var typedReceipt = prepared.Task.LastDispatch!.ContextPackageReceipt!;
         var typedIdentities = source.Segments
             .Where(segment => segment.TypedProjectionIdentity is not null)
             .Select(segment => segment.TypedProjectionIdentity.GetValueOrDefault())
             .ToHashSet();
+        var legacyPackageIdentities = legacyPackage.Artifacts
+            .Select(artifact => artifact.Identity.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var typedPackageIdentities = typedReceipt.Sections
+            .Select(section => section.LogicalIdentity)
+            .ToHashSet(StringComparer.Ordinal);
 
         Assert.Equal(typedIdentities, parsed.ProjectedIdentities.ToHashSet());
+        Assert.True(
+            legacyPackageIdentities.SetEquals(typedPackageIdentities),
+            $"Package identity mismatch for {role}: legacy-only=[{string.Join(", ", legacyPackageIdentities.Except(typedPackageIdentities).Order(StringComparer.Ordinal))}]; typed-only=[{string.Join(", ", typedPackageIdentities.Except(legacyPackageIdentities).Order(StringComparer.Ordinal))}]");
+        Assert.Equal(
+            DeliveredArtifactIdentities(legacyPrompt),
+            DeliveredArtifactIdentities(typedPrompt));
+        Assert.All(legacyPackage.Artifacts, artifact => Assert.Contains(role, artifact.RoleVisibility));
         Assert.All(source.Segments, segment => Assert.Equal([role], segment.RoleVisibility));
         Assert.Equal(
             typedIdentities,
@@ -258,14 +298,15 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
 
     private static DispatchFixture CreateDispatchFixture(
         DispatchPath path,
-        string? objectiveSuffix = null)
+        string? objectiveSuffix = null,
+        AgentRole role = AgentRole.Developer)
     {
         var root = CreateTempDirectory();
         var workingDirectory = Path.Combine(root, "repo");
         Directory.CreateDirectory(workingDirectory);
         var headCommit = InitializeRepository(workingDirectory);
         var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), "Render typed worker context.", AgentRole.Developer);
+        var task = new TaskSpec(TaskId.New(), "Render typed worker context.", role);
         var objective = "Render the worker context exactly once." +
                         (objectiveSuffix is null ? string.Empty : Environment.NewLine + objectiveSuffix);
         var goal = kernel.CreateGoal(objective, [task]);
@@ -408,6 +449,33 @@ public sealed class WorkerContextRendererDispatchPathTests : WorkerDispatchTestS
         }
 
         return count;
+    }
+
+    private static HashSet<string> DeliveredArtifactIdentities(string prompt)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in prompt.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            foreach (var prefix in new[]
+            {
+                "INLINE FULL: identity=",
+                "MANDATORY READ: identity=",
+                "ON-DEMAND ATTESTATION: identity="
+            })
+            {
+                if (!line.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var separator = line.IndexOf(';', prefix.Length);
+                Assert.True(separator > prefix.Length, $"Rendered artifact header has no identity terminator: {line}");
+                identities.Add(line[prefix.Length..separator]);
+                break;
+            }
+        }
+
+        return identities;
     }
 
     private static string RecoverInlineText(string prompt, string identity)
