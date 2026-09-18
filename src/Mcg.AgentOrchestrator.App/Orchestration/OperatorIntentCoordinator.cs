@@ -67,9 +67,16 @@ internal sealed class OperatorIntentCoordinator
             }
 
             var marker = BuildApplicationMarker(intent);
-            if (goal.Timeline.Any(item => item.Message.Contains(marker, StringComparison.Ordinal)))
+            var typedApplied = !string.IsNullOrEmpty(intent.Id) &&
+                goal.Timeline.Any(item => item.OperatorIntentApplied?.IntentId == intent.Id);
+            var legacyApplied = !typedApplied && goal.Timeline.Any(item =>
+                item.OperatorIntentApplied is null &&
+                item.Message.Contains(marker, StringComparison.Ordinal));
+            if (typedApplied || legacyApplied)
             {
-                var recoveredOutcome = $"Applied; recovered durable goal marker {marker}.";
+                var recoveredOutcome = typedApplied
+                    ? $"Applied; recovered durable operator-intent payload {intent.Id}."
+                    : $"Applied; recovered durable goal marker {marker}.";
                 _store.CompleteAsync(
                     intent.Id,
                     ClaimOwner,
@@ -98,8 +105,14 @@ internal sealed class OperatorIntentCoordinator
                 {
                     Apply(kernel, goal, intent);
                 }
-                kernel.RecordGoalPolicyDecision(
+                kernel.RecordOperatorIntentApplied(
                     goal.Id,
+                    intent.Id,
+                    intent.Verb,
+                    intent.TaskId,
+                    intent.Actor,
+                    intent.Channel,
+                    intent.AuthenticationAssurance,
                     $"{marker} verb={intent.Verb} task={intent.TaskId ?? "none"} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance}");
                 var outcome = (retryClarification == RetryClarificationHandling.Resumed
                     ? "Applied retry continuation to goal "
