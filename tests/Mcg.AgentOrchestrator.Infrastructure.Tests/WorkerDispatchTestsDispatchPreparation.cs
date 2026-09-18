@@ -2908,7 +2908,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             "preserve this unrelated role instruction"
         ]);
 
-        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(brief, AgentRole.Developer);
+        var residual = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(brief, AgentRole.Developer)
+            .CurrentBrief;
 
         Assert.DoesNotContain("formatted causal event", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("formatted review finding", residual, StringComparison.Ordinal);
@@ -2968,7 +2970,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             ]);
 
             Assert.Throws<InvalidOperationException>(() =>
-                WorkerProfileDispatcher.RemoveTypedSourceProjections(brief, AgentRole.Developer));
+                WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(brief, AgentRole.Developer));
         }
     }
 
@@ -2987,9 +2989,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             task.Id,
             emitTypedSourceBoundaries: true).Content;
 
-        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(
-            rawBrief,
-            AgentRole.Developer);
+        var residual = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(rawBrief, AgentRole.Developer)
+            .CurrentBrief;
 
         Assert.Contains(literalBoundary, residual, StringComparison.Ordinal);
     }
@@ -3036,7 +3038,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             workingDirectory: workingDirectory,
             contextDirectory: contextDirectory,
             emitTypedSourceBoundaries: true).Content;
-        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(rawBrief, AgentRole.Developer);
+        var residual = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(rawBrief, AgentRole.Developer)
+            .CurrentBrief;
 
         Assert.Contains(WorkerContextProjectionBoundary.LiteralPrefix, rawBrief, StringComparison.Ordinal);
         Assert.DoesNotContain("LAST-MODEL-PRODUCER-SENTINEL", rawBrief, StringComparison.Ordinal);
@@ -3083,7 +3087,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             contextDirectory: contextDirectory,
             emitTypedSourceBoundaries: true).Content;
 
-        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(rawBrief, AgentRole.Planner);
+        var residual = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(rawBrief, AgentRole.Planner)
+            .CurrentBrief;
 
         Assert.Contains("## Prior Task Evidence", residual, StringComparison.Ordinal);
         Assert.Contains("prior-task-summaries.md", residual, StringComparison.Ordinal);
@@ -3118,9 +3124,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             contextDirectory: contextDirectory,
             emitTypedSourceBoundaries: true).Content;
 
-        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(
-            rawBrief,
-            AgentRole.Developer);
+        var residual = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(rawBrief, AgentRole.Developer)
+            .CurrentBrief;
 
         Assert.DoesNotContain("stdout-complete", residual, StringComparison.Ordinal);
         Assert.Contains("stderr-preview-only", residual, StringComparison.Ordinal);
@@ -3165,9 +3171,17 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             workingDirectory: workingDirectory,
             contextDirectory: contextDirectory,
             emitTypedSourceBoundaries: true).Content;
-        var residualBrief = WorkerProfileDispatcher.RemoveTypedSourceProjections(
-            rawBrief,
-            AgentRole.Developer);
+        var typedSource = kernel.BuildTaskBriefSource(
+            goal.Id,
+            developer.Id,
+            modelFitTarget: $"OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias}",
+            workingDirectory: workingDirectory,
+            contextDirectory: contextDirectory,
+            measureWithTypedSourceBoundaries: true);
+        var residualBrief = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(rawBrief, AgentRole.Developer)
+            .CurrentBrief;
+        var typedBrief = WorkerContextRenderer.CreateCurrentBrief(typedSource);
 
         Assert.Contains("RESEARCH-PRODUCTION-SENTINEL", rawBrief, StringComparison.Ordinal);
         Assert.Contains("PLANNER-PRODUCTION-SENTINEL", rawBrief, StringComparison.Ordinal);
@@ -3202,8 +3216,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Equal(ContextDeliveryMode.MandatoryFile, planSection.DeliveryMode);
         Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativeResearch)), researchSection.ContentHash);
         Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativePlan)), planSection.ContentHash);
-        Assert.Equal(Encoding.UTF8.GetByteCount(residualBrief), briefSection.ByteCount);
-        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(residualBrief)), briefSection.ContentHash);
+        Assert.Equal(Encoding.UTF8.GetByteCount(typedBrief), briefSection.ByteCount);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(typedBrief)), briefSection.ContentHash);
         Assert.Equal(authoritativeResearch, File.ReadAllText(Path.Combine(
             workingDirectory,
             researchSection.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));

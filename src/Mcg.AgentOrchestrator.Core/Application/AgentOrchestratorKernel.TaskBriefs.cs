@@ -157,7 +157,7 @@ public sealed partial class AgentOrchestratorKernel
             : string.Join(Environment.NewLine, lines).Length;
     }
 
-    public TaskBrief BuildTaskBrief(
+    public TaskBriefSource BuildTaskBriefSource(
         GoalId goalId,
         TaskId taskId,
         string? modelFitTarget = null,
@@ -174,7 +174,7 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null,
         string? reviewerRoundTouchProofDiagnostic = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
-        bool emitTypedSourceBoundaries = false)
+        bool measureWithTypedSourceBoundaries = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -648,23 +648,26 @@ public sealed partial class AgentOrchestratorKernel
             .Where(request => request.GoalId == goalId)
             .ToArray();
         var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
+        var roleVisibleSegments = segments
+            .Select(segment => segment with { RoleVisibility = [task.RequiredRole] })
+            .ToArray();
         var retractedSegments = ApplyHumanInputRetractions(
-            segments,
+            roleVisibleSegments,
             humanInputRequests,
             clarificationAnswerHistory);
-        var lines = ApplyTaskBriefBudget(
+        var selection = ApplyTaskBriefBudget(
             retractedSegments,
             task.RequiredRole,
             usesFileAccessContext,
-            emitTypedSourceBoundaries);
-        var content = string.Join(Environment.NewLine, lines);
+            measureWithTypedSourceBoundaries);
 
-        return new TaskBrief(
+        return new TaskBriefSource(
             goal.Id,
             task.Id,
             task.RequiredRole,
             $"{task.RequiredRole}: {PromptContextFormatter.TrimPromptTitle(task.Description)}",
-            content,
+            selection.Segments,
+            selection.Decisions,
             prerequisiteEvidenceSection.TrimmedRequestIds);
     }
 
@@ -702,43 +705,6 @@ public sealed partial class AgentOrchestratorKernel
             : findings.Where(finding => !resolvedIds.Contains(finding.StableId)).ToArray();
     }
 
-    private static List<string> ApplyTaskBriefBudget(
-        IReadOnlyList<TaskBriefSegment> segments,
-        AgentRole role,
-        bool usesFileAccessContext,
-        bool emitTypedSourceBoundaries)
-    {
-        var budget = TaskBriefCharacterBudget(role, usesFileAccessContext);
-        var rendered = RenderTaskBriefSegments(segments, emitTypedSourceBoundaries);
-        if (!usesFileAccessContext || CountTaskBriefCharacters(rendered) <= budget)
-        {
-            return rendered;
-        }
-
-        var collapsedSegments = segments.ToList();
-        foreach (var index in collapsedSegments
-            .Select((segment, index) => new { segment, index })
-            .Where(item => item.segment.CollapsedLines is not null)
-            .OrderBy(item => item.segment.CollapsePriority)
-            .Select(item => item.index))
-        {
-            var segment = collapsedSegments[index];
-            collapsedSegments[index] = segment with
-            {
-                Lines = segment.CollapsedLines!,
-                CollapsedLines = null
-            };
-
-            rendered = RenderTaskBriefSegments(collapsedSegments, emitTypedSourceBoundaries);
-            if (CountTaskBriefCharacters(rendered) <= budget)
-            {
-                break;
-            }
-        }
-
-        return rendered;
-    }
-
     private static IReadOnlyList<TaskBriefSegment> ApplyHumanInputRetractions(
         IReadOnlyList<TaskBriefSegment> segments,
         IReadOnlyList<HumanInputRequest> requests,
@@ -767,35 +733,6 @@ public sealed partial class AgentOrchestratorKernel
 
     public static int TaskBriefCharacterBudget(AgentRole role, bool usesFileAccessContext) =>
         PromptContextFormatter.TaskBriefCharacterBudget(role, usesFileAccessContext);
-
-    private static List<string> RenderTaskBriefSegments(
-        IEnumerable<TaskBriefSegment> segments,
-        bool emitTypedSourceBoundaries)
-    {
-        var lines = new List<string>();
-        foreach (var segment in segments)
-        {
-            if (emitTypedSourceBoundaries && segment.TypedProjectionIdentity is { } identity)
-            {
-                lines.Add(WorkerContextProjectionBoundary.Start(identity));
-            }
-
-            lines.AddRange(emitTypedSourceBoundaries
-                ? segment.Lines.Select(WorkerContextProjectionBoundary.EscapeReservedLiteral)
-                : segment.Lines);
-            if (emitTypedSourceBoundaries && segment.TypedProjectionIdentity is { } closingIdentity)
-            {
-                lines.Add(WorkerContextProjectionBoundary.End(closingIdentity));
-            }
-        }
-
-        return lines;
-    }
-
-    private static int CountTaskBriefCharacters(IReadOnlyList<string> lines)
-    {
-        return string.Join(Environment.NewLine, lines).Length;
-    }
 
     private static int TimelineEventBudget(TaskComplexity complexity)
     {
@@ -1938,19 +1875,4 @@ public sealed partial class AgentOrchestratorKernel
         };
     }
 
-    private sealed record TaskBriefSegment(
-        IReadOnlyList<string> Lines,
-        IReadOnlyList<string>? CollapsedLines = null,
-        int CollapsePriority = int.MaxValue,
-        LogicalArtifactIdentity? TypedProjectionIdentity = null)
-    {
-        public static TaskBriefSegment Fixed(IReadOnlyList<string> lines) => new(lines);
-
-        public static TaskBriefSegment Projected(
-            string identity,
-            IReadOnlyList<string> lines,
-            IReadOnlyList<string>? collapsedLines = null,
-            int collapsePriority = int.MaxValue) =>
-            new(lines, collapsedLines, collapsePriority, new LogicalArtifactIdentity(identity));
-    }
 }

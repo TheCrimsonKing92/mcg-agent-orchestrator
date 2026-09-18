@@ -1611,7 +1611,9 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             "worker instruction"
         ]);
 
-        var residual = WorkerProfileDispatcher.ExtractCanonicalHeaderResidual(brief);
+        var residual = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(brief, AgentRole.Developer)
+            .HeaderResidual;
 
         Assert.Contains("Decision context: do not attempt", residual, StringComparison.Ordinal);
         Assert.Contains("newly introduced mandatory instruction", residual, StringComparison.Ordinal);
@@ -1642,7 +1644,9 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             "worker instruction"
         ]);
 
-        var residual = WorkerProfileDispatcher.ExtractCanonicalHeaderResidual(brief);
+        var residual = WorkerContextProjectionResidual
+            .ParseLegacyMarkedTextV1(brief, AgentRole.Developer)
+            .HeaderResidual;
 
         Assert.DoesNotContain(WorkerContextProjectionBoundary.LiteralPrefix, residual, StringComparison.Ordinal);
         Assert.DoesNotContain("goal projection", residual, StringComparison.Ordinal);

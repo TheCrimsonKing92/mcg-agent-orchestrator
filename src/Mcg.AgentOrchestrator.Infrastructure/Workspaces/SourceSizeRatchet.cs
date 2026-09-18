@@ -163,7 +163,10 @@ internal static class SourceSizeRatchet
             // point that holds the assembled brief, the kernel, and the dispatched goal/task identity
             // together after the dispatch record is written. The CLI worker-dispatch path is a separate
             // entry point and carries its own call site. 3256 is the measured size with that call site.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3256),
+            // Lowered for goal 29423867: typed brief selection now crosses the dispatcher boundary without
+            // marker stripping or header/current text re-parsing; those responsibilities moved to the typed
+            // renderer and versioned legacy ingress. 3037 is the measured post-extraction size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3037),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
