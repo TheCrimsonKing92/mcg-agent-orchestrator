@@ -18,6 +18,10 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
     private static readonly Lazy<ImmutableArray<byte>> MigratedStateTemplate = new(CreateMigratedStateTemplate);
     private static readonly SeedRepositoryRootInitializer SeedRepositoryProcessRoot = new(
         InitializeSeedRepositoryProcessRoot);
+    private static readonly Lazy<string> DefaultSeedRepositoryTemplate = new(
+        () => CreateSeedRepositoryTemplate(renameInitialBranchToMain: false));
+    private static readonly Lazy<string> MainSeedRepositoryTemplate = new(
+        () => CreateSeedRepositoryTemplate(renameInitialBranchToMain: true));
     private static readonly long SeedRepositoryProcessStartTimeUtcTicks = GetCurrentProcessStartTimeUtcTicks();
     private static int seedRepositoryCounter;
 
@@ -190,12 +194,31 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
 
     private static string CreateSeededGitRepository(bool renameInitialBranchToMain = false)
     {
+        var template = renameInitialBranchToMain
+            ? MainSeedRepositoryTemplate.Value
+            : DefaultSeedRepositoryTemplate.Value;
         var container = Path.Combine(
             EnsureSeedRepositoryProcessRoot(),
             BuildSeedRepositoryContainerName(
                 SeedRepositoryProcessStartTimeUtcTicks,
                 Interlocked.Increment(ref seedRepositoryCounter)));
         var repo = Path.Combine(container, "repo");
+        try
+        {
+            CopyDirectory(template, repo);
+            return repo;
+        }
+        catch
+        {
+            DeleteDirectory(repo);
+            throw;
+        }
+    }
+
+    private static string CreateSeedRepositoryTemplate(bool renameInitialBranchToMain)
+    {
+        var templateName = renameInitialBranchToMain ? ".template-main" : ".template-default";
+        var repo = Path.Combine(EnsureSeedRepositoryProcessRoot(), templateName, "repo");
         try
         {
             Directory.CreateDirectory(repo);
@@ -215,10 +238,27 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
 
             return repo;
         }
-        catch
+        catch (Exception exception)
         {
             DeleteDirectory(repo);
-            throw;
+            throw new InvalidOperationException(
+                $"Seed repository template '{templateName}' could not be created.",
+                exception);
+        }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var sourceDirectory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, sourceDirectory)));
+        }
+
+        foreach (var sourceFile in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var destinationFile = Path.Combine(destination, Path.GetRelativePath(source, sourceFile));
+            File.Copy(sourceFile, destinationFile);
         }
     }
 
