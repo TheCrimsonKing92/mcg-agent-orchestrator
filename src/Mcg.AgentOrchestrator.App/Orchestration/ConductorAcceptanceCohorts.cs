@@ -407,24 +407,36 @@ internal sealed partial class ConductorDriver
     private bool TryRegisterCohortGateRun(
         string memberPairKey,
         CohortGateRun run,
-        out CohortGateRun? blockingRun)
+        out CohortGateRun? blockingRun,
+        Action? afterSweepForTests = null)
     {
         lock (_cohortGateRegistrationSync)
         {
-            SweepCompletedCohortGateRuns();
-            if (TryGetActiveCohortGateRun(run.MemberGoalIds, out blockingRun))
+            while (true)
             {
-                return false;
-            }
+                SweepCompletedCohortGateRuns();
+                afterSweepForTests?.Invoke();
+                afterSweepForTests = null;
+                if (TryGetActiveCohortGateRun(run.MemberGoalIds, out blockingRun))
+                {
+                    return false;
+                }
 
-            if (!_cohortGateRuns.TryAdd(memberPairKey, run))
-            {
+                if (_cohortGateRuns.TryAdd(memberPairKey, run))
+                {
+                    blockingRun = null;
+                    return true;
+                }
+
+                if (!_cohortGateRuns.TryGetValue(memberPairKey, out var incumbent) ||
+                    incumbent.Completion.Task.IsCompleted)
+                {
+                    continue;
+                }
+
                 throw new InvalidOperationException(
                     $"Cohort gate registration for '{memberPairKey}' lost ownership without an active overlapping run.");
             }
-
-            blockingRun = null;
-            return true;
         }
     }
 
@@ -439,7 +451,8 @@ internal sealed partial class ConductorDriver
 
     internal bool TryRegisterCohortGateRunForTests(
         ConductorAcceptanceCohortSelection selection,
-        TaskCompletionSource completion)
+        TaskCompletionSource completion,
+        Action? afterSweep = null)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(completion);
@@ -448,7 +461,7 @@ internal sealed partial class ConductorDriver
             selection.Members.Select(member => member.GoalId.Value).ToHashSet(StringComparer.Ordinal),
             ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
             completion);
-        return TryRegisterCohortGateRun(CohortGateMemberPairKey(selection), run, out _);
+        return TryRegisterCohortGateRun(CohortGateMemberPairKey(selection), run, out _, afterSweep);
     }
 
     private static string FormatCohortGateInFlightDetail(CohortGateRun run, DateTimeOffset now) =>

@@ -334,6 +334,57 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
         }
     }
 
+    [Fact]
+    public void BackgroundCohortGate_SamePairCanRegisterWhenIncumbentCompletesAfterSweep()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goals = Enumerable.Range(0, 2)
+                .Select(index => CreateCompletedGoal(kernel, $"Same-pair cohort member {index}", repo))
+                .ToArray();
+            using var unusedStarted = new ManualResetEventSlim();
+            using var unusedRelease = new ManualResetEventSlim();
+            var driver = new ConductorDriver(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new BlockingAcceptanceVerifier(
+                    unusedStarted,
+                    unusedRelease,
+                    new AcceptanceVerificationResult(
+                        Passed: true,
+                        Skipped: false,
+                        ExitCode: 0,
+                        OutputTail: null,
+                        Checks: [],
+                        TestResultPaths: [])),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
+            var selection = TestSelection(goals[0], goals[1]);
+            var incumbentCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var replacementCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Assert.True(driver.TryRegisterCohortGateRunForTests(selection, incumbentCompletion));
+            var registered = false;
+            var exception = Record.Exception(() =>
+                registered = driver.TryRegisterCohortGateRunForTests(
+                    selection,
+                    replacementCompletion,
+                    incumbentCompletion.SetResult));
+
+            Assert.Null(exception);
+            Assert.True(registered);
+            replacementCompletion.SetResult();
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     private static ConductorAcceptanceCohortSelection TestSelection(Goal first, Goal second)
     {
         var mainRevision = new string('c', 40);
