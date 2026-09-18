@@ -167,6 +167,204 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
     }
 
     [Fact]
+    public void BackgroundCohortGate_OverlappingMembersAreHeldByActualOwner()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        var trx = Path.Combine(Path.GetTempPath(), $"cohort-overlap-{Guid.NewGuid():N}.trx");
+        using var gateStarted = new ManualResetEventSlim();
+        using var gateRelease = new ManualResetEventSlim();
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
+        ConductorDriver? driver = null;
+        TaskCompletionSource? registrationProbe = null;
+        try
+        {
+            AddAcceptanceManifest(repo);
+            File.WriteAllText(trx, ValidPassingTrx());
+            var kernel = new AgentOrchestratorKernel();
+            var goals = Enumerable.Range(0, 3)
+                .Select(index => CreateCompletedGoal(kernel, $"Overlapping cohort member {index}", repo))
+                .ToArray();
+            var paths = new[]
+            {
+                "src/Mcg.AgentOrchestrator.Infrastructure/OverlapFirst.cs",
+                "tests/OverlapSecond.cs",
+                "src/Mcg.AgentOrchestrator.Core/OverlapThird.cs"
+            };
+            for (var index = 0; index < goals.Length; index++)
+            {
+                _ = CreateWorktreeCandidate(repo, goals[index].Id, paths[index], $"overlap-{index}");
+            }
+
+            var verifier = new BlockingAcceptanceVerifier(
+                gateStarted,
+                gateRelease,
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("overlap-owner-gate", true, 0, null)],
+                    TestResultPaths: [trx]));
+            driver = new ConductorDriver(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                verifier,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
+            var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 };
+            var ownerSelection = ProjectSelection(driver, goals[0], goals[1]);
+            var overlappingSelection = ProjectSelection(driver, goals[1], goals[2]);
+
+            _ = driver.RunAcceptanceCohort(
+                ownerSelection,
+                goals,
+                policy,
+                runGateInBackground: true);
+            registrationProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Assert.False(driver.TryRegisterCohortGateRunForTests(overlappingSelection, registrationProbe));
+            var held = driver.RunAcceptanceCohort(
+                overlappingSelection,
+                goals,
+                policy,
+                runGateInBackground: true);
+
+            var owner = string.Join(
+                "+",
+                ownerSelection.Members.Select(member => member.GoalId.Value).OrderBy(id => id, StringComparer.Ordinal));
+            var capacity = driver.GetActiveAcceptanceCohortCapacity();
+            Assert.Equal(1, capacity.ActiveRootCount);
+            Assert.Single(capacity.ActiveRoots.Where(root => root.MemberGoalIds.Contains(goals[1].Id.Value)));
+            Assert.Contains("outcome=inflight", held.Detail, StringComparison.Ordinal);
+            Assert.Contains($"owner={owner}", held.Detail, StringComparison.Ordinal);
+            Assert.True(driver.TryGetCohortGateHold(goals[1].Id, out var hold));
+            Assert.Contains($"owner={owner}", hold, StringComparison.Ordinal);
+            Assert.False(driver.TryGetCohortGateHold(goals[2].Id, out _));
+        }
+        finally
+        {
+            registrationProbe?.TrySetResult();
+            gateRelease.Set();
+            if (driver is not null)
+            {
+                _ = SpinWait.SpinUntil(
+                    () => driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
+                    TimeSpan.FromSeconds(10));
+            }
+            if (File.Exists(trx)) File.Delete(trx);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Theory]
+    [InlineData("succeeded")]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public async Task BackgroundCohortGate_TerminalRunReleasesMembersWhileDisjointRunRemainsActive(
+        string terminalState)
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goals = Enumerable.Range(0, 5)
+                .Select(index => CreateCompletedGoal(kernel, $"Terminal cohort member {index}", repo))
+                .ToArray();
+            using var unusedStarted = new ManualResetEventSlim();
+            using var unusedRelease = new ManualResetEventSlim();
+            var driver = new ConductorDriver(
+                kernel,
+                OrchestratorWorkspace.ForDirectory(repo),
+                new BlockingAcceptanceVerifier(
+                    unusedStarted,
+                    unusedRelease,
+                    new AcceptanceVerificationResult(
+                        Passed: true,
+                        Skipped: false,
+                        ExitCode: 0,
+                        OutputTail: null,
+                        Checks: [],
+                        TestResultPaths: [])),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
+            var ownerSelection = TestSelection(goals[0], goals[1]);
+            var disjointSelection = TestSelection(goals[2], goals[3]);
+            var releasedSelection = TestSelection(goals[0], goals[4]);
+            var ownerCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var disjointCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releasedCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Assert.True(driver.TryRegisterCohortGateRunForTests(ownerSelection, ownerCompletion));
+            Assert.True(driver.TryRegisterCohortGateRunForTests(disjointSelection, disjointCompletion));
+            Assert.Equal(2, driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount);
+
+            switch (terminalState)
+            {
+                case "succeeded":
+                    ownerCompletion.SetResult();
+                    await ownerCompletion.Task;
+                    break;
+                case "failed":
+                    ownerCompletion.SetException(new InvalidOperationException("controlled cohort failure"));
+                    await Assert.ThrowsAsync<InvalidOperationException>(async () => await ownerCompletion.Task);
+                    break;
+                case "cancelled":
+                    ownerCompletion.SetCanceled();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await ownerCompletion.Task);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown terminal state '{terminalState}'.");
+            }
+
+            var activeMembers = driver.GetActiveCohortGateMemberGoalIds();
+            Assert.DoesNotContain(goals[0].Id.Value, activeMembers);
+            Assert.DoesNotContain(goals[1].Id.Value, activeMembers);
+            Assert.Contains(goals[2].Id.Value, activeMembers);
+            Assert.Contains(goals[3].Id.Value, activeMembers);
+            Assert.True(driver.TryRegisterCohortGateRunForTests(releasedSelection, releasedCompletion));
+
+            disjointCompletion.SetResult();
+            releasedCompletion.SetResult();
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static ConductorAcceptanceCohortSelection TestSelection(Goal first, Goal second)
+    {
+        var mainRevision = new string('c', 40);
+        return new ConductorAcceptanceCohortSelection(
+            [
+                TestProjection(first.Id, new string('a', 40), mainRevision, $"src/{first.Id.Value[..8]}.cs"),
+                TestProjection(second.Id, new string('b', 40), mainRevision, $"tests/{second.Id.Value[..8]}.cs")
+            ],
+            []);
+    }
+
+    private static GateReadyCandidateProjection TestProjection(
+        GoalId goalId,
+        string branchRevision,
+        string mainRevision,
+        string landingPath) =>
+        new(
+            goalId,
+            GoalLifecycleState.Verified,
+            GateReadyVerificationState.Satisfied,
+            ChangeRiskTier.DocsOnly,
+            ConductorTransitionDecision.Auto,
+            [landingPath],
+            [$"production:{goalId.Value[..8]}"],
+            new GateReadyMergeEvidence(
+                branchRevision,
+                mainRevision,
+                GateReadyMergeStatus.Clean,
+                GateReadyMergeReason.NoConflictsDetected));
+
+    [Fact]
     public void ProductionBatch_LongCohortGateDoesNotBlockTicksOrOperatorIntents_AndReconcilesLater()
     {
         var repo = CreateReducedAcceptanceCohortRepository();

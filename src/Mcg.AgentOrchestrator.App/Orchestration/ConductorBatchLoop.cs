@@ -2960,6 +2960,7 @@ internal sealed partial class ConductorBatchLoop
             .Select(attempt => attempt.GoalId)
             .ToHashSet(StringComparer.Ordinal);
         var activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+        var activeCohortMemberGoalIds = driver.GetActiveCohortGateMemberGoalIds();
         var acceptanceCensus = CaptureLiveAcceptanceCensus(
             liveAttempts,
             activeAttemptIds,
@@ -2968,10 +2969,12 @@ internal sealed partial class ConductorBatchLoop
             changedGoalLines,
             blockAdmissionOnFailure: true);
         var cohortEligible = orderedEligible
-            .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value))
+            .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value) &&
+                           !activeCohortMemberGoalIds.Contains(goal.Id.Value))
             .ToArray();
         var productionCandidates = speculativeCandidates
-            .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
+            .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value) &&
+                                !activeCohortMemberGoalIds.Contains(candidate.GoalId.Value))
             .ToArray();
         var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
         if (trainAdmission.IsAdmitted &&

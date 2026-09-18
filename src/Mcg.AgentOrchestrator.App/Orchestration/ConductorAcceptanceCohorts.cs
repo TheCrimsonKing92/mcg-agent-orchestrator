@@ -347,6 +347,7 @@ internal sealed partial class ConductorDriver
     // revision, so counting by fingerprint would reset before the cap and loop forever; the member pair
     // is the stable identity of "this cohort keeps faulting".
     private readonly ConcurrentDictionary<string, int> _cohortGateFaultCounts = new(StringComparer.Ordinal);
+    private readonly object _cohortGateRegistrationSync = new();
 
     // The conduct tick's entry point. A background cohort gate that ended in an exception is reported here
     // as a typed fault beside the held run result, so the tick classifies the fault instead of receiving a
@@ -389,6 +390,70 @@ internal sealed partial class ConductorDriver
             ObserveCohortGateCompletion(pair.Key, completed);
         }
     }
+
+    private bool TryGetActiveCohortGateRun(
+        IReadOnlySet<string> candidateMemberGoalIds,
+        out CohortGateRun? activeRun)
+    {
+        activeRun = _cohortGateRuns
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => pair.Value)
+            .FirstOrDefault(run =>
+                !run.Completion.Task.IsCompleted &&
+                candidateMemberGoalIds.Overlaps(run.MemberGoalIds));
+        return activeRun is not null;
+    }
+
+    private bool TryRegisterCohortGateRun(
+        string memberPairKey,
+        CohortGateRun run,
+        out CohortGateRun? blockingRun)
+    {
+        lock (_cohortGateRegistrationSync)
+        {
+            SweepCompletedCohortGateRuns();
+            if (TryGetActiveCohortGateRun(run.MemberGoalIds, out blockingRun))
+            {
+                return false;
+            }
+
+            if (!_cohortGateRuns.TryAdd(memberPairKey, run))
+            {
+                throw new InvalidOperationException(
+                    $"Cohort gate registration for '{memberPairKey}' lost ownership without an active overlapping run.");
+            }
+
+            blockingRun = null;
+            return true;
+        }
+    }
+
+    internal IReadOnlySet<string> GetActiveCohortGateMemberGoalIds()
+    {
+        SweepCompletedCohortGateRuns();
+        return _cohortGateRuns.Values
+            .Where(run => !run.Completion.Task.IsCompleted)
+            .SelectMany(run => run.MemberGoalIds)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    internal bool TryRegisterCohortGateRunForTests(
+        ConductorAcceptanceCohortSelection selection,
+        TaskCompletionSource completion)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(completion);
+        var run = new CohortGateRun(
+            _utcNow(),
+            selection.Members.Select(member => member.GoalId.Value).ToHashSet(StringComparer.Ordinal),
+            ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
+            completion);
+        return TryRegisterCohortGateRun(CohortGateMemberPairKey(selection), run, out _);
+    }
+
+    private static string FormatCohortGateInFlightDetail(CohortGateRun run, DateTimeOffset now) =>
+        $"outcome=inflight owner={string.Join('+', run.MemberGoalIds.OrderBy(id => id, StringComparer.Ordinal))} " +
+        $"fingerprint={run.PairFingerprint} elapsed_ms={Math.Max(0L, (long)(now - run.StartedAt).TotalMilliseconds)}";
 
     // Observes this member pair's completed background gate, if any, and takes the fault it parked. Called
     // before the ordinary cohort path so a faulted pair is reported as data instead of being restarted as a
