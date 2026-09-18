@@ -180,9 +180,14 @@ public sealed class WorkerContextPackageBuilder
         return WorkerProfileDispatcher.FinalizeContextPackageWithManifest(this, prepared);
     }
 
-    public static WorkerContextPackageReceipt CreateReceipt(WorkerContextPackage package)
+    public static WorkerContextPackageReceipt CreateReceipt(WorkerContextPackage package) =>
+        CreateReceipt(package, Render(package));
+
+    internal static WorkerContextPackageReceipt CreateReceipt(
+        WorkerContextPackage package,
+        string renderedPackage)
     {
-        var renderedPackage = Render(package);
+        ArgumentNullException.ThrowIfNull(renderedPackage);
         var sections = package.Artifacts.Select(artifact =>
         {
             var rendered = RenderArtifact(artifact);

@@ -3,6 +3,15 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class TaskBriefTests
 {
     [Xunit.Fact]
+    public void BuildTaskBriefExposesTypedSourceBeforeLegacyProjection()
+    {
+        var method = typeof(AgentOrchestratorKernel).GetMethod("BuildTaskBriefSource");
+
+        Assert.NotNull(method);
+        Assert.Equal("Mcg.AgentOrchestrator.Core.TaskBriefSource", method!.ReturnType.FullName);
+    }
+
+    [Xunit.Fact]
     public void BuildTaskBriefPreflight_DistinguishesUndecidableCriteriaWithoutStartingWorker()
     {
         var kernel = new AgentOrchestratorKernel();
