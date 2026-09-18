@@ -9,6 +9,29 @@ internal sealed partial class ConductorDriver
     private const string AcceptanceMainAdvanceOperation = "conductor:acceptance-main-advance";
     private const string AcceptanceMainAdvanceCarryOperation = "conductor:acceptance-main-advance-carry";
 
+    private ConductorAdvanceResult? RebaseBeforeAcceptance(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        bool applySideEffects,
+        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
+    {
+        // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
+        // criteria, landing) operates on the ACTUAL integrated result that will land — not the
+        // pre-integration branch. A goal can pass its own tests yet break once integrated with changes
+        // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
+        // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
+        // a wasted (expensive) acceptance run when the branch cannot integrate at all.
+        return RebaseOrRetire(
+            goal,
+            goalPrefix,
+            policy,
+            "pre-landing",
+            applySideEffects,
+            out earlyOutcome,
+            out _);
+    }
+
     private ConductorAdvanceResult? RebaseBeforeMerge(
         Goal goal,
         string goalPrefix,
