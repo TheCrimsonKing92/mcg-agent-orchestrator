@@ -252,7 +252,8 @@ public sealed record ProgressEventSnapshot(
     string Message,
     DateTimeOffset OccurredAt,
     TaskRequeueSkippedPayload? RequeueSkipped = null,
-    IReadOnlyList<OperatorGateRecord>? OperatorGates = null);
+    IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
+    OperatorIntentAppliedPayload? OperatorIntentApplied = null);
 
 public sealed record HumanInputRequestSnapshot(
     string Id,
