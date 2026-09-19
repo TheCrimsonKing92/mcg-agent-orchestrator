@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Runtime.CompilerServices;
 using Xunit;
 
+[Collection(CliTestCollections.ConsoleSerialized)]
 public sealed class RuntimeMaintenanceOwnershipTests
 {
     [Fact]
