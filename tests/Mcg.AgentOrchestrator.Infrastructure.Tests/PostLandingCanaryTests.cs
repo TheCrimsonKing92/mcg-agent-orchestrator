@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
+[Xunit.Collection(TestCollections.PostLandingCanary)]
 public sealed class PostLandingCanaryTests : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Post-landing canary classifier covers every engine surface and ignores unrelated paths")]

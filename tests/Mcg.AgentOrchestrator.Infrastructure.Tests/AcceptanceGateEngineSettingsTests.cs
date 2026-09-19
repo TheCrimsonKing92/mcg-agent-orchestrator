@@ -347,6 +347,22 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Contains("does not match any runnable test class", error.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "PostLandingCanary_collection_is_nonparallel_and_owns_canary_tests")]
+    public void PostLandingCanaryCollectionIsNonParallelAndOwnsCanaryTests()
+    {
+        var testAssembly = typeof(PostLandingCanaryTests).Assembly;
+        var definition = Xunit.Assert.Single(
+            testAssembly.GetTypes()
+                .Select(type => type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>())
+                .Where(attribute => attribute?.Name == TestCollections.PostLandingCanary));
+        Xunit.Assert.True(definition.DisableParallelization);
+
+        var membership = typeof(PostLandingCanaryTests)
+            .GetCustomAttribute<Xunit.CollectionAttribute>();
+        Xunit.Assert.NotNull(membership);
+        Xunit.Assert.Equal(TestCollections.PostLandingCanary, membership.Name);
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource")]
     public void AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource()
     {

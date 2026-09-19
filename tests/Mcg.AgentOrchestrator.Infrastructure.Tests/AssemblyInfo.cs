@@ -40,6 +40,11 @@ public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<Isol
 [Xunit.CollectionDefinition(TestCollections.JobAccounting, DisableParallelization = true)]
 public sealed class JobAccountingCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
+// The canary's capture-file handles are duplicated as inheritable across CreateProcessW, so concurrent
+// redirecting Process.Start calls can hold its log; see OwnedProcessGroup.cs lines 726-731.
+[Xunit.CollectionDefinition(TestCollections.PostLandingCanary, DisableParallelization = true)]
+public sealed class PostLandingCanaryCollection;
+
 // Process-spawning/worker-dispatch tests mutate process-wide env vars and shared config stores;
 // keep nested build activity off the host gate slots as well.
 [Xunit.CollectionDefinition(TestCollections.ProcessSpawning, DisableParallelization = true)]

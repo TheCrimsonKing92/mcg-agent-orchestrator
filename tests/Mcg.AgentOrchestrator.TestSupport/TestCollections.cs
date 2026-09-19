@@ -8,5 +8,6 @@ public static class TestCollections
     public const string IsolatedDotnetRoot = "IsolatedDotnetRoot";
     public const string JobAccounting = "JobAccounting";
     public const string LandingGitRunner = "LandingGitRunner";
+    public const string PostLandingCanary = "PostLandingCanary";
     public const string ProcessSpawning = "ProcessSpawning";
 }
