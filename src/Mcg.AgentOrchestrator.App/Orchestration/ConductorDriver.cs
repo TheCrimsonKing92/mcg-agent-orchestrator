@@ -3300,9 +3300,7 @@ internal sealed partial class ConductorDriver
                 continue;
             }
 
-            var elapsed = _utcNow() - pair.Value.StartedAt;
-            detail =
-                $"outcome=inflight fingerprint={pair.Value.PairFingerprint} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
+            detail = FormatCohortGateInFlightDetail(pair.Value, _utcNow());
             return true;
         }
 
@@ -3337,15 +3335,16 @@ internal sealed partial class ConductorDriver
             selection.Members[0],
             selection.Members[1]);
         var memberPairKey = CohortGateMemberPairKey(selection);
-        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun) &&
-            !currentRun.Completion.Task.IsCompleted)
+        var memberGoalIds = selection.Members
+            .Select(member => member.GoalId.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        if (TryGetActiveCohortGateRun(memberGoalIds, out var currentRun))
         {
             return CohortInFlight(
                 selection,
                 orderedGoals,
                 policy,
-                currentRun.PairFingerprint,
-                currentRun.StartedAt);
+                currentRun);
         }
 
         // Drained ahead of the production-dependency check so a faulted background completion is always
@@ -3454,20 +3453,16 @@ internal sealed partial class ConductorDriver
             {
                 var run = new CohortGateRun(
                     _utcNow(),
-                    selection.Members
-                        .Select(member => member.GoalId.Value)
-                        .ToHashSet(StringComparer.Ordinal),
+                    memberGoalIds,
                     pairFingerprint,
                     new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                if (!_cohortGateRuns.TryAdd(memberPairKey, run))
+                if (!TryRegisterCohortGateRun(memberPairKey, run, out var blockingRun))
                 {
-                    var competingRun = _cohortGateRuns[memberPairKey];
                     return CohortInFlight(
                         selection,
                         orderedGoals,
                         policy,
-                        competingRun.PairFingerprint,
-                        competingRun.StartedAt);
+                        blockingRun!);
                 }
 
                 var ownedIntegration = integrationScope.Transfer();
@@ -3496,8 +3491,7 @@ internal sealed partial class ConductorDriver
                     selection,
                     orderedGoals,
                     policy,
-                    pairFingerprint,
-                    run.StartedAt);
+                    run);
             }
 
             receipt = ExecuteAcceptanceCohortGate(
@@ -3859,14 +3853,11 @@ internal sealed partial class ConductorDriver
         ConductorAcceptanceCohortSelection selection,
         IReadOnlyList<Goal> orderedGoals,
         ConductorAutonomyPolicy policy,
-        string pairFingerprint,
-        DateTimeOffset startedAt)
+        CohortGateRun run)
     {
         var selectedIds = selection.Members.Select(member => member.GoalId).ToHashSet();
         var goals = orderedGoals.Where(goal => selectedIds.Contains(goal.Id)).ToArray();
-        var elapsed = _utcNow() - startedAt;
-        var detail =
-            $"outcome=inflight fingerprint={pairFingerprint} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
+        var detail = FormatCohortGateInFlightDetail(run, _utcNow());
         return new ConductorAcceptanceCohortRunResult(
             Receipt: null,
             goals.ToDictionary(
