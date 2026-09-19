@@ -1,6 +1,9 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+
+using static ConductorDriverTests;
 
 public sealed class GateOwnedCriterionRefinementTests
 {
@@ -127,26 +130,66 @@ public sealed class GateOwnedCriterionRefinementTests
     public void PassingFullGateDischargesOnlyTheBoundCandidate()
     {
         var matching = CreateBoundGateScenario();
+        var landCalled = false;
+        var matchingDriver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                true,
+                [],
+                BranchHeadSha: Candidate),
+            land: goal =>
+            {
+                landCalled = true;
+                return new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            });
+        matchingDriver.BeginTick(matching.Kernel, 1);
 
-        var hold = AcceptanceCriterionEvidence.RecordAndCreateHold(
+        var matchingResult = matchingDriver.AdvanceOnce(
             matching.Goal,
-            Candidate,
-            matching.Kernel);
+            ConductorAutonomyPolicy.Conservative);
 
-        Xunit.Assert.Null(hold);
+        Xunit.Assert.IsType<ConductorAdvanceOutcome.Executed>(matchingResult.Outcome);
         var satisfied = Xunit.Assert.Single(matching.Goal.CriterionEvidenceObligations);
         Xunit.Assert.Equal(CriterionEvidenceState.Satisfied, satisfied.State);
         Xunit.Assert.Equal(Candidate, satisfied.CandidateSha);
         Xunit.Assert.NotNull(satisfied.ReceiptId);
+        Xunit.Assert.True(landCalled, "The production conductor acceptance path must proceed to landing.");
 
         var mismatched = CreateBoundGateScenario();
-        var mismatchHold = AcceptanceCriterionEvidence.RecordAndCreateHold(
+        var mismatchLanded = false;
+        var mismatchedDriver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(
+                true,
+                [],
+                BranchHeadSha: "candidate-c2"),
+            land: goal =>
+            {
+                mismatchLanded = true;
+                return new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            });
+        mismatchedDriver.BeginTick(mismatched.Kernel, 1);
+
+        var mismatchResult = mismatchedDriver.AdvanceOnce(
             mismatched.Goal,
-            "candidate-c2",
-            mismatched.Kernel);
-        Xunit.Assert.NotNull(mismatchHold);
-        Xunit.Assert.Contains("Rebind", mismatchHold!.Reason, StringComparison.Ordinal);
+            ConductorAutonomyPolicy.Conservative);
+
+        var mismatchHold = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(mismatchResult.Outcome);
+        Xunit.Assert.Contains("Rebind", mismatchHold.Reason, StringComparison.Ordinal);
         Xunit.Assert.Contains(Candidate, mismatchHold.Reason, StringComparison.Ordinal);
+        Xunit.Assert.False(mismatchLanded);
         Xunit.Assert.Equal(
             CriterionEvidenceState.Pending,
             Xunit.Assert.Single(mismatched.Goal.CriterionEvidenceObligations).State);
