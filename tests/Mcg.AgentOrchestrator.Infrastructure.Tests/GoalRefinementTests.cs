@@ -2403,7 +2403,7 @@ public sealed class GoalRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task Resolve_OperatorOwned_MovesCriterionOutOfWorkerSet()
+    public async Task Resolve_OperatorOwned_RetainsCriterionAndCreatesObligation()
     {
         const string criterion =
             "Benchmark wall-clock performance on this host while the machine is idle.";
@@ -2418,14 +2418,11 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.True(resolved);
         var spec = kernel.GetGoal(goalId).RefinedSpec!;
-        Xunit.Assert.Empty(spec.AcceptanceCriteria);
+        Xunit.Assert.Equal([criterion], spec.AcceptanceCriteria);
         Xunit.Assert.Equal([criterion], spec.OperatorOwnedAcceptanceCriteria);
+        var obligation = Xunit.Assert.Single(kernel.GetGoal(goalId).CriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
         Xunit.Assert.Empty(spec.OpenQuestions);
-
-        var task = kernel.GetGoal(goalId).Tasks[0];
-        var brief = kernel.BuildTaskBrief(goalId, task.Id).Content;
-        Xunit.Assert.Contains("OPERATOR-OWNED / post-landing criteria", brief, StringComparison.Ordinal);
-        Xunit.Assert.Contains(criterion, brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

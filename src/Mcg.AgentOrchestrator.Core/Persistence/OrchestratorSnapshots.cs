@@ -70,7 +70,8 @@ public sealed record RefinedSpecSnapshot(
     IReadOnlyList<RefinedSpecDecisionSnapshot> Decisions,
     IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions,
     IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null,
-    IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null);
+    IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null,
+    IReadOnlyList<string>? AcceptanceGateOwnedAcceptanceCriteria = null);
 
 public sealed record RefinedSpecVersionSnapshot(
     int Version,

@@ -464,6 +464,37 @@ public sealed class Goal
         return updated;
     }
 
+    internal CriterionEvidenceObligation? BindDeferredCriterionObligation(
+        int criterionIndex,
+        int criterionVersion,
+        string? candidateSha,
+        DateTimeOffset recordedAt)
+    {
+        var normalizedCandidate = NormalizeSha(candidateSha);
+        if (normalizedCandidate is null)
+            return null;
+
+        var id = CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex);
+        var index = _criterionEvidenceObligations.FindIndex(item => item.Id == id);
+        if (index < 0)
+            return null;
+
+        var obligation = _criterionEvidenceObligations[index];
+        if (obligation.Owner != CriterionEvidenceOwner.Acceptance ||
+            obligation.State != CriterionEvidenceState.Pending)
+        {
+            return obligation;
+        }
+
+        var bound = obligation with
+        {
+            ExpectedCandidateSha = normalizedCandidate,
+            RecordedAt = recordedAt
+        };
+        _criterionEvidenceObligations[index] = bound;
+        return bound;
+    }
+
     internal CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
         string malformedObligationId,
         int criterionIndex,
@@ -519,25 +550,40 @@ public sealed class Goal
             }
 
             var criterion = RequireText(spec.AcceptanceCriteria[index], nameof(spec));
-            var ownershipEntries = spec.OperatorOwnedAcceptanceCriteria.Count(item =>
+            var operatorOwnershipEntries = spec.OperatorOwnedAcceptanceCriteria.Count(item =>
                 string.Equals(item.Trim(), criterion, StringComparison.Ordinal));
-            if (ownershipEntries == 0)
+            if (operatorOwnershipEntries > 0)
             {
-                // Worker verification stays on task verification records. This
-                // collection represents only proof that survives worker scope.
+                _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
+                    id,
+                    index,
+                    criterionVersion,
+                    criterion,
+                    operatorOwnershipEntries == 1 ? CriterionEvidenceOwner.Operator : CriterionEvidenceOwner.Unknown,
+                    CriterionEvidenceState.Pending,
+                    operatorOwnershipEntries == 1 ? "operator observation" : "ownership mapping required",
+                    operatorOwnershipEntries == 1 ? "authoritative refined spec" : "ambiguous authoritative refined spec ownership",
+                    recordedAt));
                 continue;
             }
 
-            _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
-                id,
-                index,
-                criterionVersion,
-                criterion,
-                ownershipEntries == 1 ? CriterionEvidenceOwner.Operator : CriterionEvidenceOwner.Unknown,
-                CriterionEvidenceState.Pending,
-                ownershipEntries == 1 ? "operator observation" : "ownership mapping required",
-                ownershipEntries == 1 ? "authoritative refined spec" : "ambiguous authoritative refined spec ownership",
-                recordedAt));
+            var acceptanceOwnershipEntries = spec.AcceptanceGateOwnedAcceptanceCriteria.Count(item =>
+                string.Equals(item.Trim(), criterion, StringComparison.Ordinal));
+            if (acceptanceOwnershipEntries > 0)
+            {
+                _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
+                    id,
+                    index,
+                    criterionVersion,
+                    criterion,
+                    acceptanceOwnershipEntries == 1 ? CriterionEvidenceOwner.Acceptance : CriterionEvidenceOwner.Unknown,
+                    CriterionEvidenceState.Pending,
+                    acceptanceOwnershipEntries == 1 ? CriterionEvidenceScopes.FullAcceptanceGate : "ownership mapping required",
+                    acceptanceOwnershipEntries == 1 ? "authoritative refined spec" : "ambiguous authoritative refined spec ownership",
+                    recordedAt));
+            }
+            // Worker verification stays on task verification records. This
+            // collection represents only proof that survives worker scope.
         }
     }
 
@@ -1093,7 +1139,8 @@ public sealed class Goal
                 question.Criterion,
                 question.BlastRadius)).ToList(),
             spec.OperatorOwnedAcceptanceCriteria.ToList(),
-            spec.ClarificationAnswerHistory.ToList());
+            spec.ClarificationAnswerHistory.ToList(),
+            spec.AcceptanceGateOwnedAcceptanceCriteria.ToList());
 
     private static RefinedSpec FromRefinedSpecSnapshot(RefinedSpecSnapshot snapshot) =>
         new(
@@ -1118,6 +1165,7 @@ public sealed class Goal
                 question.BlastRadius)).ToList())
         {
             OperatorOwnedAcceptanceCriteria = snapshot.OperatorOwnedAcceptanceCriteria ?? [],
+            AcceptanceGateOwnedAcceptanceCriteria = snapshot.AcceptanceGateOwnedAcceptanceCriteria ?? [],
             ClarificationAnswerHistory = snapshot.ClarificationAnswerHistory ?? []
         };
 

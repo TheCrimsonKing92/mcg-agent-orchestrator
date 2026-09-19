@@ -27,8 +27,10 @@ internal static class AcceptanceCriterionEvidence
     {
         var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel);
         if (diagnostic is not null) return diagnostic;
-        var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
-        if (outstanding.Count == 0) return null;
+        var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+            .Where(IsBoundOrNonAcceptanceObligation)
+            .ToArray();
+        if (outstanding.Length == 0) return null;
         var detail = string.Join(", ", outstanding.Select(item =>
             $"{item.Id}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
         return $"Acceptance completed but required criterion evidence remains outstanding: {detail}.";
@@ -46,6 +48,7 @@ internal static class AcceptanceCriterionEvidence
         var matching = outstanding
             .Where(item =>
                 item.Owner == CriterionEvidenceOwner.Acceptance &&
+                !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
                 string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
             .ToArray();
         foreach (var obligation in matching)
@@ -68,5 +71,9 @@ internal static class AcceptanceCriterionEvidence
 
         return null;
     }
+
+    private static bool IsBoundOrNonAcceptanceObligation(CriterionEvidenceObligation obligation) =>
+        obligation.Owner != CriterionEvidenceOwner.Acceptance ||
+        !string.IsNullOrWhiteSpace(obligation.ExpectedCandidateSha);
 
 }

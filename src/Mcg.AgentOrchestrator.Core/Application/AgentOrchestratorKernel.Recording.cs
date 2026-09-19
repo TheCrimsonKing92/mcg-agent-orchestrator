@@ -580,10 +580,37 @@ public sealed partial class AgentOrchestratorKernel
                         $"Reviewer WORKER_RESULT criteria attestation cannot be deferred: criterion_index={deferred.CriterionIndex} has {matches.Length} authoritative obligation records; operator repair is required.";
                     continue;
                 }
-                var obligation = matches[0];
+                var obligation = goal.BindDeferredCriterionObligation(
+                    deferred.CriterionIndex,
+                    goal.AuthoritativeRefinedSpecVersion.Version,
+                    verification.ReviewedCommit,
+                    _clock.UtcNow) ?? matches[0];
                 Append(goal, task.Id, ProgressKind.TaskNote,
                     $"Deferred criterion evidence remains pending: obligation={obligation.Id}; owner={obligation.Owner}; " +
-                    $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}.");
+                    $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}; " +
+                    $"expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
+            }
+            foreach (var advisory in registeredVerdicts.Where(item =>
+                         item.Verdict.Equals("met", StringComparison.Ordinal) &&
+                         !IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex) &&
+                         !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction =>
+                             correction.IsWaiver &&
+                             string.Equals(
+                                 correction.SupersededCriterion,
+                                 refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
+                                 StringComparison.OrdinalIgnoreCase))))
+            {
+                var version = goal.AuthoritativeRefinedSpecVersion!.Version;
+                var obligation = goal.BindDeferredCriterionObligation(
+                    advisory.CriterionIndex,
+                    version,
+                    verification.ReviewedCommit,
+                    _clock.UtcNow);
+                if (obligation?.Owner != CriterionEvidenceOwner.Acceptance)
+                    continue;
+                Append(goal, task.Id, ProgressKind.TaskNote,
+                    $"Acceptance-gate-owned criterion met verdict is advisory; the gate remains the evidence: " +
+                    $"obligation={obligation.Id}; state={obligation.State}; expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
             }
             if (workerOwnedNonPassingVerdicts.Length > 0)
             {
@@ -591,8 +618,17 @@ public sealed partial class AgentOrchestratorKernel
                     "; ",
                     workerOwnedNonPassingVerdicts.Select(item =>
                         $"criterion_index={item.CriterionIndex} verdict={item.Verdict} evidence={item.Evidence}"));
+                var repairCommands = string.Join(
+                    "; ",
+                    workerOwnedNonPassingVerdicts
+                        .Where(item => item.Verdict.Equals("not-verifiable", StringComparison.Ordinal))
+                        .Select(item =>
+                            $"criterion-evidence-map --goal {goal.Id.Value} {item.CriterionIndex} " +
+                            $"{goal.AuthoritativeRefinedSpecVersion!.Version} acceptance {CriterionEvidenceScopes.FullAcceptanceGate} " +
+                            $"deferred-criterion-{item.CriterionIndex} {verification.ReviewedCommit ?? "missing"}"));
                 nonPassingCriteriaDiagnostic =
-                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}.";
+                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}." +
+                    (repairCommands.Length == 0 ? string.Empty : $" Operator repair: {repairCommands}.");
             }
 
             foreach (var extra in criterionVerdicts.Where(item =>

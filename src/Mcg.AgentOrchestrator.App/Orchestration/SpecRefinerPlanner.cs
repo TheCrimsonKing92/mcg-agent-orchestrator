@@ -30,15 +30,19 @@ internal sealed record ResolvedSpecClarification(
 internal sealed record SpecRefinementOutput(
     string BehavioralContract,
     IReadOnlyList<string> AcceptanceCriteria,
+    IReadOnlyList<string> AcceptanceGateOwnedAcceptanceCriteria,
+    IReadOnlyList<string> OperatorOwnedAcceptanceCriteria,
     VerificationClass VerificationClass,
     IReadOnlyList<RefinedSpecDecision> Decisions,
     IReadOnlyList<SpecRefinementFork> Forks,
     IReadOnlyList<string> ValidationErrors)
 {
+    public IReadOnlyList<string> ParseDiagnostics { get; init; } = [];
+
     public bool IsValid => ValidationErrors.Count == 0;
 
     public static SpecRefinementOutput Invalid(string error) =>
-        new(string.Empty, [], VerificationClass.TestVerifiable, [], [], [error]);
+        new(string.Empty, [], [], [], VerificationClass.TestVerifiable, [], [], [error]);
 }
 
 internal static class SpecRefinerPlanner
@@ -76,7 +80,8 @@ internal static class SpecRefinerPlanner
 
         OUTPUT ONLY a fenced JSON object (```json ... ```) with these fields:
         - "behavioralContract": string — one paragraph: WHAT the system does, observable from the outside
-        - "acceptanceCriteria": string array — concrete, testable outcomes
+        - "acceptanceCriteria": array — each entry is either a string (worker-owned) or {"text": string, "evidence_owner": "worker" | "acceptance-gate" | "operator"}
+        - Use evidence_owner "acceptance-gate" when evidence is a test execution or gate receipt that no worker may run under docs/role-capability-matrix.md. Use "operator" when evidence needs a real host, a human, or post-landing observation. Missing means "worker".
         - Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.
         - "verificationClass": "TestVerifiable" | "RealWorldDependent"
         - "decisions": array of {question, choice, rationale} — forks you resolved yourself
@@ -93,7 +98,7 @@ internal static class SpecRefinerPlanner
         ```json
         {
           "behavioralContract": "The API exposes goal status as a JSON object over HTTP.",
-          "acceptanceCriteria": ["GET /goals/{id} returns 200 with status field", "404 for unknown id"],
+          "acceptanceCriteria": [{"text": "GET /goals/{id} returns 200 with status field", "evidence_owner": "acceptance-gate"}, "404 for unknown id"],
           "verificationClass": "TestVerifiable",
           "decisions": [{"question": "HTTP method?", "choice": "GET", "rationale": "Read-only; idempotent."}],
           "forks": [{"kind": "observable-behavior", "topicKey": "http-method", "refinerConfidence": "high", "blastRadius": "low", "question": "HTTP method?", "choice": "GET", "rationale": "Read-only; idempotent."}]
@@ -130,7 +135,7 @@ internal static class SpecRefinerPlanner
             if (string.IsNullOrWhiteSpace(contract))
                 return SpecRefinementOutput.Invalid("Missing 'behavioralContract' field.");
 
-            var criteria = ReadStringArray(root, "acceptanceCriteria");
+            var criteria = ReadAcceptanceCriteria(root);
             var vc = string.Equals(ReadString(root, "verificationClass"), "RealWorldDependent", StringComparison.Ordinal)
                 ? VerificationClass.RealWorldDependent
                 : VerificationClass.TestVerifiable;
@@ -138,7 +143,18 @@ internal static class SpecRefinerPlanner
             var decisions = ReadDecisions(root);
             var forks = ReadForks(root);
 
-            return new SpecRefinementOutput(contract, criteria, vc, decisions, forks, []);
+            return new SpecRefinementOutput(
+                contract,
+                criteria.Criteria,
+                criteria.AcceptanceGateOwned,
+                criteria.OperatorOwned,
+                vc,
+                decisions,
+                forks,
+                [])
+            {
+                ParseDiagnostics = criteria.Diagnostics
+            };
         }
         catch (JsonException ex)
         {
@@ -208,19 +224,67 @@ internal static class SpecRefinerPlanner
             ? v.GetString() ?? string.Empty
             : string.Empty;
 
-    private static IReadOnlyList<string> ReadStringArray(JsonElement root, string property)
+    private static ParsedAcceptanceCriteria ReadAcceptanceCriteria(JsonElement root)
     {
-        if (!root.TryGetProperty(property, out var arr) || arr.ValueKind != JsonValueKind.Array)
-            return [];
-        var result = new List<string>();
+        if (!root.TryGetProperty("acceptanceCriteria", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return new([], [], [], []);
+        var criteria = new List<string>();
+        var acceptanceGateOwned = new List<string>();
+        var operatorOwned = new List<string>();
+        var diagnostics = new List<string>();
+        var index = 0;
         foreach (var item in arr.EnumerateArray())
         {
-            var s = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
-            if (!string.IsNullOrWhiteSpace(s))
-                result.Add(s!);
+            var criterion = item.ValueKind switch
+            {
+                JsonValueKind.String => item.GetString(),
+                JsonValueKind.Object => FirstNonEmpty(ReadString(item, "text"), ReadString(item, "criterion")),
+                _ => null
+            };
+            if (string.IsNullOrWhiteSpace(criterion))
+            {
+                index++;
+                continue;
+            }
+
+            criterion = criterion.Trim();
+            criteria.Add(criterion);
+            var ownerToken = item.ValueKind == JsonValueKind.Object
+                ? ReadString(item, "evidence_owner")
+                : string.Empty;
+            switch (NormalizeEvidenceOwner(ownerToken))
+            {
+                case "acceptance gate":
+                    acceptanceGateOwned.Add(criterion);
+                    break;
+                case "operator":
+                    operatorOwned.Add(criterion);
+                    break;
+                case "worker":
+                    break;
+                default:
+                    diagnostics.Add(
+                        $"acceptanceCriteria[{index}] has unrecognized evidence_owner '{ownerToken.Trim()}'; treated as worker.");
+                    break;
+            }
+            index++;
         }
-        return result;
+        return new(criteria, acceptanceGateOwned, operatorOwned, diagnostics);
     }
+
+    private static string NormalizeEvidenceOwner(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "worker";
+        return string.Join(' ', value.Trim().Replace('-', ' ').Replace('_', ' ')
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
+    }
+
+    private sealed record ParsedAcceptanceCriteria(
+        IReadOnlyList<string> Criteria,
+        IReadOnlyList<string> AcceptanceGateOwned,
+        IReadOnlyList<string> OperatorOwned,
+        IReadOnlyList<string> Diagnostics);
 
     private static IReadOnlyList<RefinedSpecDecision> ReadDecisions(JsonElement root)
     {

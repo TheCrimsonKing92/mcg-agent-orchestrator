@@ -56,7 +56,8 @@ public sealed record CriterionEvidenceObligation(
         State is CriterionEvidenceState.Pending or CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired &&
         (Owner != CriterionEvidenceOwner.Unknown || State is CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired) &&
         (Owner != CriterionEvidenceOwner.Acceptance ||
-         (!string.IsNullOrWhiteSpace(ExpectedCandidateSha) && RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate)) &&
+         (RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate &&
+          (State == CriterionEvidenceState.Pending || !string.IsNullOrWhiteSpace(ExpectedCandidateSha)))) &&
         (State is CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired
             ? CandidateSha is null && ReceiptId is null && Detail is null
             : CurrentReceipt() is { IsWellFormed: true } &&
