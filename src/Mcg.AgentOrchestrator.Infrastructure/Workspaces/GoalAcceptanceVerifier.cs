@@ -1731,7 +1731,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 baselineEnvironmentId = GoalId.New();
                 baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
                     baselineEnvironmentId,
-                    $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
+                    $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}", storageRoot: _storageRoot);
                 executedArm = await RunFocusedEvidenceArmAsync(
                     FindingEvidenceArm.Baseline,
                     baselineSha,
@@ -1762,12 +1762,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             TryDeleteFocusedEvidenceBaselineDirectory(baselineRoot, baselinePath);
             if (baselineEnvironment is not null)
             {
-                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(baselineEnvironment);
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(baselineEnvironment, _storageRoot);
             }
 
             if (baselineEnvironmentId is not null)
             {
-                DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(baselineEnvironmentId);
+                DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(baselineEnvironmentId, _storageRoot);
             }
         }
     }
