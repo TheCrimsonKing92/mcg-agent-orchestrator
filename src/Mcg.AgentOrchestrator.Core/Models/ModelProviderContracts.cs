@@ -299,11 +299,17 @@ public sealed record TaskDispatchRecord(
     // dispatch start boundary transports that decision to the worker sandbox instead of selecting again.
     // A directory path and an explicit/default source kind only: never credential material.
     string? ClaudeCredentialSourceDirectory = null,
-    bool ClaudeCredentialSourceIsExplicit = false)
+    bool ClaudeCredentialSourceIsExplicit = false,
+    string? AssignedAgentId = null,
+    int ConductorRoutingRevision = 0)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
     public string? BriefSnapshot { get; internal set; } = BriefSnapshot;
+
+    public string? AssignedAgentId { get; internal set; } = AssignedAgentId;
+
+    public int ConductorRoutingRevision { get; internal set; } = ConductorRoutingRevision;
 }
 
 public sealed record ReviewRetryCapReceipt(int Round, int StopRound)

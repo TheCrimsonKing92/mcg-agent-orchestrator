@@ -118,12 +118,91 @@ internal sealed partial class GoalDispatchOperations
 
         var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
         var resolvedProfiles = profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
-        var profile = resolvedProfiles.Profiles.FirstOrDefault(candidate =>
-            candidate.Name.Equals(lastDispatch.WorkerName, StringComparison.OrdinalIgnoreCase));
-        if (profile is null)
+        AgentDefinition assignedAgent;
+        try
         {
-            throw new InvalidOperationException(
-                $"Cannot refresh dispatch for task '{task.Id}' before start because worker profile '{lastDispatch.WorkerName}' is not available.");
+            assignedAgent = AssignedAgentResolver.Resolve(task, resolvedAgents);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            throw AssignmentHold(
+                DispatchAssignmentHoldCode.AgentNotFound,
+                task,
+                ex.Message,
+                task.AssignedAgentId?.Value);
+        }
+
+        if (assignedAgent.Status != AgentStatus.Available)
+        {
+            throw AssignmentHold(
+                DispatchAssignmentHoldCode.AgentUnavailable,
+                task,
+                $"Assigned agent '{assignedAgent.Id.Value}' is {assignedAgent.Status}; only Available agents may start a dispatch.",
+                assignedAgent.Id.Value);
+        }
+
+        if (assignedAgent.Role != task.RequiredRole)
+        {
+            throw AssignmentHold(
+                DispatchAssignmentHoldCode.RoleMismatch,
+                task,
+                $"Assigned agent '{assignedAgent.Id.Value}' has role {assignedAgent.Role}; task requires {task.RequiredRole}.",
+                assignedAgent.Id.Value);
+        }
+
+        WorkerProfile profile;
+        if (AgentExecutionPolicies.AllowsSubscription(assignedAgent.ExecutionPolicy))
+        {
+            string profileName;
+            try
+            {
+                profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(
+                    assignedAgent,
+                    goal,
+                    task,
+                    resolvedProfiles,
+                    sandboxOptions: sandboxOptions);
+                profile = resolvedProfiles.GetRequired(profileName);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+            {
+                throw AssignmentHold(
+                    DispatchAssignmentHoldCode.ProfileUnavailable,
+                    task,
+                    $"Assigned agent '{assignedAgent.Id.Value}' has no available subscription profile: {ex.Message}",
+                    assignedAgent.Id.Value,
+                    assignedAgent.Subscription?.WorkerProfileName);
+            }
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(lastDispatch.AssignedAgentId) ||
+                !lastDispatch.AssignedAgentId.Equals(assignedAgent.Id.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                var preparedAgent = string.IsNullOrWhiteSpace(lastDispatch.AssignedAgentId)
+                    ? "an unrecorded legacy assignment"
+                    : $"agent '{lastDispatch.AssignedAgentId}'";
+                throw AssignmentHold(
+                    DispatchAssignmentHoldCode.HarnessRebindUnsupported,
+                    task,
+                    $"Prepared harness '{lastDispatch.WorkerName}' belongs to {preparedAgent}, but the acknowledged assignment is API-only agent '{assignedAgent.Id.Value}'.",
+                    assignedAgent.Id.Value,
+                    lastDispatch.WorkerName);
+            }
+
+            try
+            {
+                profile = resolvedProfiles.GetRequired(lastDispatch.WorkerName);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                throw AssignmentHold(
+                    DispatchAssignmentHoldCode.ProfileUnavailable,
+                    task,
+                    ex.Message,
+                    assignedAgent.Id.Value,
+                    lastDispatch.WorkerName);
+            }
         }
 
         return ProfileDispatchTask(
@@ -138,6 +217,21 @@ internal sealed partial class GoalDispatchOperations
             reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
             sandboxOptions: sandboxOptions,
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
+    }
+
+    private static DispatchAssignmentHoldException AssignmentHold(
+        DispatchAssignmentHoldCode code,
+        TaskSpec task,
+        string detail,
+        string? assignedAgentId = null,
+        string? workerProfileName = null)
+    {
+        var message = $"DISPATCH_ASSIGNMENT_HOLD code={code} task={task.Id.Value} detail={detail}";
+        return new DispatchAssignmentHoldException(new DispatchAssignmentHold(
+            code,
+            message,
+            assignedAgentId,
+            workerProfileName));
     }
 
     public IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatchesBeforeStart(

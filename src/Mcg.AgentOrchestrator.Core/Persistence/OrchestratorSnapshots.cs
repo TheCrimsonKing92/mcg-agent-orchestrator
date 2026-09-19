@@ -124,7 +124,8 @@ public sealed record TaskSnapshot(
     AcceptedRetryFeedback? AcceptedRetryFeedback = null,
     IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceHistory = null,
     int PreReviewEvidenceAttemptCount = 0,
-    InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint = null);
+    InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint = null,
+    int ConductorRoutingRevision = 0);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -215,7 +216,9 @@ public sealed record TaskDispatchSnapshot(
     // Selected and reported by this dispatch's Claude auth preflight; absent for every other provider and
     // for dispatches recorded before the preflight-to-dispatch handoff existed. Path and source kind only.
     string? ClaudeCredentialSourceDirectory = null,
-    bool ClaudeCredentialSourceIsExplicit = false);
+    bool ClaudeCredentialSourceIsExplicit = false,
+    string? AssignedAgentId = null,
+    int ConductorRoutingRevision = 0);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

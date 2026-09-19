@@ -422,6 +422,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(1234, restoredTask.LastDispatch.PromptCharacterCount);
     Assert.True(restoredTask.LastDispatch.UsesComplexModel);
     Assert.Equal(ProviderKind.OpenAICodexCli, restoredTask.LastDispatch.WorkerProviderKind);
+    Assert.Equal(task.AssignedAgentId!.Value, restoredTask.LastDispatch.AssignedAgentId);
     Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
 }
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_non_blocking_process_ownership")]

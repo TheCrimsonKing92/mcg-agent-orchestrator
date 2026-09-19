@@ -1318,6 +1318,8 @@ public sealed partial class AgentOrchestratorKernel
 
         dispatch.BriefVersion = goal.AuthoritativeBrief.Version;
         dispatch.BriefSnapshot = goal.Objective;
+        dispatch.AssignedAgentId ??= task.AssignedAgentId?.Value;
+        dispatch.ConductorRoutingRevision = task.ConductorRoutingRevision;
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);

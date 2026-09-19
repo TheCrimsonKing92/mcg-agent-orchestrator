@@ -554,7 +554,7 @@ Durable state lives in stores, never in `.scratch`.
 
 `agent <role> <provider> <model> [name]` replaces the role's primary agent. `agent-add <role> <provider> <model> [name]` adds a second entry at `route=alternate` with a derived id, leaving the primary in place — that is the right verb when you want one goal's task moved to a different model via `reassign-agent` without switching the whole role.
 
-**Both verbs set the API model and leave the subscription half stale, and the subscription half is the one that dispatches.** They write `Model.ModelName` but not `Subscription.ModelAlias`, `Subscription.ReasoningEffort`, or `ComplexModel.ModelName`, which retain values from whatever previously occupied that id or role. Under the default `ExecutionPolicy=PreferSubscription`, the worker CLI is invoked with `{subscriptionModelName}` and `{subscriptionReasoningEffort}` from `workers.json` templates — so the model you just configured is the half that is *not* used.
+**Without subscription flags, both verbs set the API model and can leave the subscription half stale, and the subscription half is the one that dispatches.** They write `Model.ModelName`, while omitted subscription or complex-model values can retain values from whatever previously occupied that id or role. Under the default `ExecutionPolicy=PreferSubscription`, the worker CLI is invoked with `{subscriptionModelName}` and `{subscriptionReasoningEffort}` from `workers.json` templates — so verify both halves after every roster change.
 
 The `agents` listing prints both halves on one line without marking the conflict:
 
@@ -563,7 +563,9 @@ Developer: Codex developer id=openai-developer ... api=OpenAI/gpt-5.6-sol reason
                                                     ^^^ what the command set                ^^^ what actually dispatches
 ```
 
-There is no CLI flag for the subscription alias. After any roster change, edit the entry in `.orchestrator/agents.json` — `Subscription.ModelAlias`, `Subscription.ReasoningEffort`, and `ComplexModel.ModelName` — then re-run `agents` and confirm the two halves agree before letting a dispatch form. Tracked as backlog `fd4a5ed5`.
+Use `--subscription-model <alias>` and `--subscription-reasoning <effort>` with `agent` or `agent-add` to set the subscription launch values. After any roster change, re-run `agents` and confirm the API and subscription halves agree before letting a dispatch form; edit `.orchestrator/agents.json` only for fields that the command did not set, such as an independently selected `ComplexModel.ModelName`. Tracked as backlog `fd4a5ed5`.
+
+An acknowledged `reassign-agent` is resolved again at the final application pre-start boundary: the next command takes its harness, model, and reasoning from the assigned agent, never from the former dispatch record. A reassignment before start authorization keeps the prepared attempt pending and rebuilds its command at that boundary. A reassignment after an authorized start leaves that running attempt and its recorded owner unchanged, reports `effect=next-attempt`, and applies to the following attempt. A role mismatch, missing agent, unavailable profile, or unsupported API-only harness rebind produces a typed hold and launches nothing; it never falls back to the former provider.
 
 Dogfood goal-boundary evidence is durable SQLite state, not a tracked markdown append log.
 

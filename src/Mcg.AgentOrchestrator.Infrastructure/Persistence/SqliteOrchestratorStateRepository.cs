@@ -2120,7 +2120,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         if (left is null || right is null)
             return left is null && right is null;
 
-        return left.DispatchedAt == right.DispatchedAt;
+        return left.DispatchedAt == right.DispatchedAt &&
+            (string.IsNullOrWhiteSpace(left.AssignedAgentId) ||
+             string.IsNullOrWhiteSpace(right.AssignedAgentId) ||
+             string.Equals(left.AssignedAgentId, right.AssignedAgentId, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool SameProcessAttempt(TaskProcessSnapshot? left, TaskProcessSnapshot? right)

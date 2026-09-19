@@ -1533,7 +1533,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         });
 
         Xunit.Assert.Equal("planner", task.AssignedAgentId!.Value);
-        Xunit.Assert.Contains("ERROR: agent id 'missing-agent' was not found.", stderr);
+        Xunit.Assert.Contains("AGENT_REASSIGNMENT_HOLD code=AgentNotFound", stderr);
     }
 
 
