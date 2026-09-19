@@ -183,7 +183,9 @@ internal static class SourceSizeRatchet
             // five further lines preserve conduct-loop and global-reconcile scheduler cadence.
             // The operation owner threads through this runner's own call sites.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4863),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1566),
+            // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
+            // environment seam; the production verifier remains at its prior ceiling.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
             // Goal ce3c3917 adds the two MakeDriver forwarding seams required to inject and capture the

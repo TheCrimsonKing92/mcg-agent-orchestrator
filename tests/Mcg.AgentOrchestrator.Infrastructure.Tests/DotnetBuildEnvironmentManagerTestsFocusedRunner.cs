@@ -7,8 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerFocusedRunner)]
+public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuildEnvironmentManagerRootedTestBase
 {
     // Failsafe budget for FocusedRunner_AllSlotsHeld_ReportsNoSlotWithoutStartingDotnet. It is
     // inside the script's documented 1-to-300 BudgetSeconds range and exists only so a genuine
@@ -1002,8 +1002,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
     [Xunit.Fact]
     public void AcceptanceLease_ReservesPriorityUntilFocusedSlotIsReleased()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+        var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot,
             new GoalId("cccccccccccccccccccccccccccccccc"),
             "priority-test");
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
@@ -1027,7 +1026,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
     [Xunit.Fact]
     public void FocusedRunner_ConcurrentInvocations_NeverExceedSharedGrid()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var source = ReadIsolatedDotnetScript();
         Assert.Contains("Join-Path $lockDirectory \"build-$slot.lock\"", source, StringComparison.Ordinal);
 
@@ -1042,7 +1040,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             var signaled = false;
             try
             {
-                var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+                var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot,
                     new GoalId((index + 1).ToString("x8", System.Globalization.CultureInfo.InvariantCulture) + new string('0', 24)),
                     $"focused-concurrency-{index}");
                 start.Wait();

@@ -22,18 +22,34 @@ public sealed class LocalProcessVerifier
         TimeSpan? Elapsed = null);
 
     private readonly Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
+    private readonly DotnetBuildStorageRoot _storageRoot;
 
-    public LocalProcessVerifier() : this(RunCommandAsync) { }
+    public LocalProcessVerifier() : this(RunCommandAsync, DotnetBuildEnvironmentManager.CaptureStorageRoot()) { }
 
     internal LocalProcessVerifier(Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> runner)
+        : this(runner, DotnetBuildEnvironmentManager.CaptureStorageRoot())
+    {
+    }
+
+    internal LocalProcessVerifier(
+        Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> runner,
+        DotnetBuildStorageRoot storageRoot)
         : this((fileName, args, workingDirectory, _, cancellationToken) =>
-            runner(fileName, args, workingDirectory, cancellationToken))
+            runner(fileName, args, workingDirectory, cancellationToken), storageRoot)
     {
     }
 
     internal LocalProcessVerifier(Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> runner)
+        : this(runner, DotnetBuildEnvironmentManager.CaptureStorageRoot())
+    {
+    }
+
+    internal LocalProcessVerifier(
+        Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
+        DotnetBuildStorageRoot storageRoot)
     {
         _runner = runner;
+        _storageRoot = storageRoot;
     }
 
     public async Task<TaskVerificationRecord> RunAsync(
@@ -62,7 +78,7 @@ public sealed class LocalProcessVerifier
             cancellationToken).ConfigureAwait(false);
 
         var completedAt = DateTimeOffset.UtcNow;
-        var preparedCommand = PrepareCommand(command, goalId, taskId);
+        var preparedCommand = PrepareCommand(command, goalId, taskId, _storageRoot);
         var elapsed = Stopwatch.StartNew();
         var commandTimeout = AcceptanceCheckTimeouts.DefaultTimeout;
 
@@ -137,7 +153,11 @@ public sealed class LocalProcessVerifier
         }
     }
 
-    internal static PreparedCommand PrepareCommand(string command, GoalId? goalId = null, TaskId? taskId = null)
+    internal static PreparedCommand PrepareCommand(
+        string command,
+        GoalId? goalId,
+        TaskId? taskId,
+        DotnetBuildStorageRoot storageRoot)
     {
         var commandToRun = command.Trim();
         var executionArguments = TokenizeSimpleCommand(commandToRun);
@@ -149,7 +169,7 @@ public sealed class LocalProcessVerifier
         }
 
         var attemptName = taskId is null ? "verify" : $"verify-{Prefix(taskId.Value)}";
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName);
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName, storageRoot: storageRoot);
         arguments = [.. arguments, .. environment.Arguments];
         return new PreparedCommand(
             JoinDisplayCommand([fileName, .. arguments]),
