@@ -352,6 +352,18 @@ public sealed partial class AgentOrchestratorKernel
                 foreach (var criterion in refinedSpec.OperatorOwnedAcceptanceCriteria)
                     specLines.Add($"- {criterion}");
             }
+            var acceptanceGateOwnedCriteria = refinedSpec.AcceptanceGateOwnedAcceptanceCriteria
+                .Where(criterion => !refinedSpec.OperatorOwnedAcceptanceCriteria.Contains(
+                    criterion,
+                    StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (acceptanceGateOwnedCriteria.Length > 0)
+            {
+                specLines.Add(string.Empty);
+                specLines.Add("ACCEPTANCE-GATE-OWNED criteria (the acceptance gate, not the worker, produces this evidence):");
+                foreach (var criterion in acceptanceGateOwnedCriteria)
+                    specLines.Add($"- {criterion}");
+            }
             if (refinedSpec.Decisions.Count > 0)
             {
                 specLines.Add(string.Empty);
