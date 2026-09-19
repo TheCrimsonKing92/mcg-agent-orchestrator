@@ -361,6 +361,13 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
             });
             Assert.Equal(first.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(first.GoalId)}").Trim());
             Assert.Equal(second.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(second.GoalId)}").Trim());
+            Assert.All([firstGoal, secondGoal], goal =>
+            {
+                var intent = GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(repo, goal.Id));
+                Assert.NotNull(intent);
+                Assert.Equal(main, intent.BoundMainRevision);
+                Assert.Null(intent.PreviousIntegrationRevision);
+            });
         }
         finally
         {

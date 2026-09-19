@@ -103,9 +103,15 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             Assert.Equal(3, Assert.IsAssignableFrom<IReadOnlyList<AcceptanceCohortCoverage>>(result.Coverage).Count);
             Assert.All(result.Coverage!, coverage => Assert.True(coverage.Landed));
             Assert.All([firstGoal, secondGoal, thirdGoal], goal =>
+            {
+                var intent = GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(repo, goal.Id));
+                Assert.NotNull(intent);
+                Assert.Equal(main, intent.BoundMainRevision);
+                Assert.Null(intent.PreviousIntegrationRevision);
                 Assert.Contains(
                     GoalOperationJournal.Read(repo, goal.Id).Entries,
-                    operation => operation.Operation == "conductor:land" && operation.Status == GoalOperationStatus.Completed));
+                    operation => operation.Operation == "conductor:land" && operation.Status == GoalOperationStatus.Completed);
+            });
             store.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
         }
         finally

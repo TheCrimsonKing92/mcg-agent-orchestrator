@@ -108,7 +108,9 @@ internal static partial class LandingExecutor
                 GoalWorktrees.BranchName(goal.Id),
                 $"train/{receipt.Identity.Value}",
                 commit,
-                "LandingExecutor.ExecuteMergeTrain");
+                "LandingExecutor.ExecuteMergeTrain",
+                boundMainRevision: liveMain,
+                previousIntegrationRevision: priorIntegrationRevision);
         }
 
         blockReason = mutationBlocker?.Invoke();
@@ -131,6 +133,13 @@ internal static partial class LandingExecutor
             : RunGit(executionDirectory, "update-ref", $"refs/heads/{IntegrationBranchName}", commit, priorIntegrationRevision);
         if (integrationUpdate.ExitCode != 0)
         {
+            foreach (var goal in goals)
+            {
+                GoalOperationJournal.TombstoneLandingIntent(
+                    executionDirectory,
+                    goal,
+                    $"merge train integration ref update failed: {integrationUpdate.Error}");
+            }
             return new AcceptanceCohortLandingResult(
                 AcceptanceCohortLandingOutcome.RetryableHold,
                 $"Merge train integration ref update failed: {integrationUpdate.Error}");
