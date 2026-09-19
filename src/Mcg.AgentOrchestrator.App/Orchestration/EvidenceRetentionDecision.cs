@@ -87,7 +87,7 @@ internal sealed record EvidenceRetentionDecision(
 
 internal static class EvidenceRetentionPolicy
 {
-    internal const int Version = 2;
+    internal const int Version = 1;
 
     internal static IReadOnlySet<string> ProtectedAttemptIds(
         IReadOnlyCollection<RetentionAttemptIdentity> attempts)
@@ -180,15 +180,15 @@ internal static class EvidenceRetentionPolicy
             return Eligibility(EvidenceEligibility.Keep, "non-terminal-evidence", facts);
         }
 
-        if (facts.Owner is null)
+        if (facts.Owner is null && facts.RequireOwner)
         {
             return Eligibility(
-                facts.RequireOwner ? EvidenceEligibility.Keep : EvidenceEligibility.Archive,
-                facts.RequireOwner ? "artifact-owner-unresolved" : "terminal-goal-evidence",
+                EvidenceEligibility.Keep,
+                "artifact-owner-unresolved",
                 facts with { OwnershipSource = EvidenceOwnershipSource.Unresolved });
         }
 
-        if (facts.ProtectedAttempt)
+        if (facts.Owner is not null && facts.ProtectedAttempt)
         {
             return Eligibility(
                 EvidenceEligibility.Keep,
@@ -196,7 +196,7 @@ internal static class EvidenceRetentionPolicy
                 facts);
         }
 
-        if (facts.ReferencedArtifact)
+        if (facts.Owner is not null && facts.ReferencedArtifact)
         {
             return Eligibility(EvidenceEligibility.Keep, "retained-test-artifact-owner-metadata", facts);
         }

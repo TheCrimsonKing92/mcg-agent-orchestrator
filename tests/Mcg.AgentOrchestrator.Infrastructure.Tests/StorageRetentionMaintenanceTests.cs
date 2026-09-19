@@ -652,6 +652,59 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
+    public void AcceptanceRetention_ExpiredLegacyUnattributedArtifactIsReclaimed()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        var legacyArtifact = Path.Combine(goalDirectory, "legacy-unattributed.bin");
+        File.WriteAllText(legacyArtifact, "expired legacy evidence");
+        var expectedReclaimedBytes = new FileInfo(legacyArtifact).Length;
+        SetAge(legacyArtifact, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.False(File.Exists(legacyArtifact));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == legacyArtifact &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "past-age-bound" &&
+            decision.OwnershipSource == EvidenceOwnershipSource.Unresolved &&
+            decision.BytesAttempted == expectedReclaimedBytes &&
+            decision.BytesReclaimed == expectedReclaimedBytes);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_LegacyUnattributedBytesParticipateInByteBound()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        var legacyArtifact = Path.Combine(goalDirectory, "legacy-unattributed.bin");
+        File.WriteAllText(legacyArtifact, "byte-bound legacy evidence");
+        SetAge(legacyArtifact, 2);
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [TerminalGoal(WorkTaskStatus.Completed)],
+            Now,
+            acceptanceArtifactMaxBytesForTests: 1);
+
+        Assert.False(File.Exists(legacyArtifact));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == legacyArtifact &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "past-byte-bound" &&
+            decision.BytesReclaimed > 0);
+    }
+
+    [Xunit.Fact]
     public void AcceptanceRetention_WriterLeaseRemainsHeldThroughCandidateDeletion()
     {
         using var fixture = new RetentionFixture();

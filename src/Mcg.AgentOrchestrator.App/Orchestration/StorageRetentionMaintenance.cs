@@ -601,9 +601,10 @@ internal static partial class StorageRetentionMaintenance
 
             var candidates = new List<(
                 FileInfo File,
-                RetentionAttemptIdentity Owner,
+                RetentionAttemptIdentity? Owner,
                 EvidenceOwnershipSource OwnershipSource,
-                string GoalId)>();
+                string GoalId,
+                bool RequireOwner)>();
             var goalId = Path.GetFileName(goalDirectory);
             var owners = goals.Where(goal => goal.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (owners.Length != 1)
@@ -802,18 +803,28 @@ internal static partial class StorageRetentionMaintenance
                 {
                     if (owner.Attempt is null)
                     {
-                        decisions.Add(new EvidenceRetentionDecision(
-                            family,
-                            EvidenceRetentionAction.RetainedUndecidable,
-                            path,
-                            goal.GoalId,
-                            EvidenceOwnerResolution.UniqueTerminal,
-                            owner.Ambiguous ? "artifact-owner-ambiguous" : "artifact-owner-unresolved",
-                            OwnershipSource: owner.Source));
-                        continue;
+                        var legacyUnattributed = !owner.Ambiguous &&
+                            attempts.All(attempt => attempt.DeclaredPaths is not { Count: > 0 });
+                        if (!legacyUnattributed)
+                        {
+                            decisions.Add(new EvidenceRetentionDecision(
+                                family,
+                                EvidenceRetentionAction.RetainedUndecidable,
+                                path,
+                                goal.GoalId,
+                                EvidenceOwnerResolution.UniqueTerminal,
+                                owner.Ambiguous ? "artifact-owner-ambiguous" : "artifact-owner-unresolved",
+                                OwnershipSource: owner.Source));
+                            continue;
+                        }
                     }
 
-                    candidates.Add((new FileInfo(path), owner.Attempt, owner.Source, goal.GoalId));
+                    candidates.Add((
+                        new FileInfo(path),
+                        owner.Attempt,
+                        owner.Source,
+                        goal.GoalId,
+                        RequireOwner: owner.Attempt is not null));
                 }
             }
 
@@ -828,8 +839,23 @@ internal static partial class StorageRetentionMaintenance
                 .ThenBy(item => item.File.LastWriteTimeUtc)
                 .ThenBy(item => item.File.FullName, StringComparer.OrdinalIgnoreCase))
             {
-                if (!TryReadAttemptIdentities(goalDirectory, goal.GoalId, out var refreshedAttempts, out var refreshReason) ||
-                    refreshedAttempts.Any(attempt => !attempt.Reconciled))
+                if (!TryReadAttemptIdentities(goalDirectory, goal.GoalId, out var refreshedAttempts, out var refreshReason))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.RetainedUndecidable,
+                        candidate.File.FullName,
+                        candidate.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        refreshReason,
+                        candidate.Owner?.AttemptId,
+                        candidate.Owner?.Ordinal,
+                        OwnershipSource: candidate.OwnershipSource,
+                        FactRevision: expectedFactRevision));
+                    continue;
+                }
+
+                if (refreshedAttempts.Any(attempt => !attempt.Reconciled))
                 {
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
@@ -837,9 +863,9 @@ internal static partial class StorageRetentionMaintenance
                         candidate.File.FullName,
                         candidate.GoalId,
                         EvidenceOwnerResolution.UniqueTerminal,
-                        string.IsNullOrWhiteSpace(refreshReason) ? "attempt-became-unreconciled-before-effect" : refreshReason,
-                        candidate.Owner.AttemptId,
-                        candidate.Owner.Ordinal,
+                        "attempt-became-unreconciled-before-effect",
+                        candidate.Owner?.AttemptId,
+                        candidate.Owner?.Ordinal,
                         OwnershipSource: candidate.OwnershipSource,
                         FactRevision: expectedFactRevision));
                     continue;
@@ -857,8 +883,8 @@ internal static partial class StorageRetentionMaintenance
                         candidate.GoalId,
                         EvidenceOwnerResolution.UniqueTerminal,
                         "retention-facts-changed-before-effect",
-                        candidate.Owner.AttemptId,
-                        candidate.Owner.Ordinal,
+                        candidate.Owner?.AttemptId,
+                        candidate.Owner?.Ordinal,
                         OwnershipSource: candidate.OwnershipSource,
                         FactRevision: observedFactRevision));
                     continue;
@@ -879,8 +905,12 @@ internal static partial class StorageRetentionMaintenance
                 }
 
                 var refreshedOwner = EvidenceRetentionPolicy.ResolveOwner(refreshedAttempts, candidate.File.FullName);
-                if (refreshedOwner.Attempt is null ||
-                    !refreshedOwner.Attempt.AttemptId.Equals(candidate.Owner.AttemptId, StringComparison.OrdinalIgnoreCase))
+                var ownerChanged = candidate.Owner is null
+                    ? refreshedOwner.Attempt is not null ||
+                      refreshedAttempts.Any(attempt => attempt.DeclaredPaths is { Count: > 0 })
+                    : refreshedOwner.Attempt is null ||
+                      !refreshedOwner.Attempt.AttemptId.Equals(candidate.Owner.AttemptId, StringComparison.OrdinalIgnoreCase);
+                if (ownerChanged)
                 {
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
@@ -905,18 +935,23 @@ internal static partial class StorageRetentionMaintenance
                     totalCandidateBytes > acceptanceArtifactMaxBytes &&
                     age > WorkerCompressionAge;
                 var referencedArtifact =
-                    retainedTrxAttemptIds.Contains(refreshedOwner.Attempt.AttemptId) ||
-                    retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, refreshedOwner.Attempt.AttemptId));
+                    candidate.File.Name.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase) &&
+                    refreshedOwner.Attempt is not null &&
+                    (retainedTrxAttemptIds.Contains(refreshedOwner.Attempt.AttemptId) ||
+                     retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, refreshedOwner.Attempt.AttemptId)));
                 var eligibilityFacts = new EvidenceRetentionFacts(
                     TerminalGoal: true,
                     refreshedOwner.Attempt,
                     refreshedOwner.Source,
-                    refreshedProtectedAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
+                    refreshedOwner.Attempt is not null &&
+                        refreshedProtectedAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
                     referencedArtifact,
-                    refreshedCountBoundAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
+                    refreshedOwner.Attempt is not null &&
+                        refreshedCountBoundAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
                     aged,
                     byteBoundEligible,
-                    observedFactRevision);
+                    observedFactRevision,
+                    candidate.RequireOwner);
                 var eligibility = EvidenceRetentionPolicy.EvaluatePath(eligibilityFacts);
                 if (eligibility.Disposition != EvidenceEligibility.DeleteWhenSafe)
                 {
@@ -930,8 +965,8 @@ internal static partial class StorageRetentionMaintenance
                             eligibility.Reason == "within-retention-bounds"
                                 ? "byte-bound-unsatisfiable-fresh-evidence"
                                 : eligibility.Reason,
-                        refreshedOwner.Attempt.AttemptId,
-                        refreshedOwner.Attempt.Ordinal,
+                        refreshedOwner.Attempt?.AttemptId,
+                        refreshedOwner.Attempt?.Ordinal,
                         OwnershipSource: refreshedOwner.Source,
                         FactRevision: observedFactRevision,
                         Eligibility: eligibility.Disposition));
@@ -947,8 +982,8 @@ internal static partial class StorageRetentionMaintenance
                     candidate.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
                     deletion.Success ? eligibility.Reason : "exclusive-delete-failed",
-                    refreshedOwner.Attempt.AttemptId,
-                    refreshedOwner.Attempt.Ordinal,
+                    refreshedOwner.Attempt?.AttemptId,
+                    refreshedOwner.Attempt?.Ordinal,
                     BytesAttempted: length,
                     BytesReclaimed: deletion.Success ? length : 0,
                     FailureExceptionType: deletion.ExceptionType,
@@ -959,16 +994,39 @@ internal static partial class StorageRetentionMaintenance
                 {
                     deleted++;
                     totalCandidateBytes = Math.Max(0, totalCandidateBytes - length);
-                    if (TryReadAttemptIdentities(
+                    if (!TryReadAttemptIdentities(
                         goalDirectory,
                         goal.GoalId,
                         out var postEffectAttempts,
-                        out _))
+                        out var postEffectReason))
                     {
-                        expectedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
-                            postEffectAttempts,
-                            Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
+                        decisions.Add(new EvidenceRetentionDecision(
+                            family,
+                            EvidenceRetentionAction.RetainedUndecidable,
+                            goalDirectory,
+                            goal.GoalId,
+                            EvidenceOwnerResolution.UniqueTerminal,
+                            $"post-effect-fact-refresh-failed:{postEffectReason}",
+                            FactRevision: expectedFactRevision));
+                        break;
                     }
+
+                    if (postEffectAttempts.Any(attempt => !attempt.Reconciled))
+                    {
+                        decisions.Add(new EvidenceRetentionDecision(
+                            family,
+                            EvidenceRetentionAction.DeferredLive,
+                            goalDirectory,
+                            goal.GoalId,
+                            EvidenceOwnerResolution.UniqueTerminal,
+                            "attempt-became-unreconciled-after-effect",
+                            FactRevision: expectedFactRevision));
+                        break;
+                    }
+
+                    expectedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
+                        postEffectAttempts,
+                        Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
                 }
             }
         }
@@ -1676,7 +1734,7 @@ internal static partial class StorageRetentionMaintenance
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
-            // Invalid optional declarations degrade to conservative legacy inference.
+            // Ignore an invalid optional declaration. Legacy inference is used only when no valid declaration remains.
         }
     }
 

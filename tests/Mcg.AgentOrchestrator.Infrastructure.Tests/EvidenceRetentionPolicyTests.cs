@@ -153,4 +153,24 @@ public sealed class EvidenceRetentionPolicyTests
         Assert.Equal(firstRevision, eligibility.FactRevision);
         Assert.NotEqual(firstRevision, secondRevision);
     }
+
+    [Xunit.Fact]
+    public void Eligibility_ExpiredLegacyUnattributedArtifactCanBeDeletedWhenOwnerIsOptional()
+    {
+        var eligibility = EvidenceRetentionPolicy.EvaluatePath(new EvidenceRetentionFacts(
+            TerminalGoal: true,
+            Owner: null,
+            EvidenceOwnershipSource.Unresolved,
+            ProtectedAttempt: false,
+            ReferencedArtifact: false,
+            CountBound: false,
+            Aged: true,
+            ByteBoundEligible: false,
+            FactRevision: "legacy-revision",
+            RequireOwner: false));
+
+        Assert.Equal(EvidenceEligibility.DeleteWhenSafe, eligibility.Disposition);
+        Assert.Equal("past-age-bound", eligibility.Reason);
+        Assert.Equal(EvidenceOwnershipSource.Unresolved, eligibility.OwnershipSource);
+    }
 }
