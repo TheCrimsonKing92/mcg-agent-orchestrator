@@ -10,6 +10,64 @@ using Microsoft.Data.Sqlite;
 public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWorkflowTests
 {
     [Fact]
+    public void IntegrationCreationFailure_TombstonesPreparedGoalLandingIntents()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        var previousGitRunner = LandingExecutor.GitRunner;
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First creation-failure member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second creation-failure member", repo);
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, firstGoal.Id.Value, "src/First.cs", "first");
+            var second = CreateCandidate(repo, secondGoal.Id.Value, "tests/Second.cs", "second");
+            var bindings = new[]
+            {
+                Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+            };
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
+            var identity = AcceptanceCohortIdentity.Create(
+                bindings,
+                main,
+                integration.TreeRevision,
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                    integration.Path,
+                    bindings.SelectMany(member => member.LandingPaths).ToArray()));
+            var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
+                "receipt-integration-create-failure", identity, AcceptanceCohortGateOutcome.Passed, DateTimeOffset.UtcNow,
+                100, [], 0, [WritePassingTrx(repo, "receipt-integration-create-failure.trx")], ValidForLanding: true));
+            LandingExecutor.GitRunner = (workingDirectory, args) =>
+                args.Length == 3 &&
+                args[0] == "update-ref" &&
+                args[1] == $"refs/heads/{LandingExecutor.IntegrationBranchName}"
+                    ? new GitCli.GitResult(1, string.Empty, "fixture integration creation failure")
+                    : GitCli.Run(workingDirectory, args);
+
+            var result = LandingExecutor.ExecuteCohort(
+                kernel, [firstGoal, secondGoal], workspace, receipt, integration.CommitRevision, store,
+                ConductorAutonomyPolicy.Conservative);
+
+            Assert.Equal(AcceptanceCohortLandingOutcome.RetryableHold, result.Outcome);
+            Assert.False(result.MainAdvanced);
+            Assert.Equal(main, RunGitOutput(repo, "rev-parse", "main").Trim());
+            Assert.False(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
+            Assert.All(
+                [firstGoal, secondGoal],
+                goal => Assert.False(GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(repo, goal.Id))));
+        }
+        finally
+        {
+            LandingExecutor.GitRunner = previousGitRunner;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void MainCasFailure_RestoresIntegrationRef_AndLandsNeitherMember()
     {
         var repo = CreateAcceptanceCohortRepository();

@@ -111,7 +111,9 @@ internal sealed record GoalLandingIntent(
     string IntegrationBranch,
     string MergeCommitSha,
     DateTimeOffset RecordedAt,
-    string Source);
+    string Source,
+    string? BoundMainRevision = null,
+    string? PreviousIntegrationRevision = null);
 
 internal sealed record GoalLifecycleJournalEntry(
     string IdempotencyKey,
@@ -274,7 +276,9 @@ internal static class GoalOperationJournal
         string integrationBranch,
         string mergeCommitSha,
         string source,
-        DateTimeOffset? recordedAt = null)
+        DateTimeOffset? recordedAt = null,
+        string? boundMainRevision = null,
+        string? previousIntegrationRevision = null)
     {
         var intent = new GoalLandingIntent(
             goal.Id.Value,
@@ -282,7 +286,9 @@ internal static class GoalOperationJournal
             integrationBranch,
             mergeCommitSha,
             recordedAt ?? DateTimeOffset.UtcNow,
-            source);
+            source,
+            NormalizeSha(boundMainRevision),
+            NormalizeSha(previousIntegrationRevision));
         BeforeLandingIntentAppend?.Invoke(intent);
         Append(
             executionDirectory,
