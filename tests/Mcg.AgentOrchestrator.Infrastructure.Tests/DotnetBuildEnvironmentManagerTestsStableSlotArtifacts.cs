@@ -7,17 +7,16 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : DotnetBuildEnvironmentManagerRootedTestBase
 {
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_concurrent_stable_slot_acquirers_get_different_slots")]
     public async Task DotnetBuildEnvironmentManagerConcurrentStableSlotAcquirersGetDifferentSlots()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var tasks = new[]
         {
-            Task.Run(() => DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2))),
-            Task.Run(() => DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2)))
+            Task.Run(() => RootedDotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(StorageRoot, TimeSpan.FromSeconds(2))),
+            Task.Run(() => RootedDotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(StorageRoot, TimeSpan.FromSeconds(2)))
         };
 
         var leases = await Task.WhenAll(tasks);
@@ -42,8 +41,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
             return;
         }
 
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var readyPath = Path.Combine(Path.GetDirectoryName(slot0.ExecutionLockPath)!, $"holder-ready-{Guid.NewGuid():N}.txt");
         var script = $$"""
             $stream = [System.IO.File]::Open('{{EscapePowerShell(slot0.ExecutionLockPath)}}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
@@ -98,13 +96,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_all_stable_slots_leased_returns_slots_busy")]
     public void DotnetBuildEnvironmentManagerAllStableSlotsLeasedReturnsSlotsBusy()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var locks = new List<FileStream>();
         try
         {
             for (var slot = 0; slot < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount; slot++)
             {
-                var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(slot);
+                var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, slot);
                 locks.Add(DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment));
                 Thread.Sleep(5);
             }
@@ -116,7 +113,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
             LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "test");
             var output = AsyncLocalConsoleRouter.Capture(() =>
             {
-                result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+                result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
                     TimeSpan.FromSeconds(2),
                     waits.Add,
                     timeProvider: clock,
@@ -154,8 +151,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_gate_held_lease_blocks_script_byte_range_lock_not_open")]
     public void DotnetBuildEnvironmentManagerGateHeldLeaseBlocksScriptByteRangeLockNotOpen()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var gateLease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0);
         var script = $$"""
             $stream = [System.IO.File]::Open('{{EscapePowerShell(slot0.ExecutionLockPath)}}', [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
@@ -200,8 +196,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_classifies_unleased_active_testhost_slot_as_busy")]
     public void DotnetBuildEnvironmentManagerClassifiesUnleasedActiveTesthostSlotAsBusy()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var sleeper = StartSleepProcess();
         DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
             new Dictionary<int, string>
@@ -231,8 +226,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void SlotCandidate_UnavailableInspection_IsNotAttributedToSlot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         const int candidateProcessId = 424242;
         var snapshot = new ProcessCommandLineSnapshot(
             new Dictionary<int, ProcessInspectionRecord>
@@ -255,8 +249,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void SlotCandidate_UnrelatedUnavailable_DoesNotMaskMatchingConsumer()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var sleeper = StartSleepProcess();
         const int unavailableProcessId = 424242;
         var snapshot = new ProcessCommandLineSnapshot(
@@ -296,8 +289,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void UnrelatedCommandLine_SkipsLivenessQuery()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         const int candidateProcessId = 424242;
         var livenessQueries = 0;
         var snapshot = new ProcessCommandLineSnapshot(
@@ -322,8 +314,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void MatchingCommandLine_RevalidatesLivenessOnce()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         const int candidateProcessId = 424242;
         var livenessQueries = 0;
         var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
@@ -346,8 +337,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void MatchingExitedProcess_IsNotAttributed()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         const int candidateProcessId = 424242;
         var livenessQueries = 0;
         var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
@@ -368,8 +358,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void MatchingUnreadableProcess_RemainsConservativelyAttributed()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         const int candidateProcessId = 424242;
         var livenessQueries = 0;
         var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
@@ -391,7 +380,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void StableSlotPoll_UnattributableUnavailableCandidate_DoesNotBlockEverySlot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         const int unavailableProcessId = 424242;
         var snapshotCalls = 0;
         DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
@@ -413,7 +401,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
 
         try
         {
-            var result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+            var result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
                 TimeSpan.Zero,
                 slotCount: DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
                 timeProvider: new RecordingTimeProvider(),
@@ -439,8 +427,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void StableSlotPoll_AttributedUnavailableCandidate_BlocksOnlyOwnedSlot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var holder = StartSleepProcess();
         var ownerArtifactsPath = Path.Combine(
             Path.GetDirectoryName(Path.GetDirectoryName(slot0.ArtifactsPath))!,
@@ -490,7 +477,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
             };
 
             var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(
-                DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+                RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
                     TimeSpan.Zero,
                     slotCount: 1,
                     timeProvider: new RecordingTimeProvider(),
@@ -501,7 +488,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
             Assert.Equal(ProcessInspectionStatus.AccessDenied, blockedSlot.UnavailableStatus);
             Assert.Equal(1, snapshotCalls);
 
-            var result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+            var result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
                 TimeSpan.Zero,
                 slotCount: DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
                 timeProvider: new RecordingTimeProvider(),
@@ -521,8 +508,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void StableSlotPoll_AttributedUnavailableCandidateWithoutHeldLease_BlocksOwnedSlot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var holder = StartSleepProcess();
         var ownerArtifactsPath = Path.Combine(
             Path.GetDirectoryName(Path.GetDirectoryName(slot0.ArtifactsPath))!,
@@ -559,7 +545,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
 
         try
         {
-            var result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+            var result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
                 TimeSpan.Zero,
                 slotCount: 1,
                 timeProvider: new RecordingTimeProvider(),
@@ -584,7 +570,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void StableSlotPoll_EnumerationFailure_BlocksWithTypedNativeCause()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var failure = new ProcessInspectionFailure(
             ProcessInspectionStatus.NativeFailure,
             24,
@@ -598,7 +583,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(
+                result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot,
                     TimeSpan.Zero,
                     slotCount: DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
                     timeProvider: new RecordingTimeProvider(),
@@ -627,8 +612,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact]
     public void SlotCandidate_DefaultSnapshotFactory_IsCalledOnce()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var snapshotCalls = 0;
         DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
         {
@@ -650,8 +634,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unleased_slot_consumer_racing_artifact_prep_returns_slots_busy")]
     public void DotnetBuildEnvironmentManagerUnleasedSlotConsumerRacingArtifactPrepReturnsSlotsBusy()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(slot0.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "debug_net10.0", "testhost.exe");
         using var sleeper = StartSleepProcess();
         var snapshotCalls = 0;
@@ -703,9 +686,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reused_goal_does_not_move_artifacts_for_unleased_test_process")]
     public void DotnetBuildEnvironmentManagerReusedGoalDoesNotMoveArtifactsForUnleasedTestProcess()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var gateGoalId = new GoalId("92000000920000009200000092000000");
-        var first = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "first");
+        var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, gateGoalId, "first");
         using var sleeper = StartSleepProcess();
         DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () => new ProcessCommandLineSnapshot(
             new Dictionary<int, string>
@@ -715,7 +697,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
 
         try
         {
-            var reused = DotnetBuildEnvironmentManager.CreateAttempt(gateGoalId, "gate");
+            var reused = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, gateGoalId, "gate");
 
             Assert.True(reused.ReusedGoalLease);
             Assert.Equal(first.ExecutionLockPath, reused.ExecutionLockPath);
@@ -725,18 +707,17 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         {
             DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             StopProcess(sleeper);
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(gateGoalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, gateGoalId);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_artifacts_for_same_goal_slot")]
     public void DotnetBuildEnvironmentManagerReusesArtifactsForSameGoalSlot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("10293847102938471029384710293847");
         try
         {
-            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "first");
+            var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "first");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first))
             {
                 File.WriteAllText(Path.Combine(first.ArtifactsPath, "warm-cache.txt"), "keep");
@@ -746,14 +727,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
                 File.WriteAllText(Path.Combine(first.ArtifactsPath, "bin", "stale.dll"), "delete");
             }
 
-            var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "second");
+            var second = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "second");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(second))
             {
                 Assert.True(File.Exists(Path.Combine(second.ArtifactsPath, "warm-cache.txt")));
             }
 
             File.WriteAllText(Path.Combine(second.RootPath, "lease", "lease.lock"), "999999");
-            var stale = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "stale-owner");
+            var stale = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "stale-owner");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(stale))
             {
                 Assert.True(File.Exists(Path.Combine(stale.ArtifactsPath, "warm-cache.txt")));
@@ -763,20 +744,19 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_goal_artifacts_are_per_goal_and_build_lock_is_not_an_artifact_root")]
     public void DotnetBuildEnvironmentManagerGoalArtifactsArePerGoalAndBuildLockIsNotAnArtifactRoot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var firstGoal = new GoalId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         var secondGoal = new GoalId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         try
         {
-            var first = DotnetBuildEnvironmentManager.CreateAttempt(firstGoal, "gate");
-            var second = DotnetBuildEnvironmentManager.CreateAttempt(secondGoal, "gate");
+            var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, firstGoal, "gate");
+            var second = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, secondGoal, "gate");
             Assert.Equal(Path.Combine(first.RootPath, "artifacts"), first.ArtifactsPath);
             Assert.Equal(Path.Combine(second.RootPath, "artifacts"), second.ArtifactsPath);
             Assert.NotEqual(first.ArtifactsPath, second.ArtifactsPath);
@@ -791,16 +771,15 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(firstGoal);
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(secondGoal);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, firstGoal);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, secondGoal);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironment_derived_artifacts_path_keeps_arguments_consistent")]
     public void DotnetBuildEnvironmentDerivedArtifactsPathKeepsArgumentsConsistent()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var original = DotnetBuildEnvironmentManager.CreateAttempt(null, "derive-artifacts");
+        var original = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, null, "derive-artifacts");
         var derivedPath = Path.Combine(original.ArtifactsPath, "main-coverage-baseline");
 
         var derived = original.DeriveArtifactsPath(derivedPath);
@@ -818,9 +797,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_caps_msbuild_parallelism_per_slot")]
     public void DotnetBuildEnvironmentManagerCapsMsbuildParallelismPerSlot()
     {
-        using var rootScope = EnvVarScope.ForIsolatedDotnetRoot();
         using var defaultScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, null);
-        var defaultArguments = DotnetBuildEnvironmentManager.CreateAttempt(null, "default-cpu").Arguments;
+        var defaultArguments = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, null, "default-cpu").Arguments;
         var expectedDefault = Math.Max(2, Environment.ProcessorCount / DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
 
         Assert.Equal($"-maxcpucount:{expectedDefault}", MaxCpuCountArgument(defaultArguments));
@@ -828,7 +806,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts
         Assert.Contains("-p:BuildInParallel=false", defaultArguments);
 
         using var configuredScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, "7");
-        var configuredArguments = DotnetBuildEnvironmentManager.CreateAttempt(null, "configured-cpu").Arguments;
+        var configuredArguments = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, null, "configured-cpu").Arguments;
 
         Assert.Equal("-maxcpucount:7", MaxCpuCountArgument(configuredArguments));
         Assert.Contains("-p:BuildInParallel=false", configuredArguments);

@@ -11,6 +11,15 @@ public sealed class ChaosGateGitCollection;
 [Xunit.CollectionDefinition(TestCollections.DotnetBuildSlots, DisableParallelization = true)]
 public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
+// Environment-manager facts own per-test storage roots. Separate fixture-free collections let
+// these classes overlap one another while preserving explicit collection ownership.
+[Xunit.CollectionDefinition(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+public sealed class DotnetBuildEnvironmentManagerStaticHooksCollection;
+[Xunit.CollectionDefinition(TestCollections.DotnetBuildEnvironmentManagerFocusedRunner)]
+public sealed class DotnetBuildEnvironmentManagerFocusedRunnerCollection;
+[Xunit.CollectionDefinition(TestCollections.DotnetBuildEnvironmentManagerProcessSpawnGuard)]
+public sealed class DotnetBuildEnvironmentManagerProcessSpawnGuardCollection;
+
 // Verifier tests can spawn nested acceptance/build activity; keep that work off the host gate slots.
 [Xunit.CollectionDefinition(TestCollections.GoalAcceptanceVerifier, DisableParallelization = true)]
 public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;

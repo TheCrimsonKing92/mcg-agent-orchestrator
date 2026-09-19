@@ -50,6 +50,9 @@ internal sealed class DotnetBaseBuildCache
     public static DotnetBaseBuildCache Default() =>
         new(DotnetBuildEnvironmentManager.BaseBuildCacheRoot());
 
+    public static DotnetBaseBuildCache Default(DotnetBuildStorageRoot storageRoot) =>
+        new(DotnetBuildEnvironmentManager.BaseBuildCacheRoot(storageRoot));
+
     public static string DefaultRootPath(string isolatedRootBase) =>
         Path.Combine(isolatedRootBase, CacheDirectoryName);
 

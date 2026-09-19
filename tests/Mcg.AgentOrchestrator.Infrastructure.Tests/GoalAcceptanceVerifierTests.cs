@@ -11,6 +11,45 @@ using System.Xml.Linq;
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact]
+    public void GoalAcceptanceVerifier_resolves_execution_environments_under_each_constructed_storage_root()
+    {
+        var firstDirectory = CreateTempDirectory();
+        var secondDirectory = CreateTempDirectory();
+        var ambientRoot = CreateTempDirectory();
+        try
+        {
+            var firstRoot = new DotnetBuildStorageRoot(firstDirectory);
+            var secondRoot = new DotnetBuildStorageRoot(secondDirectory);
+            var ambientStorageRoot = new DotnetBuildStorageRoot(ambientRoot);
+            using var ambient = DotnetBuildEnvironmentManagerTests.EnvVarScope.ForVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                ambientRoot);
+            var firstVerifier = new GoalAcceptanceVerifier(firstRoot);
+            var secondVerifier = new GoalAcceptanceVerifier(secondRoot);
+            var firstEnvironment = firstVerifier.ResolveExecutionEnvironment(null, "first", null, null);
+            var secondEnvironment = secondVerifier.ResolveExecutionEnvironment(null, "second", null, null);
+
+            foreach (var path in new[] { firstEnvironment.RootPath, firstEnvironment.ArtifactsPath, firstEnvironment.ExecutionLockPath })
+            {
+                Assert.True(firstRoot.ContainsPath(path));
+                Assert.False(ambientStorageRoot.ContainsPath(path));
+            }
+
+            foreach (var path in new[] { secondEnvironment.RootPath, secondEnvironment.ArtifactsPath, secondEnvironment.ExecutionLockPath })
+            {
+                Assert.True(secondRoot.ContainsPath(path));
+                Assert.False(ambientStorageRoot.ContainsPath(path));
+            }
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(firstDirectory);
+            DeleteDirectoryWithRetry(secondDirectory);
+            DeleteDirectoryWithRetry(ambientRoot);
+        }
+    }
+
+    [Xunit.Fact]
     public void EmitShardTimingProgressRecordsTypedLoadContextAndPreservesExistingFields()
     {
         var progress = new List<AcceptanceGateProgress>();
@@ -26,7 +65,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "Process spawning",
             1,
             elapsed,
-            3, progress.Add);
+            3,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+            progress.Add);
 
         var emitted = Assert.Single(progress);
         Assert.Equal(goalId.Value, emitted.GoalId);
@@ -59,7 +100,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "0-infrastructure-shards",
             0,
             TimeSpan.Zero,
-            0, progress.Add);
+            0,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+            progress.Add);
 
         var emitted = Assert.Single(progress);
         Assert.Equal("shards-complete", emitted.Phase);
@@ -91,7 +134,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "Cli",
             0,
             TimeSpan.FromSeconds(4),
-            2, progress.Add));
+            2,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+            progress.Add));
 
         Assert.Null(exception);
         var emitted = Assert.Single(progress);
