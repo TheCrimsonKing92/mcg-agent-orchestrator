@@ -218,17 +218,26 @@ internal sealed partial class GoalDispatchOperations
             {
                 resolvedAgents ??= agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
                 resolvedProfiles ??= profiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath);
-                RefreshPreparedDispatchBeforeStart(
-                    kernel,
-                    workspace,
-                    goal,
-                    task,
-                    resolvedAgents,
-                    resolvedProfiles,
-                    providers,
-                    reviewAutoRetryStopRound,
-                    sandboxOptions,
-                    conductorPolicy: conductorPolicy);
+                try
+                {
+                    RefreshPreparedDispatchBeforeStart(
+                        kernel,
+                        workspace,
+                        goal,
+                        task,
+                        resolvedAgents,
+                        resolvedProfiles,
+                        providers,
+                        reviewAutoRetryStopRound,
+                        sandboxOptions,
+                        conductorPolicy: conductorPolicy);
+                }
+                catch (DispatchAssignmentHoldException ex)
+                {
+                    kernel.RecordTaskNote(goal.Id, task.Id, ex.Hold.Message);
+                    startRefusals.Add(new DispatchProcessStartRefusal(task.Id, ex.Hold.Message, ex.Hold));
+                    continue;
+                }
             }
 
             RetryAdmissionResult? admission = null;
@@ -479,5 +488,13 @@ internal sealed partial class GoalDispatchOperations
     /// instance's process-liveness probe.
     /// </remarks>
     internal bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart) =>
-        refreshBeforeStart && !HasRecoverablePreparedReservation(task);
+        refreshBeforeStart &&
+        (!HasRecoverablePreparedReservation(task) || !PreparedDispatchMatchesAcknowledgedAssignment(task));
+
+    private static bool PreparedDispatchMatchesAcknowledgedAssignment(TaskSpec task) =>
+        task.LastDispatch is { } preparedDispatch &&
+        preparedDispatch.ConductorRoutingRevision == task.ConductorRoutingRevision &&
+        (preparedDispatch.AssignedAgentId is not { Length: > 0 } preparedAgentId ||
+         task.AssignedAgentId is { } assignedAgentId &&
+         preparedAgentId.Equals(assignedAgentId.Value, StringComparison.OrdinalIgnoreCase));
 }

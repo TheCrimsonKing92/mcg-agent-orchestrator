@@ -54,6 +54,8 @@ public sealed class TaskSpec
 
     public AgentId? AssignedAgentId { get; private set; }
 
+    public int ConductorRoutingRevision { get; private set; }
+
     public TaskExecutionRecord? LastExecution { get; private set; }
 
     public TaskVerificationRecord? LastVerification { get; private set; }
@@ -88,6 +90,11 @@ public sealed class TaskSpec
         AssignedAgentId = agentId;
         Status = WorkTaskStatus.Assigned;
         WasCancelledByConductor = false;
+    }
+
+    internal void AdvanceConductorRoutingRevision()
+    {
+        ConductorRoutingRevision = checked(ConductorRoutingRevision + 1);
     }
 
     internal void SetStatus(WorkTaskStatus status)
@@ -243,7 +250,8 @@ public sealed class TaskSpec
             AcceptedRetryFeedback,
             _preReviewEvidenceHistory.ToArray(),
             PreReviewEvidenceAttemptCount,
-            PendingInterruptedWorkCheckpoint);
+            PendingInterruptedWorkCheckpoint,
+            ConductorRoutingRevision);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -254,6 +262,8 @@ public sealed class TaskSpec
         {
             task.AssignTo(new AgentId(snapshot.AssignedAgentId));
         }
+
+        task.ConductorRoutingRevision = snapshot.ConductorRoutingRevision;
 
         task.SetStatus(snapshot.Status);
 
@@ -980,7 +990,9 @@ public sealed class TaskSpec
         dispatch.RetryContextFingerprint,
         dispatch.PaidRoute,
         dispatch.ClaudeCredentialSourceDirectory,
-        dispatch.ClaudeCredentialSourceIsExplicit);
+        dispatch.ClaudeCredentialSourceIsExplicit,
+        dispatch.AssignedAgentId,
+        dispatch.ConductorRoutingRevision);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1015,7 +1027,9 @@ public sealed class TaskSpec
         dispatch.RetryContextFingerprint,
         dispatch.PaidRoute,
         dispatch.ClaudeCredentialSourceDirectory,
-        dispatch.ClaudeCredentialSourceIsExplicit);
+        dispatch.ClaudeCredentialSourceIsExplicit,
+        dispatch.AssignedAgentId,
+        dispatch.ConductorRoutingRevision);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

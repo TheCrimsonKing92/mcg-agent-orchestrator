@@ -21,6 +21,139 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         WorkerSandboxOptions.DefaultCredentialTarget);
 
     [Xunit.Fact]
+    public void RefreshPreparedDispatchBeforeStart_ReassignmentThroughCliRebindsHarnessModelAndReasoning()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Rebind the acknowledged assignment before start.", AgentRole.Developer);
+        var goal = MarkGoalRefined(kernel, kernel.CreateGoal("Honor dispatch reassignment", [task]));
+        var firstAgent = new AgentDefinition(
+            new AgentId("developer-a"),
+            "Developer A",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "model-a", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("harness-a", "model-a", "medium"));
+        var reassignedAgent = new AgentDefinition(
+            new AgentId("developer-b"),
+            "Developer B",
+            AgentRole.Developer,
+            new ModelProfile("Anthropic", "model-b", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("harness-b", "model-b", "high"));
+        IReadOnlyList<AgentDefinition> agents = [firstAgent, reassignedAgent];
+        var profiles = new WorkerProfileCatalog([
+            new WorkerProfile("harness-a", "Write-Output harness-a"),
+            new WorkerProfile("harness-b", "Write-Output harness-b")
+        ]);
+        kernel.ActivateGoal(goal.Id, [firstAgent]);
+        _ = new GoalDispatchOperations().ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            task,
+            profiles.GetRequired("harness-a"),
+            agents,
+            sandboxOptions: DisabledSandbox);
+        Assert.Equal("harness-a", task.LastDispatch!.WorkerName);
+
+        var currentGoal = goal;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["reassign-agent", "1", reassignedAgent.Id.Value],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Assert.True(changed);
+        });
+
+        _ = new GoalDispatchOperations().RefreshPreparedDispatchBeforeStart(
+            kernel,
+            workspace,
+            goal,
+            task,
+            agents,
+            profiles,
+            providers,
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Contains("developer-b", output, StringComparison.Ordinal);
+        Assert.Equal("developer-b", task.LastDispatch!.AssignedAgentId);
+        Assert.Equal("harness-b", task.LastDispatch!.WorkerName);
+        Assert.Equal("model-b", task.LastDispatch.ModelName);
+        Assert.Equal("high", task.LastDispatch.ReasoningEffort);
+    }
+
+    [Xunit.Fact]
+    public void RefreshPreparedDispatchBeforeStart_LegacyApiDispatchFailsClosedAfterReassignment()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Fail closed for an unbound legacy API dispatch.", AgentRole.Developer);
+        var goal = MarkGoalRefined(kernel, kernel.CreateGoal("Reject stale legacy API routing", [task]));
+        var firstAgent = new AgentDefinition(
+            new AgentId("api-developer-a"),
+            "API Developer A",
+            AgentRole.Developer,
+            new ModelProfile("provider-a", "model-a", ModelCapability.Text, SubscriptionMode.ApiKey));
+        var reassignedAgent = new AgentDefinition(
+            new AgentId("api-developer-b"),
+            "API Developer B",
+            AgentRole.Developer,
+            new ModelProfile("provider-b", "model-b", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [firstAgent]);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "legacy-api-harness",
+            "legacy-command",
+            root,
+            DateTimeOffset.Parse("2026-09-18T20:00:00Z")));
+        var currentSnapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var currentTaskSnapshot = Assert.Single(currentSnapshot.Tasks);
+        var recordedAt = currentTaskSnapshot.LastDispatch!.DispatchedAt;
+        kernel.ReplaceGoalWithSnapshot(currentSnapshot with
+        {
+            Tasks = [currentTaskSnapshot with
+            {
+                LastDispatch = currentTaskSnapshot.LastDispatch with { AssignedAgentId = null },
+                DispatchHistory = currentTaskSnapshot.DispatchHistory!
+                    .Select(dispatch => dispatch.DispatchedAt == recordedAt
+                        ? dispatch with { AssignedAgentId = null }
+                        : dispatch)
+                    .ToArray()
+            }]
+        });
+        goal = kernel.GetGoal(goal.Id);
+        task = goal.Tasks.Single();
+        var legacyDispatch = task.LastDispatch;
+        kernel.ReassignTaskAgent(goal.Id, task.Id, reassignedAgent);
+
+        var hold = Assert.Throws<DispatchAssignmentHoldException>(() =>
+            new GoalDispatchOperations().RefreshPreparedDispatchBeforeStart(
+                kernel,
+                workspace,
+                goal,
+                task,
+                [firstAgent, reassignedAgent],
+                new WorkerProfileCatalog([new WorkerProfile("legacy-api-harness", "Write-Output legacy")]),
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Equal(DispatchAssignmentHoldCode.HarnessRebindUnsupported, hold.Hold.Code);
+        Assert.Equal(reassignedAgent.Id.Value, hold.Hold.AssignedAgentId);
+        Assert.Contains("unrecorded legacy assignment", hold.Message, StringComparison.Ordinal);
+        Assert.Same(legacyDispatch, task.LastDispatch);
+        Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact]
     public async Task GoalReplacement_PreflightAndTransfer_DoNotStartPaidWorker()
     {
         var root = CreateSeededDispatchRepository();
@@ -562,7 +695,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             "developer", "command", "worktree", at,
             RetryContextFingerprint: fingerprint,
-            PaidRoute: PaidRouteClassification.Paid));
+            PaidRoute: PaidRouteClassification.Paid,
+            AssignedAgentId: "developer"));
         kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
             task,
             fingerprint,
@@ -575,6 +709,95 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         Assert.False(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
         Assert.Equal(at, task.LastDispatch!.DispatchedAt);
+    }
+
+    [Xunit.Fact]
+    public void StartDispatches_RefreshesRecoverableReservationWhenAssignmentChangedBeforeAuthorization()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Rebuild a reserved retry for its new assignment.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Rebind reserved retry", [task]);
+        var firstAgent = new AgentDefinition(
+            new AgentId("developer-a"),
+            "Developer A",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-a", ModelCapability.Text, SubscriptionMode.ApiKey));
+        var reassignedAgent = firstAgent with
+        {
+            Id = new AgentId("developer-b"),
+            Name = "Developer B",
+            Model = firstAgent.Model with { ModelName = "gpt-b" }
+        };
+        kernel.ActivateGoal(goal.Id, [firstAgent]);
+        var at = DateTimeOffset.Parse("2026-09-18T21:00:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, AgentRole.Developer, "OpenAI", "gpt-a",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "developer", "command", "worktree", at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid,
+            AssignedAgentId: firstAgent.Id.Value));
+        kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
+            task,
+            fingerprint,
+            PaidRouteClassification.Paid,
+            RetryCause.NewSourceFinding,
+            at,
+            at,
+            reservationOwnerId: "owner-a",
+            reservationLeaseExpiresAt: at.AddMinutes(1)));
+        kernel.ReassignTaskAgent(goal.Id, task.Id, reassignedAgent);
+
+        Assert.True(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+        Assert.Equal(firstAgent.Id.Value, task.LastDispatch!.AssignedAgentId);
+        Assert.Equal(reassignedAgent.Id, task.AssignedAgentId);
+    }
+
+    [Xunit.Fact]
+    public void StartDispatches_RefreshesLegacyRecoverableReservationAfterAcknowledgedReassignment()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Rebuild a legacy reserved retry for its new assignment.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Rebind legacy reserved retry", [task]);
+        var firstAgent = new AgentDefinition(
+            new AgentId("legacy-developer-a"),
+            "Legacy Developer A",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "gpt-a", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [firstAgent]);
+        var at = DateTimeOffset.Parse("2026-09-18T21:00:00Z");
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, AgentRole.Developer, "OpenAI", "gpt-a",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "legacy-developer", "command", "worktree", at,
+            RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid));
+        kernel.ApplyPreparedRetryAdmission(goal.Id, task.Id, RetryAdmissionPolicy.Evaluate(
+            task, fingerprint, PaidRouteClassification.Paid, RetryCause.NewSourceFinding,
+            at, at, reservationOwnerId: "owner-a", reservationLeaseExpiresAt: at.AddMinutes(1)));
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var taskSnapshot = Assert.Single(snapshot.Tasks);
+        kernel.ReplaceGoalWithSnapshot(snapshot with
+        {
+            Tasks = [taskSnapshot with
+            {
+                LastDispatch = taskSnapshot.LastDispatch! with { AssignedAgentId = null },
+                DispatchHistory = taskSnapshot.DispatchHistory!
+                    .Select(dispatch => dispatch with { AssignedAgentId = null })
+                    .ToArray()
+            }]
+        });
+        task = kernel.GetTask(goal.Id, task.Id);
+        var reassignedAgent = firstAgent with { Id = new AgentId("legacy-developer-b"), Name = "Legacy Developer B" };
+
+        kernel.ReassignTaskAgent(goal.Id, task.Id, reassignedAgent);
+
+        Assert.True(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart: true));
+        Assert.Null(task.LastDispatch!.AssignedAgentId);
+        Assert.Equal(0, task.LastDispatch.ConductorRoutingRevision);
+        Assert.Equal(1, task.ConductorRoutingRevision);
     }
 
     [Xunit.Fact]

@@ -57,20 +57,90 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         sandboxOptions: DisabledSandbox);
     var missingProfiles = new WorkerProfileCatalog([]);
 
-    var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
-        new GoalDispatchOperations().StartDispatches(
-            kernel,
-            workspace,
-            goal,
-            [agent],
-            missingProfiles,
-            runner: new BackgroundDispatchRunner(disableProcessStart: true),
-            sandboxOptions: DisabledSandbox));
+    var result = new GoalDispatchOperations().StartDispatches(
+        kernel,
+        workspace,
+        goal,
+        [agent],
+        missingProfiles,
+        runner: new BackgroundDispatchRunner(disableProcessStart: true),
+        sandboxOptions: DisabledSandbox);
 
-    Assert.Contains("worker profile 'codex-cli' is not available", ex.Message);
+    var refusal = Assert.Single(result.StartRefusals!);
+    Assert.Equal(developer.Id, refusal.TaskId);
+    Assert.Equal(DispatchAssignmentHoldCode.ProfileUnavailable, refusal.AssignmentHold!.Code);
+    Assert.Equal(agent.Id.Value, refusal.AssignmentHold.AssignedAgentId);
+    Assert.Equal("codex-cli", refusal.AssignmentHold.WorkerProfileName);
+    Assert.Contains("DISPATCH_ASSIGNMENT_HOLD code=ProfileUnavailable", refusal.Reason);
     Assert.Equal(prepared.PromptPath, developer.LastDispatch!.PromptPath);
     Xunit.Assert.Null(developer.LastProcess);
 }
+
+    [Xunit.Fact(DisplayName = "StartDispatches_resolves_profile_from_acknowledged_assignment_when_recorded_profile_is_missing")]
+    public void StartDispatchesResolvesProfileFromAcknowledgedAssignmentWhenRecordedProfileIsMissing()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-06-28T14:10:00Z")));
+        var developer = new TaskSpec(TaskId.New(), "Honor the acknowledged assignment.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Resolve the assigned worker profile", [developer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Resolve the assigned worker profile",
+            ["The start boundary resolves the acknowledged assignment instead of the recorded worker."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var firstAgent = new AgentDefinition(
+            new AgentId("developer-a"),
+            "Developer A",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", "model-a", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("harness-a", "model-a", "medium"));
+        var reassignedAgent = new AgentDefinition(
+            new AgentId("developer-b"),
+            "Developer B",
+            AgentRole.Developer,
+            new ModelProfile("Anthropic", "model-b", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("harness-b", "model-b", "high"));
+        var initialProfiles = new WorkerProfileCatalog([
+            new WorkerProfile("harness-a", "Write-Output harness-a"),
+            new WorkerProfile("harness-b", "Write-Output harness-b")
+        ]);
+        kernel.ActivateGoal(goal.Id, [firstAgent]);
+        _ = new GoalDispatchOperations().ProfileDispatchTask(
+            kernel,
+            workspace,
+            goal,
+            developer,
+            initialProfiles.GetRequired("harness-a"),
+            [firstAgent, reassignedAgent],
+            sandboxOptions: DisabledSandbox);
+        kernel.ReassignTaskAgent(goal.Id, developer.Id, reassignedAgent);
+        var assignmentProfiles = new WorkerProfileCatalog([
+            new WorkerProfile("harness-b", "Write-Output harness-b")
+        ]);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new GoalDispatchOperations().StartDispatches(
+                kernel,
+                workspace,
+                goal,
+                [firstAgent, reassignedAgent],
+                assignmentProfiles,
+                runner: new BackgroundDispatchRunner(disableProcessStart: true),
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Contains("Background dispatch process start is disabled", ex.Message);
+        Assert.Equal(reassignedAgent.Id.Value, developer.LastDispatch!.AssignedAgentId);
+        Assert.Equal("harness-b", developer.LastDispatch.WorkerName);
+        Assert.Equal("model-b", developer.LastDispatch.ModelName);
+        Assert.Equal("high", developer.LastDispatch.ReasoningEffort);
+    }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_subscription_tasks_by_assigned_provider")]
     public void WorkerProfileDispatcherPreparesSubscriptionTasksByAssignedProvider()

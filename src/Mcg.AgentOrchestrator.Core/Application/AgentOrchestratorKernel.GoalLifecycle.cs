@@ -1015,7 +1015,12 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var previousAgentId = task.AssignedAgentId?.Value ?? "none";
+        var assignmentChanged = task.AssignedAgentId != agent.Id;
         task.AssignTo(agent.Id);
+        if (assignmentChanged)
+        {
+            task.AdvanceConductorRoutingRevision();
+        }
         Append(
             goal,
             task.Id,
@@ -1036,14 +1041,37 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var previousAgentId = task.AssignedAgentId?.Value ?? "none";
+        var preparedDispatchRequiresRebuild = task.Status == WorkTaskStatus.Running &&
+            task.LastDispatch is not null &&
+            task.LastProcess is null;
+        var authorizedAttemptUnaffected = task.Status == WorkTaskStatus.Running &&
+            task.LastDispatch is not null &&
+            task.LastProcess is not null;
+        var authorizedHarness = task.LastDispatch?.WorkerName;
+        var assignmentChanged = task.AssignedAgentId != agent.Id;
         task.AssignTo(agent.Id);
+        if (assignmentChanged)
+        {
+            task.AdvanceConductorRoutingRevision();
+        }
+        if (preparedDispatchRequiresRebuild || authorizedAttemptUnaffected)
+        {
+            task.SetStatus(WorkTaskStatus.Running);
+        }
+
+        var routingEffect = authorizedAttemptUnaffected
+            ? $" Authorized attempt on harness '{authorizedHarness}' remains unchanged; the acknowledged assignment applies to the next attempt."
+            : preparedDispatchRequiresRebuild
+                ? " The prepared command is invalidated and will be rebuilt from the acknowledged assignment at the final pre-start boundary."
+                : " The acknowledged assignment applies to the next dispatch.";
+        var operatorReason = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" Reason: {reason.Trim()}";
         Append(
             goal,
             task.Id,
             ProgressKind.TaskRedelegated,
-            string.IsNullOrWhiteSpace(reason)
-                ? $"Reassigned {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name})."
-                : reason.Trim());
+            $"Reassigned {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name})." +
+            routingEffect +
+            operatorReason);
         RefreshGoalStatus(goal);
         return task;
     }
