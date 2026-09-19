@@ -1562,6 +1562,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             FROM goals
             ORDER BY updated_at DESC
             """;
+        _statementObserver?.Invoke(cmd.CommandText);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         while (await reader.ReadAsync(cancellationToken))
