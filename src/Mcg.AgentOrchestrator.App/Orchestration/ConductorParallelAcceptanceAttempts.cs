@@ -1136,7 +1136,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var driver = new ConductorDriver(
                 kernel,
                 workspace,
-                new GoalAcceptanceVerifier(),
+                new GoalAcceptanceVerifier(DotnetBuildEnvironmentManager.CaptureStorageRoot()),
                 agents,
                 profiles,
                 NullOperatorChannel.Instance,

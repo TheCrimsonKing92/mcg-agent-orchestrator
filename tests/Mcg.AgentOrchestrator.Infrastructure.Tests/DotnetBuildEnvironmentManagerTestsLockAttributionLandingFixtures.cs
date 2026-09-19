@@ -7,8 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures : DotnetBuildEnvironmentManagerRootedTestBase
 {
     public static bool RestartManagerAvailable =>
         OperatingSystem.IsWindows() && CanStartRestartManagerForTests();
@@ -198,8 +198,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]
     public void DotnetBuildEnvironmentManagerOwnedArtifactHolderIsReapedAndRetried()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var prepareAttempts = 0;
         var killedPids = new List<int>();
@@ -246,8 +245,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_no_holder_artifact_prep_lock_retries_and_acquires")]
     public void DotnetBuildEnvironmentManagerNoHolderArtifactPrepLockRetriesAndAcquires()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.Core.dll");
         var fakeTimeProvider = new RecordingTimeProvider();
         var startedAt = fakeTimeProvider.GetUtcNow();
@@ -555,7 +553,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_artifact_prep_lock_returns_build_lock_blocked")]
     public void DotnetBuildEnvironmentManagerFirstAvailableArtifactPrepLockReturnsBuildLockBlocked()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var lockedPathByLeaseId = new Dictionary<string, string>(StringComparer.Ordinal);
         var shutdownCount = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -576,7 +573,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(TimeSpan.Zero));
+                result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot, TimeSpan.Zero));
 
             var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.BuildLockBlocked>(result);
             Assert.True(lockedPathByLeaseId.TryGetValue(blocked.WantedBy, out var lockedPath), $"Unexpected lease id {blocked.WantedBy}.");
@@ -605,8 +602,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unowned_artifact_holder_blocks_without_reaper")]
     public void DotnetBuildEnvironmentManagerUnownedArtifactHolderBlocksWithoutReaper()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var killAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -652,8 +648,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_self_held_artifact_lock_is_not_build_lock_blocked")]
     public void DotnetBuildEnvironmentManagerSelfHeldArtifactLockIsNotBuildLockBlocked()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         Directory.CreateDirectory(Path.Combine(environment.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Core", "debug"));
         var lockedPath = Path.Combine(
             environment.ArtifactsPath,
@@ -701,8 +696,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_self_held_landing_fixture_lock_is_not_build_lock_blocked")]
     public void DotnetBuildEnvironmentManagerSelfHeldLandingFixtureLockIsNotBuildLockBlocked()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         var fakeTimeProvider = new RecordingTimeProvider();
         var startedAt = fakeTimeProvider.GetUtcNow();
@@ -753,8 +747,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_marked_landing_fixture_from_other_process_is_transient")]
     public void DotnetBuildEnvironmentManagerMarkedLandingFixtureFromOtherProcessIsTransient()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         var readyPath = Path.Combine(fixtureRoot, "holder-ready.txt");
@@ -816,8 +809,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_persistent_marked_landing_fixture_lock_returns_slots_busy_bounded")]
     public void DotnetBuildEnvironmentManagerPersistentMarkedLandingFixtureLockReturnsSlotsBusyBounded()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         var readyPath = Path.Combine(fixtureRoot, "holder-ready.txt");
@@ -866,8 +858,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_landing_fixture_marker_is_debris_not_blocker")]
     public void DotnetBuildEnvironmentManagerStaleLandingFixtureMarkerIsDebrisNotBlocker()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
@@ -908,8 +899,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_landing_fixture_marker_with_live_holder_blocks_bounded")]
     public void DotnetBuildEnvironmentManagerStaleLandingFixtureMarkerWithLiveHolderBlocksBounded()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
@@ -956,8 +946,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_landing_fixture_creation_path_registers_root")]
     public void DotnetBuildEnvironmentManagerLandingFixtureCreationPathRegistersRoot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var fixtureRoot = LandingExecutorTests.CreateGitRepository();
         var lockedPath = CreateLandingFixtureLockPath(fixtureRoot);
         var prepareAttempts = 0;
@@ -995,8 +984,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_foreign_landing_fixture_holder_blocks")]
     public void DotnetBuildEnvironmentManagerForeignLandingFixtureHolderBlocks()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (_, lockedPath) = CreateLandingFixtureLockPath();
         var killAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -1043,8 +1031,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_recently_created_unregistered_landing_fixture_lock_blocks")]
     public void DotnetBuildEnvironmentManagerRecentlyCreatedUnregisteredLandingFixtureLockBlocks()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         Directory.SetCreationTimeUtc(fixtureRoot, DateTime.UtcNow);
@@ -1080,8 +1067,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unknown_landing_fixture_lock_under_different_run_blocks")]
     public void DotnetBuildEnvironmentManagerUnknownLandingFixtureLockUnderDifferentRunBlocks()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (currentFixtureRoot, currentLockedPath) = CreateLandingFixtureLockPath();
         var (otherFixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(currentLockedPath)!);
@@ -1121,8 +1107,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_lease_lock_contention_returns_slots_busy_without_reaper")]
     public void DotnetBuildEnvironmentManagerLeaseLockContentionReturnsSlotsBusyWithoutReaper()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var heldLease = new FileStream(
             environment.ExecutionLockPath,
             FileMode.OpenOrCreate,
@@ -1171,11 +1156,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_detects_stale_locks_and_rotates_goal_lease")]
     public void DotnetBuildEnvironmentManagerDetectsStaleLocksAndRotatesGoalLease()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("decafbaddecafbaddecafbaddecafbad");
         try
         {
-            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "test");
+            var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "test");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first))
             {
             }
@@ -1186,7 +1170,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
 
             DotnetBuildEnvironment? second = null;
             var creationOutput = AsyncLocalConsoleRouter.Capture(() =>
-                second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "retry"));
+                second = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "retry"));
             Assert.NotNull(second);
             Assert.DoesNotContain("decision=", creationOutput, StringComparison.Ordinal);
             var acquisitionOutput = AsyncLocalConsoleRouter.Capture(() =>
@@ -1213,31 +1197,30 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                 Assert.Equal(999999, journal.RootElement.GetProperty("reclaimedProcessId").GetInt32());
             }
 
-            Assert.True(DotnetBuildEnvironmentManager.TryRotateGoalLease(goalId, "corrupt-cache"));
-            var third = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "after-rotate");
+            Assert.True(RootedDotnetBuildEnvironmentManager.TryRotateGoalLease(StorageRoot, goalId, "corrupt-cache"));
+            var third = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "after-rotate");
             Assert.False(third.ReusedGoalLease);
             Assert.Equal(first.LeaseId, third.LeaseId);
             Assert.True(Directory.Exists(Path.Combine(third.RootPath, "rotated-leases")));
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_inspects_and_cleans_orphaned_goal_lease")]
     public void DotnetBuildEnvironmentManagerInspectsAndCleansOrphanedGoalLease()
     {
-        using var envScope = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("0badcafe0badcafe0badcafe0badcafe");
         try
         {
-            var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "test");
-            var active = DotnetBuildEnvironmentManager.InspectGoalLease(goalId);
+            var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "test");
+            var active = RootedDotnetBuildEnvironmentManager.InspectGoalLease(StorageRoot, goalId);
             Assert.Equal(environment.LeaseId, active.LeaseId);
             Assert.True(active.OwnerProcessAlive);
             Assert.False(active.CanCleanup);
-            Assert.False(DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(goalId, out _, out var activeDetail));
+            Assert.False(RootedDotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(StorageRoot, goalId, out _, out var activeDetail));
             Assert.True(activeDetail.Contains("Refusing to delete active build lease", StringComparison.Ordinal));
 
             using (var metadata = JsonDocument.Parse(File.ReadAllText(environment.LeaseMetadataPath!)))
@@ -1249,17 +1232,17 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                 File.WriteAllText(environment.LeaseMetadataPath!, orphanedJson);
             }
 
-            var orphaned = DotnetBuildEnvironmentManager.InspectGoalLease(goalId);
+            var orphaned = RootedDotnetBuildEnvironmentManager.InspectGoalLease(StorageRoot, goalId);
             Assert.False(orphaned.OwnerProcessAlive);
             Assert.True(orphaned.CanCleanup);
             Assert.True(orphaned.Detail.Contains("orphaned", StringComparison.Ordinal));
-            Assert.True(DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(goalId, out _, out var cleanupDetail));
+            Assert.True(RootedDotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(StorageRoot, goalId, out _, out var cleanupDetail));
             Assert.True(cleanupDetail.Contains("Deleted orphaned build lease", StringComparison.Ordinal));
             Assert.False(Directory.Exists(environment.RootPath));
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 

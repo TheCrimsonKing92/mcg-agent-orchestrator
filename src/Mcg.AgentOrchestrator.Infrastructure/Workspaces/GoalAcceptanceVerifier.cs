@@ -474,13 +474,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new StartupContract(manifest.Checks.Count, laneNames);
     }
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
+    private readonly DotnetBuildStorageRoot _storageRoot;
     private readonly AcceptanceStructuralCoverageEvaluator _structuralCoverageEvaluator;
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
     private readonly IAcceptanceRunExecutionContext? _executionContext;
     private readonly AcceptanceInvocationContext? _invocationContext;
-    private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource;
-    private readonly GoalAcceptanceVerifierTestOverrides _testOverrides;
+    private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource, _testOverrides;
     // Injected runners return only CommandResult; missing TRX remains a typed compatibility signal for that seam.
     private readonly bool _requiresTestTelemetryReceipt;
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(5), DefaultProgressInterval = TimeSpan.FromSeconds(30);
@@ -505,8 +505,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         ProviderEnvironmentTestsProject,
         CliTestsProject
     ];
-    public GoalAcceptanceVerifier() : this(new GoalAcceptanceVerifierTestOverrides()) { }
-    internal GoalAcceptanceVerifier(GoalAcceptanceVerifierTestOverrides testOverrides)
+    public GoalAcceptanceVerifier() : this(DotnetBuildEnvironmentManager.CaptureStorageRoot()) { }
+    public GoalAcceptanceVerifier(DotnetBuildStorageRoot storageRoot) : this(new GoalAcceptanceVerifierTestOverrides(), storageRoot) { }
+    internal GoalAcceptanceVerifier(GoalAcceptanceVerifierTestOverrides testOverrides, DotnetBuildStorageRoot? storageRoot = null)
         : this(
             (arguments, workingDirectory, timeout, cancellationToken) => RunProcessAsync(
                 arguments, workingDirectory, timeout,
@@ -522,7 +523,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 progressInterval: testOverrides.ProgressInterval),
             TimeProvider.System,
             requiresTestTelemetryReceipt: true,
-            testOverrides: testOverrides)
+            testOverrides: testOverrides,
+            storageRoot: storageRoot)
     { }
     internal GoalAcceptanceVerifier(
         GoalAcceptanceVerifierTestOverrides testOverrides,
@@ -565,9 +567,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeProvider timeProvider,
         Action<TimeSpan>? leaseSleep = null,
         bool requiresTestTelemetryReceipt = false,
-        GoalAcceptanceVerifierTestOverrides? testOverrides = null)
+        GoalAcceptanceVerifierTestOverrides? testOverrides = null,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
         _runner = runner;
+        _storageRoot = storageRoot is null ? DotnetBuildEnvironmentManager.CaptureStorageRoot() : storageRoot;
         _structuralCoverageEvaluator = new AcceptanceStructuralCoverageEvaluator(discoveryRunner, IsBuildArtifactIoException);
         _timeProvider = timeProvider;
         _leaseSleep = leaseSleep ?? Thread.Sleep;
@@ -578,17 +582,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal GoalAcceptanceVerifier(GoalAcceptanceVerifier source, IAcceptanceRunExecutionContext executionContext)
     {
         _runner = source._runner;
+        _storageRoot = source._storageRoot;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
         _leaseSleep = source._leaseSleep;
         _requiresTestTelemetryReceipt = source._requiresTestTelemetryReceipt;
         _executionContext = executionContext;
-        _testOverrideSource = source._testOverrideSource;
-        _testOverrides = source._testOverrides;
+        _testOverrideSource = source._testOverrideSource; _testOverrides = source._testOverrides;
     }
     private GoalAcceptanceVerifier(GoalAcceptanceVerifier source, AcceptanceInvocationContext invocationContext)
     {
         _runner = source._runner;
+        _storageRoot = source._storageRoot;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
         _leaseSleep = source._leaseSleep;
@@ -1726,7 +1731,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 baselineEnvironmentId = GoalId.New();
                 baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
                     baselineEnvironmentId,
-                    $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
+                    $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}", storageRoot: _storageRoot);
                 executedArm = await RunFocusedEvidenceArmAsync(
                     FindingEvidenceArm.Baseline,
                     baselineSha,
@@ -1757,12 +1762,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             TryDeleteFocusedEvidenceBaselineDirectory(baselineRoot, baselinePath);
             if (baselineEnvironment is not null)
             {
-                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(baselineEnvironment);
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(baselineEnvironment, _storageRoot);
             }
 
             if (baselineEnvironmentId is not null)
             {
-                DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(baselineEnvironmentId);
+                DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(baselineEnvironmentId, _storageRoot);
             }
         }
     }
@@ -2077,7 +2082,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worker.SlotIndex,
                 shardElapsed,
                 shardConcurrency.Count,
-                EmitGateProgress);
+                _storageRoot, EmitGateProgress);
         }
 
         while (pendingShards.Count > 0 || activeShards.Count > 0)
@@ -2177,7 +2182,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             primarySlotIndex,
             wallElapsed,
             shardConcurrency.Count,
-            EmitGateProgress);
+            _storageRoot, EmitGateProgress);
         var completed = outcomes.Where(outcome => outcome is not null).Select(outcome => outcome!).ToArray();
         return new CheckBatchResult(
             cacheContext?.ApplySharedApparatusInvalidation(
@@ -2232,7 +2237,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int slotIndex,
         TimeSpan elapsed,
         int concurrentShardCount,
-        Action<AcceptanceGateProgress>? progressSink = null)
+        DotnetBuildStorageRoot storageRoot,
+        Action<AcceptanceGateProgress>? progressSink)
     {
         var now = DateTimeOffset.UtcNow;
         progressSink?.Invoke(new AcceptanceGateProgress(
@@ -2247,7 +2253,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             now,
             elapsed,
             0,
-            GateHeartbeatArtifacts.GetStableSlotPath(slotIndex),
+            GateHeartbeatArtifacts.GetStableSlotPath(slotIndex, storageRoot),
             GateLoadContextProbe.Capture(concurrentShardCount)));
     }
 
@@ -4550,7 +4556,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"{attemptName}-cache",
             stableSlotIndex,
             stableSlotLease);
-        var cache = _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default();
+        var cache = _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default(_storageRoot);
         var restore = cache.Probe(plan.MainSha, plan.RestoreProjects);
         var retried = false;
         var lockRemediationApplied = false;
@@ -5478,10 +5484,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         if (stableSlotIndex.HasValue &&
             path.Equals(
-                GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value),
+                GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value, _storageRoot),
                 StringComparison.OrdinalIgnoreCase))
         {
-            return GateHeartbeatArtifacts.ReadStableSlot(stableSlotIndex.Value);
+            return GateHeartbeatArtifacts.ReadStableSlot(stableSlotIndex.Value, _storageRoot);
         }
 
         try
@@ -6975,7 +6981,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>
         stableSlotIndex.HasValue || stableSlotLease is not null;
 
-    private DotnetBuildEnvironment ResolveExecutionEnvironment(
+    internal DotnetBuildEnvironment ResolveExecutionEnvironment(
         GoalId? goalId,
         string attemptName,
         int? stableSlotIndex,
@@ -6991,16 +6997,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         else if (goalId is not null)
         {
-            environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+            environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId, _storageRoot);
         }
         else
         {
             environment = stableSlotIndex.HasValue
                 ? DotnetBuildEnvironmentManager.CreateStableSlotAttempt(
-                    stableSlotIndex.Value)
+                    stableSlotIndex.Value,
+                    storageRoot: _storageRoot)
                 : DotnetBuildEnvironmentManager.CreateAttempt(
                     null,
-                    attemptName);
+                    attemptName,
+                    storageRoot: _storageRoot);
         }
 
         if (buildLease is null)
@@ -7953,7 +7961,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check.Name,
             stableSlotIndex,
             heartbeatPath,
-            ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath),
+            ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath, _storageRoot),
             string.Join(' ', arguments.Select(QuoteForDisplay)),
             environment?.RootPath);
     }
@@ -7963,7 +7971,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     // so terminal updates can never overwrite a sibling. Gate-status enumerates these run-scoped mirrors.
     private static string? ResolveStableSlotHeartbeatMirrorPath(
         DotnetBuildEnvironment? environment,
-        string primaryHeartbeatPath)
+        string primaryHeartbeatPath,
+        DotnetBuildStorageRoot storageRoot)
     {
         if (environment?.BuildPermitIndex is not { } slotIndex ||
             slotIndex < 0 ||
@@ -7972,10 +7981,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
-        var stableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(slotIndex);
+        var stableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(slotIndex, storageRoot);
         return primaryHeartbeatPath.Equals(stableSlotPath, StringComparison.OrdinalIgnoreCase)
             ? null
-            : GateHeartbeatArtifacts.GetRunScopedStableSlotPath(slotIndex, primaryHeartbeatPath);
+            : GateHeartbeatArtifacts.GetRunScopedStableSlotPath(slotIndex, primaryHeartbeatPath, storageRoot);
     }
 
     private string ResolveGateHeartbeatPath(
@@ -7990,7 +7999,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             worktreePath,
             AcceptanceAttemptResultsPrefix,
-            invocationOrdinal ?? _invocationContext?.Ordinal ?? 0);
+            invocationOrdinal ?? _invocationContext?.Ordinal ?? 0,
+            _storageRoot);
 
     private static string ResolveGateHeartbeatPathCore(
         AcceptanceManifestCheck check,
@@ -7998,7 +8008,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         string? worktreePath,
         string? attemptPrefix,
-        int invocationOrdinal)
+        int invocationOrdinal,
+        DotnetBuildStorageRoot storageRoot)
     {
         if (!string.IsNullOrWhiteSpace(attemptPrefix))
         {
@@ -8019,7 +8030,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return stableSlotIndex.HasValue
-            ? GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value)
+            ? GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value, storageRoot)
             : GateHeartbeatArtifacts.GetManualPath(
                 worktreePath ?? Path.Combine(Path.GetTempPath(), "mcg-acceptance-owner-results"));
     }
@@ -8035,7 +8046,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             worktreePath: null,
             attemptPrefix: attemptResultsPrefix,
-            invocationOrdinal: 0);
+            invocationOrdinal: 0,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot());
 
     internal static string ResolveGateHeartbeatPathForTests(
         string checkName,
@@ -8048,7 +8060,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex: null,
             worktreePath,
             attemptPrefix: attemptResultsPrefix,
-            invocationOrdinal);
+            invocationOrdinal,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot());
 
     internal static string ResolveTrxPathForTests(
         string checkName,
@@ -8081,14 +8094,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex: null,
             Path.GetTempPath(),
             attemptPrefix: attemptResultsPrefix,
-            invocationOrdinal: 0);
+            invocationOrdinal: 0,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot());
         var context = new GateHeartbeatContext(
             goalId?.Value,
             "verification-check",
             check.Name,
             null,
             heartbeatPath,
-            ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath),
+            ResolveStableSlotHeartbeatMirrorPath(
+                environment,
+                heartbeatPath,
+                DotnetBuildEnvironmentManager.CaptureStorageRoot()),
             "dotnet test",
             environment.RootPath);
         var runtime = new GateHeartbeatRuntime(
