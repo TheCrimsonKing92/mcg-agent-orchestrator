@@ -57,6 +57,18 @@ internal sealed record EvidenceRetentionEligibility(
     int PolicyVersion,
     string FactRevision);
 
+internal sealed record EvidenceRetentionFacts(
+    bool TerminalGoal,
+    RetentionAttemptIdentity? Owner,
+    EvidenceOwnershipSource OwnershipSource,
+    bool ProtectedAttempt,
+    bool ReferencedArtifact,
+    bool CountBound,
+    bool Aged,
+    bool ByteBoundEligible,
+    string FactRevision,
+    bool RequireOwner = true);
+
 internal sealed record EvidenceRetentionDecision(
     EvidenceArtifactFamily Family,
     EvidenceRetentionAction Action,
@@ -70,7 +82,8 @@ internal sealed record EvidenceRetentionDecision(
     long BytesReclaimed = 0,
     string? FailureExceptionType = null,
     EvidenceOwnershipSource OwnershipSource = EvidenceOwnershipSource.Unresolved,
-    string? FactRevision = null);
+    string? FactRevision = null,
+    EvidenceEligibility? Eligibility = null);
 
 internal static class EvidenceRetentionPolicy
 {
@@ -160,54 +173,43 @@ internal static class EvidenceRetentionPolicy
         };
     }
 
-    internal static EvidenceRetentionEligibility EvaluatePath(
-        bool terminalGoal,
-        RetentionAttemptIdentity? owner,
-        EvidenceOwnershipSource ownershipSource,
-        bool protectedAttempt,
-        bool referencedArtifact,
-        bool countBound,
-        bool aged,
-        bool byteBoundEligible,
-        string factRevision,
-        bool requireOwner = true)
+    internal static EvidenceRetentionEligibility EvaluatePath(EvidenceRetentionFacts facts)
     {
-        if (!terminalGoal)
+        if (!facts.TerminalGoal)
         {
-            return Eligibility(EvidenceEligibility.Keep, "non-terminal-evidence", owner, ownershipSource, factRevision);
+            return Eligibility(EvidenceEligibility.Keep, "non-terminal-evidence", facts);
         }
 
-        if (owner is null)
+        if (facts.Owner is null)
         {
             return Eligibility(
-                requireOwner ? EvidenceEligibility.Keep : EvidenceEligibility.Archive,
-                requireOwner ? "artifact-owner-unresolved" : "terminal-goal-evidence",
-                null,
-                EvidenceOwnershipSource.Unresolved,
-                factRevision);
+                facts.RequireOwner ? EvidenceEligibility.Keep : EvidenceEligibility.Archive,
+                facts.RequireOwner ? "artifact-owner-unresolved" : "terminal-goal-evidence",
+                facts with { OwnershipSource = EvidenceOwnershipSource.Unresolved });
         }
 
-        if (protectedAttempt)
+        if (facts.ProtectedAttempt)
         {
-            return Eligibility(EvidenceEligibility.Keep, owner.Failed ? "last-failing-attempt" : "final-attempt", owner, ownershipSource, factRevision);
+            return Eligibility(
+                EvidenceEligibility.Keep,
+                facts.Owner.Failed ? "last-failing-attempt" : "final-attempt",
+                facts);
         }
 
-        if (referencedArtifact)
+        if (facts.ReferencedArtifact)
         {
-            return Eligibility(EvidenceEligibility.Keep, "retained-test-artifact-owner-metadata", owner, ownershipSource, factRevision);
+            return Eligibility(EvidenceEligibility.Keep, "retained-test-artifact-owner-metadata", facts);
         }
 
-        if (countBound || aged || byteBoundEligible)
+        if (facts.CountBound || facts.Aged || facts.ByteBoundEligible)
         {
             return Eligibility(
                 EvidenceEligibility.DeleteWhenSafe,
-                countBound ? "past-count-bound" : aged ? "past-age-bound" : "past-byte-bound",
-                owner,
-                ownershipSource,
-                factRevision);
+                facts.CountBound ? "past-count-bound" : facts.Aged ? "past-age-bound" : "past-byte-bound",
+                facts);
         }
 
-        return Eligibility(EvidenceEligibility.Archive, "within-retention-bounds", owner, ownershipSource, factRevision);
+        return Eligibility(EvidenceEligibility.Archive, "within-retention-bounds", facts);
     }
 
     internal static string ComputeFactRevision(
@@ -235,17 +237,15 @@ internal static class EvidenceRetentionPolicy
     private static EvidenceRetentionEligibility Eligibility(
         EvidenceEligibility disposition,
         string reason,
-        RetentionAttemptIdentity? owner,
-        EvidenceOwnershipSource ownershipSource,
-        string factRevision) =>
+        EvidenceRetentionFacts facts) =>
         new(
             disposition,
             reason,
-            owner?.AttemptId,
-            owner?.Ordinal,
-            ownershipSource,
+            facts.Owner?.AttemptId,
+            facts.Owner?.Ordinal,
+            facts.OwnershipSource,
             Version,
-            factRevision);
+            facts.FactRevision);
 }
 
 internal sealed record RetentionPathOwner(

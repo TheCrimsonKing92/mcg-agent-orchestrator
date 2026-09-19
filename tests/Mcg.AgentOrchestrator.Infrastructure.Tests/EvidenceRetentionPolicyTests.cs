@@ -91,6 +91,39 @@ public sealed class EvidenceRetentionPolicyTests
     }
 
     [Xunit.Fact]
+    public void DeclaredPathsAndNameInferenceAgreeOnLegacyFixtures()
+    {
+        var root = Path.GetFullPath("retention-shadow-fixtures");
+        var paths = new[]
+        {
+            Path.Combine(root, "legacy.out.log"),
+            Path.Combine(root, "legacy.err.log"),
+            Path.Combine(root, "legacy.exit.txt"),
+            Path.Combine(root, "legacy.heartbeat.json"),
+            Path.Combine(root, "legacy.result.json"),
+            Path.Combine(root, "legacy.attempt.json"),
+            Path.Combine(root, "legacy.trx"),
+            Path.Combine(root, "legacy.receipts", "receipt.json")
+        };
+        var legacy = new RetentionAttemptIdentity(
+            "legacy",
+            1,
+            DateTimeOffset.Parse("2026-08-20T12:00:00Z"),
+            false,
+            true);
+
+        foreach (var path in paths)
+        {
+            var declared = legacy with { DeclaredPaths = [path] };
+
+            Assert.True(EvidenceRetentionPolicy.OwnsPath(legacy, path, out var inferredSource));
+            Assert.True(EvidenceRetentionPolicy.OwnsPath(declared, path, out var declaredSource));
+            Assert.Equal(EvidenceOwnershipSource.InferredFromName, inferredSource);
+            Assert.Equal(EvidenceOwnershipSource.Declared, declaredSource);
+        }
+    }
+
+    [Xunit.Fact]
     public void Eligibility_SameFactsShareRevisionAndOwnerChangeRevisesIt()
     {
         var path = Path.GetFullPath("attempt.out.log");
@@ -104,29 +137,20 @@ public sealed class EvidenceRetentionPolicyTests
         var firstRevision = EvidenceRetentionPolicy.ComputeFactRevision([first], [path]);
         var secondRevision = EvidenceRetentionPolicy.ComputeFactRevision([first with { Ordinal = 2 }], [path]);
 
-        var preview = EvidenceRetentionPolicy.EvaluatePath(
-            true,
+        var facts = new EvidenceRetentionFacts(
+            TerminalGoal: true,
             first,
             EvidenceOwnershipSource.Declared,
-            protectedAttempt: false,
-            referencedArtifact: false,
-            countBound: false,
-            aged: true,
-            byteBoundEligible: false,
+            ProtectedAttempt: false,
+            ReferencedArtifact: false,
+            CountBound: false,
+            Aged: true,
+            ByteBoundEligible: false,
             firstRevision);
-        var execution = EvidenceRetentionPolicy.EvaluatePath(
-            true,
-            first,
-            EvidenceOwnershipSource.Declared,
-            protectedAttempt: false,
-            referencedArtifact: false,
-            countBound: false,
-            aged: true,
-            byteBoundEligible: false,
-            firstRevision);
+        var eligibility = EvidenceRetentionPolicy.EvaluatePath(facts);
 
-        Assert.Equal(preview, execution);
-        Assert.Equal(EvidenceEligibility.DeleteWhenSafe, execution.Disposition);
+        Assert.Equal(EvidenceEligibility.DeleteWhenSafe, eligibility.Disposition);
+        Assert.Equal(firstRevision, eligibility.FactRevision);
         Assert.NotEqual(firstRevision, secondRevision);
     }
 }

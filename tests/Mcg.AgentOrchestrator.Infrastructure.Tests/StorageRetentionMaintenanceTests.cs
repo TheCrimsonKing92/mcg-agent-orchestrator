@@ -274,7 +274,80 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void AcceptanceRetention_DeclaredOwnerOverridesFilenameDerivedProtectedOwner()
+    public void PreviewAndExecutionAgreeAtSameFactRevision()
+    {
+        using var fixture = new RetentionFixture();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("retention preview fixture", [
+            new TaskSpec(new TaskId(TaskId), "retention fixture task", AgentRole.Developer)
+        ]);
+        kernel.EscalateTaskFailure(goal.Id, new TaskId(TaskId), "fixture terminal state");
+        var goalDirectory = Path.Combine(
+            fixture.OrchestratorDirectory,
+            "acceptance-gate-attempts",
+            goal.Id.Value);
+        Directory.CreateDirectory(goalDirectory);
+        var disposable = Path.Combine(goalDirectory, "old.out.log");
+        var oldMetadata = fixture.WriteAttempt(
+            goalDirectory,
+            "old",
+            ordinal: 1,
+            failed: false,
+            reconciled: true,
+            goal.Id.Value);
+        fixture.WriteAttempt(
+            goalDirectory,
+            "final",
+            ordinal: 2,
+            failed: false,
+            reconciled: true,
+            goal.Id.Value);
+        File.WriteAllText(disposable, "disposable preview evidence");
+        File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "old",
+            goalId = goal.Id.Value,
+            ordinal = 1,
+            startedAt = Now.AddMinutes(1),
+            outcome = 1,
+            reconciledAt = Now,
+            stdoutPath = disposable,
+            metadataPath = oldMetadata
+        }));
+        SetAge(disposable, 30);
+        var execution = fixture.Run(new StorageRetentionGoal(
+            goal.Id.Value,
+            goal.Status,
+            new Dictionary<string, WorkTaskStatus> { [TaskId] = WorkTaskStatus.Failed }));
+        var executed = Assert.Single(execution.Decisions, decision =>
+            decision.Path == disposable &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            !string.IsNullOrWhiteSpace(decision.FactRevision));
+        var preview = GoalArtifactRetentionPlanner.PreviewTestEvidence(new EvidenceRetentionFacts(
+            TerminalGoal: true,
+            new RetentionAttemptIdentity(
+                "old",
+                1,
+                Now.AddMinutes(1),
+                Failed: false,
+                Reconciled: true,
+                [disposable, oldMetadata]),
+            EvidenceOwnershipSource.Declared,
+            ProtectedAttempt: false,
+            ReferencedArtifact: false,
+            CountBound: false,
+            Aged: true,
+            ByteBoundEligible: false,
+            executed.FactRevision!));
+
+        Assert.Equal(EvidenceEligibility.DeleteWhenSafe, preview.Disposition);
+        Assert.Equal(preview.Disposition, executed.Eligibility);
+        Assert.Equal(preview.FactRevision, executed.FactRevision);
+        Assert.Equal(preview.AttemptId, executed.AttemptId);
+    }
+
+    [Xunit.Fact]
+    public void NegativeControl_FilenameOwnerWouldPreserveDeclaredDisposableBytes()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -305,6 +378,22 @@ public sealed class StorageRetentionMaintenanceTests
             metadataPath = finalMetadata
         }));
         SetAge(disposable, 30);
+        var attempts = new[]
+        {
+            new RetentionAttemptIdentity("old", 1, Now.AddMinutes(1), false, true, [disposable, oldMetadata]),
+            new RetentionAttemptIdentity("final", 2, Now.AddMinutes(2), false, true, [finalMetadata])
+        };
+        var declaredOwner = EvidenceRetentionPolicy.ResolveOwner(attempts, disposable);
+        var filenameOwner = EvidenceRetentionPolicy.ResolveOwner(
+            attempts.Select(attempt => attempt with { DeclaredPaths = null }).ToArray(),
+            disposable);
+        var protectedIds = EvidenceRetentionPolicy.ProtectedAttemptIds(attempts);
+        var expectedReclaimedBytes = new FileInfo(disposable).Length;
+
+        Assert.Equal("old", declaredOwner.Attempt?.AttemptId);
+        Assert.Equal("final", filenameOwner.Attempt?.AttemptId);
+        Assert.DoesNotContain(declaredOwner.Attempt!.AttemptId, protectedIds);
+        Assert.Contains(filenameOwner.Attempt!.AttemptId, protectedIds);
 
         var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
@@ -314,7 +403,7 @@ public sealed class StorageRetentionMaintenanceTests
             decision.Action == EvidenceRetentionAction.Deleted &&
             decision.AttemptId == "old" &&
             decision.OwnershipSource == EvidenceOwnershipSource.Declared &&
-            decision.BytesReclaimed > 0 &&
+            decision.BytesReclaimed == expectedReclaimedBytes &&
             !string.IsNullOrWhiteSpace(decision.FactRevision));
     }
 
@@ -398,6 +487,85 @@ public sealed class StorageRetentionMaintenanceTests
             decision.Path == disposable &&
             decision.Action == EvidenceRetentionAction.Deleted &&
             decision.OwnershipSource == EvidenceOwnershipSource.InferredFromName);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_RenamedReferenceIsNotDeletedByStaleDeclaration()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var declaredOriginal = Path.Combine(goalDirectory, "old.out.log");
+        var renamed = Path.Combine(goalDirectory, "old-renamed.out.log");
+        var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "old",
+            goalId = GoalId,
+            ordinal = 1,
+            startedAt = Now.AddMinutes(1),
+            outcome = 1,
+            reconciledAt = Now,
+            stdoutPath = declaredOriginal,
+            metadataPath = oldMetadata
+        }));
+        File.WriteAllText(renamed, "renamed evidence must remain unattributed");
+        SetAge(renamed, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.True(File.Exists(renamed));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == renamed &&
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable &&
+            decision.Reason == "artifact-owner-unresolved" &&
+            decision.OwnershipSource == EvidenceOwnershipSource.Unresolved);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_SharedTrxReferenceIsRetainedForAmbiguousOwners()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var sharedTrx = Path.Combine(goalDirectory, "shared.trx");
+        var firstMetadata = fixture.WriteAttempt(goalDirectory, "first", ordinal: 1, failed: false, reconciled: true);
+        var finalMetadata = fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        File.WriteAllText(firstMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "first",
+            goalId = GoalId,
+            ordinal = 1,
+            startedAt = Now.AddMinutes(1),
+            outcome = 1,
+            reconciledAt = Now,
+            metadataPath = firstMetadata,
+            testResultPaths = new[] { sharedTrx }
+        }));
+        File.WriteAllText(finalMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "final",
+            goalId = GoalId,
+            ordinal = 2,
+            startedAt = Now.AddMinutes(2),
+            outcome = 1,
+            reconciledAt = Now,
+            metadataPath = finalMetadata,
+            testResultPaths = new[] { sharedTrx }
+        }));
+        File.WriteAllText(sharedTrx, SuccessfulTrx("Suite.Shared"));
+        SetAge(sharedTrx, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.True(File.Exists(sharedTrx));
+        Assert.False(File.Exists(sharedTrx + ".test-identities.json"));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == sharedTrx &&
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable &&
+            decision.Reason == "trx-attempt-ownership-ambiguous" &&
+            decision.OwnershipSource == EvidenceOwnershipSource.Declared);
     }
 
     [Xunit.Fact]

@@ -907,8 +907,8 @@ internal static partial class StorageRetentionMaintenance
                 var referencedArtifact =
                     retainedTrxAttemptIds.Contains(refreshedOwner.Attempt.AttemptId) ||
                     retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, refreshedOwner.Attempt.AttemptId));
-                var eligibility = EvidenceRetentionPolicy.EvaluatePath(
-                    terminalGoal: true,
+                var eligibilityFacts = new EvidenceRetentionFacts(
+                    TerminalGoal: true,
                     refreshedOwner.Attempt,
                     refreshedOwner.Source,
                     refreshedProtectedAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
@@ -917,6 +917,7 @@ internal static partial class StorageRetentionMaintenance
                     aged,
                     byteBoundEligible,
                     observedFactRevision);
+                var eligibility = EvidenceRetentionPolicy.EvaluatePath(eligibilityFacts);
                 if (eligibility.Disposition != EvidenceEligibility.DeleteWhenSafe)
                 {
                     decisions.Add(new EvidenceRetentionDecision(
@@ -932,7 +933,8 @@ internal static partial class StorageRetentionMaintenance
                         refreshedOwner.Attempt.AttemptId,
                         refreshedOwner.Attempt.Ordinal,
                         OwnershipSource: refreshedOwner.Source,
-                        FactRevision: observedFactRevision));
+                        FactRevision: observedFactRevision,
+                        Eligibility: eligibility.Disposition));
                     continue;
                 }
 
@@ -951,7 +953,8 @@ internal static partial class StorageRetentionMaintenance
                     BytesReclaimed: deletion.Success ? length : 0,
                     FailureExceptionType: deletion.ExceptionType,
                     OwnershipSource: refreshedOwner.Source,
-                    FactRevision: observedFactRevision));
+                    FactRevision: observedFactRevision,
+                    Eligibility: eligibility.Disposition));
                 if (deletion.Success)
                 {
                     deleted++;

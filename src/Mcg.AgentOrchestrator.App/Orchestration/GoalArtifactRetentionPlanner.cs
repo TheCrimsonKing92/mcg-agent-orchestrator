@@ -51,6 +51,9 @@ internal sealed record GoalArtifactRetentionItem(
 
 internal static class GoalArtifactRetentionPlanner
 {
+    internal static EvidenceRetentionEligibility PreviewTestEvidence(EvidenceRetentionFacts facts) =>
+        EvidenceRetentionPolicy.EvaluatePath(facts);
+
     public static GoalArtifactRetentionPlan Build(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -218,17 +221,17 @@ internal static class GoalArtifactRetentionPlanner
             RetentionGoalState.Abandoned or
             RetentionGoalState.Superseded;
         var factRevision = EvidenceRetentionPolicy.ComputeFactRevision([], [path], state.ToString());
-        var eligibility = EvidenceRetentionPolicy.EvaluatePath(
+        var eligibility = PreviewTestEvidence(new EvidenceRetentionFacts(
             terminal,
-            owner: null,
+            Owner: null,
             EvidenceOwnershipSource.Unresolved,
-            protectedAttempt: false,
-            referencedArtifact: false,
-            countBound: false,
-            aged: false,
-            byteBoundEligible: false,
+            ProtectedAttempt: false,
+            ReferencedArtifact: false,
+            CountBound: false,
+            Aged: false,
+            ByteBoundEligible: false,
             factRevision,
-            requireOwner: false);
+            RequireOwner: false));
         var decision = eligibility.Disposition switch
         {
             EvidenceEligibility.Keep => RetentionDecision.Keep,
