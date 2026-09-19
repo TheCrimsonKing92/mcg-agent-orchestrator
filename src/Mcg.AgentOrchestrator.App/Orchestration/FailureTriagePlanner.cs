@@ -133,6 +133,16 @@ internal static class FailureTriagePlanner
         AutonomyPolicy policy,
         DateTimeOffset now)
     {
+        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task) &&
+            agents.Any(agent =>
+                agent.Role == task.RequiredRole &&
+                agent.Status == AgentStatus.Available &&
+                agent.Id != task.AssignedAgentId))
+        {
+            AddFailoverItem(items, task, taskNumber, agents, policy, FailureTriageCause.ProviderConnectivity);
+            return;
+        }
+
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
         {
             items.Add(Item(

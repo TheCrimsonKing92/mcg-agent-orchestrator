@@ -7,62 +7,6 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public enum DispatchRecordCheckpointPhase
-{
-    BeforeProcessStart,
-    ProcessMayHaveStarted,
-    BeforeRetryAdmission
-}
-
-public sealed record DispatchRefreshOutcome(
-    TaskProcessRecord ProcessRecord,
-    TaskVerificationRecord? Verification,
-    string? ResultCommit = null,
-    string? ResultCommitProvenance = null,
-    DispatchRecoveryDecision? RecoveryDecision = null,
-    ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
-    DispatchDiagnosticPayload? DiagnosticPayload = null,
-    DispatchAutoRequeueDisposition? AutoRequeueDisposition = null,
-    ProviderReportedUsage? ProviderUsage = null,
-    string ProviderUsageUnavailableReason = "unsupported",
-    DateTimeOffset? DispatchAttemptAt = null);
-
-public sealed record DispatchDiagnosticPayload(
-    int ExitCode,
-    string StandardOutput,
-    string StandardError);
-
-public sealed record DispatchAutoRequeueDisposition(string EventName, string Message, bool ShouldRequeue = true);
-
-public sealed record DispatchProcessStartResult(
-    TaskProcessRecord? ProcessRecord,
-    WorkerSandboxPrepRecoverableAction? RecoveryAction,
-    bool RequeueSkipped = false,
-    string? FailureReason = null)
-{
-    public static DispatchProcessStartResult Started(TaskProcessRecord processRecord) => new(processRecord, null);
-
-    public static DispatchProcessStartResult RequiresRecovery(WorkerSandboxPrepRecoverableAction action) => new(null, action);
-
-    public static DispatchProcessStartResult Skipped() => new(null, null, RequeueSkipped: true);
-
-    public static DispatchProcessStartResult Failed(string reason) => new(null, null, FailureReason: reason);
-}
-
-public sealed record InterruptedDispatchStateRead(
-    GoalStatus? GoalStatus,
-    WorkTaskStatus? TaskStatus,
-    string? UnreadableEntity = null,
-    string? Error = null,
-    bool WasTaskCancelledByConductor = false,
-    bool WasTaskGracefullyDetachedByConductor = false)
-{
-    public bool IsReadable => UnreadableEntity is null;
-
-    public static InterruptedDispatchStateRead Unreadable(string entity, string error) =>
-        new(null, null, entity, error);
-}
-
 public sealed class BackgroundDispatchRunner
 {
     private const int ApparatusHoldObservationsBeforeEscalation = 2;
@@ -116,6 +60,7 @@ public sealed class BackgroundDispatchRunner
     private readonly WorkerDispatchCompletionClassifier _completionClassifier;
     private readonly DispatchProcessRecoveryService _recoveryService;
     private readonly DispatchWorktreeCommitter _worktreeCommitter;
+    private readonly InterruptedWorkCheckpointAuthorizer _checkpointAuthorizer;
     private readonly ProcessLogReader _processLogReader;
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> _runOrchestratorBuildCheck;
@@ -171,6 +116,11 @@ public sealed class BackgroundDispatchRunner
             diagnosticWriter: _diagnosticWriter,
             readProcessIdentity: DispatchProcessIdentityEvidence.Adapt(readProcessIdentity));
         _worktreeCommitter = new DispatchWorktreeCommitter(beforeWorktreeInspection: beforeGoalWorktreeInspection);
+        _checkpointAuthorizer = new InterruptedWorkCheckpointAuthorizer(
+            _worktreeCommitter,
+            _clock,
+            isProcessRunning: _isStillRunning,
+            readCurrentIdentity: DispatchProcessIdentityEvidence.Adapt(readProcessIdentity));
         _startProcess = startProcess ?? Process.Start;
         _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? OrchestratorBuildEvidenceCheck.RunDefault;
         _processCommandLineSnapshotFactory = processCommandLineSnapshotFactory ?? ProcessCommandLines.SnapshotOperation;
@@ -838,7 +788,7 @@ public sealed class BackgroundDispatchRunner
                 "interrupted worker evidence requires operator verification");
             const string interruptedReason = "process missing with dirty worktree evidence";
             _recoveryService.TryWriteExitCode(processRecord.ExitCodePath, 1, interruptedReason);
-            return BuildCompletedProcessOutcome(
+            var interruptedOutcome = BuildCompletedProcessOutcome(
                 kernel,
                 goalId,
                 taskId,
@@ -846,7 +796,10 @@ public sealed class BackgroundDispatchRunner
                 1,
                 DispatchProcessRecoveryService.BuildRecoveryDiagnostic(interruptedDecision),
                 interruptedDecision,
-                staleResourceAccounting) with
+                staleResourceAccounting);
+            return interruptedOutcome.AutoRequeueDisposition is not null
+                ? interruptedOutcome
+                : interruptedOutcome with
                 {
                     AutoRequeueDisposition = new DispatchAutoRequeueDisposition(
                     "InterruptedDispatchWorkPreserved",
@@ -969,13 +922,36 @@ public sealed class BackgroundDispatchRunner
         if (outcome.AutoRequeueDisposition is { } disposition)
         {
             kernel.RecordTaskNote(goalId, taskId, $"{disposition.EventName}: {disposition.Message}");
-            if (disposition.ShouldRequeue)
+            var checkpointRetryBudgetExhausted =
+                disposition.Checkpoint is not null &&
+                task.Status == WorkTaskStatus.Failed &&
+                verification is { Succeeded: false } &&
+                outcome.ProviderFailureKind == ProviderFailureKind.Connectivity &&
+                DispatchFailureClassifier.IsRecoverableProviderConnectivityFailure(verification);
+            var checkpointAlreadyApplied =
+                disposition.Checkpoint is { } candidateCheckpoint &&
+                task.PendingInterruptedWorkCheckpoint is { } pendingCheckpoint &&
+                string.Equals(candidateCheckpoint.IdempotencyKey, pendingCheckpoint.IdempotencyKey, StringComparison.Ordinal) &&
+                string.Equals(candidateCheckpoint.CheckpointSha, pendingCheckpoint.CheckpointSha, StringComparison.Ordinal) &&
+                string.Equals(candidateCheckpoint.DispatchId, pendingCheckpoint.DispatchId, StringComparison.Ordinal) &&
+                string.Equals(candidateCheckpoint.GoalId, pendingCheckpoint.GoalId, StringComparison.Ordinal) &&
+                string.Equals(candidateCheckpoint.TaskId, pendingCheckpoint.TaskId, StringComparison.Ordinal);
+            if (checkpointRetryBudgetExhausted)
+            {
+                kernel.RecordTaskNote(
+                    goalId,
+                    taskId,
+                    "InterruptedDispatchCheckpointRetryBudgetExhausted: checkpoint-retry-budget-exhausted; checkpoint retained in git for operator recovery.");
+            }
+            else if (disposition.ShouldRequeue && !checkpointAlreadyApplied)
             {
                 kernel.RequeueInterruptedDispatch(
                     goalId,
                     taskId,
                     disposition.Message,
-                    RetryCause.ProviderInterruption);
+                    RetryCause.ProviderInterruption,
+                    disposition.InterruptedDispatchId,
+                    disposition.Checkpoint);
             }
         }
 
@@ -1282,13 +1258,7 @@ public sealed class BackgroundDispatchRunner
         string? finalPlannerRejectionDiagnostic = null;
         var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var wrapperExitReconciled = false;
-        var resourceAccounting = capturedResourceAccounting ?? _recoveryService.ReleaseTrackedProcessJobs(processRecord);
-        if (resourceAccounting is not null &&
-            !resourceAccounting.Reaped &&
-            DispatchProcessRecoveryService.IsDispatchHostReapCompletion(decisionStandardError))
-        {
-            resourceAccounting = resourceAccounting with { Reaped = true };
-        }
+        var resourceAccounting = capturedResourceAccounting;
         var goal = kernel.GetGoal(goalId);
         var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
@@ -1431,6 +1401,7 @@ public sealed class BackgroundDispatchRunner
             authoritativeStandardOutput);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
+        InterruptedWorkCheckpointDisposition? checkpointDisposition = null;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
             ? _worktreeCommitter.InspectGoalWorktree(
                 processRecord.WorkingDirectory,
@@ -1513,6 +1484,24 @@ public sealed class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
+            checkpointDisposition = _checkpointAuthorizer.AuthorizeAndCheckpoint(
+                new InterruptedWorkCheckpointRequest(
+                    goalId,
+                    task,
+                    processRecord,
+                    recoveryDecision,
+                    providerFailureKind,
+                    completedWorktreeInspection,
+                    BuildDispatchId(goalId, taskId, task.LastDispatch!),
+                    failedWorkerBuildCheck));
+            if (checkpointDisposition.Kind is InterruptedWorkCheckpointDispositionKind.Hold or
+                InterruptedWorkCheckpointDispositionKind.CommitFailed)
+            {
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    checkpointDisposition.Message);
+            }
+
             var buildEvidence = OrchestratorBuildEvidenceCheck.Resolve(
                 processRecord.WorkingDirectory,
                 task.RequiredRole,
@@ -1536,6 +1525,7 @@ public sealed class BackgroundDispatchRunner
                 (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
                 !missingWorkerBuildEvidence &&
+                checkpointDisposition?.IsCheckpoint != true &&
                 (recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork || reconcileWrapperExit) &&
                 ((exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
                  reconcileWrapperExit ||
@@ -1684,6 +1674,14 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
+        resourceAccounting ??= _recoveryService.ReleaseTrackedProcessJobs(processRecord);
+        if (resourceAccounting is not null &&
+            !resourceAccounting.Reaped &&
+            DispatchProcessRecoveryService.IsDispatchHostReapCompletion(decisionStandardError))
+        {
+            resourceAccounting = resourceAccounting with { Reaped = true };
+        }
+
         if (reconcileWrapperExit &&
             (dispatchRoleCapability != DispatchRoleOutputCapability.RequiresChangeEvidence || hasCommittedChanges))
         {
@@ -1763,7 +1761,9 @@ public sealed class BackgroundDispatchRunner
         };
 
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
-        var resultCommit = TryGetWorktreeHead(processRecord.WorkingDirectory);
+        var resultCommit = checkpointDisposition?.IsCheckpoint == true
+            ? null
+            : TryGetWorktreeHead(processRecord.WorkingDirectory);
         var resultCommitProvenance = hasCommittedChanges
             ? orchestratorCommitted ? "orchestrator" : "worker"
             : null;
@@ -1821,6 +1821,9 @@ public sealed class BackgroundDispatchRunner
             recoveryDecision,
             providerFailureKind,
             new DispatchDiagnosticPayload(exitCode, standardOutput, standardError),
+            AutoRequeueDisposition: DispatchAutoRequeueDisposition.FromInterruptedWorkCheckpoint(
+                checkpointDisposition,
+                recoveryDecision),
             ProviderUsage: jsonl?.Usage,
             ProviderUsageUnavailableReason: jsonl?.UsageUnavailableReason ?? "unsupported",
             DispatchAttemptAt: contextReceiptAttemptAt);
@@ -2509,7 +2512,7 @@ public sealed class BackgroundDispatchRunner
         GoalStatus.Superseded or
         GoalStatus.Completed;
 
-    private static string BuildDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
+    internal static string BuildDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
     {
         var raw = string.Join('\u001f',
             goalId.Value,

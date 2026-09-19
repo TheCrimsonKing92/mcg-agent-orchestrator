@@ -1059,6 +1059,7 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 AgentRole.Developer,
                 "required-instruction-source-✓");
             var goal = kernel.CreateGoal("Preserve exact semantic sources", [priorTask, task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             const string criterionOne = "acceptance-criterion-source-one";
             const string criterionTwo = "acceptance-criterion-source-two";
             kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
@@ -1127,6 +1128,31 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 FullStandardError: string.Empty));
             const string currentVerificationOutput = "current-verification-output-source-✓\n";
             const string currentVerificationError = "current-verification-error-source-漢字\r\n";
+            var checkpointParent = new string('a', 40);
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+                "checkpoint-worker-source",
+                "checkpoint-command-source",
+                root,
+                DateTimeOffset.Parse("2026-01-01T00:00:30Z"),
+                BaseCommit: checkpointParent));
+            var checkpoint = InterruptedWorkCheckpoint.Create(
+                "dispatch-attempt-source",
+                goal.Id.Value,
+                task.Id.Value,
+                task.RequiredRole,
+                "goal/context-source",
+                root,
+                checkpointParent,
+                ProviderFailureKind.Connectivity,
+                DateTimeOffset.Parse("2026-01-01T00:00:45Z"),
+                new string('c', 40));
+            kernel.RequeueInterruptedDispatch(
+                goal.Id,
+                task.Id,
+                "checkpoint-context-source",
+                RetryCause.ProviderInterruption,
+                checkpoint.DispatchId,
+                checkpoint);
             kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                 "verify-current",
                 root,

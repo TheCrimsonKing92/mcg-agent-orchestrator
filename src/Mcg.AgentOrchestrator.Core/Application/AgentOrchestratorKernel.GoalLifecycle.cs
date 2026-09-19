@@ -740,7 +740,8 @@ public sealed partial class AgentOrchestratorKernel
         TaskId taskId,
         string message,
         RetryCause retryCause,
-        string? interruptedDispatchId = null)
+        string? interruptedDispatchId = null,
+        InterruptedWorkCheckpoint? checkpoint = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -760,19 +761,70 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
 
+        ValidateInterruptedWorkCheckpoint(goalId, task, retryCause, interruptedDispatchId, checkpoint);
+
         task.ClearLatestVerification();
         task.ClearLastExecution();
         task.ClearLastDispatch();
         task.ClearLastProcess();
-        task.ClearSubscriptionRetryAfter();
+        if (retryCause != RetryCause.ProviderInterruption)
+        {
+            task.ClearSubscriptionRetryAfter();
+        }
+        else if (checkpoint is not null && task.SubscriptionRetryAfter is null)
+        {
+            var connectivityFailures = Math.Max(
+                1,
+                DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+            task.SetSubscriptionRetryAfter(
+                _clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
+        }
         task.RecordRetry(_clock.UtcNow, retryCause);
         task.SetInterruptedDispatchRecovery(interruptedDispatchId);
+        task.SetInterruptedWorkCheckpoint(checkpoint);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Interrupted dispatch recovery reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
         return task;
     }
+
+    private static void ValidateInterruptedWorkCheckpoint(
+        GoalId goalId,
+        TaskSpec task,
+        RetryCause retryCause,
+        string? interruptedDispatchId,
+        InterruptedWorkCheckpoint? checkpoint)
+    {
+        if (checkpoint is null)
+        {
+            return;
+        }
+
+        var violation = retryCause != RetryCause.ProviderInterruption ? "checkpoint-retry-cause-mismatch" :
+            !string.Equals(checkpoint.GoalId, goalId.Value, StringComparison.Ordinal) ? "checkpoint-goal-mismatch" :
+            !string.Equals(checkpoint.TaskId, task.Id.Value, StringComparison.Ordinal) ? "checkpoint-task-mismatch" :
+            checkpoint.Role != task.RequiredRole ? "checkpoint-role-mismatch" :
+            string.IsNullOrWhiteSpace(interruptedDispatchId) ||
+                !string.Equals(checkpoint.DispatchId, interruptedDispatchId, StringComparison.Ordinal) ? "checkpoint-dispatch-mismatch" :
+            task.LastDispatch is null ? "checkpoint-dispatch-missing" :
+            !string.Equals(checkpoint.ParentCommit, task.LastDispatch.BaseCommit, StringComparison.Ordinal) ? "checkpoint-parent-mismatch" :
+            !PathsEqual(checkpoint.WorktreePath, task.LastDispatch.WorkingDirectory) ? "checkpoint-worktree-mismatch" :
+            string.IsNullOrWhiteSpace(checkpoint.CheckpointSha) ? "checkpoint-sha-missing" :
+            checkpoint.Cause != ProviderFailureKind.Connectivity ? "checkpoint-cause-mismatch" :
+            null;
+        if (violation is not null)
+        {
+            throw new InvalidOperationException(
+                $"Interrupted-work checkpoint cannot be applied: {violation}; task={task.Id.Value}; dispatch={interruptedDispatchId ?? "none"}.");
+        }
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback)
     {

@@ -2103,16 +2103,16 @@ public static class DispatchFailureClassifier
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {
         retryAfter = default;
-        if (task.VerificationHistory.LastOrDefault() is not { Succeeded: false } latest ||
-            !IsRecoverableSubscriptionLimitFailure(latest))
-        {
-            return false;
-        }
-
         if (task.SubscriptionRetryAfter is { } storedRetryAfter)
         {
             retryAfter = storedRetryAfter;
             return true;
+        }
+
+        if (task.VerificationHistory.LastOrDefault() is not { Succeeded: false } latest ||
+            !IsRecoverableSubscriptionLimitFailure(latest))
+        {
+            return false;
         }
 
         // RetryTask is the operator's explicit reset boundary. Keep the historical receipt, but do not

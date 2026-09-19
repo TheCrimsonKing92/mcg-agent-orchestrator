@@ -1586,6 +1586,13 @@ public static class WorkerProcessJobs
             $"worker-process-registration-missing: pid={processId}; stage=owned-child-transfer");
     }
 
+    internal static bool TryGetActiveProcessIds(int processId, out IReadOnlyList<int> processIds)
+    {
+        processIds = [];
+        return Jobs.TryGetValue(processId, out var job) &&
+            job.Group.TryGetActiveProcessIds(out processIds);
+    }
+
     internal static void ReleaseOwned(
         int processId,
         RegisteredJob registration,

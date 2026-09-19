@@ -2289,11 +2289,9 @@ public static class WorkerProfileDispatcher
         {
             return false;
         }
-
         return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
-
     internal static WorkerContextPackage BuildContextPackage(
         Goal goal,
         TaskSpec task,
@@ -2500,6 +2498,9 @@ public static class WorkerProfileDispatcher
                     .ToArray());
             ReviewFindingContextProjector.AddArtifacts(reviewFindingProjection, AddSource);
         }
+        var interruptedCheckpointProjection = InterruptedWorkCheckpointContextProjector.Project(task);
+        if (interruptedCheckpointProjection is not null)
+            AddSource(WorkerContextSemanticSource.InterruptedWorkCheckpoint, interruptedCheckpointProjection.LogicalIdentity, ContextArtifactKind.RegisteredContext, interruptedCheckpointProjection.Bytes, [AgentRole.Developer], ContextDeliveryMode.OnDemandFile);
         if (task.LastExecution is not null)
         {
             var identity = new LogicalArtifactIdentity("task/last-model-output.txt");
@@ -2664,11 +2665,11 @@ public static class WorkerProfileDispatcher
         var builder = new WorkerContextPackageBuilder();
         var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts) with
         {
-            ReviewFindingProjection = reviewFindingProjection?.Metrics
+            ReviewFindingProjection = reviewFindingProjection?.Metrics,
+            InterruptedWorkCheckpointProjection = interruptedCheckpointProjection?.Metrics
         };
         return FinalizeContextPackageWithManifest(builder, preparedWithoutManifest, observedSources);
     }
-
     private static void AddCompleteReviewerScopeArtifactWhenPreviewIsCapped(
         WorkerContextSemanticSource source,
         string logicalIdentity,
@@ -2893,6 +2894,7 @@ public static class WorkerProfileDispatcher
         ReviewerMergeConflictScope,
         Timeline,
         ReviewFindingHistory,
+        InterruptedWorkCheckpoint,
         LastModelOutput,
         LastDispatch,
         LastVerificationOutput,

@@ -166,7 +166,10 @@ internal static class SourceSizeRatchet
             // Lowered for goal 29423867: typed brief selection now crosses the dispatcher boundary without
             // marker stripping or header/current text re-parsing; those responsibilities moved to the typed
             // renderer and versioned legacy ingress. 3037 is the measured post-extraction size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3037),
+            // Raised two lines for goal 31fa5aec: the dispatcher adds the interrupted-work checkpoint
+            // context source at its single call site; projection and metrics live in
+            // InterruptedWorkCheckpointContextProjector. 3039 is the measured size with that call site.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3039),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

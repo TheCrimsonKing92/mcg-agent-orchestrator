@@ -40,6 +40,26 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("startup sweep interrupted worker", decision.Reason, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_synthetic_exit_with_unavailable_heartbeat_holds_before_preservation")]
+    public void DispatchRecoveryPolicySyntheticExitWithUnavailableHeartbeatHoldsBeforePreservation()
+    {
+        var process = CreateProcess();
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), "{not-json");
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+
+        var decision = CreatePolicy().Evaluate(
+            process,
+            hasLiveProcess: false,
+            worktreeInspection: DispatchWorktreeInspectionStatus.Available(
+                hasDirtyEvidence: true,
+                process.WorkingDirectory));
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, decision.Action);
+        Xunit.Assert.Equal("heartbeat-invalid", decision.Blocker);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciles_synthetic_artifact_as_terminal_interrupted_failure")]
     public void BackgroundDispatchRunnerReconcilesSyntheticArtifactAsTerminalInterruptedFailure()
     {

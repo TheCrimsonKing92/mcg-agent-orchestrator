@@ -72,6 +72,8 @@ public sealed class TaskSpec
 
     public string? InterruptedDispatchRecoveryId { get; private set; }
 
+    public InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint { get; private set; }
+
     public bool WasCancelledByConductor { get; private set; }
 
     public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
@@ -240,7 +242,8 @@ public sealed class TaskSpec
             PendingReviewFindingRepairCheckpoint,
             AcceptedRetryFeedback,
             _preReviewEvidenceHistory.ToArray(),
-            PreReviewEvidenceAttemptCount);
+            PreReviewEvidenceAttemptCount,
+            PendingInterruptedWorkCheckpoint);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -469,6 +472,7 @@ public sealed class TaskSpec
             snapshot.PreReviewEvidenceAttemptCount);
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
+        task.PendingInterruptedWorkCheckpoint = snapshot.PendingInterruptedWorkCheckpoint;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
         return task;
     }
@@ -484,6 +488,9 @@ public sealed class TaskSpec
     internal void SetInterruptedDispatchRecovery(string? dispatchId) =>
         InterruptedDispatchRecoveryId = string.IsNullOrWhiteSpace(dispatchId) ? null : dispatchId.Trim();
 
+    internal void SetInterruptedWorkCheckpoint(InterruptedWorkCheckpoint? checkpoint) =>
+        PendingInterruptedWorkCheckpoint = checkpoint;
+
     internal void SetVerificationPlan(string verificationPlan) => VerificationPlan = RequireText(verificationPlan, nameof(verificationPlan));
 
     internal void RecordVerification(TaskVerificationRecord verification)
@@ -491,6 +498,12 @@ public sealed class TaskSpec
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
         PendingReviewFindingRepairCheckpoint = null;
+        if (PendingInterruptedWorkCheckpoint is { } checkpoint &&
+            verification.DispatchStartedAt is { } dispatchStartedAt &&
+            dispatchStartedAt > checkpoint.RecordedAt)
+        {
+            PendingInterruptedWorkCheckpoint = null;
+        }
         // EmptyOutputRetryCount is the shared bounded transient-dispatch retry budget. It covers
         // missing worker output, sandbox preflight failures, and structured Tester inconclusive
         // results without consuming Developer or Reviewer convergence allowances.

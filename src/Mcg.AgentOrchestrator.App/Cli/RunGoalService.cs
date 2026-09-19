@@ -345,6 +345,15 @@ internal static class RunGoalService
 
     private static bool TryGetAutomaticFailoverEvidence(TaskSpec task, DateTimeOffset now, out AutomaticFailoverEvidence evidence)
     {
+        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
+        {
+            var count = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
+            evidence = new AutomaticFailoverEvidence(
+                $"recoverable provider connectivity evidence ({count} failure(s))",
+                count);
+            return true;
+        }
+
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
         {
             evidence = new AutomaticFailoverEvidence(
@@ -367,15 +376,6 @@ internal static class RunGoalService
             evidence = new AutomaticFailoverEvidence(
                 "provider-neutral heartbeat/progress stall evidence",
                 task.VerificationHistory.Count(DispatchFailureClassifier.IsProviderNeutralProgressStallFailure));
-            return true;
-        }
-
-        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
-        {
-            var count = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
-            evidence = new AutomaticFailoverEvidence(
-                $"recoverable provider connectivity evidence ({count} failure(s))",
-                count);
             return true;
         }
 

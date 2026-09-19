@@ -90,6 +90,12 @@ internal sealed class DispatchWorktreeCommitter
         }
     }
 
+    internal CommitWorktreeEditsResult TryCommitCheckpoint(
+        string workingDirectory,
+        InterruptedWorkCheckpoint checkpoint,
+        IReadOnlyList<string> dirtyPaths) =>
+        TryCommitWorktreeEdits(workingDirectory, checkpoint.RenderCommitMessage(), dirtyPaths);
+
     internal static string BuildOrchestratorCommitSubject(TaskSpec task, string standardOutput, string standardError)
     {
         var title = NormalizeCommitSubjectPart(task.Description);

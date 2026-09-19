@@ -23,6 +23,28 @@ public sealed class DispatchOutcomeClassifyTests
             EarlyConvergenceReceiptHashes: [evidenceHash]);
     }
 
+    private static WorkerContextPackageReceipt CheckpointConvergenceReceipt(string candidateSha)
+    {
+        var evidenceHash = new string('b', 64);
+        return new WorkerContextPackageReceipt(
+            "ctxpkg-checkpoint-test",
+            [new WorkerContextSectionReceipt(
+                $"goal/interrupted-work-checkpoint/{evidenceHash}.json",
+                1,
+                1,
+                evidenceHash,
+                ContextDeliveryMode.OnDemandFile,
+                ContextContractVersion.V1.Value,
+                [AgentRole.Developer])],
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            EarlyConvergenceEligible: true,
+            EarlyConvergenceCandidateSha: candidateSha,
+            EarlyConvergenceReceiptHashes: [evidenceHash],
+            EarlyConvergenceEvidenceSource: EarlyConvergenceEvidenceKind.InterruptedWorkCheckpoint);
+    }
+
     private static TaskSpec SimpleTask(AgentRole role = AgentRole.Developer)
     {
         var clock = new FakeClock();
@@ -87,7 +109,8 @@ public sealed class DispatchOutcomeClassifyTests
     private static TaskSpec RetryTaskWithBaseCommit(
         string baseCommit,
         AgentRole role = AgentRole.Developer,
-        bool includeContextReceipt = true)
+        bool includeContextReceipt = true,
+        bool useCheckpointReceipt = false)
     {
         var clock = new FakeClock();
         var kernel = new AgentOrchestratorKernel(clock);
@@ -103,7 +126,11 @@ public sealed class DispatchOutcomeClassifyTests
                 "C:\\repo",
                 clock.UtcNow,
                 WorkerProviderKind: ProviderKind.OpenAICodexCli,
-                ContextPackageReceipt: includeContextReceipt ? EarlyConvergenceReceipt(baseCommit) : null));
+                ContextPackageReceipt: includeContextReceipt
+                    ? useCheckpointReceipt
+                        ? CheckpointConvergenceReceipt(baseCommit)
+                        : EarlyConvergenceReceipt(baseCommit)
+                    : null));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["gate-failure feedback: rerun receipts against current branch"]);
         return task;
@@ -356,6 +383,40 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
         Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_CheckpointResumedDeveloperVerifiedNoChange_Completes()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit, useCheckpointReceipt: true),
+            WorkerResultVerification(
+                1,
+                WorkerResultStdout("pass - focused verification completed"),
+                standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_CheckpointResumedDeveloperWithChangedBaseline_Fails()
+    {
+        const string checkpointCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        const string changedBaseline = "58422231916172e8d172a0cc0428d13d222c071c";
+        var task = RetryTaskWithBaseCommit(checkpointCommit, useCheckpointReceipt: true);
+        task.SetDispatchBaseCommit(changedBaseline);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            task,
+            WorkerResultVerification(
+                1,
+                WorkerResultStdout("pass - focused verification completed"),
+                standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

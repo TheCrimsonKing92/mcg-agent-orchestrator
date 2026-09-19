@@ -123,7 +123,8 @@ public sealed record TaskSnapshot(
     ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint = null,
     AcceptedRetryFeedback? AcceptedRetryFeedback = null,
     IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceHistory = null,
-    int PreReviewEvidenceAttemptCount = 0);
+    int PreReviewEvidenceAttemptCount = 0,
+    InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

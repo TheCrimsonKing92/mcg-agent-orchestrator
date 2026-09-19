@@ -117,7 +117,8 @@ public sealed class WorkerContextPackageBuilder
             prepared.ContractVersion,
             prepared.TargetRole,
             ordered,
-            prepared.ReviewFindingProjection);
+            prepared.ReviewFindingProjection,
+            prepared.InterruptedWorkCheckpointProjection);
     }
 
     public static string Render(WorkerContextPackage package)
@@ -205,6 +206,7 @@ public sealed class WorkerContextPackageBuilder
         }).ToArray();
 
         var projection = package.ReviewFindingProjection;
+        var checkpointProjection = package.InterruptedWorkCheckpointProjection;
         return new WorkerContextPackageReceipt(
             package.SemanticPackageId,
             sections,
@@ -225,9 +227,14 @@ public sealed class WorkerContextPackageBuilder
                 .Sum(artifact => artifact.AuthoritativeByteCount),
             ToolTranscriptCharacters: 0,
             ModelInputTokenEstimate: WorkerPromptInputBudget.CountTokens(renderedPackage),
-            EarlyConvergenceEligible: projection?.EarlyConvergenceEligible ?? false,
-            EarlyConvergenceCandidateSha: projection?.EarlyConvergenceCandidateSha,
-            EarlyConvergenceReceiptHashes: projection?.EarlyConvergenceReceiptHashes ?? []);
+            EarlyConvergenceEligible: checkpointProjection is not null || projection?.EarlyConvergenceEligible == true,
+            EarlyConvergenceCandidateSha: checkpointProjection?.CandidateSha ?? projection?.EarlyConvergenceCandidateSha,
+            EarlyConvergenceReceiptHashes: checkpointProjection is null
+                ? projection?.EarlyConvergenceReceiptHashes ?? []
+                : [checkpointProjection.ReceiptHash],
+            EarlyConvergenceEvidenceSource: checkpointProjection is null
+                ? EarlyConvergenceEvidenceKind.ReviewFindingReceipt
+                : EarlyConvergenceEvidenceKind.InterruptedWorkCheckpoint);
     }
 
     internal static string RenderArtifact(WorkerContextArtifact artifact)
