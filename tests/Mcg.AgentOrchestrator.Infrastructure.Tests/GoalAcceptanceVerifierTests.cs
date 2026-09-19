@@ -21,11 +21,11 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var firstRoot = new DotnetBuildStorageRoot(firstDirectory);
             var secondRoot = new DotnetBuildStorageRoot(secondDirectory);
             var ambientStorageRoot = new DotnetBuildStorageRoot(ambientRoot);
-            var firstVerifier = new GoalAcceptanceVerifier(firstRoot);
-            var secondVerifier = new GoalAcceptanceVerifier(secondRoot);
             using var ambient = DotnetBuildEnvironmentManagerTests.EnvVarScope.ForVariable(
                 DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
                 ambientRoot);
+            var firstVerifier = new GoalAcceptanceVerifier(firstRoot);
+            var secondVerifier = new GoalAcceptanceVerifier(secondRoot);
             var firstEnvironment = firstVerifier.ResolveExecutionEnvironment(null, "first", null, null);
             var secondEnvironment = secondVerifier.ResolveExecutionEnvironment(null, "second", null, null);
 
