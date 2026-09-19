@@ -30,7 +30,7 @@ public sealed class AcceptancePolicyShardPlannerTests
             Assert.Equal(
                 "build-system file changed: src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj; " +
                 "changed projects: Core; dependency closure: App, Core, Core.Tests, Dashboard.Tests, " +
-                "Infrastructure, Infrastructure.Cli.Tests, Infrastructure.OperatorComms, " +
+                "Infrastructure, Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.OperatorComms, " +
                 "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Providers, Infrastructure.Tests, TestSupport",
                 AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                     ["src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj"]).Evidence);

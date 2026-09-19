@@ -337,7 +337,8 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                     soloProjection.Projection.LandingPaths),
                 ConductorAutonomyPolicy.Permissive,
                 stableSlotLease: null,
-                CancellationToken.None);
+                CancellationToken.None,
+                new AcceptanceRunExecutionOptions());
             Assert.NotNull(soloResult.Acceptance);
             Assert.False(soloResult.Acceptance!.Passed);
             Assert.Equal(3, verifier.RunCount);

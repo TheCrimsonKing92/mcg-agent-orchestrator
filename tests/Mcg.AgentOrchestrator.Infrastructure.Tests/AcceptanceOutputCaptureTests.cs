@@ -150,20 +150,19 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
     [Xunit.Fact]
     public async Task TerminalOnlyFlushControlWithholdsLiveBytesButPreservesFinalOutput()
     {
-        var previousInterval = GoalAcceptanceVerifier.CapturePublicationInterval;
         var path = Path.Combine(Path.GetTempPath(), $"mcg-terminal-flush-control-{Guid.NewGuid():N}.out");
         var payload = Encoding.UTF8.GetBytes("terminal flush still preserves exact output");
         await using var source = new HeldOpenAfterPayloadStream(payload);
         var visiblePayload = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var watcher = WatchVisiblePayload(path, payload.Length, visiblePayload);
-        GoalAcceptanceVerifier.CapturePublicationInterval = Timeout.InfiniteTimeSpan;
         var drain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
             source,
             path,
             limitBytes: 1024,
             utcNow: () => DateTimeOffset.UnixEpoch,
             onLimitReached: null,
-            CancellationToken.None);
+            CancellationToken.None,
+            publicationInterval: Timeout.InfiniteTimeSpan);
         try
         {
             await source.SecondReadEntered.WaitAsync(TimeSpan.FromSeconds(5));
@@ -181,7 +180,6 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         finally
         {
             source.ReleaseEof();
-            GoalAcceptanceVerifier.CapturePublicationInterval = previousInterval;
             await drain.WaitAsync(TimeSpan.FromSeconds(5));
             try { File.Delete(path); } catch { }
         }
@@ -190,7 +188,6 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
     [Xunit.Fact]
     public async Task ConcurrentStdoutAndStderrPublishIndependentlyWhileBothSourcesRemainOpen()
     {
-        var previousInterval = GoalAcceptanceVerifier.CapturePublicationInterval;
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-live-stdout-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-live-stderr-{Guid.NewGuid():N}.err");
         var stdoutPayload = Encoding.UTF8.GetBytes("stdout-live-payload");
@@ -201,11 +198,12 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         var stderrVisible = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var stdoutWatcher = WatchVisiblePayload(stdoutPath, stdoutPayload.Length, stdoutVisible);
         using var stderrWatcher = WatchVisiblePayload(stderrPath, stderrPayload.Length, stderrVisible);
-        GoalAcceptanceVerifier.CapturePublicationInterval = TimeSpan.FromMilliseconds(50);
         var stdoutDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
-            stdoutSource, stdoutPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None);
+            stdoutSource, stdoutPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None,
+            publicationInterval: TimeSpan.FromMilliseconds(50));
         var stderrDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
-            stderrSource, stderrPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None);
+            stderrSource, stderrPath, 1024, () => DateTimeOffset.UnixEpoch, null, CancellationToken.None,
+            publicationInterval: TimeSpan.FromMilliseconds(50));
         try
         {
             await Task.WhenAll(stdoutSource.SecondReadEntered, stderrSource.SecondReadEntered)
@@ -222,7 +220,6 @@ public sealed class AcceptanceOutputCaptureTests : GoalAcceptanceVerifierTestBas
         {
             stdoutSource.ReleaseEof();
             stderrSource.ReleaseEof();
-            GoalAcceptanceVerifier.CapturePublicationInterval = previousInterval;
             await Task.WhenAll(stdoutDrain, stderrDrain).WaitAsync(TimeSpan.FromSeconds(5));
             try { File.Delete(stdoutPath); } catch { }
             try { File.Delete(stderrPath); } catch { }

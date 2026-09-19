@@ -2418,7 +2418,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             var decision = coordinator.Evaluate(
                 candidate,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, _, _, _) =>
+                (attemptCandidate, _, _, _, _) =>
                 {
                     preflightRuns++;
                     paidStarts++;

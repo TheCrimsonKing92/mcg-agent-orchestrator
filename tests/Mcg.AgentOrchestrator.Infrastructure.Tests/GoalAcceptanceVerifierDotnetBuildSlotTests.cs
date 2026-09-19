@@ -9,14 +9,14 @@ using System.Xml.Linq;
 
 public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
-    private protected static void SetPartitionVerdictKeyHooks(string candidateTreeSha, string mainSha, string verifyingCommitSha)
+    private protected void SetPartitionVerdictKeyHooks(string candidateTreeSha, string mainSha, string verifyingCommitSha)
     {
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => candidateTreeSha;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => verifyingCommitSha;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => candidateTreeSha;
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => mainSha;
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => verifyingCommitSha;
     }
 
-    private protected static async Task<AcceptanceVerificationResult> RunTwoLaneShardScenarioAsync(
+    private protected async Task<AcceptanceVerificationResult> RunTwoLaneShardScenarioAsync(
         int maxConcurrentShards,
         Func<string[], string, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner,
         string goalId)
@@ -24,7 +24,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         var root = CreateTwoLaneShardManifestWorkspace(maxConcurrentShards);
         try
         {
-            var verifier = new GoalAcceptanceVerifier(runner);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, runner);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             return await verifier.RunAsync(
@@ -287,11 +287,11 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
             : throw new InvalidOperationException($"Expected build-pool path, got '{path}'.");
     }
 
-    private protected static void ResetPartitionVerdictKeyHooks()
+    private protected void ResetPartitionVerdictKeyHooks()
     {
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
     }
 
     private protected static int CountInfrastructurePartitionTestCalls(IEnumerable<string[]> calls) =>

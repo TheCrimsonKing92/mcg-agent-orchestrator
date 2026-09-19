@@ -2,10 +2,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
-    // Once output has been consumed, carry one publication deadline across fast reads. This bounds
-    // external file visibility to this interval plus flush duration, and heartbeat observation to
-    // one additional HeartbeatInterval. Infinite/non-positive values preserve terminal-only flushing.
-    internal static TimeSpan CapturePublicationInterval { get; set; } = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DefaultCapturePublicationInterval = TimeSpan.FromSeconds(1);
 
     internal static async Task<CaptureLimitResult> DrainCappedCaptureAsync(
         Stream source,
@@ -13,7 +10,8 @@ public sealed partial class GoalAcceptanceVerifier
         long limitBytes,
         Func<DateTimeOffset> utcNow,
         Action? onLimitReached,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? publicationInterval = null)
     {
         var buffer = new byte[64 * 1024];
         long writtenBytes = 0;
@@ -94,14 +92,14 @@ public sealed partial class GoalAcceptanceVerifier
                         if (!publicationPending)
                         {
                             publicationPending = true;
-                            var publicationInterval = CapturePublicationInterval;
-                            if (publicationInterval > TimeSpan.Zero &&
-                                publicationInterval != Timeout.InfiniteTimeSpan)
+                            var effectivePublicationInterval = publicationInterval ?? DefaultCapturePublicationInterval;
+                            if (effectivePublicationInterval > TimeSpan.Zero &&
+                                effectivePublicationInterval != Timeout.InfiniteTimeSpan)
                             {
                                 publicationDelayCancellation =
                                     CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                                 publicationDelay = Task.Delay(
-                                    publicationInterval,
+                                    effectivePublicationInterval,
                                     publicationDelayCancellation.Token);
                             }
                         }

@@ -1106,7 +1106,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var decision = coordinator.Evaluate(
             candidate!,
             ConductorAutonomyPolicy.Conservative,
-            (_, _, lease, _) =>
+            (_, _, lease, _, _) =>
             {
                 acceptanceRan = true;
                 Assert.NotNull(lease);
@@ -1161,7 +1161,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             candidate,
             ConductorAutonomyPolicy.Conservative,
             stableSlotLease: null,
-            CancellationToken.None);
+            CancellationToken.None, new AcceptanceRunExecutionOptions());
 
         Assert.Null(result.Exception);
         Assert.Same(accepted, result.Acceptance);

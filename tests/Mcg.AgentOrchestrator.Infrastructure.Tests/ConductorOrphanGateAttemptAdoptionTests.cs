@@ -264,7 +264,8 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         DotnetBuildEnvironmentLease? lease,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        AcceptanceRunExecutionOptions executionOptions) =>
         throw new InvalidOperationException("An adopted orphan attempt must not be re-run by the successor.");
 
     private static ConductorParallelAcceptanceAttempt SyntheticAttempt(int? generationId)

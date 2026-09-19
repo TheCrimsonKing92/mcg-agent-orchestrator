@@ -713,13 +713,13 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         public bool StableSlotLeaseObserved { get; private set; }
         public DotnetBuildEnvironment? ObservedEnvironment { get; private set; }
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             RunCount++;
             StableSlotLeaseObserved |= stableSlotLease is not null && stableSlotIndex is not null;
@@ -732,14 +732,14 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
             return Task.FromResult(AddPolicyRequiredChecks(configuredResult, changedFiles ?? []));
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default)
+            bool runBaselineArm = false)
         {
             if (exception is not null)
                 throw exception;
@@ -2728,7 +2728,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot, runInline: true, buildPermitBusyTimeout: TimeSpan.Zero, buildStorageRoot: selectedRoot);
             var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative,
-                (item, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (item, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     item, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
             Assert.True(Directory.Exists(DotnetBuildEnvironmentManager.GoalRoot(goal.Id, selectedRoot)));
             void AssertBlocked() => Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, decision.Attempt.Outcome);
@@ -2773,7 +2773,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                     return new ConductorParallelAcceptanceOwnedProcessLaunchResult(Environment.ProcessId);
                 });
             var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative,
-                (item, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (item, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     item, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
             var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
             var json = File.ReadAllText(decision.Attempt.MetadataPath);
@@ -2834,7 +2834,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 blocked = blockedCoordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
-                    (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                         attemptCandidate,
                         AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -2860,7 +2860,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
             var regated = regateCoordinator.Evaluate(
                 candidate,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, _, lease, _) =>
+                (attemptCandidate, _, lease, _, _) =>
                 {
                     Xunit.Assert.NotNull(lease);
                     return ConductorParallelAcceptanceRunResult.Accepted(
@@ -2948,11 +2948,11 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
             var attemptA = Task.Run(() => coordinator.Evaluate(
                 candidateA,
                 ConductorAutonomyPolicy.Conservative,
-                (candidate, _, lease, _) => RunPartition(candidate, lease)));
+                (candidate, _, lease, _, _) => RunPartition(candidate, lease)));
             var attemptB = Task.Run(() => coordinator.Evaluate(
                 candidateB,
                 ConductorAutonomyPolicy.Conservative,
-                (candidate, _, lease, _) => RunPartition(candidate, lease)));
+                (candidate, _, lease, _, _) => RunPartition(candidate, lease)));
 
             Xunit.Assert.True(bothExecuting.Wait(TimeSpan.FromSeconds(5)));
             release.Set();

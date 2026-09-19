@@ -18,12 +18,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var remainderRuns = 0;
-        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) && args.Contains(remainderLaneFilter))
@@ -39,10 +38,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, ".orchestrator", "attempt-one"));
-            var first = await verifier.RunAsync(root, goalId);
+            var first = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-one");
             Assert.False(first.Passed);
             Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
             Assert.False(File.Exists(Path.Combine(root, ".orchestrator", "acceptance-partition-verdicts.json")));
@@ -52,10 +48,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 entry.Operation == "acceptance:partition-verdict" &&
                 entry.PartitionId == "cli");
 
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, ".orchestrator", "attempt-two"));
-            var second = await verifier.RunAsync(root, goalId);
+            var second = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-two");
             Assert.False(second.Passed);
             Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 1, CountInfrastructurePartitionTestCalls(calls));
             var secondReceipt = Assert.Single(second.Checks!, check => check.Name == "infrastructure partition verdict cache");
@@ -64,10 +57,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("aggregate_verdict=RED", secondReceipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("verifying_commit_sha=commit-a", secondReceipt.ResultSummary, StringComparison.Ordinal);
 
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, ".orchestrator", "attempt-three"));
-            var third = await verifier.RunAsync(root, goalId);
+            var third = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-three");
             Assert.True(third.Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 2,
@@ -80,8 +70,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -95,10 +84,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
@@ -125,7 +114,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -139,11 +128,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var cliRuns = 0;
+        var attemptPrefix = Path.Combine(root, ".orchestrator", "attempt-flaky");
         SetPartitionVerdictKeyHooks("tree-b", "main-b", "commit-b");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
@@ -161,7 +151,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                             goalId,
                             root,
                             "infrastructure tests: Cli",
-                            "retry-driving stderr from the original Cli partition")
+                            "retry-driving stderr from the original Cli partition",
+                            attemptPrefix)
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
@@ -170,7 +161,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
-            var result = await verifier.RunAsync(root, goalId);
+            var result = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-flaky");
 
             Assert.True(
                 result.Passed,
@@ -188,7 +179,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -209,15 +200,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("dddddddddddddddddddddddddddddddd");
         var calls = new List<string[]>();
         var mtpRuns = 0;
-        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var attemptPrefix = Path.Combine(root, ".orchestrator", "attempt-mtp");
         SetPartitionVerdictKeyHooks("tree-mtp", "main-mtp", "commit-mtp");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, ".orchestrator", "attempt-mtp"));
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
@@ -229,7 +217,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                             goalId,
                             root,
                             "infrastructure tests: Cli",
-                            "retry-driving stderr from the original MTP Cli partition"));
+                            "retry-driving stderr from the original MTP Cli partition",
+                            attemptPrefix));
                     }
 
                     WriteMtpTrx(args, 1, ["CliPartition.Passes"]);
@@ -239,7 +228,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             });
 
-            var result = await verifier.RunAsync(root, goalId);
+            var result = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-mtp");
 
             Assert.True(
                 result.Passed,
@@ -259,8 +248,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             DeleteDirectoryWithRetry(root);
@@ -318,10 +306,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.Length > 1 && args[0] == "git" && args[1] == "diff")
@@ -345,7 +333,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -358,35 +346,39 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            Task<GoalAcceptanceVerifier.CommandResult> Runner(string[] args, string _, CancellationToken __)
             {
                 calls.Add(args);
                 return Task.FromResult(IsVstestCall(args)
                     ? CreatePassingVstestResult(args)
                     : new GoalAcceptanceVerifier.CommandResult(0, ""));
-            });
+            }
 
-            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+
+            Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-a-main-a")).Passed);
             Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-a", "commit-b");
-            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+            Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-b-main-a")).Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 2,
                 CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-b", "commit-c");
-            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+            Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-b-main-b")).Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 3,
                 CountInfrastructurePartitionTestCalls(calls));
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -399,10 +391,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(IsVstestCall(args)
@@ -427,7 +419,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -440,10 +432,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(IsVstestCall(args)
@@ -465,7 +457,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -484,10 +476,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         manifest["engine"]!["partitionVerdictFullRerunEveryN"] = 2;
         File.WriteAllText(manifestPath, manifest.ToJsonString());
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (failFirstPartitionOnForcedRerun &&
@@ -526,7 +518,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -561,11 +553,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
 
         cache.Publish(mainSha, seedArtifacts, restoredProjects);
-        GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
+        TestOverrides.BaseBuildCacheForTests = cache;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -638,8 +630,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = null;
-            GoalAcceptanceVerifier.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildMainShaForTests = null;
+            TestOverrides.BaseBuildCacheForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -668,11 +660,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
 
         cache.Publish(mainSha, seedArtifacts, restoredProjects);
-        GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
+        TestOverrides.BaseBuildCacheForTests = cache;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -748,8 +740,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = null;
-            GoalAcceptanceVerifier.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildMainShaForTests = null;
+            TestOverrides.BaseBuildCacheForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -779,11 +771,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
         ];
 
-        GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
+        TestOverrides.BaseBuildCacheForTests = cache;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -906,8 +898,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = null;
-            GoalAcceptanceVerifier.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildMainShaForTests = null;
+            TestOverrides.BaseBuildCacheForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -947,12 +939,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         GoalId goalId,
         string worktreePath,
         string checkName,
-        string stderr)
+        string stderr,
+        string attemptResultsPrefix)
     {
         var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
             checkName,
             worktreePath,
-            invocationOrdinal: 0);
+            invocationOrdinal: 0,
+            attemptResultsPrefix: attemptResultsPrefix);
         var now = DateTimeOffset.UtcNow;
         GateHeartbeatArtifacts.Write(
             heartbeatPath,
@@ -978,6 +972,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
             Stderr: stderr);
     }
+
+    private static Task<AcceptanceVerificationResult> RunOwnedAttemptAsync(
+        GoalAcceptanceVerifier verifier,
+        string worktreePath,
+        GoalId goalId,
+        string attemptId) =>
+        verifier.RunOwnedAsync(
+            worktreePath,
+            goalId,
+            changedFiles: null,
+            stableSlotIndex: null,
+            stableSlotLease: null,
+            cancellationToken: default,
+            executionOptions: new AcceptanceRunExecutionOptions(
+                RunId: attemptId,
+                ResultsPrefix: Path.Combine(worktreePath, ".orchestrator", attemptId)));
 
     private static string DescribeFailedChecks(AcceptanceVerificationResult result) =>
         string.Join(

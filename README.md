@@ -7,7 +7,7 @@ This repository contains the orchestration kernel: create a goal, decompose it i
 ## Projects
 
 The current project inventory is derived from `src/**/*.csproj` (five production projects) and
-`tests/**/*.csproj` (eight test/support projects). See the
+`tests/**/*.csproj` (nine test/support projects). See the
 [architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
 and the separately labelled modular-monolith target.
 
@@ -21,6 +21,7 @@ and the separately labelled modular-monolith target.
 | `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | Executable composition root containing the current conductor, CLI, dashboard, and adapter wiring. | Reusable domain contracts or the persistence implementations. |
 | `tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj` | Core policy and repository-documentation contract tests. | Infrastructure or hosted-dashboard integration coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | Broad infrastructure, orchestration, worker, workspace, and acceptance tests. | The separately scoped CLI, dashboard, and provider-environment suites. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj` | Focused acceptance execution-owner and invocation-pipeline tests. | Broad infrastructure, CLI, dashboard, or provider-environment coverage. |
 | `tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj` | Dashboard API and UI behavior tests. | A production Dashboard assembly or general infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj` | CLI parsing, command, and console-contract tests. | Executable hosting or non-CLI infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj` | Process-isolated provider environment and configuration tests. | General provider implementation ownership. |
