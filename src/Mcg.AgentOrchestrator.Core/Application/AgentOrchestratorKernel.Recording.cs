@@ -592,7 +592,13 @@ public sealed partial class AgentOrchestratorKernel
             }
             foreach (var advisory in registeredVerdicts.Where(item =>
                          item.Verdict.Equals("met", StringComparison.Ordinal) &&
-                         !IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex)))
+                         !IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex) &&
+                         !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction =>
+                             correction.IsWaiver &&
+                             string.Equals(
+                                 correction.SupersededCriterion,
+                                 refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
+                                 StringComparison.OrdinalIgnoreCase))))
             {
                 var version = goal.AuthoritativeRefinedSpecVersion!.Version;
                 var obligation = goal.BindDeferredCriterionObligation(

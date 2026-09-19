@@ -55,6 +55,27 @@ public sealed class GateOwnedCriterionDeferralTests
     }
 
     [Xunit.Fact]
+    public void WaivedGateOwnedMetVerdictDoesNotBindObligation()
+    {
+        var scenario = CreateReviewScenario(gateOwned: true);
+        scenario.Kernel.WaiveAcceptanceCriterion(
+            scenario.Goal.Id,
+            scenario.Goal.RefinedSpec!.AcceptanceCriteria[0],
+            "Operator accepts the criterion without gate evidence.",
+            "operator@example");
+
+        RecordReview(scenario, "met");
+
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, scenario.Reviewer.Status);
+        var obligation = Xunit.Assert.Single(scenario.Goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Xunit.Assert.Null(obligation.ExpectedCandidateSha);
+        Xunit.Assert.DoesNotContain(scenario.Goal.Timeline, item =>
+            item.Kind == ProgressKind.TaskNote &&
+            item.Message.Contains("met verdict is advisory", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void BriefAndRoleGuidanceIdentifyAcceptanceGateOwnedCriteria()
     {
         const string gateCriterion = "The full acceptance gate passes.";
