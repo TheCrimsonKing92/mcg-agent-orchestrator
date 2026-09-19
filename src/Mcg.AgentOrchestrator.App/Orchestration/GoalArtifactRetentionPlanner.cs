@@ -213,12 +213,29 @@ internal static class GoalArtifactRetentionPlanner
         string path,
         string evidenceKind)
     {
-        var decision = state is RetentionGoalState.AcceptedCleaned or
+        var terminal = state is RetentionGoalState.AcceptedCleaned or
             RetentionGoalState.Failed or
             RetentionGoalState.Abandoned or
-            RetentionGoalState.Superseded
-                ? RetentionDecision.Archive
-                : RetentionDecision.Keep;
+            RetentionGoalState.Superseded;
+        var factRevision = EvidenceRetentionPolicy.ComputeFactRevision([], [path], state.ToString());
+        var eligibility = EvidenceRetentionPolicy.EvaluatePath(
+            terminal,
+            owner: null,
+            EvidenceOwnershipSource.Unresolved,
+            protectedAttempt: false,
+            referencedArtifact: false,
+            countBound: false,
+            aged: false,
+            byteBoundEligible: false,
+            factRevision,
+            requireOwner: false);
+        var decision = eligibility.Disposition switch
+        {
+            EvidenceEligibility.Keep => RetentionDecision.Keep,
+            EvidenceEligibility.Archive => RetentionDecision.Archive,
+            EvidenceEligibility.DeleteWhenSafe => RetentionDecision.DeleteWhenSafe,
+            _ => throw new InvalidOperationException($"Unsupported evidence eligibility '{eligibility.Disposition}'.")
+        };
         return new GoalArtifactRetentionItem(
             RetentionArtifactKind.TestEvidence,
             decision,

@@ -274,6 +274,133 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
+    public void AcceptanceRetention_DeclaredOwnerOverridesFilenameDerivedProtectedOwner()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var disposable = Path.Combine(goalDirectory, "final.out.log");
+        var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        var finalMetadata = fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        File.WriteAllText(disposable, "disposable evidence");
+        File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "old",
+            goalId = GoalId,
+            ordinal = 1,
+            startedAt = Now.AddMinutes(1),
+            outcome = 1,
+            reconciledAt = Now,
+            stdoutPath = disposable,
+            metadataPath = oldMetadata
+        }));
+        File.WriteAllText(finalMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "final",
+            goalId = GoalId,
+            ordinal = 2,
+            startedAt = Now.AddMinutes(2),
+            outcome = 1,
+            reconciledAt = Now,
+            metadataPath = finalMetadata
+        }));
+        SetAge(disposable, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.False(File.Exists(disposable));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == disposable &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.AttemptId == "old" &&
+            decision.OwnershipSource == EvidenceOwnershipSource.Declared &&
+            decision.BytesReclaimed > 0 &&
+            !string.IsNullOrWhiteSpace(decision.FactRevision));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_ChangedOwnerRevisionBeforeDeletionAbortsEffect()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var disposable = Path.Combine(goalDirectory, "old.out.log");
+        var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        File.WriteAllText(disposable, "must remain after fact revision changes");
+        File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "old",
+            goalId = GoalId,
+            ordinal = 1,
+            startedAt = Now.AddMinutes(1),
+            outcome = 1,
+            reconciledAt = Now,
+            stdoutPath = disposable,
+            metadataPath = oldMetadata
+        }));
+        SetAge(disposable, 30);
+
+        var result = StorageRetentionMaintenance.Run(
+            fixture.LogDirectory,
+            fixture.OrchestratorDirectory,
+            fixture.ExecutionDirectory,
+            [TerminalGoal(WorkTaskStatus.Completed)],
+            Now,
+            beforeAttemptCandidateDeletionForTests: _ =>
+                File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    attemptId = "old",
+                    goalId = GoalId,
+                    ordinal = 3,
+                    startedAt = Now.AddMinutes(1),
+                    outcome = 1,
+                    reconciledAt = Now,
+                    stdoutPath = disposable,
+                    metadataPath = oldMetadata
+                })));
+
+        Assert.True(File.Exists(disposable));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == disposable &&
+            decision.Action == EvidenceRetentionAction.RetainedUndecidable &&
+            decision.Reason == "retention-facts-changed-before-effect");
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_MalformedDeclarationsFallBackToLegacyInference()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var disposable = Path.Combine(goalDirectory, "old.out.log");
+        var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        var outside = Path.Combine(fixture.ExecutionDirectory, "outside.log");
+        File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["attemptId"] = "old",
+            ["goalId"] = GoalId,
+            ["ordinal"] = 1,
+            ["startedAt"] = Now.AddMinutes(1),
+            ["outcome"] = 1,
+            ["reconciledAt"] = Now,
+            ["stdoutPath"] = 123,
+            ["testResultPaths"] = new object?[] { null, string.Empty, outside }
+        }));
+        File.WriteAllText(disposable, "legacy-inferred disposable evidence");
+        SetAge(disposable, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.False(File.Exists(disposable));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == disposable &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.OwnershipSource == EvidenceOwnershipSource.InferredFromName);
+    }
+
+    [Xunit.Fact]
     public void AcceptanceRetention_OlderFailingTrxIsReducedToReceiptWhileLastFailureRemainsWhole()
     {
         using var fixture = new RetentionFixture();

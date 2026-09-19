@@ -599,7 +599,11 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
 
-            var candidates = new List<(FileInfo File, bool CountBound, string GoalId)>();
+            var candidates = new List<(
+                FileInfo File,
+                RetentionAttemptIdentity Owner,
+                EvidenceOwnershipSource OwnershipSource,
+                string GoalId)>();
             var goalId = Path.GetFileName(goalDirectory);
             var owners = goals.Where(goal => goal.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (owners.Length != 1)
@@ -662,10 +666,10 @@ internal static partial class StorageRetentionMaintenance
             var retainedTrxAttemptIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var trxPath in Directory.EnumerateFiles(goalDirectory, "*.trx", SearchOption.AllDirectories))
             {
-                var protectedAttempt = protectedAttemptIds.FirstOrDefault(id => BelongsToAttempt(trxPath, id));
-                if (protectedAttempt is not null)
+                var owner = EvidenceRetentionPolicy.ResolveOwner(attempts, trxPath);
+                if (owner.Attempt is not null && protectedAttemptIds.Contains(owner.Attempt.AttemptId))
                 {
-                    var identity = attempts.Single(attempt => attempt.AttemptId.Equals(protectedAttempt, StringComparison.OrdinalIgnoreCase));
+                    var identity = owner.Attempt;
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
                         EvidenceRetentionAction.Preserved,
@@ -674,11 +678,12 @@ internal static partial class StorageRetentionMaintenance
                         EvidenceOwnerResolution.UniqueTerminal,
                         identity.Failed ? "last-failing-attempt" : "final-attempt",
                         identity.AttemptId,
-                        identity.Ordinal));
+                        identity.Ordinal,
+                        OwnershipSource: owner.Source));
                     continue;
                 }
 
-                var attempt = attempts.FirstOrDefault(identity => BelongsToAttempt(trxPath, identity.AttemptId));
+                var attempt = owner.Attempt;
                 if (attempt is null)
                 {
                     decisions.Add(new EvidenceRetentionDecision(
@@ -687,7 +692,8 @@ internal static partial class StorageRetentionMaintenance
                         trxPath,
                         goal.GoalId,
                         EvidenceOwnerResolution.UniqueTerminal,
-                        "trx-attempt-ownership-unresolved"));
+                        owner.Ambiguous ? "trx-attempt-ownership-ambiguous" : "trx-attempt-ownership-unresolved",
+                        OwnershipSource: owner.Source));
                     continue;
                 }
 
@@ -741,10 +747,10 @@ internal static partial class StorageRetentionMaintenance
 
             foreach (var path in Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories))
             {
-                var protectedAttempt = protectedAttemptIds.FirstOrDefault(id => BelongsToAttempt(path, id));
-                if (protectedAttempt is not null)
+                var owner = EvidenceRetentionPolicy.ResolveOwner(attempts, path);
+                if (owner.Attempt is not null && protectedAttemptIds.Contains(owner.Attempt.AttemptId))
                 {
-                    var identity = attempts.Single(attempt => attempt.AttemptId.Equals(protectedAttempt, StringComparison.OrdinalIgnoreCase));
+                    var identity = owner.Attempt;
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
                         EvidenceRetentionAction.Preserved,
@@ -753,7 +759,8 @@ internal static partial class StorageRetentionMaintenance
                         EvidenceOwnerResolution.UniqueTerminal,
                         identity.Failed ? "last-failing-attempt" : "final-attempt",
                         identity.AttemptId,
-                        identity.Ordinal));
+                        identity.Ordinal,
+                        OwnershipSource: owner.Source));
                     continue;
                 }
 
@@ -771,7 +778,7 @@ internal static partial class StorageRetentionMaintenance
 
                 if (path.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase))
                 {
-                    var identity = attempts.FirstOrDefault(attempt => BelongsToAttempt(path, attempt.AttemptId));
+                    var identity = owner.Attempt;
                     if (identity is not null &&
                         (retainedTrxAttemptIds.Contains(identity.AttemptId) ||
                          retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, identity.AttemptId))))
@@ -784,7 +791,8 @@ internal static partial class StorageRetentionMaintenance
                             EvidenceOwnerResolution.UniqueTerminal,
                             "retained-test-artifact-owner-metadata",
                             identity.AttemptId,
-                            identity.Ordinal));
+                            identity.Ordinal,
+                            OwnershipSource: owner.Source));
                         continue;
                     }
                 }
@@ -792,37 +800,139 @@ internal static partial class StorageRetentionMaintenance
                 if (!path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase) &&
                     !path.EndsWith(".test-identities.json", StringComparison.OrdinalIgnoreCase))
                 {
-                    candidates.Add((
-                        new FileInfo(path),
-                        countBoundAttemptIds.Any(id => BelongsToAttempt(path, id)),
-                        goal.GoalId));
+                    if (owner.Attempt is null)
+                    {
+                        decisions.Add(new EvidenceRetentionDecision(
+                            family,
+                            EvidenceRetentionAction.RetainedUndecidable,
+                            path,
+                            goal.GoalId,
+                            EvidenceOwnerResolution.UniqueTerminal,
+                            owner.Ambiguous ? "artifact-owner-ambiguous" : "artifact-owner-unresolved",
+                            OwnershipSource: owner.Source));
+                        continue;
+                    }
+
+                    candidates.Add((new FileInfo(path), owner.Attempt, owner.Source, goal.GoalId));
                 }
             }
 
             var totalCandidateBytes = candidates.Sum(candidate => SafeLength(candidate.File.FullName));
+            var expectedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
+                attempts,
+                Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
             beforeAttemptCandidateDeletionForTests?.Invoke(goalDirectory);
             foreach (var candidate in candidates
-                .OrderBy(item => item.File.LastWriteTimeUtc)
+                .OrderBy(item => item.File.Extension.Equals(".json", StringComparison.OrdinalIgnoreCase) &&
+                    item.File.Name.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(item => item.File.LastWriteTimeUtc)
                 .ThenBy(item => item.File.FullName, StringComparer.OrdinalIgnoreCase))
             {
+                if (!TryReadAttemptIdentities(goalDirectory, goal.GoalId, out var refreshedAttempts, out var refreshReason) ||
+                    refreshedAttempts.Any(attempt => !attempt.Reconciled))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.DeferredLive,
+                        candidate.File.FullName,
+                        candidate.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        string.IsNullOrWhiteSpace(refreshReason) ? "attempt-became-unreconciled-before-effect" : refreshReason,
+                        candidate.Owner.AttemptId,
+                        candidate.Owner.Ordinal,
+                        OwnershipSource: candidate.OwnershipSource,
+                        FactRevision: expectedFactRevision));
+                    continue;
+                }
+
+                var observedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
+                    refreshedAttempts,
+                    Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
+                if (!expectedFactRevision.Equals(observedFactRevision, StringComparison.Ordinal))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.RetainedUndecidable,
+                        candidate.File.FullName,
+                        candidate.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        "retention-facts-changed-before-effect",
+                        candidate.Owner.AttemptId,
+                        candidate.Owner.Ordinal,
+                        OwnershipSource: candidate.OwnershipSource,
+                        FactRevision: observedFactRevision));
+                    continue;
+                }
+
+                if (!IsPathContainedBy(goalDirectory, candidate.File.FullName))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.RetainedUndecidable,
+                        candidate.File.FullName,
+                        candidate.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        "candidate-path-left-goal-directory",
+                        OwnershipSource: candidate.OwnershipSource,
+                        FactRevision: observedFactRevision));
+                    continue;
+                }
+
+                var refreshedOwner = EvidenceRetentionPolicy.ResolveOwner(refreshedAttempts, candidate.File.FullName);
+                if (refreshedOwner.Attempt is null ||
+                    !refreshedOwner.Attempt.AttemptId.Equals(candidate.Owner.AttemptId, StringComparison.OrdinalIgnoreCase))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.RetainedUndecidable,
+                        candidate.File.FullName,
+                        candidate.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        "artifact-owner-changed-before-effect",
+                        OwnershipSource: refreshedOwner.Source,
+                        FactRevision: observedFactRevision));
+                    continue;
+                }
+
+                var refreshedProtectedAttemptIds = EvidenceRetentionPolicy.ProtectedAttemptIds(refreshedAttempts);
+                var refreshedCountBoundAttemptIds = EvidenceRetentionPolicy.AttemptIdsPastCountBound(
+                    refreshedAttempts,
+                    ConductorParallelAcceptanceAttemptCoordinator.RetainedAttemptCountPerGoal,
+                    refreshedProtectedAttemptIds);
                 var age = now - candidate.File.LastWriteTimeUtc;
                 var aged = age > AcceptanceArtifactMaxAge;
                 var byteBoundEligible =
                     totalCandidateBytes > acceptanceArtifactMaxBytes &&
                     age > WorkerCompressionAge;
-                if (!candidate.CountBound && !aged && !byteBoundEligible)
+                var referencedArtifact =
+                    retainedTrxAttemptIds.Contains(refreshedOwner.Attempt.AttemptId) ||
+                    retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, refreshedOwner.Attempt.AttemptId));
+                var eligibility = EvidenceRetentionPolicy.EvaluatePath(
+                    terminalGoal: true,
+                    refreshedOwner.Attempt,
+                    refreshedOwner.Source,
+                    refreshedProtectedAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
+                    referencedArtifact,
+                    refreshedCountBoundAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
+                    aged,
+                    byteBoundEligible,
+                    observedFactRevision);
+                if (eligibility.Disposition != EvidenceEligibility.DeleteWhenSafe)
                 {
-                    if (totalCandidateBytes > acceptanceArtifactMaxBytes)
-                    {
-                        decisions.Add(new EvidenceRetentionDecision(
-                            family,
-                            EvidenceRetentionAction.Preserved,
-                            candidate.File.FullName,
-                            candidate.GoalId,
-                            EvidenceOwnerResolution.UniqueTerminal,
-                            "byte-bound-unsatisfiable-fresh-evidence"));
-                    }
-
+                    decisions.Add(new EvidenceRetentionDecision(
+                        family,
+                        EvidenceRetentionAction.Preserved,
+                        candidate.File.FullName,
+                        candidate.GoalId,
+                        EvidenceOwnerResolution.UniqueTerminal,
+                        totalCandidateBytes > acceptanceArtifactMaxBytes &&
+                            eligibility.Reason == "within-retention-bounds"
+                                ? "byte-bound-unsatisfiable-fresh-evidence"
+                                : eligibility.Reason,
+                        refreshedOwner.Attempt.AttemptId,
+                        refreshedOwner.Attempt.Ordinal,
+                        OwnershipSource: refreshedOwner.Source,
+                        FactRevision: observedFactRevision));
                     continue;
                 }
 
@@ -834,16 +944,28 @@ internal static partial class StorageRetentionMaintenance
                     candidate.File.FullName,
                     candidate.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
-                    deletion.Success
-                        ? candidate.CountBound ? "past-count-bound" : aged ? "past-age-bound" : "past-byte-bound"
-                        : "exclusive-delete-failed",
+                    deletion.Success ? eligibility.Reason : "exclusive-delete-failed",
+                    refreshedOwner.Attempt.AttemptId,
+                    refreshedOwner.Attempt.Ordinal,
                     BytesAttempted: length,
                     BytesReclaimed: deletion.Success ? length : 0,
-                    FailureExceptionType: deletion.ExceptionType));
+                    FailureExceptionType: deletion.ExceptionType,
+                    OwnershipSource: refreshedOwner.Source,
+                    FactRevision: observedFactRevision));
                 if (deletion.Success)
                 {
                     deleted++;
                     totalCandidateBytes = Math.Max(0, totalCandidateBytes - length);
+                    if (TryReadAttemptIdentities(
+                        goalDirectory,
+                        goal.GoalId,
+                        out var postEffectAttempts,
+                        out _))
+                    {
+                        expectedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
+                            postEffectAttempts,
+                            Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
+                    }
                 }
             }
         }
@@ -1462,7 +1584,17 @@ internal static partial class StorageRetentionMaintenance
                 var reconciled = root.TryGetProperty("reconciledAt", out var reconciledAt) &&
                     reconciledAt.ValueKind == JsonValueKind.String &&
                     reconciledAt.TryGetDateTimeOffset(out _);
-                result.Add(new RetentionAttemptIdentity(attemptId, ordinal, startedAt, failed, reconciled));
+                var declaredPaths = ReadDeclaredAttemptPaths(root, goalDirectory);
+                var lifecycleRevision = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(root.GetRawText()))).ToLowerInvariant();
+                result.Add(new RetentionAttemptIdentity(
+                    attemptId,
+                    ordinal,
+                    startedAt,
+                    failed,
+                    reconciled,
+                    declaredPaths.Count == 0 ? null : declaredPaths,
+                    lifecycleRevision));
             }
 
             if (result.Count == 0)
@@ -1481,6 +1613,67 @@ internal static partial class StorageRetentionMaintenance
             attempts = [];
             reason = $"attempt-metadata-unreadable:{ex.GetType().Name}";
             return false;
+        }
+    }
+
+    private static IReadOnlyList<string> ReadDeclaredAttemptPaths(JsonElement root, string goalDirectory)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var propertyName in new[]
+        {
+            "stdoutPath",
+            "stderrPath",
+            "exitCodePath",
+            "heartbeatPath",
+            "resultPath",
+            "metadataPath",
+            "executionDirectory"
+        })
+        {
+            if (root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                AddDeclaredPath(paths, goalDirectory, value.GetString());
+            }
+        }
+
+        if (root.TryGetProperty("testResultPaths", out var testResultPaths) &&
+            testResultPaths.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var value in testResultPaths.EnumerateArray())
+            {
+                if (value.ValueKind == JsonValueKind.String)
+                {
+                    AddDeclaredPath(paths, goalDirectory, value.GetString());
+                }
+            }
+        }
+
+        return paths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static void AddDeclaredPath(HashSet<string> paths, string goalDirectory, string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return;
+        }
+
+        try
+        {
+            var goalRoot = Path.GetFullPath(goalDirectory);
+            var fullPath = Path.GetFullPath(candidate, goalRoot);
+            var relative = Path.GetRelativePath(goalRoot, fullPath);
+            if (!Path.IsPathRooted(relative) &&
+                !relative.Equals("..", StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                paths.Add(fullPath);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Invalid optional declarations degrade to conservative legacy inference.
         }
     }
 
@@ -1584,16 +1777,13 @@ internal static partial class StorageRetentionMaintenance
         return fileName.Equals("attempt-sequence.txt", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool BelongsToAttempt(string path, string? attemptId)
+    private static bool IsPathContainedBy(string directory, string path)
     {
-        if (string.IsNullOrWhiteSpace(attemptId))
-        {
-            return false;
-        }
-
-        return Path.GetFileName(path).StartsWith(attemptId + ".", StringComparison.OrdinalIgnoreCase) ||
-            path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(segment => segment.Equals(attemptId + ".receipts", StringComparison.OrdinalIgnoreCase));
+        var relative = Path.GetRelativePath(Path.GetFullPath(directory), Path.GetFullPath(path));
+        return !Path.IsPathRooted(relative) &&
+            !relative.Equals("..", StringComparison.Ordinal) &&
+            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+            !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     private static int SweepPrompts(
