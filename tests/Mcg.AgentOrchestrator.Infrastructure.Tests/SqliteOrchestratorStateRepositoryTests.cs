@@ -2750,6 +2750,64 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(waiting.Id.Value, ids);
     }
 
+    [Xunit.Fact(DisplayName = "ListConductLoopGoalMetadata_skips_terminal_snapshot_json_on_repeated_reads")]
+    public async Task ListConductLoopGoalMetadataSkipsTerminalSnapshotJsonOnRepeatedReads()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        GoalSnapshot[] terminal =
+        [
+            BuildLargeTerminalGoalSnapshot(0),
+            BuildLargeTerminalGoalSnapshot(1) with { Status = GoalStatus.Cancelled },
+            BuildLargeTerminalGoalSnapshot(2) with { Status = GoalStatus.Superseded }
+        ];
+        var active = BuildTerminalGoalSnapshot(3) with { Status = GoalStatus.Active };
+        var failedActive = BuildTerminalGoalSnapshot(4) with
+        {
+            Status = GoalStatus.Active,
+            Tasks = [BuildTerminalGoalSnapshot(4).Tasks.Single() with { Status = WorkTaskStatus.Failed }]
+        };
+        await repo.SaveGoalSnapshotsAsync([.. terminal, active, failedActive]);
+
+        var largeTimelineListing = await repo.ListConductLoopGoalMetadataAsync();
+        var expectedOrder = largeTimelineListing.Select(row => row.Id).ToArray();
+        Assert.Equal(5, expectedOrder.Length);
+
+        using (var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE goals SET snapshot_json = '{not-json' WHERE id IN ($id0, $id1, $id2)";
+            cmd.Parameters.AddWithValue("$id0", terminal[0].Id);
+            cmd.Parameters.AddWithValue("$id1", terminal[1].Id);
+            cmd.Parameters.AddWithValue("$id2", terminal[2].Id);
+            Assert.Equal(3, cmd.ExecuteNonQuery());
+        }
+
+        IReadOnlyList<GoalSummary>? listing = null;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var exception = await Record.ExceptionAsync(async () =>
+                listing = await repo.ListConductLoopGoalMetadataAsync());
+            Assert.Null(exception);
+        }
+
+        Assert.NotNull(listing);
+        Assert.Equal(5, listing.Count);
+        Assert.Equal(expectedOrder, listing.Select(row => row.Id));
+        Assert.All(terminal, snapshot => Assert.Contains(listing, row =>
+            row.Id == snapshot.Id &&
+            row.Status == snapshot.Status.ToString() &&
+            row.Objective == $"Terminal {Array.IndexOf(terminal, snapshot)} title"));
+        var activeSummary = Assert.Single(listing, row => row.Id == active.Id);
+        Assert.Equal("result-3", activeSummary.ResultCommit);
+        Assert.Equal(active.Timeline[0].OccurredAt, activeSummary.CreatedAt);
+        Assert.Equal(active.Timeline[^1].OccurredAt, activeSummary.TerminatedAt);
+        Assert.Null(activeSummary.Condition);
+        var failedSummary = Assert.Single(listing, row => row.Id == failedActive.Id);
+        Assert.Equal(GoalLifecycle.ActiveWithFailedTaskCondition, failedSummary.Condition);
+    }
+
     [Xunit.Fact(DisplayName = "LoadConductLoopKernel_excludes_terminal_goals_from_active_dictionary")]
     public async Task LoadConductLoopKernelExcludesTerminalGoalsFromActiveDictionary()
     {
@@ -3136,6 +3194,22 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                     Criterion: $"QUESTION_CRITERION_SENTINEL_{index}",
                     BlastRadius: "high")],
                 [$"OPERATOR_ACCEPTANCE_SENTINEL_{index}"]));
+    }
+
+    private static GoalSnapshot BuildLargeTerminalGoalSnapshot(int index)
+    {
+        var snapshot = BuildTerminalGoalSnapshot(index);
+        var firstEvent = snapshot.Timeline.Single();
+        return snapshot with
+        {
+            Timeline = Enumerable.Range(0, 5_000)
+                .Select(eventIndex => firstEvent with
+                {
+                    Message = $"TIMELINE_SENTINEL_{index}_{eventIndex}",
+                    OccurredAt = firstEvent.OccurredAt.AddSeconds(eventIndex)
+                })
+                .ToArray()
+        };
     }
 
     private static string DiagnosticsPath(string dbPath) =>
