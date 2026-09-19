@@ -202,7 +202,7 @@ public sealed class ConductorCrossTickTests
             fixture.AttemptCoordinator.Evaluate(
                 excessCandidate,
                 ConductorAutonomyPolicy.Conservative,
-                (candidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (candidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     candidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)));
         Assert.Contains("capacity 2 is exhausted", gateViolation.Message, StringComparison.Ordinal);

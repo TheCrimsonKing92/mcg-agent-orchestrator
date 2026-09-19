@@ -103,7 +103,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<Goal, FailedGoalRecoveryDecision>? _beforeFailedGoalRecoveryEffect;
     private readonly Func<TimeSpan, string> _buildServerShutdown;
     private readonly TimeSpan _buildServerShutdownTimeout;
-    private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
@@ -539,7 +539,7 @@ internal sealed partial class ConductorDriver
         _buildServerShutdownTimeout = DefaultBuildServerShutdownTimeout;
         _buildServerShutdown = timeout => RunBuildServerShutdown(dir, timeout);
 
-        _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken) =>
+        _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken, attemptOptions) =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
@@ -618,18 +618,15 @@ internal sealed partial class ConductorDriver
             {
                 var gateProgressEventWriter = new ConductEventLogWriter(
                     Path.Combine(dir, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
-                using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-                    AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress));
-                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(
-                    cancellationProbeState.ShouldCancel,
-                    cancellationProbeState.ShouldCancelNow);
-                verification = acceptanceVerifier.RunAsync(
-                    worktreePath,
-                    goal.Id,
-                    changedFiles,
-                    stableSlotIndex,
-                    stableSlotLease,
-                    cancellationToken).GetAwaiter().GetResult();
+                var executionOptions = attemptOptions with
+                {
+                    ProgressSink = progress => AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress),
+                    CancellationProbe = cancellationProbeState.ShouldCancel,
+                    BoundaryCancellationProbe = cancellationProbeState.ShouldCancelNow
+                };
+                verification = AcceptanceExecutionRunner.RunAttempt(
+                    acceptanceVerifier, worktreePath, goal.Id, changedFiles, stableSlotIndex,
+                    stableSlotLease, cancellationToken, executionOptions);
             }
             catch (AcceptanceInfrastructureDeferredException ex)
             {
@@ -771,15 +768,10 @@ internal sealed partial class ConductorDriver
             }
 
             GoalOperationJournal.Begin(dir, goal, "conductor:finding-evidence", $"Running focused finding evidence: {request}");
-            var result = acceptanceVerifier.RunFocusedEvidenceAsync(
-                    worktreePath,
-                    goal.Id,
-                    request,
-                    stableSlotLease: stableSlotLease,
-                    runBaselineArm: runBaselineArm,
-                    cancellationToken: cancellationToken)
-                .GetAwaiter()
-                .GetResult();
+            var result = AcceptanceExecutionRunner.RunFocusedVerification(
+                acceptanceVerifier, worktreePath, goal.Id, request,
+                stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
+                runBaselineArm, cancellationToken);
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
@@ -1327,10 +1319,11 @@ internal sealed partial class ConductorDriver
         _buildServerShutdown = timeout => RunBoundedBuildServerShutdown(
             buildServerShutdown ?? (() => { }),
             timeout);
-        _runAcceptanceVerification = runAcceptanceVerificationWithLease
-            ?? (runAcceptanceVerificationWithSlot is not null
-                ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
-                : ((goal, _, _, _) => runAcceptanceVerification(goal)));
+        _runAcceptanceVerification = runAcceptanceVerificationWithLease is not null
+            ? ((goal, slot, lease, token, _) => runAcceptanceVerificationWithLease(goal, slot, lease, token))
+            : (runAcceptanceVerificationWithSlot is not null
+                ? ((goal, slot, _, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
+                : ((goal, _, _, _, _) => runAcceptanceVerification(goal)));
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = (acceptanceEventSink ?? ((_, _) => { }), noTickAcceptancePollDelay ?? Thread.Sleep, noTickAcceptancePollTimeout ?? DefaultNoTickAcceptancePollTimeout);
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
@@ -3673,8 +3666,8 @@ internal sealed partial class ConductorDriver
         if (RunAcceptanceCohortSourceSizePreflight(integration.Path, identity, store) is { } sourceSizeReceipt) return sourceSizeReceipt;
         var gateProgressEventWriter = new ConductEventLogWriter(
             Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
-        using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-            AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress));
+        var executionOptions = new AcceptanceRunExecutionOptions(
+            ProgressSink: progress => AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress));
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;
@@ -3690,13 +3683,15 @@ internal sealed partial class ConductorDriver
                 identity.Value,
                 cancellationToken);
             onGateAdmitted?.Invoke();
-            var verification = verifier.RunAsync(
+            var verification = AcceptanceExecutionRunner.RunAttempt(
+                verifier,
                 integration.Path,
                 goalId: null,
-                changedFiles: bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                stableSlotIndex: stableSlotLease.Environment.BuildPermitIndex,
-                stableSlotLease: stableSlotLease,
-                cancellationToken: cancellationToken).GetAwaiter().GetResult();
+                bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                stableSlotLease.Environment.BuildPermitIndex,
+                stableSlotLease,
+                cancellationToken,
+                executionOptions);
             gateExitCode = verification.ExitCode;
             var classifiedVerification = ClassifyCohortVerificationResultWithPaths(verification);
             classification = classifiedVerification.Classification;
@@ -3808,11 +3803,9 @@ internal sealed partial class ConductorDriver
             partitionManifest = verifier.ComputeEffectivePlanIdentity(
                 partition.Path,
                 member.LandingPaths);
-            var result = verifier.RunAsync(
-                partition.Path,
-                member.GoalId,
-                member.LandingPaths,
-                cancellationToken: cancellationToken).GetAwaiter().GetResult();
+            var result = AcceptanceExecutionRunner.RunAttempt(
+                verifier, partition.Path, member.GoalId, member.LandingPaths,
+                stableSlotIndex: null, stableSlotLease: null, cancellationToken);
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             partition.AssertGoalBranchesUnchanged();
             outcome = ClassifyCohortVerification(result);

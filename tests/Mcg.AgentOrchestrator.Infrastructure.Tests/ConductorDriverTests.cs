@@ -32,7 +32,7 @@ public sealed class ConductorDriverTests
         var decision = coordinator.Evaluate(
             candidate,
             ConductorAutonomyPolicy.Conservative,
-            (_, _) => throw new InvalidOperationException("Owned acceptance callback should not run inline."));
+            (_, _, _, _, _) => throw new InvalidOperationException("Owned acceptance callback should not run inline."));
 
         Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
         Assert.True(coordinator.HasLiveAttempt(goal.Id.Value));
@@ -723,23 +723,23 @@ public sealed class ConductorDriverTests
 
     internal sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
     {
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default) =>
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner) =>
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             Task.FromResult(new FocusedEvidenceRunResult(
                 request,
                 Accepted: true,
@@ -757,23 +757,23 @@ public sealed class ConductorDriverTests
 
     internal sealed class ThrowingAcceptanceVerifier(Exception exception) : IGoalAcceptanceVerifier
     {
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default) =>
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner) =>
             Task.FromException<AcceptanceVerificationResult>(exception);
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             Task.FromException<FocusedEvidenceRunResult>(exception);
     }
 

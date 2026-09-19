@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text.Json;
 
 public sealed class InfrastructureProductionProjectGraphTests
 {
@@ -102,6 +103,39 @@ public sealed class InfrastructureProductionProjectGraphTests
                 Assert.Null(reference.Attribute("AdditionalProperties"));
             }
         }
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceOwnerProjectIsManifestDeclaredAndIsolated()
+    {
+        const string project =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj";
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var projectPath = Path.Combine(root, project.Replace('/', Path.DirectorySeparatorChar));
+        var document = XDocument.Load(projectPath);
+        var references = document.Descendants()
+            .Where(element => element.Name.LocalName == "ProjectReference")
+            .Select(element => element.Attribute("Include")!.Value)
+            .Select(include => Normalize(Path.GetRelativePath(root, Path.GetFullPath(Path.Combine(
+                Path.GetDirectoryName(projectPath)!, include)))))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        Assert.Equal([CoreProject, InfrastructureProject], references);
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "config", "acceptance-manifest.json")));
+        var declaredChecks = manifest.RootElement.GetProperty("checks").EnumerateArray()
+            .Count(check => check.TryGetProperty("project", out var value) && value.GetString() == project);
+        var declaredInvocations = manifest.RootElement.GetProperty("engine").GetProperty("mtpInvocations").EnumerateArray()
+            .Count(invocation => invocation.GetProperty("project").GetString() == project);
+        Assert.Equal(1, declaredChecks);
+        Assert.Equal(1, declaredInvocations);
+
+        var umbrella = XDocument.Load(Path.Combine(
+            root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        Assert.Contains(umbrella.Descendants(), element =>
+            element.Name.LocalName == "Compile" &&
+            element.Attribute("Remove")?.Value == "Acceptance\u005c**\u005c*.cs");
     }
 
     private static Dictionary<string, ProductionProject> LoadProductionProjects(string root)

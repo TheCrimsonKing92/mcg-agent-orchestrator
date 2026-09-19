@@ -1001,7 +1001,7 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.True(plan.RequiresBroadVerification);
-        Assert.Equal(5, plan.Checks.Count);
+        Assert.Equal(6, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
         {
             Assert.Equal("dotnet", check.Command[0]);
@@ -1014,6 +1014,7 @@ public sealed class RepositoryChangeClassifierTests
             [
                 "core tests",
                 "infrastructure tests",
+                "acceptance execution owner tests",
                 "provider environment tests",
                 "cli tests",
                 "full dotnet tests: dashboard"
@@ -1023,6 +1024,7 @@ public sealed class RepositoryChangeClassifierTests
             [
                 "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"

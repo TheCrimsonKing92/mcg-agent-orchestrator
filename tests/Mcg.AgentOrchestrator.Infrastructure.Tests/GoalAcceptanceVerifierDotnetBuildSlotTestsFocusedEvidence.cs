@@ -526,6 +526,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 OutputTail: "candidate failures",
                 FailingTestIdentities: identities,
                 TestProjectPath: project);
+            await using var executionOwner = AcceptanceExecutionOwners.CreateAttempt(
+                root,
+                options: new AcceptanceRunExecutionOptions(
+                    RunId: "failure-attribution-cap",
+                    ResultsPrefix: Path.Combine(root, "failure-attribution-cap")));
             var attributed = await verifier.AttachTestFailureAttributionsAsync(
                 check,
                 new GoalAcceptanceVerifier.AcceptanceManifestCheck
@@ -540,6 +545,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 GoalId.New(),
                 stableSlotIndex: null,
                 stableSlotLease: null,
+                executionOwner,
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(

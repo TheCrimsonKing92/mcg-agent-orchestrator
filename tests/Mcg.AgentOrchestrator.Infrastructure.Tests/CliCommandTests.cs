@@ -1097,13 +1097,13 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 
         public int? LastStableSlotIndex { get; private set; }
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             RunCount++;
             LastStableSlotIndex = stableSlotIndex;
@@ -1123,14 +1123,14 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
                 Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.", DurationMilliseconds: 7)]));
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             Task.FromResult(new FocusedEvidenceRunResult(
                 request,
                 Accepted: true,

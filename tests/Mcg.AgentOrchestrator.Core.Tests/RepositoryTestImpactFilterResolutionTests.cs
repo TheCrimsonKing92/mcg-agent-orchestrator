@@ -14,6 +14,26 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     }
 
     [Xunit.Fact]
+    public void AcceptanceOwnerTestUsesItsIndependentProject()
+    {
+        const string path =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/AcceptanceAttemptExecutionOwnerTests.cs";
+        var reader = SourceDeclarationReader.ForFiles(
+            (path, TestSource("AcceptanceAttemptExecutionOwnerTests")));
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([path]),
+            reader);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal(RepositoryTestProject.Acceptance, check.TestProject);
+        Assert.Contains(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
+            check.Command);
+        Assert.Equal("FullyQualifiedName~AcceptanceAttemptExecutionOwnerTests", check.Command[^1]);
+    }
+
+    [Xunit.Fact]
     public void DottedChangedTestFileUsesDeclaredClass()
     {
         // Mirrors CliCommandTests.PersistentRunnerCommands.cs, whose declared class removes the dot.

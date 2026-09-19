@@ -1843,11 +1843,19 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         int executedTestCount)
     {
         var exitCode = -1;
+        var executionOwner = new FakeAcceptanceExecutionOwner();
         var output = CaptureConsole(() =>
             exitCode = PostLandingCanaryCommand.Run(
                 [PostLandingCanaryCommand.SubcommandName, "fixture-root"],
                 verifier,
-                _ => executedTestCount));
+                _ => executedTestCount,
+                (worktreePath, _) =>
+                {
+                    Assert.Equal("fixture-root", worktreePath);
+                    return executionOwner;
+                }));
+        Assert.Same(executionOwner, verifier.ExecutionOwner);
+        Assert.True(executionOwner.Disposed);
         var resultLine = output
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Single(line => line.StartsWith(PostLandingCanaryCommand.ResultPrefix, StringComparison.Ordinal));
@@ -1893,29 +1901,42 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     {
         internal string? WorktreePath { get; private set; }
         internal IReadOnlyList<string>? ChangedFiles { get; private set; }
+        internal IAcceptanceAttemptExecutionOwner? ExecutionOwner { get; private set; }
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             WorktreePath = worktreePath;
             ChangedFiles = changedFiles;
+            ExecutionOwner = executionOwner;
             return Task.FromResult(result);
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class FakeAcceptanceExecutionOwner : IAcceptanceAttemptExecutionOwner
+    {
+        internal bool Disposed { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class ToggleAcceptanceEngineStateReader(PostLandingCanaryEventStore inner)

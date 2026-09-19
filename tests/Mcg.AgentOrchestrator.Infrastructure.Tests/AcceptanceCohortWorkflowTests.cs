@@ -346,50 +346,80 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         internal string StableSlotRootPath { get; private set; } = string.Empty;
         internal string WorktreePath { get; private set; } = string.Empty;
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        internal Task<AcceptanceVerificationResult> RunAsync(
             string worktreePath,
             GoalId? goalId = null,
             IReadOnlyList<string>? changedFiles = null,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default) =>
+            RunCore(
+                worktreePath,
+                goalId,
+                changedFiles,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken);
+
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
+            string worktreePath,
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
+        {
+            var executionContext = (IAcceptanceRunExecutionContext)executionOwner;
+            return RunCore(
+                worktreePath,
+                goalId,
+                changedFiles,
+                stableSlotIndex,
+                stableSlotLease,
+                executionContext.CancellationToken,
+                executionContext.ReportProgress);
+        }
+
+        private Task<AcceptanceVerificationResult> RunCore(
+            string worktreePath,
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            CancellationToken cancellationToken,
+            Action<AcceptanceGateProgress>? progressSink = null)
         {
             Interlocked.Increment(ref _runCount);
             WorktreePath = worktreePath;
             StableSlotLeaseObserved = stableSlotLease is not null && stableSlotIndex is not null;
             StableSlotRootPath = stableSlotLease?.Environment.RootPath ?? string.Empty;
             var now = DateTimeOffset.UtcNow;
-            typeof(GoalAcceptanceVerifier)
-                .GetMethod("EmitGateProgress", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-                .Invoke(null,
-                [
-                    new AcceptanceGateProgress(
-                        GoalId: goalId?.Value,
-                        Phase: "controlled-cohort",
-                        CurrentTarget: "blocking-verifier",
-                        SlotIndex: stableSlotIndex,
-                        ProcessId: Environment.ProcessId,
-                        ChildProcessId: null,
-                        StartedAt: now,
-                        LastObservedAt: now,
-                        LastProgressAt: now,
-                        Elapsed: TimeSpan.Zero,
-                        OutputBytes: 0,
-                        HeartbeatPath: Path.Combine(worktreePath, "controlled-heartbeat.json"))
-                ]);
+            progressSink?.Invoke(new AcceptanceGateProgress(
+                GoalId: goalId?.Value,
+                Phase: "controlled-cohort",
+                CurrentTarget: "blocking-verifier",
+                SlotIndex: stableSlotIndex,
+                ProcessId: Environment.ProcessId,
+                ChildProcessId: null,
+                StartedAt: now,
+                LastObservedAt: now,
+                LastProgressAt: now,
+                Elapsed: TimeSpan.Zero,
+                OutputBytes: 0,
+                HeartbeatPath: Path.Combine(worktreePath, "controlled-heartbeat.json")));
             started.Set();
             release.Wait(cancellationToken);
             return Task.FromResult(result);
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             throw new NotSupportedException("Focused evidence is not used by the blocking cohort fixture.");
     }
 
@@ -403,13 +433,13 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         internal List<IReadOnlyList<string>> ChangedFiles { get; } = [];
         internal List<IReadOnlyList<string>> ObservedBuildPaths { get; } = [];
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             GoalIds.Add(goalId);
             ChangedFiles.Add(changedFiles?.ToArray() ?? []);
@@ -423,14 +453,14 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             return Task.FromResult(results[_nextResult++]);
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             throw new NotSupportedException("Focused evidence is not used by the cohort sequence fixture.");
     }
 
@@ -442,26 +472,26 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             string worktreePath,
             IReadOnlyList<string>? changedFiles = null) => throw exception;
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             RunCount++;
             throw new InvalidOperationException("The gate must not run when manifest identity cannot be computed.");
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             throw new NotSupportedException("Focused evidence is not used by the manifest-failure fixture.");
     }
 

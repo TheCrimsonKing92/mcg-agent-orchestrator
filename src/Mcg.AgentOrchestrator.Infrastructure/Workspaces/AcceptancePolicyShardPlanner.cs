@@ -12,6 +12,7 @@ internal static class AcceptancePolicyShardPlanner
     internal const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     internal const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     internal const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+    internal const string AcceptanceTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj";
     internal const string DashboardTestsProject = "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj";
     internal const string TestSupportProject = "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj";
     internal const string ProviderEnvironmentTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
@@ -19,13 +20,14 @@ internal static class AcceptancePolicyShardPlanner
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [CoreProject] = [ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [ProvidersProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
         [OperatorCommsProject] = [AppProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [AppProject] = [InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
         [InfrastructureTestsProject] = [],
+        [AcceptanceTestsProject] = [],
         [DashboardTestsProject] = [],
         [TestSupportProject] = [InfrastructureTestsProject, DashboardTestsProject],
         [ProviderEnvironmentTestsProject] = [],

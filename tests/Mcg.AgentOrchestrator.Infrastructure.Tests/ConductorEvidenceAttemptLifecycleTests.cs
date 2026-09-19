@@ -319,7 +319,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -374,7 +374,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -431,7 +431,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -490,7 +490,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -531,7 +531,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (_, _) => throw new IOException("failure before result publication"));
+                (_, _, _, _, _) => throw new IOException("failure before result publication"));
 
             Assert.False(File.Exists(attempt.ResultPath));
             Assert.Equal("1", File.ReadAllText(attempt.ExitCodePath));
@@ -578,7 +578,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     attempt,
                     candidate,
                     ConductorAutonomyPolicy.Permissive,
-                    (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                         attemptCandidate,
                         AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)),
                 CancellationToken.None,
@@ -625,7 +625,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -706,7 +706,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -903,7 +903,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 first.Attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
                     attemptCandidate,
                     PassingEvidence(attemptCandidate.Goal, batchedRequest, null, CancellationToken.None)));
 
@@ -1002,7 +1002,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     decision.Attempt,
                     candidate,
                     ConductorAutonomyPolicy.Permissive,
-                    (_, _, _, _) => RunResultForOutcome(expectedOutcome, candidate));
+                    (_, _, _, _, _) => RunResultForOutcome(expectedOutcome, candidate));
             }
 
             var end = Assert.Single(ReadEvents(logPath).Where(item =>
@@ -1044,7 +1044,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 first.Attempt,
                 firstCandidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
                     attemptCandidate,
                     PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
 
@@ -1100,7 +1100,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 first.Attempt,
                 firstCandidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
                     attemptCandidate,
                     PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
 

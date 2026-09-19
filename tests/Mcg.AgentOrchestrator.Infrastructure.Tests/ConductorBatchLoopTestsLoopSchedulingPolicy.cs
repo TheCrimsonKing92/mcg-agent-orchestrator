@@ -293,7 +293,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var started = coordinator.Evaluate(
                 candidate,
                 explicitPreset.Policy,
-                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+                (_, _, _, _, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
             var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(started.Attempt.MetadataPath),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -351,7 +351,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var started = coordinator.Evaluate(
                 candidate,
                 configured,
-                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+                (_, _, _, _, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
             var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(started.Attempt.MetadataPath),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));

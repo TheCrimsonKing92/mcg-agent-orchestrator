@@ -287,9 +287,33 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                     "Acceptance entered Verifying while the terminal gate runs.");
                 try
                 {
-                    using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-                        AppendConductEvent(context, "gate-progress", goal.Id, FormatGateProgressConductEvent(progress)));
-                    verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
+                    var executionOptions = new AcceptanceRunExecutionOptions(
+                        ProgressSink: progress => AppendConductEvent(
+                            context,
+                            "gate-progress",
+                            goal.Id,
+                            FormatGateProgressConductEvent(progress)),
+                        RunId: Environment.GetEnvironmentVariable(
+                            AcceptanceAttemptArtifactCustody.AttemptIdVariable),
+                        ResultsPrefix: Environment.GetEnvironmentVariable(
+                            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable),
+                        LivenessCheckHint: Environment.GetEnvironmentVariable(
+                            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable));
+                    var executionOwner = AcceptanceExecutionOwners.CreateAttempt(
+                        worktreePath,
+                        goal.Id,
+                        stableSlotIndex,
+                        CancellationToken.None,
+                        executionOptions);
+                    verification = AcceptanceExecutionOwnerLifetime.Run(
+                        executionOwner,
+                        () => context.AcceptanceVerifier.RunOwnedAsync(
+                            worktreePath,
+                            goal.Id,
+                            changedFiles,
+                            stableSlotIndex,
+                            stableSlotLease,
+                            executionOwner).GetAwaiter().GetResult());
                 }
                 catch (AcceptanceInfrastructureDeferredException ex)
                 {

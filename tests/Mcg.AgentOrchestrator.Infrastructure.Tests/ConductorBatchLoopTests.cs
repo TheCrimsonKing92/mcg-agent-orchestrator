@@ -268,6 +268,14 @@ public abstract class ConductorBatchLoopTests
         ConductorAutonomyPolicy _) =>
         ConductorParallelAcceptanceRunResult.Accepted(candidate, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
 
+    private protected static ConductorParallelAcceptanceRunResult PassingRun(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy _,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken,
+        AcceptanceRunExecutionOptions executionOptions) =>
+        PassingRun(candidate, _);
+
     private protected static ConductorParallelAcceptanceAttempt ReadAttempt(string path) =>
         JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
             File.ReadAllText(path),

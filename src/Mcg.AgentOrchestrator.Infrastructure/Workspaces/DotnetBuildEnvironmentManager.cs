@@ -567,14 +567,18 @@ public static class DotnetBuildEnvironmentManager
         DotnetBuildEnvironment environment,
         CancellationToken cancellationToken = default,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null)
+        Action<TimeSpan>? sleep = null,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody = null)
     {
-        return TryAcquireLeaseExecutionLock(
+        return TryAcquireLeaseExecutionLockCore(
             environment,
             timeout: null,
             cancellationToken,
             timeProvider,
-            sleep) switch
+            sleep,
+            acceptancePriorityHeldByCaller: false,
+            emitSlotsBusyReceipt: true,
+            artifactCustody: artifactCustody) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
@@ -596,7 +600,8 @@ public static class DotnetBuildEnvironmentManager
             timeProvider,
             sleep,
             acceptancePriorityHeldByCaller: false,
-            emitSlotsBusyReceipt: true);
+            emitSlotsBusyReceipt: true,
+            artifactCustody: null);
 
     private static DotnetBuildLeaseAcquisition TryAcquireLeaseExecutionLockCore(
         DotnetBuildEnvironment environment,
@@ -605,7 +610,8 @@ public static class DotnetBuildEnvironmentManager
         TimeProvider? timeProvider,
         Action<TimeSpan>? sleep,
         bool acceptancePriorityHeldByCaller,
-        bool emitSlotsBusyReceipt)
+        bool emitSlotsBusyReceipt,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
         var clock = timeProvider ?? DefaultLeaseTimeProvider;
@@ -720,7 +726,8 @@ public static class DotnetBuildEnvironmentManager
                         forceClean: forceCleanArtifacts,
                         currentProcessOwnsExecutionLease: true,
                         ownerMarkerValidated: reclaim.Reclaimed,
-                        staleExecutionLeaseReclaim: pendingStaleExecutionLeaseReclaim);
+                        staleExecutionLeaseReclaim: pendingStaleExecutionLeaseReclaim,
+                        artifactCustody: artifactCustody);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -788,7 +795,41 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default,
         Action? onWait = null,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null)
+        Action<TimeSpan>? sleep = null) =>
+        TryAcquireFirstAvailableBuildPermitCore(
+            environment,
+            timeout,
+            cancellationToken,
+            onWait,
+            timeProvider,
+            sleep,
+            artifactCustody: null);
+
+    internal static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermitOwned(
+        DotnetBuildEnvironment environment,
+        AcceptanceAttemptArtifactCustodyContext artifactCustody,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken = default,
+        Action? onWait = null,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null) =>
+        TryAcquireFirstAvailableBuildPermitCore(
+            environment,
+            timeout,
+            cancellationToken,
+            onWait,
+            timeProvider,
+            sleep,
+            artifactCustody);
+
+    private static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermitCore(
+        DotnetBuildEnvironment environment,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken,
+        Action? onWait,
+        TimeProvider? timeProvider,
+        Action<TimeSpan>? sleep,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody)
     {
         ArgumentNullException.ThrowIfNull(environment);
         var preferredPermit = environment.BuildPermitIndex ?? BuildSlotIndex(environment.SlotOwnerToken);
@@ -835,7 +876,8 @@ public static class DotnetBuildEnvironmentManager
                         clock,
                         delay,
                         acceptancePriorityHeldByCaller: true,
-                        emitSlotsBusyReceipt: false);
+                        emitSlotsBusyReceipt: false,
+                        artifactCustody: artifactCustody);
                     if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
                     {
                         return acquisition;
@@ -1559,7 +1601,8 @@ public static class DotnetBuildEnvironmentManager
         bool forceClean = false,
         bool currentProcessOwnsExecutionLease = false,
         bool ownerMarkerValidated = false,
-        StaleExecutionLeaseReclaim? staleExecutionLeaseReclaim = null)
+        StaleExecutionLeaseReclaim? staleExecutionLeaseReclaim = null,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody = null)
     {
         PrepareArtifactsDirectoryForTests?.Invoke(environment);
         var clean = forceClean;
@@ -1578,7 +1621,7 @@ public static class DotnetBuildEnvironmentManager
         {
             AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
                 environment.ArtifactsPath,
-                Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
+                artifactCustody?.AttemptId);
         }
 
         var decision = "preserved";
@@ -1630,16 +1673,13 @@ public static class DotnetBuildEnvironmentManager
             WriteOwnerMarker(ownerPath, environment.SlotOwnerToken);
         }
 
-        var attemptId = Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
-        var livenessCheckHint = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
-        if (!string.IsNullOrWhiteSpace(attemptId) && !string.IsNullOrWhiteSpace(livenessCheckHint))
+        if (artifactCustody is not null)
         {
             AcceptanceAttemptArtifactCustody.Write(
                 environment.ArtifactsPath,
-                attemptId,
-                livenessCheckHint,
-                Environment.ProcessId);
+                artifactCustody.AttemptId,
+                artifactCustody.LivenessCheckHint,
+                artifactCustody.OwnerProcessId);
         }
 
         var outcomeIntegrity = outcomeOverride ??

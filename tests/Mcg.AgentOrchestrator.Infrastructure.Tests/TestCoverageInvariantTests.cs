@@ -7,8 +7,6 @@ public sealed class TestCoverageInvariantTests
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-attempt-receipts-{Guid.NewGuid():N}");
         var attemptPrefix = Path.Combine(root, "attempts", "attempt-123");
-        var previousPrefix = Environment.GetEnvironmentVariable(
-            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var environment = new DotnetBuildEnvironment(
             "run-slot-3",
             Path.Combine(root, "slots", "slot-3"),
@@ -23,11 +21,9 @@ public sealed class TestCoverageInvariantTests
                 "lane.trx");
             Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
             WriteTrxAt(sourcePath, ("1", "ExampleTests.Runs", "Passed"));
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                attemptPrefix);
-
-            var durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath])!;
+            var durablePaths = GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder(
+                [sourcePath],
+                attemptPrefix)!;
             Directory.Delete(environment.ArtifactsPath, recursive: true);
             var coverage = TestCoverageInvariant.Evaluate(
                 new HashSet<string>(["ExampleTests.Runs"], StringComparer.OrdinalIgnoreCase),
@@ -45,9 +41,6 @@ public sealed class TestCoverageInvariantTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                previousPrefix);
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
@@ -62,20 +55,16 @@ public sealed class TestCoverageInvariantTests
         var sourcePath = Path.Combine(root, "slot", "lane.trx");
         var attemptPrefix = Path.Combine(root, "attempts", "attempt-123");
         var receiptDirectory = Path.GetDirectoryName(attemptPrefix)!;
-        var previousPrefix = Environment.GetEnvironmentVariable(
-            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
             WriteTrxAt(sourcePath, ("1", "ExampleTests.Runs", "Passed"));
             Directory.CreateDirectory(Path.GetDirectoryName(receiptDirectory)!);
             File.WriteAllText(receiptDirectory, "blocks directory creation");
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                attemptPrefix);
-
             var exception = Assert.Throws<IOException>(
-                () => GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder([sourcePath]));
+                () => GoalAcceptanceVerifier.CopyCompletedTestReceiptsToAttemptFolder(
+                    [sourcePath],
+                    attemptPrefix));
 
             Assert.True(File.Exists(sourcePath));
             Assert.Contains(sourcePath, exception.Message, StringComparison.Ordinal);
@@ -83,9 +72,6 @@ public sealed class TestCoverageInvariantTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                previousPrefix);
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);

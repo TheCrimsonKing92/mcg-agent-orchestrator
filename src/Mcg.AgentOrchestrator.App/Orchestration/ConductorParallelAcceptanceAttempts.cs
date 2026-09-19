@@ -185,7 +185,8 @@ internal delegate ConductorParallelAcceptanceRunResult ConductorParallelAcceptan
     ConductorParallelAcceptanceCandidate candidate,
     ConductorAutonomyPolicy policy,
     DotnetBuildEnvironmentLease? stableSlotLease,
-    CancellationToken cancellationToken);
+    CancellationToken cancellationToken,
+    AcceptanceRunExecutionOptions executionOptions);
 
 internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAcceptanceTryRunPreSlot(
     ConductorParallelAcceptanceCandidate candidate,
@@ -424,12 +425,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
-        Evaluate(candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
-
-    internal ConductorParallelAcceptanceAttemptDecision Evaluate(
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
         AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy = AcceptanceStableSlotExhaustionPolicy.Fail)
         => EvaluateCore(
@@ -544,7 +539,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return EvaluateCore(
             candidate,
             policy,
-            (attemptCandidate, _, lease, cancellationToken) => ConductorParallelAcceptanceRunResult.Focused(
+            (attemptCandidate, _, lease, cancellationToken, _) => ConductorParallelAcceptanceRunResult.Focused(
                 attemptCandidate,
                 runFocusedEvidence(attemptCandidate.Goal, request, lease, cancellationToken)),
             PreReviewEvidenceDispatchKind,
@@ -1099,13 +1094,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
-        RunAttemptForTests(attempt, candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
-
-    internal void RunAttemptForTests(
-        ConductorParallelAcceptanceAttempt attempt,
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         RunAttemptWithArtifactLease(attempt, candidate, policy, runAcceptance);
@@ -1187,7 +1175,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     activeAttempt,
                     candidate,
                     policy,
-                    (attemptCandidate, _, lease, cancellationToken) =>
+                    (attemptCandidate, _, lease, cancellationToken, _) =>
                         driver.RunPreReviewFocusedEvidence(
                             attemptCandidate,
                             activeAttempt.FocusedEvidenceRequest,
@@ -1203,12 +1191,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     activeAttempt,
                     candidate,
                     policy,
-                    (attemptCandidate, attemptPolicy, lease, cancellationToken) =>
+                    (attemptCandidate, attemptPolicy, lease, cancellationToken, executionOptions) =>
                         driver.RunParallelLandingAcceptance(
                             attemptCandidate,
                             attemptPolicy,
                             lease,
                             cancellationToken,
+                            executionOptions,
                             omitStableSlotIndexWithoutLease));
             }
             return 0;
@@ -1432,8 +1421,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             candidate.Goal.Id,
             $"{purpose}-{attempt.AttemptId}",
             storageRoot: _buildStorageRoot);
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermitOwned(
             environment,
+            new AcceptanceAttemptArtifactCustodyContext(
+                attempt.AttemptId,
+                attempt.MetadataPath,
+                Environment.ProcessId),
             _buildPermitBusyTimeout,
             onWait: () => EmitAttemptLeaseReceipt(
                 "wait",
@@ -1495,57 +1488,40 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
         Action<DotnetBuildEnvironmentLease> leaseAcquired)
     {
-        var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
-        var previousAttemptId = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.AttemptIdVariable);
-        var previousLivenessHint = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
-        Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
-        Environment.SetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.AttemptIdVariable,
-            attempt.AttemptId);
-        Environment.SetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
-            attempt.MetadataPath);
+        DotnetBuildEnvironmentLease? stableSlotLease;
         try
         {
-            DotnetBuildEnvironmentLease? stableSlotLease;
-            try
-            {
-                stableSlotLease = _acquireStableSlotLease(attempt, candidate);
-            }
-            catch (Exception ex) when (
-                attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial &&
-                ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
-            {
-                EmitAttemptLeaseReceipt(
-                    "degrade",
-                    attempt,
-                    candidate,
-                    holderPid: null,
-                    permitName: AllBuildPermitNames(),
-                    waitReason: ex is DotnetBuildSlotsBusyException
-                        ? AcceptanceBuildPermitWaitReason.AllPermitsBusy
-                        : null);
-                stableSlotLease = null;
-            }
-            if (stableSlotLease is not null)
-            {
-                leaseAcquired(stableSlotLease);
-            }
-            return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
+            stableSlotLease = _acquireStableSlotLease(attempt, candidate);
         }
-        finally
+        catch (Exception ex) when (
+            attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial &&
+            ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
         {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
-            Environment.SetEnvironmentVariable(
-                AcceptanceAttemptArtifactCustody.AttemptIdVariable,
-                previousAttemptId);
-            Environment.SetEnvironmentVariable(
-                AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
-                previousLivenessHint);
+            EmitAttemptLeaseReceipt(
+                "degrade",
+                attempt,
+                candidate,
+                holderPid: null,
+                permitName: AllBuildPermitNames(),
+                waitReason: ex is DotnetBuildSlotsBusyException
+                    ? AcceptanceBuildPermitWaitReason.AllPermitsBusy
+                    : null);
+            stableSlotLease = null;
         }
+        if (stableSlotLease is not null)
+        {
+            leaseAcquired(stableSlotLease);
+        }
+        return runAcceptance(
+            candidate,
+            policy,
+            stableSlotLease,
+            CancellationToken.None,
+            new AcceptanceRunExecutionOptions(
+                RunId: attempt.AttemptId,
+                ResultsPrefix: prefix,
+                LivenessCheckHint: attempt.MetadataPath));
     }
 
     private void EmitAttemptLeaseReceipt(

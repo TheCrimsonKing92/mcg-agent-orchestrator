@@ -54,7 +54,7 @@ public sealed class ConductorDriverTestsSourceSizePreflight
         var decision = coordinator.Evaluate(
             candidate!,
             ConductorAutonomyPolicy.Conservative,
-            (_, _, _, _) =>
+            (_, _, _, _, _) =>
             {
                 acceptanceRan = true;
                 return ConductorParallelAcceptanceRunResult.Accepted(
