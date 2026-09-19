@@ -668,6 +668,11 @@ internal static partial class StorageRetentionMaintenance
             foreach (var trxPath in Directory.EnumerateFiles(goalDirectory, "*.trx", SearchOption.AllDirectories))
             {
                 var owner = EvidenceRetentionPolicy.ResolveOwner(attempts, trxPath);
+                if (owner.Attempt is null && !owner.Ambiguous)
+                {
+                    owner = EvidenceRetentionPolicy.ResolveLegacyOwner(attempts, trxPath);
+                }
+
                 if (owner.Attempt is not null && protectedAttemptIds.Contains(owner.Attempt.AttemptId))
                 {
                     var identity = owner.Attempt;
@@ -723,7 +728,10 @@ internal static partial class StorageRetentionMaintenance
                     trxPath + ".test-identities.json",
                     goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
-                    "trx-identities-preserved"));
+                    "trx-identities-preserved",
+                    attempt.AttemptId,
+                    attempt.Ordinal,
+                    OwnershipSource: owner.Source));
                 var length = SafeLength(trxPath);
                 var deletion = TryDeleteExclusive(trxPath);
                 decisions.Add(new EvidenceRetentionDecision(
@@ -733,9 +741,12 @@ internal static partial class StorageRetentionMaintenance
                     goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
                     deletion.Success ? "trx-reduced-to-receipt" : "exclusive-delete-failed",
+                    attempt.AttemptId,
+                    attempt.Ordinal,
                     BytesAttempted: length,
                     BytesReclaimed: deletion.Success ? length : 0,
-                    FailureExceptionType: deletion.ExceptionType));
+                    FailureExceptionType: deletion.ExceptionType,
+                    OwnershipSource: owner.Source));
                 if (deletion.Success)
                 {
                     deleted++;
@@ -803,8 +814,10 @@ internal static partial class StorageRetentionMaintenance
                 {
                     if (owner.Attempt is null)
                     {
+                        var legacyOwner = EvidenceRetentionPolicy.ResolveLegacyShadowOwner(attempts, path);
                         var legacyUnattributed = !owner.Ambiguous &&
-                            attempts.All(attempt => attempt.DeclaredPaths is not { Count: > 0 });
+                            legacyOwner.Attempt is null &&
+                            !legacyOwner.Ambiguous;
                         if (!legacyUnattributed)
                         {
                             decisions.Add(new EvidenceRetentionDecision(
@@ -905,9 +918,12 @@ internal static partial class StorageRetentionMaintenance
                 }
 
                 var refreshedOwner = EvidenceRetentionPolicy.ResolveOwner(refreshedAttempts, candidate.File.FullName);
+                var refreshedLegacyOwner = EvidenceRetentionPolicy.ResolveLegacyShadowOwner(
+                    refreshedAttempts,
+                    candidate.File.FullName);
                 var ownerChanged = candidate.Owner is null
-                    ? refreshedOwner.Attempt is not null ||
-                      refreshedAttempts.Any(attempt => attempt.DeclaredPaths is { Count: > 0 })
+                    ? refreshedOwner.Attempt is not null || refreshedOwner.Ambiguous ||
+                      refreshedLegacyOwner.Attempt is not null || refreshedLegacyOwner.Ambiguous
                     : refreshedOwner.Attempt is null ||
                       !refreshedOwner.Attempt.AttemptId.Equals(candidate.Owner.AttemptId, StringComparison.OrdinalIgnoreCase);
                 if (ownerChanged)

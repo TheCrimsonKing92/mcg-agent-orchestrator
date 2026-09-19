@@ -138,9 +138,31 @@ internal static class EvidenceRetentionPolicy
         }
 
         source = EvidenceOwnershipSource.InferredFromName;
-        return Path.GetFileName(path).StartsWith(attempt.AttemptId + ".", StringComparison.OrdinalIgnoreCase) ||
-            path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(segment => segment.Equals(attempt.AttemptId + ".receipts", StringComparison.OrdinalIgnoreCase));
+        return OwnsLegacyPath(attempt, path);
+    }
+
+    internal static RetentionPathOwner ResolveLegacyOwner(
+        IReadOnlyCollection<RetentionAttemptIdentity> attempts,
+        string path)
+        => ResolveLegacyOwner(attempts, path, OwnsLegacyPath);
+
+    internal static RetentionPathOwner ResolveLegacyShadowOwner(
+        IReadOnlyCollection<RetentionAttemptIdentity> attempts,
+        string path)
+        => ResolveLegacyOwner(attempts, path, OwnsLegacyShadowPath);
+
+    private static RetentionPathOwner ResolveLegacyOwner(
+        IReadOnlyCollection<RetentionAttemptIdentity> attempts,
+        string path,
+        Func<RetentionAttemptIdentity, string, bool> ownsPath)
+    {
+        var inferred = attempts.Where(attempt => ownsPath(attempt, path)).ToArray();
+        return inferred.Length switch
+        {
+            1 => new RetentionPathOwner(inferred[0], EvidenceOwnershipSource.InferredFromName, Ambiguous: false),
+            > 1 => new RetentionPathOwner(null, EvidenceOwnershipSource.InferredFromName, Ambiguous: true),
+            _ => new RetentionPathOwner(null, EvidenceOwnershipSource.Unresolved, Ambiguous: false)
+        };
     }
 
     internal static RetentionPathOwner ResolveOwner(
@@ -188,15 +210,17 @@ internal static class EvidenceRetentionPolicy
                 facts with { OwnershipSource = EvidenceOwnershipSource.Unresolved });
         }
 
-        if (facts.Owner is not null && facts.ProtectedAttempt)
+        if (facts.ProtectedAttempt)
         {
             return Eligibility(
                 EvidenceEligibility.Keep,
-                facts.Owner.Failed ? "last-failing-attempt" : "final-attempt",
+                facts.Owner is null
+                    ? "protected-attempt"
+                    : facts.Owner.Failed ? "last-failing-attempt" : "final-attempt",
                 facts);
         }
 
-        if (facts.Owner is not null && facts.ReferencedArtifact)
+        if (facts.ReferencedArtifact)
         {
             return Eligibility(EvidenceEligibility.Keep, "retained-test-artifact-owner-metadata", facts);
         }
@@ -210,6 +234,19 @@ internal static class EvidenceRetentionPolicy
         }
 
         return Eligibility(EvidenceEligibility.Archive, "within-retention-bounds", facts);
+    }
+
+    private static bool OwnsLegacyPath(RetentionAttemptIdentity attempt, string path) =>
+        Path.GetFileName(path).StartsWith(attempt.AttemptId + ".", StringComparison.OrdinalIgnoreCase) ||
+        path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => segment.Equals(attempt.AttemptId + ".receipts", StringComparison.OrdinalIgnoreCase));
+
+    private static bool OwnsLegacyShadowPath(RetentionAttemptIdentity attempt, string path)
+    {
+        var name = Path.GetFileName(path);
+        return OwnsLegacyPath(attempt, path) ||
+            name.StartsWith(attempt.AttemptId + "-", StringComparison.OrdinalIgnoreCase) ||
+            name.StartsWith(attempt.AttemptId + "_", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static string ComputeFactRevision(

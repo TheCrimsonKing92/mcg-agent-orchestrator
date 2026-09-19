@@ -173,4 +173,28 @@ public sealed class EvidenceRetentionPolicyTests
         Assert.Equal("past-age-bound", eligibility.Reason);
         Assert.Equal(EvidenceOwnershipSource.Unresolved, eligibility.OwnershipSource);
     }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true, false, "protected-attempt")]
+    [Xunit.InlineData(false, true, "retained-test-artifact-owner-metadata")]
+    public void Eligibility_ProtectionFactsDoNotDependOnOwnerResolution(
+        bool protectedAttempt,
+        bool referencedArtifact,
+        string expectedReason)
+    {
+        var eligibility = EvidenceRetentionPolicy.EvaluatePath(new EvidenceRetentionFacts(
+            TerminalGoal: true,
+            Owner: null,
+            EvidenceOwnershipSource.Unresolved,
+            protectedAttempt,
+            referencedArtifact,
+            CountBound: false,
+            Aged: true,
+            ByteBoundEligible: false,
+            FactRevision: "unresolved-protected-revision",
+            RequireOwner: false));
+
+        Assert.Equal(EvidenceEligibility.Keep, eligibility.Disposition);
+        Assert.Equal(expectedReason, eligibility.Reason);
+    }
 }

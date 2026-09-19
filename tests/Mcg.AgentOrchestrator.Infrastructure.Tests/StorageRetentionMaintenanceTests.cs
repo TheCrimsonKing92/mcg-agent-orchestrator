@@ -569,6 +569,50 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
+    public void AcceptanceRetention_UndeclaredLegacyTrxStillWritesIdentityReceipt()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var trx = Path.Combine(goalDirectory, "old.trx");
+        var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        var finalMetadata = fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "old",
+            goalId = GoalId,
+            ordinal = 1,
+            startedAt = Now.AddMinutes(1),
+            outcome = 1,
+            reconciledAt = Now,
+            metadataPath = oldMetadata
+        }));
+        File.WriteAllText(finalMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "final",
+            goalId = GoalId,
+            ordinal = 2,
+            startedAt = Now.AddMinutes(2),
+            outcome = 1,
+            reconciledAt = Now,
+            metadataPath = finalMetadata
+        }));
+        File.WriteAllText(trx, SuccessfulTrx("Suite.Legacy"));
+        SetAge(trx, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.False(File.Exists(trx));
+        Assert.True(File.Exists(trx + ".test-identities.json"));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == trx &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "trx-reduced-to-receipt" &&
+            decision.AttemptId == "old" &&
+            decision.OwnershipSource == EvidenceOwnershipSource.InferredFromName);
+    }
+
+    [Xunit.Fact]
     public void AcceptanceRetention_OlderFailingTrxIsReducedToReceiptWhileLastFailureRemainsWhole()
     {
         using var fixture = new RetentionFixture();
@@ -674,6 +718,48 @@ public sealed class StorageRetentionMaintenanceTests
             decision.OwnershipSource == EvidenceOwnershipSource.Unresolved &&
             decision.BytesAttempted == expectedReclaimedBytes &&
             decision.BytesReclaimed == expectedReclaimedBytes);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceRetention_MixedFormatUnattributedArtifactIsReclaimed()
+    {
+        using var fixture = new RetentionFixture();
+        var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
+        Directory.CreateDirectory(goalDirectory);
+        var oldMetadata = fixture.WriteAttempt(goalDirectory, "old", ordinal: 1, failed: false, reconciled: true);
+        var finalMetadata = fixture.WriteAttempt(goalDirectory, "final", ordinal: 2, failed: false, reconciled: true);
+        File.WriteAllText(oldMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "old",
+            goalId = GoalId,
+            ordinal = 1,
+            startedAt = Now.AddMinutes(1),
+            outcome = 1,
+            reconciledAt = Now,
+            metadataPath = oldMetadata
+        }));
+        File.WriteAllText(finalMetadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId = "final",
+            goalId = GoalId,
+            ordinal = 2,
+            startedAt = Now.AddMinutes(2),
+            outcome = 1,
+            reconciledAt = Now,
+            metadataPath = finalMetadata
+        }));
+        var legacyArtifact = Path.Combine(goalDirectory, "legacy-unattributed.bin");
+        File.WriteAllText(legacyArtifact, "mixed-format expired legacy evidence");
+        SetAge(legacyArtifact, 30);
+
+        var result = fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
+
+        Assert.False(File.Exists(legacyArtifact));
+        Assert.Contains(result.Decisions, decision =>
+            decision.Path == legacyArtifact &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "past-age-bound" &&
+            decision.OwnershipSource == EvidenceOwnershipSource.Unresolved);
     }
 
     [Xunit.Fact]
