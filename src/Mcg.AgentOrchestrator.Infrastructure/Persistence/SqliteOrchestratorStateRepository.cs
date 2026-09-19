@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -22,6 +23,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     private readonly SqliteWriteTelemetry _writeTelemetry;
     private readonly Action? _beforeOutboxCommit;
     private readonly StateDbConnectionProfile _connectionProfile;
+    private readonly ConcurrentDictionary<TerminalMetadataCacheKey, Lazy<TerminalGoalMetadataValues>> _terminalMetadataCache = new();
     private static readonly AsyncLocal<string?> CurrentWriteOperationTag = new();
     private static readonly string[] CoreSchemaTableNames =
     [
@@ -1526,52 +1528,126 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         var results = new List<GoalSummary>();
 
         await using var cmd = conn.CreateCommand();
+        // EXPLAIN QUERY PLAN retains one ordered goals scan with correlated JSON virtual tables;
+        // keeping those tables beneath lazy CASE expressions avoids a second status-index scan and
+        // preserves row order. SQLite evaluates CASE arms on demand, so terminal rows never invoke
+        // json_each (covered by the malformed-JSON sentinel fact).
+        var nonTerminal = ConductLoopGoalStatus.SqlNonTerminalPredicate("status");
         cmd.CommandText = $"""
             SELECT
                 id,
                 status,
                 {GoalMetadataTitleSql()},
                 updated_at,
-                (
+                CASE WHEN {nonTerminal} THEN (
                     SELECT json_extract(task.value, '$.LastDispatch.ResultCommit')
                     FROM json_each(goals.snapshot_json, '$.Tasks') AS task
                     WHERE COALESCE(json_extract(task.value, '$.LastDispatch.ResultCommit'), '') <> ''
                     ORDER BY CAST(task.key AS INTEGER) DESC
                     LIMIT 1
-                ) AS result_commit,
-                (
+                ) END AS result_commit,
+                CASE WHEN {nonTerminal} THEN (
                     SELECT json_extract(evt.value, '$.OccurredAt')
                     FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
                     ORDER BY CAST(evt.key AS INTEGER) ASC
                     LIMIT 1
-                ) AS created_at,
-                (
+                ) END AS created_at,
+                CASE WHEN {nonTerminal} THEN (
                     SELECT json_extract(evt.value, '$.OccurredAt')
                     FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
                     ORDER BY CAST(evt.key AS INTEGER) DESC
                     LIMIT 1
-                ) AS terminated_at,
+                ) END AS terminated_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
             """;
+        _statementObserver?.Invoke(cmd.CommandText);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         while (await reader.ReadAsync(cancellationToken))
         {
+            var id = reader.GetString(0);
+            var status = reader.GetString(1);
+            var updatedAt = reader.GetString(3);
             results.Add(new GoalSummary(
-                reader.GetString(0),
-                reader.GetString(1),
+                id,
+                status,
                 reader.GetString(2),
-                reader.GetString(3),
+                updatedAt,
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
                 reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
-                Condition: reader.IsDBNull(7) ? null : reader.GetString(7)));
+                Condition: reader.IsDBNull(7) ? null : reader.GetString(7),
+                terminalMetadataLoader: ConductLoopGoalStatus.IsTerminal(status)
+                    ? () => LoadTerminalMetadata(id, updatedAt)
+                    : null));
         }
 
         return results;
     }
+
+    private TerminalGoalMetadataValues LoadTerminalMetadata(string id, string updatedAt)
+    {
+        var key = new TerminalMetadataCacheKey(id, updatedAt);
+        return _terminalMetadataCache.GetOrAdd(
+            key,
+            static (cacheKey, repository) => new Lazy<TerminalGoalMetadataValues>(
+                () => repository.ReadTerminalMetadata(cacheKey),
+                LazyThreadSafetyMode.ExecutionAndPublication),
+            this).Value;
+    }
+
+    private TerminalGoalMetadataValues ReadTerminalMetadata(TerminalMetadataCacheKey key)
+    {
+        using var conn = OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT snapshot_json
+            FROM goals
+            WHERE id = $id
+              AND updated_at = $updated_at
+              AND {ConductLoopGoalStatus.SqlTerminalPredicate("status")}
+            """;
+        cmd.Parameters.AddWithValue("$id", key.Id);
+        cmd.Parameters.AddWithValue("$updated_at", key.UpdatedAt);
+        var snapshotJson = cmd.ExecuteScalar() as string ?? throw new InvalidOperationException(
+            $"Terminal goal metadata changed before detail access for goal '{key.Id}'.");
+
+        using var document = JsonDocument.Parse(snapshotJson);
+        var root = document.RootElement;
+        string? resultCommit = null;
+        if (root.TryGetProperty("Tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var task in tasks.EnumerateArray())
+            {
+                if (task.TryGetProperty("LastDispatch", out var dispatch) &&
+                    dispatch.ValueKind == JsonValueKind.Object &&
+                    dispatch.TryGetProperty("ResultCommit", out var commit) &&
+                    !string.IsNullOrEmpty(commit.GetString()))
+                {
+                    resultCommit = commit.GetString();
+                }
+            }
+        }
+
+        DateTimeOffset? createdAt = null;
+        DateTimeOffset? terminatedAt = null;
+        if (root.TryGetProperty("Timeline", out var timeline) &&
+            timeline.ValueKind == JsonValueKind.Array &&
+            timeline.GetArrayLength() > 0)
+        {
+            createdAt = ReadOccurredAt(timeline[0]);
+            terminatedAt = ReadOccurredAt(timeline[timeline.GetArrayLength() - 1]);
+        }
+
+        return new TerminalGoalMetadataValues(resultCommit, createdAt, terminatedAt);
+    }
+
+    private static DateTimeOffset? ReadOccurredAt(JsonElement timelineEvent) =>
+        timelineEvent.TryGetProperty("OccurredAt", out var occurredAt) && occurredAt.ValueKind == JsonValueKind.String
+            ? DateTimeOffset.Parse(occurredAt.GetString()!, CultureInfo.InvariantCulture)
+            : null;
 
     private static string ActiveWithFailedTaskConditionSql() => $"""
         CASE
@@ -2741,14 +2817,91 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     }
 }
 
-public sealed record GoalSummary(
-    string Id,
-    string Status,
-    string Objective,
-    string UpdatedAt,
-    string? ResultCommit = null,
-    DateTimeOffset? CreatedAt = null,
-    DateTimeOffset? TerminatedAt = null,
-    string? Condition = null);
+internal sealed record TerminalMetadataCacheKey(string Id, string UpdatedAt);
+
+internal sealed record TerminalGoalMetadataValues(
+    string? ResultCommit,
+    DateTimeOffset? CreatedAt,
+    DateTimeOffset? TerminatedAt);
+
+public sealed record GoalSummary
+{
+    private readonly string? _resultCommit;
+    private readonly DateTimeOffset? _createdAt;
+    private readonly DateTimeOffset? _terminatedAt;
+    private readonly Lazy<TerminalGoalMetadataValues>? _terminalMetadata;
+
+    public GoalSummary(
+        string Id,
+        string Status,
+        string Objective,
+        string UpdatedAt,
+        string? ResultCommit = null,
+        DateTimeOffset? CreatedAt = null,
+        DateTimeOffset? TerminatedAt = null,
+        string? Condition = null)
+        : this(Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition, null)
+    {
+    }
+
+    internal GoalSummary(
+        string Id,
+        string Status,
+        string Objective,
+        string UpdatedAt,
+        string? ResultCommit,
+        DateTimeOffset? CreatedAt,
+        DateTimeOffset? TerminatedAt,
+        string? Condition,
+        Func<TerminalGoalMetadataValues>? terminalMetadataLoader)
+    {
+        this.Id = Id;
+        this.Status = Status;
+        this.Objective = Objective;
+        this.UpdatedAt = UpdatedAt;
+        _resultCommit = ResultCommit;
+        _createdAt = CreatedAt;
+        _terminatedAt = TerminatedAt;
+        this.Condition = Condition;
+        _terminalMetadata = terminalMetadataLoader is null
+            ? null
+            : new Lazy<TerminalGoalMetadataValues>(terminalMetadataLoader, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    public string Id { get; init; }
+    public string Status { get; init; }
+    public string Objective { get; init; }
+    public string UpdatedAt { get; init; }
+    public string? ResultCommit => _terminalMetadata?.Value.ResultCommit ?? _resultCommit;
+    public DateTimeOffset? CreatedAt => _terminalMetadata?.Value.CreatedAt ?? _createdAt;
+    public DateTimeOffset? TerminatedAt => _terminalMetadata?.Value.TerminatedAt ?? _terminatedAt;
+    public string? Condition { get; init; }
+
+    public bool Equals(GoalSummary? other) =>
+        other is not null &&
+        Id == other.Id &&
+        Status == other.Status &&
+        Objective == other.Objective &&
+        UpdatedAt == other.UpdatedAt &&
+        ResultCommit == other.ResultCommit &&
+        CreatedAt == other.CreatedAt &&
+        TerminatedAt == other.TerminatedAt &&
+        Condition == other.Condition;
+
+    public override int GetHashCode() => HashCode.Combine(
+        Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition);
+
+    public void Deconstruct(
+        out string Id,
+        out string Status,
+        out string Objective,
+        out string UpdatedAt,
+        out string? ResultCommit,
+        out DateTimeOffset? CreatedAt,
+        out DateTimeOffset? TerminatedAt,
+        out string? Condition) =>
+        (Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition) =
+            (this.Id, this.Status, this.Objective, this.UpdatedAt, this.ResultCommit, this.CreatedAt, this.TerminatedAt, this.Condition);
+}
 
 public sealed record QuarantinedGoalSummary(string Id, string Error);

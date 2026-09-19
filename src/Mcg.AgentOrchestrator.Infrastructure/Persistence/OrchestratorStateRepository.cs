@@ -38,6 +38,30 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
     Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default);
 }
 
+internal static class ConductLoopGoalStatus
+{
+    private static readonly string[] TerminalStatusNames =
+    [
+        GoalStatus.Completed.ToString(),
+        GoalStatus.Failed.ToString(),
+        GoalStatus.Cancelled.ToString(),
+        GoalStatus.Superseded.ToString(),
+        "Retired",
+        "CleanedUp"
+    ];
+
+    internal static bool IsTerminal(string status) =>
+        TerminalStatusNames.Contains(status, StringComparer.OrdinalIgnoreCase);
+
+    internal static string SqlTerminalPredicate(string columnName) =>
+        $"{columnName} COLLATE NOCASE IN ({SqlTerminalStatusList})";
+
+    internal static string SqlNonTerminalPredicate(string columnName) =>
+        $"{columnName} COLLATE NOCASE NOT IN ({SqlTerminalStatusList})";
+
+    private static string SqlTerminalStatusList => string.Join(", ", TerminalStatusNames.Select(status => $"'{status}'"));
+}
+
 public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateRepository
 {
     bool SupportsGoalCheckpointContainment => false;

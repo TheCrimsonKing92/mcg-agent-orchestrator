@@ -1694,13 +1694,7 @@ internal static partial class CliPersistentStateRunner
         return AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = mergedGoals });
     }
 
-    private static bool IsConductLoopTerminalStatus(string status) =>
-        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals(GoalStatus.Failed.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals("Retired", StringComparison.OrdinalIgnoreCase) ||
-        status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
+    private static bool IsConductLoopTerminalStatus(string status) => ConductLoopGoalStatus.IsTerminal(status);
 
     private static ConductLoopDependencyMetadata ReadConductLoopDependencyMetadata(
         GoalSummary summary,
