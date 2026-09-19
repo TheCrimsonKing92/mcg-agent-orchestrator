@@ -1,6 +1,6 @@
-namespace Mcg.AgentOrchestrator.App.Rendering;
+namespace Mcg.AgentOrchestrator.App.Application;
 
-internal sealed record OutputTextPreview(string Text, bool IsTruncated, int OriginalLength)
+public sealed record OutputTextPreview(string Text, bool IsTruncated, int OriginalLength)
 {
     private const int PayloadMaxChars = 4000;
     private const int PayloadTailChars = 1200;

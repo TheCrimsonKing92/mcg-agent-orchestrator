@@ -14,6 +14,12 @@ This is the implementation record, not a completion claim. Goal state, dispatche
 | Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | Goal `6032a3d4` follows gate-floor `a1088fcb` and orphan ownership `99f7b1f1`. Tests need real isolation and preserved discovery. |
 | Workflow decisions | Conductor policy produces typed, attributed decisions; effect execution and completion are separately owned | Goal `42115646` follows application extraction and orphan ownership. First complete policy slice is the Failed lifecycle, preserving characterized precedence and existing retry/admission invariants. |
 | Hosts | Independently publishable headless runtime and optional dashboard; explicit composition and compatible entry points | Goal `ac61f820` follows application, acceptance and policy extraction. Measure dependency/publish/startup changes. |
+
+The host boundary is implemented as a plain-SDK `Mcg.AgentOrchestrator.App` headless runtime and a
+one-way Web-SDK `Mcg.AgentOrchestrator.Dashboard` adapter. Use `scripts/publish-headless.ps1` and
+`scripts/publish-dashboard.ps1`; dashboard commands locate only a sibling dashboard executable or
+assembly and return exit code 78 with publish guidance when it is absent. The runtime conduct loop
+remains the sole periodic worktree-cleanup owner.
 | Persistent operation | Queryable runtime generation/readiness/ownership, safe update/child adoption and offline recovery | Build on current supervisor/lease/staging. Service lifecycle is independent of sole-writer migration. |
 | Evidence/economics | Reconciled transition → execution → acceptance → integration → activation receipts, measured coverage and matched provider trials | Hermes identity slice `bbf6fe7c` landed at `a24b9c41`; ACP fit remains unproven. Source inventory `76443477` landed at `cd90a071`, preserving the matched legitimate file set and cutting estimated prompt tokens 29.6%. Complete-log decision ownership moved to `ProcessLogReader` at `fee18b42`; bounded previews no longer determine whether a complete worker result exists. |
 

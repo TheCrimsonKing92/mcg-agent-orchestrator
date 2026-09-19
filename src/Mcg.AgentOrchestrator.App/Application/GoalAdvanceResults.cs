@@ -8,17 +8,17 @@ namespace Mcg.AgentOrchestrator.App.Application;
 /// <c>object?</c> result the presentation DTO used to carry, so a non-presentation consumer can
 /// branch on the outcome without pattern-matching a transport type.
 /// </summary>
-internal abstract record GoalAdvanceStepPayload;
+public abstract record GoalAdvanceStepPayload;
 
-internal sealed record GoalAdvanceNoPayload : GoalAdvanceStepPayload;
+public sealed record GoalAdvanceNoPayload : GoalAdvanceStepPayload;
 
-internal sealed record GoalAdvanceDispatchPrepared(WorkerProfileDispatchResult Dispatch) : GoalAdvanceStepPayload;
+public sealed record GoalAdvanceDispatchPrepared(WorkerProfileDispatchResult Dispatch) : GoalAdvanceStepPayload;
 
-internal sealed record GoalAdvanceTaskUpdated(TaskSpec Task) : GoalAdvanceStepPayload;
+public sealed record GoalAdvanceTaskUpdated(TaskSpec Task) : GoalAdvanceStepPayload;
 
-internal sealed record GoalAdvanceDelegationPlanned(DelegationPlan Plan) : GoalAdvanceStepPayload;
+public sealed record GoalAdvanceDelegationPlanned(DelegationPlan Plan) : GoalAdvanceStepPayload;
 
-internal sealed record GoalAdvanceDispatchStartFailed(DispatchProcessStartFailure Failure) : GoalAdvanceStepPayload;
+public sealed record GoalAdvanceDispatchStartFailed(DispatchProcessStartFailure Failure) : GoalAdvanceStepPayload;
 
 /// <param name="ActionDispatchState">
 /// Authoritative dispatch state for <paramref name="Action"/> as it stood immediately before this
@@ -26,7 +26,7 @@ internal sealed record GoalAdvanceDispatchStartFailed(DispatchProcessStartFailur
 /// <c>CompletedAt</c>, which makes a later evaluation return null - so an adapter that rendered the
 /// action after the step would describe a different action than the operation actually chose.
 /// </param>
-internal sealed record GoalAdvanceOutcome(
+public sealed record GoalAdvanceOutcome(
     GoalId GoalId,
     bool Executed,
     NextActionItem? Action,
@@ -40,7 +40,7 @@ internal sealed record GoalAdvanceOutcome(
 /// Pre-execution dispatch state for <paramref name="BlockingAction"/>, captured on the iteration
 /// that stopped the loop. See <see cref="GoalAdvanceOutcome.ActionDispatchState"/>.
 /// </param>
-internal sealed record GoalAdvanceLoopOutcome(
+public sealed record GoalAdvanceLoopOutcome(
     GoalId GoalId,
     bool Executed,
     int StepCount,

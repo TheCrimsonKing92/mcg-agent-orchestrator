@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -886,90 +885,30 @@ internal static partial class CliCommandHandlers
 
             case "dashboard":
             {
-                var dashboardMode = GetFlagValue(parts, "--mode");
-                if (dashboardMode is not null)
-                {
-                    var baseArgs = RemoveFlagWithValue(parts, "--mode");
-                    switch (dashboardMode.ToLowerInvariant())
-                    {
-                        case "local":
-                        {
-                            var modeArgList = new List<string>(baseArgs) { [0] = "serve-dashboard" };
-                            var localArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "serve-dashboard", defaultOpenBrowser: false);
-                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, localArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                            return false;
-                        }
-                        case "hosted":
-                        {
-                            var modeArgList = new List<string>(baseArgs) { [0] = "hosted-dashboard" };
-                            var hostedModeArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "hosted-dashboard", defaultOpenBrowser: false);
-                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, hostedModeArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                            return false;
-                        }
-                        case "read-only":
-                        {
-                            var modeArgList = new List<string>(baseArgs) { [0] = "simple-hosted-dashboard" };
-                            var readOnlyArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "simple-hosted-dashboard", defaultOpenBrowser: false);
-                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, readOnlyArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                            return false;
-                        }
-                        default:
-                            throw new ArgumentException($"Unknown dashboard mode '{dashboardMode}'. Use: local|hosted|read-only");
-                    }
-                }
-
-                var dashboardArgs = DashboardHost.ParseDashboardArgs(parts);
-                var dashboardPath = dashboardArgs.Path;
-                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dashboardPath))!);
-                var dashboardOptions = dashboardArgs.Options with
-                {
-                    AgentDefinitions = context.Agents,
-                    WorkerProfiles = context.WorkerProfiles
-                };
-                File.WriteAllText(dashboardPath, DashboardRenderer.Render(context.Kernel, dashboardOptions));
-                Console.WriteLine($"Dashboard: {Path.GetFullPath(dashboardPath)}");
-                if (dashboardArgs.Options.AutoRefreshSeconds is > 0)
-                {
-                    Console.WriteLine($"Auto-refresh: {dashboardArgs.Options.AutoRefreshSeconds.Value}s");
-                }
+                var exitCode = CliCommandCapabilities.Classify(parts) == CliCommandCapability.DashboardHost
+                    ? OptionalDashboardHostLauncher.Run(parts)
+                    : OptionalDashboardHostLauncher.RunStatic(parts, context);
+                if (exitCode != 0)
+                    throw new CliExitException(exitCode);
                 return false;
             }
 
             case "serve-dashboard":
-                var serveArgs = DashboardHost.ParseDashboardHostArgs(parts, "serve-dashboard", defaultOpenBrowser: false);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, serveArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                return false;
-
             case "hosted-dashboard":
-                var hostedArgs = DashboardHost.ParseDashboardHostArgs(parts, "hosted-dashboard", defaultOpenBrowser: false);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, hostedArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                return false;
-
             case "simple-hosted-dashboard":
-                var simpleHostedArgs = DashboardHost.ParseDashboardHostArgs(parts, "simple-hosted-dashboard", defaultOpenBrowser: false);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, simpleHostedArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                return false;
-
             case "open-dashboard":
-                var openArgs = DashboardHost.ParseDashboardHostArgs(parts, "open-dashboard", defaultOpenBrowser: true);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, openArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
+            {
+                var exitCode = OptionalDashboardHostLauncher.Run(parts);
+                if (exitCode != 0)
+                    throw new CliExitException(exitCode);
                 return false;
+            }
 
             case "transcript":
                 context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, null);
-                var transcriptPath = parts.Count > 1
-                    ? parts[1]
-                    : context.Workspace.TranscriptPath;
-                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(transcriptPath))!);
-                File.WriteAllText(
-                    transcriptPath,
-                    GoalTranscriptRenderer.Render(
-                        context.Kernel,
-                        context.CurrentGoal,
-                        context.WorkerProfiles,
-                        context.Agents,
-                        context.Workspace.ExecutionDirectory));
-                Console.WriteLine($"Transcript: {Path.GetFullPath(transcriptPath)}");
+                var transcriptExitCode = OptionalDashboardHostLauncher.RunStatic(parts, context);
+                if (transcriptExitCode != 0)
+                    throw new CliExitException(transcriptExitCode);
                 return false;
 
             default:
@@ -1846,9 +1785,9 @@ internal static partial class CliCommandHandlers
         return HistoricalTrialReplayResolver.Resolve(kernel, selector);
     }
 
-    private static DistributedArchitectureDto BuildCliArchitectureReport(CliExecutionContext context)
+    private static DistributedArchitectureReport BuildCliArchitectureReport(CliExecutionContext context)
     {
-        return DistributedArchitectureDto.Create(
+        return DistributedArchitectureReport.Create(
             context.Workspace,
             context.Agents,
             context.WorkerProfiles,

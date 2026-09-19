@@ -438,10 +438,10 @@ private static GoalLifecycleState? ResolveLifecycle(Goal goal, string? execution
     }
 
     var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
-    var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-    var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
-    var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
-    var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
+    var journal = DashboardApplicationServices.ReadOperationJournal(executionDirectory, goal.Id);
+    var isMerged = DashboardApplicationServices.HasCompletedLandingEvidence(journal);
+    var isRecorded = DashboardApplicationServices.HasCompletedRecordEvidence(journal);
+    var isCleanedUp = DashboardApplicationServices.HasCompletedCleanupEvidence(journal);
 
     return GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(workspaceExists, IsMerged: isMerged, IsRecorded: isRecorded, IsCleanedUp: isCleanedUp));
 }
@@ -456,7 +456,7 @@ private static GoalTestImpactDto BuildGoalTestImpactDto(
         : GoalWorktrees.TryResolve(executionDirectory, goal.Id);
     changedFiles ??= worktree is null
         ? []
-        : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree);
+        : DashboardApplicationServices.GetChangedFiles(worktree);
     var plan = worktree is null
         ? RepositoryTestImpactPlanner.Plan(changedFiles)
         : RepositoryTestImpactPlanner.Plan(changedFiles, worktree);
@@ -491,7 +491,7 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
-    var processSnapshot = ProcessCommandLines.SnapshotOperation();
+    var processSnapshot = ProcessInspectionSnapshots.SnapshotOperation();
 
     return new TaskWorkContextDto(
         goal.Id.Value,
@@ -693,7 +693,7 @@ public static NextActionsDto ToNextActionsDto(
     Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
 {
     var processInspection = new ProcessInspectionSnapshotScope(
-        processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation);
+        processSnapshotFactory ?? ProcessInspectionSnapshots.SnapshotOperation);
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
     var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
         goal,

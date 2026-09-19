@@ -31,7 +31,7 @@ public static BatchActionResultDto ApplyGoalBatchAction(
     OrchestratorWorkspace workspace,
     IModelProviderRegistry? providers = null)
 {
-    var dispatches = new GoalDispatchOperations();
+    var dispatches = new GoalBatchCommandOperations();
     return operation.ToLowerInvariant() switch
     {
         "profile-dispatch-ready" => ApplyProfileDispatchReady(kernel, workspace, agents, goal, body, providers),
@@ -54,7 +54,7 @@ public static BatchActionResultDto ApplyProfileDispatchReady(
 {
     var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
     var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
-    var results = new GoalDispatchOperations().ProfileDispatchReadyTasks(kernel, workspace, goal, profile, agents, providers);
+    var results = new GoalBatchCommandOperations().ProfileDispatchReadyTasks(kernel, workspace, goal, profile, agents, providers);
     return DashboardResponseMapper.ToBatchActionResultDto(goal, "profile-dispatch-ready", results.Select(result => result.Task).ToList(), results);
 }
 
@@ -66,7 +66,7 @@ public static BatchActionResultDto ApplySubscriptionDispatchReady(
     IModelProviderRegistry? providers = null)
 {
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var results = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(kernel, workspace, goal, agents, profiles, providers);
+    var results = new GoalBatchCommandOperations().SubscriptionDispatchReadyBatch(kernel, workspace, goal, agents, profiles, providers);
     return DashboardResponseMapper.ToBatchActionResultDto(
         goal,
         "subscription-dispatch-ready",
@@ -83,7 +83,7 @@ public static BatchActionResultDto ApplyStartSubscriptionReady(
     IModelProviderRegistry? providers = null)
 {
     var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-    var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles, providers);
+    var result = new GoalBatchCommandOperations().StartSubscriptionReadyTasks(kernel, workspace, goal, agents, profiles, providers);
     return DashboardResponseMapper.ToSubscriptionStartActionResultDto(goal, result);
 }
 

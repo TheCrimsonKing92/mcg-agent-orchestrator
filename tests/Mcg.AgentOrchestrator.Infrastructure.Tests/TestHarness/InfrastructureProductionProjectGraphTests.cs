@@ -13,6 +13,18 @@ public sealed class InfrastructureProductionProjectGraphTests
         "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj";
     private const string AppProject =
         "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
+    private const string DashboardProject =
+        "src/Mcg.AgentOrchestrator.Dashboard/Mcg.AgentOrchestrator.Dashboard.csproj";
+
+    [Xunit.Fact(DisplayName = "Dashboard depends on App while App remains headless")]
+    public void DashboardDependencyDirectionIsOneWay()
+    {
+        var projects = LoadProductionProjects(InfrastructureTestSupport.FindRepositoryRoot());
+
+        Assert.Equal([AppProject], projects[DashboardProject].References);
+        Assert.DoesNotContain(DashboardProject, projects[AppProject].References);
+        AssertAcyclic(projects);
+    }
 
     [Xunit.Fact(DisplayName = "Infrastructure production project graph is acyclic and Providers owns its seam once")]
     public void ProvidersAssemblyOwnsProviderSources()

@@ -115,7 +115,7 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "progress":
             var progress = DashboardRequestParser.ParseProgressSubmission(body);
-            var progressStatus = CliArgumentParser.ParseReportableStatus(progress.Status);
+            var progressStatus = DashboardApplicationServices.ParseReportableStatus(progress.Status);
             return await EnqueueOperatorIntentDtoAsync(
                 commands,
                 workspace,

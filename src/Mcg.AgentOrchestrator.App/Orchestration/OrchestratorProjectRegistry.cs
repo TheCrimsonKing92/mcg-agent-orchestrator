@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed class OrchestratorProjectRegistry
+public sealed class OrchestratorProjectRegistry
 {
     public const string RegistryHomeEnvironmentVariable = "MCG_ORCHESTRATOR_PROJECT_REGISTRY";
     private const string RegistryFileName = "projects.json";

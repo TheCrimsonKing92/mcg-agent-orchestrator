@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 /// Pushes conductor batch-loop tick events to a running dashboard process via HTTP POST.
 /// Silently skips if no dashboard URL is configured or the dashboard is not reachable.
 /// </summary>
-internal static class ConductorTickPusher
+public static class ConductorTickPusher
 {
     internal const int MaxPersistedProgressLines = 32;
     internal const int MaxPersistedProgressLineChars = 240;

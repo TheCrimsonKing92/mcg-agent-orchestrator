@@ -10,15 +10,20 @@ namespace Mcg.AgentOrchestrator.App.Application;
 /// dispatch operations, and reports typed outcomes. It builds no presentation payload and applies
 /// no presentation text policy; adapters map <see cref="GoalAdvanceOutcome"/> for their transport.
 /// </summary>
-internal sealed class GoalAdvancementOperations
+public sealed class GoalAdvancementOperations
 {
     private const int MaxAutomaticHandoffSteps = 20;
 
     private readonly GoalDispatchOperations _dispatch;
 
-    public GoalAdvancementOperations(GoalDispatchOperations? dispatch = null)
+    public GoalAdvancementOperations()
+        : this(new GoalDispatchOperations())
     {
-        _dispatch = dispatch ?? new GoalDispatchOperations();
+    }
+
+    internal GoalAdvancementOperations(GoalDispatchOperations dispatch)
+    {
+        _dispatch = dispatch;
     }
 
     private sealed class DurableDispatchStartFailureException(DispatchProcessStartFailure failure)

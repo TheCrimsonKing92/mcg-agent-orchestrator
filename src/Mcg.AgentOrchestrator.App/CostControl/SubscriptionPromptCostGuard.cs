@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.CostControl;
 
-internal sealed record PaidSubscriptionPromptRisk(
+public sealed record PaidSubscriptionPromptRisk(
     int TaskCount,
     int PromptCharacterCount,
     int BatchPromptThreshold,
@@ -18,7 +18,7 @@ internal sealed record PaidSubscriptionPromptRisk(
     IReadOnlyList<string> Details,
     bool IsAnomalous);
 
-internal static class SubscriptionPromptCostGuard
+public static class SubscriptionPromptCostGuard
 {
     public const string DashboardConfirmationQueryName = "confirmLargePaidSubscriptionStart";
     public const string CliConfirmationFlag = "--confirm-large-paid-subscription-start";

@@ -4,8 +4,8 @@ using System.Text.RegularExpressions;
 /// <summary>
 /// Enforces the dependency direction the application module exists to establish: presentation adapts
 /// application operations, and goal execution never reaches back into presentation. The module lives
-/// in the same assembly as the dashboard for this slice, so the boundary is guarded here by source
-/// inspection until the host split turns it into a compile boundary.
+/// in the headless application assembly, while the dashboard host references it one way. Source
+/// inspection complements that project-level compile boundary for the application module itself.
 /// </summary>
 public sealed class ApplicationBoundaryConventionTests
 {

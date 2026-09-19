@@ -688,7 +688,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains(expected, task.LastVerification!.StandardError, StringComparison.Ordinal);
         Xunit.Assert.Contains(
             expected,
-            Mcg.AgentOrchestrator.App.Rendering.OutputTextPreview
+            Mcg.AgentOrchestrator.App.Application.OutputTextPreview
                 .CreateVerificationLog(task.LastVerification.StandardError, task.LastVerification.StandardErrorPath)
                 .Text,
             StringComparison.Ordinal);

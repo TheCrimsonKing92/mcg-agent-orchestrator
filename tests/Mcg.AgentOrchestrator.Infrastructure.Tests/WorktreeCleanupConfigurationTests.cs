@@ -1,18 +1,17 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.Extensions.Configuration;
 
 public sealed class WorktreeCleanupConfigurationTests
 {
     [Xunit.Fact(DisplayName = "WorktreeCleanup_configuration_reads_all_values")]
     public void WorktreeCleanupConfigurationReadsAllValues()
     {
-        var section = BuildSection(new Dictionary<string, string?>
+        var section = new Dictionary<string, string?>
         {
-            ["WorktreeCleanup:SweepInterval"] = "00:07:00",
-            ["WorktreeCleanup:EscalationThreshold"] = "5",
-            ["WorktreeCleanup:EscalatedRetryInterval"] = "2.00:00:00"
-        });
+            ["SweepInterval"] = "00:07:00",
+            ["EscalationThreshold"] = "5",
+            ["EscalatedRetryInterval"] = "2.00:00:00"
+        };
 
         var options = WorktreeCleanupConfiguration.Read(section);
 
@@ -30,10 +29,10 @@ public sealed class WorktreeCleanupConfigurationTests
         string value,
         string expectedMessage)
     {
-        var section = BuildSection(new Dictionary<string, string?>
+        var section = new Dictionary<string, string?>
         {
-            [$"WorktreeCleanup:{key}"] = value
-        });
+            [key] = value
+        };
 
         var exception = Assert.Throws<InvalidOperationException>(() => WorktreeCleanupConfiguration.Read(section));
 
@@ -89,9 +88,4 @@ public sealed class WorktreeCleanupConfigurationTests
         Assert.Equal("SweepInterval", exception.ParamName);
     }
 
-    private static IConfiguration BuildSection(IReadOnlyDictionary<string, string?> values) =>
-        new ConfigurationBuilder()
-            .AddInMemoryCollection(values)
-            .Build()
-            .GetSection("WorktreeCleanup");
 }

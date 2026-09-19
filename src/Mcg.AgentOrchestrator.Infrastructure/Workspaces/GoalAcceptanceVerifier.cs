@@ -8142,7 +8142,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal const string LegacyOwnedStartNegativeControlVariable =
         "MCG_TEST_ONLY_ACCEPTANCE_LEGACY_START_THEN_ATTACH";
 
-    internal static void ConfigureHermeticVerificationEnvironment(
+    public static void ConfigureHermeticVerificationEnvironment(
         IDictionary<string, string?> environment,
         string repositoryRoot,
         string? buildEnvironmentRoot = null)

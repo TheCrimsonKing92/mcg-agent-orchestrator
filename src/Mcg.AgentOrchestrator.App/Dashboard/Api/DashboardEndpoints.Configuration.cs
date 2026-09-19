@@ -10,7 +10,7 @@ internal static partial class DashboardEndpoints
         var isPost = context.Request.Method.Equals("POST", StringComparison.OrdinalIgnoreCase);
         var target = isPost
             ? DashboardRequestParser.ParseProviderSmokeSubmission(await ReadRequestBodyAsync(context.Request))
-            : DashboardRequestParser.GetQueryValue(context.Request, "target") ?? ProviderSmokeRunner.DefaultTarget;
+            : DashboardHttpRequestParser.GetQueryValue(context.Request, "target") ?? ProviderSmokeRunner.DefaultTarget;
         if (!isPost && target.Equals("all", StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException(ProviderSmokeRunner.BuildBroadSmokeConfirmationMessage("POST with confirmAll=true"));

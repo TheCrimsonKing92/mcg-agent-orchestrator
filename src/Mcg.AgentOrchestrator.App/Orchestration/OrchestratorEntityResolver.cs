@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal static class OrchestratorEntityResolver
+public static class OrchestratorEntityResolver
 {
 public static Goal? GetLatestGoal(AgentOrchestratorKernel kernel)
 {

@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal static class GoalAcceptanceStatusProjector
+public static class GoalAcceptanceStatusProjector
 {
     public static GoalAcceptanceSummary Build(
         AgentOrchestratorKernel kernel,
