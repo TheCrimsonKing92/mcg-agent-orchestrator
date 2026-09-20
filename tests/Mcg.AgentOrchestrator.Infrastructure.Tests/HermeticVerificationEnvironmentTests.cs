@@ -56,7 +56,18 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
         Assert.DoesNotContain("DISCORD_BOT_TOKEN", environment.Keys);
         Assert.Equal(repositoryRoot, environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"]);
         Assert.Equal(@"C:\windows", environment["PATH"]);
-        Assert.Equal(@"C:\temp", environment["TEMP"]);
+        if (OperatingSystem.IsWindows())
+        {
+            var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA") ??
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var buildServerTemp = Path.Combine(localAppData, "Temp", "Low", "mcg-build-server");
+            Assert.Equal(buildServerTemp, environment["TEMP"]);
+            Assert.Equal(buildServerTemp, environment["TMP"]);
+        }
+        else
+        {
+            Assert.Equal(@"C:\temp", environment["TEMP"]);
+        }
         Assert.Equal(@"C:\dotnet", environment["DOTNET_ROOT"]);
         Assert.Equal(@"C:\packages", environment["NUGET_PACKAGES"]);
         Assert.Equal(
@@ -119,6 +130,9 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
             Assert.Equal(first["NUGET_PACKAGES"], second["NUGET_PACKAGES"]);
             Assert.Equal(Path.Combine(firstRoot, "nuget-http-cache"), first["NUGET_HTTP_CACHE_PATH"]);
             Assert.Equal(Path.Combine(secondRoot, "nuget-http-cache"), second["NUGET_HTTP_CACHE_PATH"]);
+            Assert.Equal(first["TEMP"], second["TEMP"]);
+            Assert.DoesNotContain(firstRoot, first["TEMP"], StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(secondRoot, second["TEMP"], StringComparison.OrdinalIgnoreCase);
             Assert.True(Directory.Exists(first["DOTNET_CLI_HOME"]));
             Assert.True(Directory.Exists(second["DOTNET_CLI_HOME"]));
         }

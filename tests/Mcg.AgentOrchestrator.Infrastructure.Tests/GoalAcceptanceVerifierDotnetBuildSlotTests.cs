@@ -223,6 +223,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         {
             startInfo.ArgumentList.Add(argument);
         }
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         foreach (var (name, value) in environmentVariables)
         {
             startInfo.Environment[name] = value;
