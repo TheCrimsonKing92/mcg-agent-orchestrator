@@ -21,16 +21,17 @@ public static class GoalAcceptanceStatusProjector
         if (string.IsNullOrWhiteSpace(executionDirectory) ||
             TryResolveCurrentCandidate(executionDirectory, goal.Id) is not { } candidate)
         {
-            return summary with
-            {
-                IsAccepted = false,
-                AcceptanceHoldDescription = BuildHoldDescription(
-                    summary,
-                    candidateSha: null,
-                    hasCurrentPassedOutcome: false,
-                    summary.Blockers,
-                    GetOrderedPendingWaits(kernel, goal.Id))
-            };
+            return summary.IsAccepted
+                ? summary with { AcceptanceHoldDescription = null }
+                : summary with
+                {
+                    AcceptanceHoldDescription = BuildHoldDescription(
+                        summary,
+                        candidateSha: null,
+                        hasCurrentPassedOutcome: false,
+                        summary.Blockers,
+                        GetOrderedPendingWaits(kernel, goal.Id))
+                };
         }
 
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
