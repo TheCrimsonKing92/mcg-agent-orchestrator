@@ -8234,10 +8234,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
             // A shared VBCSCompiler outlives any one gate lane or test host. Keep its analyzer shadow copies
             // outside process-owned TEMP roots, which are deleted when that owner exits.
-            var buildServerTemp = Path.Combine(localAppData, "Temp", "Low", "mcg-build-server");
-            Directory.CreateDirectory(buildServerTemp);
-            environment["TEMP"] = buildServerTemp;
-            environment["TMP"] = buildServerTemp;
+            DotnetBuildEnvironmentManager.ConfigureSharedCompilerTemp(environment, localAppData);
             // Repointing LOCALAPPDATA silently moves every path DERIVED from it, and the Windows per-user
             // temp location is %LOCALAPPDATA%\Temp. Callers that resolve their own temp root that way - the
             // test assembly's temp redirect does exactly this - then land under a directory that exists only
