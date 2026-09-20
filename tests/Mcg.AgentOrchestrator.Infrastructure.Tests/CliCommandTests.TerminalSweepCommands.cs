@@ -1056,6 +1056,54 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void VerifiedPassedCandidateWithWaitPointsToAttention()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Hold landing for prospective evidence", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/pending-evidence.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
+            var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
+            var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
+            GoalOperationJournal.AcceptanceGatePassed(
+                root,
+                goal,
+                "acceptance",
+                branchHead,
+                mainHead,
+                "terminal gate passed");
+            var wait = kernel.RequestHumanInput(
+                goal.Id,
+                task.Id,
+                "Observe the accepted candidate.",
+                HumanWaitKind.ProspectiveAcceptanceEvidence);
+
+            var blocker = Assert.Single(Assert.Single(RunSweep(kernel, root, goal.Id).Goals).Blockers);
+
+            Assert.Equal("completed-branch-unmerged", blocker.Kind);
+            Assert.Contains("acceptance passed", blocker.Evidence, StringComparison.Ordinal);
+            Assert.Contains(wait.Id.Value[..8], blocker.Evidence, StringComparison.Ordinal);
+            Assert.Contains(nameof(HumanWaitKind.ProspectiveAcceptanceEvidence), blocker.Evidence, StringComparison.Ordinal);
+            Assert.Contains($"attention show {goal.Id.Value[..8]}", blocker.Command, StringComparison.Ordinal);
+            Assert.Contains(wait.Id.Value[..8], blocker.Command, StringComparison.Ordinal);
+            Assert.DoesNotContain($"acceptance {goal.Id.Value[..8]}", blocker.Command, StringComparison.Ordinal);
+            Assert.Contains(kernel.GetPendingHumanInput(goal.Id), request => request.Id == wait.Id);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_acceptance_guard_abort_is_operator_only_and_not_a_bare_retry")]
     public void TerminalGoalSweepAcceptanceGuardAbortIsOperatorOnlyAndNotABareRetry()
     {

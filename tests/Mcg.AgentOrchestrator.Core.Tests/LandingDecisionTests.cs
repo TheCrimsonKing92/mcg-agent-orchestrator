@@ -47,7 +47,23 @@ public sealed class LandingDecisionTests
         var decision = LandingDecisionEngine.Decide(inputs);
 
         var escalate = Assert.IsType<LandingDecision.Escalate>(decision);
-        Assert.True(escalate.Reason.Contains("acceptance", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("acceptance verification not passed", escalate.Reason);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceHoldDescriptionOverridesFallback()
+    {
+        const string hold = "acceptance passed at 12345678; landing held by 1 pending human wait(s)";
+        var inputs = new LandingInputs(
+            BehaviorChangeSummary(),
+            AcceptancePassed: false,
+            IntegrationToMainIsCleanFastForward: true,
+            GoalFailureRetryCount: 0,
+            AcceptanceHoldDescription: hold);
+
+        var decision = LandingDecisionEngine.Decide(inputs);
+
+        Assert.Equal(hold, Assert.IsType<LandingDecision.Escalate>(decision).Reason);
     }
 
     // --- Escalate: security-risk change ---

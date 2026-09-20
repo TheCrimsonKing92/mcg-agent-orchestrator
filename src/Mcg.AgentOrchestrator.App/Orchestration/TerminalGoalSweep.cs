@@ -748,17 +748,22 @@ internal static class TerminalGoalSweep
                 }
 
                 var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
+                var acceptance = contentEquivalent
+                    ? null
+                    : GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
                 blockers.Add(new TerminalGoalSweepBlocker(
                     contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
                     contentEquivalent
                         ? BuildSupersededBranchEvidence(goal, "retirement required")
-                        : $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
+                        : AppendAcceptanceHold(
+                            $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
+                            acceptance),
                     contentEquivalent
                         ? TerminalGoalRemedy.OperatorOnly(
                             goal.Id,
                             prefix,
                             $"conduct {prefix} --loop")
-                        : BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
+                        : BuildAcceptanceRemedy(kernel, executionDirectory, goal, prefix, branchFactIndex, acceptance)));
                 results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
                 continue;
             }
@@ -777,10 +782,11 @@ internal static class TerminalGoalSweep
                     cleanupHooks);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
+                    var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "completed-branch-unmerged",
-                        removeResult.Message,
-                        BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
+                        AppendAcceptanceHold(removeResult.Message, acceptance),
+                        BuildAcceptanceRemedy(kernel, executionDirectory, goal, prefix, branchFactIndex, acceptance)));
                 }
                 else if (!removeResult.IsComplete)
                 {
@@ -1260,17 +1266,22 @@ internal static class TerminalGoalSweep
                 !branchFacts.BranchAlreadyLanded)
             {
                 var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
+                var acceptance = contentEquivalent
+                    ? null
+                    : GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
                 blockers.Add(new TerminalGoalSweepBlocker(
                     contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
                     contentEquivalent
                         ? BuildSupersededBranchEvidence(goal, "retirement required")
-                        : $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
+                        : AppendAcceptanceHold(
+                            $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
+                            acceptance),
                     contentEquivalent
                         ? TerminalGoalRemedy.OperatorOnly(
                             goal.Id,
                             prefix,
                             $"conduct {prefix} --loop")
-                        : BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
+                        : BuildAcceptanceRemedy(kernel, executionDirectory, goal, prefix, branchFactIndex, acceptance)));
             }
 
             if (blockers.Count > 0)
@@ -1285,12 +1296,30 @@ internal static class TerminalGoalSweep
             SweptGoalIds: kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).Select(goal => goal.Id).ToArray());
     }
 
+    private static string AppendAcceptanceHold(
+        string evidence,
+        GoalAcceptanceSummary? acceptance) =>
+        string.IsNullOrWhiteSpace(acceptance?.AcceptanceHoldDescription)
+            ? evidence
+            : $"{evidence}; {acceptance.AcceptanceHoldDescription}";
+
     private static TerminalGoalRemedy BuildAcceptanceRemedy(
+        AgentOrchestratorKernel kernel,
         string executionDirectory,
         Goal goal,
         string prefix,
-        GoalGitFactIndex branchFactIndex)
+        GoalGitFactIndex branchFactIndex,
+        GoalAcceptanceSummary? acceptance = null)
     {
+        if (acceptance is { PendingHumanInputCount: > 0 } &&
+            GoalAcceptanceStatusProjector.BuildPendingHumanWaitAttentionCommand(
+                kernel,
+                goal.Id,
+                prefix) is { } attentionCommand)
+        {
+            return TerminalGoalRemedy.OperatorOnly(goal.Id, prefix, attentionCommand);
+        }
+
         var branchHeadSha = branchFactIndex.TryGetGoalBranchTip(goal.Id);
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var passedGate = GoalOperationJournal.NewestPassedGateForBranch(
