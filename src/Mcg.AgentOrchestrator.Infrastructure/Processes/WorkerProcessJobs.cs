@@ -288,8 +288,9 @@ public static class WorkerProcessJobs
     private static string? RegistryDbPath;
     private static readonly Func<Process, SpawnProcessIdentityReadResult> ProductionRegistrationIdentityReader =
         BuildRegistrationIdentityReader(ReadIdentityOnce, identityReadDelay: null);
+    private static readonly Func<int, bool> ProductionTryKillPidTree = DefaultTryKillPidTree;
 
-    internal static Func<int, bool> TryKillPidTree { get; set; } = DefaultTryKillPidTree;
+    internal static Func<int, bool> TryKillPidTree { get; set; } = ProductionTryKillPidTree;
 
     public static void ConfigureRegistry(string dbPath)
     {
@@ -1417,6 +1418,7 @@ public static class WorkerProcessJobs
             allowProtectedDescendant: false,
             markRegistryReleased: true,
             out _,
+            useNativeLivenessPrecheck: true,
             inspect,
             snapshotOwnedRoots,
             tryKillPidTree,
@@ -1450,14 +1452,16 @@ public static class WorkerProcessJobs
         bool markRegistryReleased,
         out WorkerProcessJobAccounting? accounting)
     {
+        var tryKillPidTree = TryKillPidTree;
         return TryKillOrFallback(
             processId,
             allowProtectedDescendant,
             markRegistryReleased,
             out accounting,
+            useNativeLivenessPrecheck: ReferenceEquals(tryKillPidTree, ProductionTryKillPidTree),
             WindowsNativeProcessInspection.Read,
             TempRootJanitor.SnapshotOwnedRoots,
-            TryKillPidTree,
+            tryKillPidTree,
             ReapOwnedTempRoots,
             Console.Error.WriteLine);
     }
@@ -1467,6 +1471,7 @@ public static class WorkerProcessJobs
         bool allowProtectedDescendant,
         bool markRegistryReleased,
         out WorkerProcessJobAccounting? accounting,
+        bool useNativeLivenessPrecheck,
         Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
         Func<IEnumerable<int>, IReadOnlyList<TempRootJanitorOwnedRoot>> snapshotOwnedRoots,
         Func<int, bool> tryKillPidTree,
@@ -1498,7 +1503,8 @@ public static class WorkerProcessJobs
             }
         }
 
-        if (removal == StaticRegistrationRemoval.Missing &&
+        if (useNativeLivenessPrecheck &&
+            removal == StaticRegistrationRemoval.Missing &&
             OperatingSystem.IsWindows() &&
             IsDefinitelyNotAlive(processId, inspect))
         {
