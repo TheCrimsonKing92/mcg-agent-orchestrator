@@ -355,5 +355,6 @@ internal static class GoalRefinementWorkCoordinator
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
-            workerProfiles);
+            workerProfiles,
+            rawOutputDirectory: workspace.LogDirectory);
 }

@@ -43,7 +43,8 @@ internal sealed record RefinementResult(
 internal sealed record RefinerAttempt(
     SpecRefinementOutput Output,
     RefinementInvocationMetadata Invocation,
-    RefinementFailure? Failure = null);
+    RefinementFailure? Failure = null,
+    string? RawOutputDecision = null);
 
 internal delegate Task<CollaborationItem> CollaborationItemRaise(
     CollaborationItemType type,
@@ -70,6 +71,7 @@ internal sealed class GoalRefinementService
     private readonly WorkerProfileCatalog? _workerProfiles;
     private readonly Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? _subscriptionCompleterFactory;
     private readonly TimeSpan _subscriptionTimeout;
+    private readonly string _rawOutputDirectory;
     private static readonly HashSet<string> QuestionStopWords = new(StringComparer.Ordinal)
     {
         "a", "an", "and", "are", "as", "be", "by", "for", "from", "how", "in", "is", "it", "of", "on",
@@ -84,7 +86,8 @@ internal sealed class GoalRefinementService
         WorkerProfileCatalog? workerProfiles = null,
         Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
         CollaborationItemRaise? raiseCollaborationItem = null,
-        TimeSpan? subscriptionTimeout = null)
+        TimeSpan? subscriptionTimeout = null,
+        string? rawOutputDirectory = null)
     {
         _providers = providers;
         _catalog = catalog;
@@ -94,6 +97,8 @@ internal sealed class GoalRefinementService
         _workerProfiles = workerProfiles;
         _subscriptionCompleterFactory = subscriptionCompleterFactory;
         _subscriptionTimeout = subscriptionTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
+        _rawOutputDirectory = Path.GetFullPath(rawOutputDirectory ??
+            Path.Combine(Path.GetTempPath(), "mcg-spec-refiner", "logs"));
     }
 
     public async Task<RefinementResult> RefineAsync(
@@ -113,8 +118,10 @@ internal sealed class GoalRefinementService
             .Where(question => string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase))
             .ToList() ?? [];
         var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
-        var attempt = await RunRefinerAsync(goal.Objective, resolvedClarifications, cancellationToken);
+        var attempt = await RunRefinerAsync(goalId, goal.Objective, resolvedClarifications, cancellationToken);
         var output = attempt.Output;
+        if (!string.IsNullOrWhiteSpace(attempt.RawOutputDecision))
+            kernel.RecordGoalPolicyDecision(goalId, attempt.RawOutputDecision);
 
         if (!output.IsValid)
         {
@@ -143,24 +150,43 @@ internal sealed class GoalRefinementService
                     : $"Answered by operator; topic already resolved (topic: {resolved.TopicKey}).");
         }
 
+        var declaredCriteria = ParseDeclaredAcceptanceCriteria(goal.Objective);
         var acceptanceCriteria = ResolveAcceptanceCriteria(goal.Objective, output.AcceptanceCriteria);
         var operatorOwnedCriteria = goal.RefinedSpec?.OperatorOwnedAcceptanceCriteria.ToList() ?? [];
-        AddOwnedCriteria(operatorOwnedCriteria, acceptanceCriteria, output.OperatorOwnedAcceptanceCriteria);
+        var parseDiagnostics = output.ParseDiagnostics
+            .Where(diagnostic => declaredCriteria.Count > 0 ||
+                !diagnostic.Contains("declared_index", StringComparison.Ordinal))
+            .ToList();
+        List<string> acceptanceGateOwnedCriteria;
+        if (declaredCriteria.Count > 0)
+        {
+            acceptanceGateOwnedCriteria = ResolveDeclaredOwnedCriteria(
+                acceptanceCriteria,
+                output.CriterionOwnerships,
+                operatorOwnedCriteria,
+                parseDiagnostics);
+        }
+        else
+        {
+            AddOwnedCriteria(operatorOwnedCriteria, acceptanceCriteria, output.OperatorOwnedAcceptanceCriteria);
+            acceptanceGateOwnedCriteria = ResolveOwnedCriteria(
+                acceptanceCriteria,
+                output.AcceptanceGateOwnedAcceptanceCriteria,
+                operatorOwnedCriteria);
+        }
         var scenarioBackedCriteria = ApplyFeasibilityResolutions(
             acceptanceCriteria,
             operatorOwnedCriteria,
             resolvedClarifications);
-        var acceptanceGateOwnedCriteria = ResolveOwnedCriteria(
-            acceptanceCriteria,
-            output.AcceptanceGateOwnedAcceptanceCriteria,
-            operatorOwnedCriteria);
+        acceptanceGateOwnedCriteria.RemoveAll(criterion =>
+            operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase));
         var feasibilityFindings = AcceptanceCriterionFeasibility
             .Evaluate(acceptanceCriteria, AgentRole.Developer)
             .Where(finding =>
                 !scenarioBackedCriteria.Contains(finding.Criterion) &&
                 !operatorOwnedCriteria.Contains(finding.Criterion, StringComparer.OrdinalIgnoreCase))
             .ToList();
-        foreach (var diagnostic in output.ParseDiagnostics)
+        foreach (var diagnostic in parseDiagnostics)
             kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner parse diagnostic: {diagnostic}");
 
         var openQuestions = new List<RefinedSpecOpenQuestion>();
@@ -767,6 +793,7 @@ internal sealed class GoalRefinementService
             item.CorrelationKey?.StartsWith(CorrelationKeyPrefix, StringComparison.Ordinal) == true);
 
     private async Task<RefinerAttempt> RunRefinerAsync(
+        GoalId goalId,
         string objective,
         IReadOnlyList<ResolvedSpecClarification> resolvedClarifications,
         CancellationToken cancellationToken)
@@ -775,6 +802,8 @@ internal sealed class GoalRefinementService
         var prompt = SpecRefinerPlanner.BuildPrompt(objective, resolvedClarifications);
         var promptCharacters = prompt.Length;
         var promptBytes = Encoding.UTF8.GetByteCount(prompt);
+        var declaredCriteriaCount = ParseDeclaredAcceptanceCriteria(objective).Count;
+        int? declaredIndexUpperBound = declaredCriteriaCount > 0 ? declaredCriteriaCount : null;
         if (binding.Subscription is { } subscription && _workerProfiles is not null)
         {
             var invocation = new RefinementInvocationMetadata(
@@ -786,7 +815,13 @@ internal sealed class GoalRefinementService
                 string.IsNullOrWhiteSpace(subscription.ReasoningEffort)
                     ? AgentCatalog.ComplexReasoningEffort
                     : subscription.ReasoningEffort);
-            return await RunSubscriptionRefinerAsync(subscription, prompt, invocation, cancellationToken).ConfigureAwait(false);
+            return await RunSubscriptionRefinerAsync(
+                goalId,
+                subscription,
+                prompt,
+                invocation,
+                declaredIndexUpperBound,
+                cancellationToken).ConfigureAwait(false);
         }
 
         var apiInvocation = new RefinementInvocationMetadata(
@@ -819,15 +854,17 @@ internal sealed class GoalRefinementService
         try
         {
             var response = await provider.CompleteAsync(request, cancellationToken).ConfigureAwait(false);
-            var output = SpecRefinerPlanner.Parse(response.Text);
+            var rawOutputDecision = await PersistRawOutputAsync(goalId, response.Text).ConfigureAwait(false);
+            var output = SpecRefinerPlanner.Parse(response.Text, declaredIndexUpperBound);
             return output.IsValid
-                ? new RefinerAttempt(output, apiInvocation)
+                ? new RefinerAttempt(output, apiInvocation, RawOutputDecision: rawOutputDecision)
                 : new RefinerAttempt(
                     output,
                     apiInvocation,
                     new RefinementFailure(
                         "invalid-output",
-                        output.ValidationErrors.FirstOrDefault() ?? "Spec refiner output was invalid."));
+                        output.ValidationErrors.FirstOrDefault() ?? "Spec refiner output was invalid."),
+                    rawOutputDecision);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -871,9 +908,11 @@ internal sealed class GoalRefinementService
         string.IsNullOrWhiteSpace(binding.Name) ? binding.Purpose : binding.Name;
 
     private async Task<RefinerAttempt> RunSubscriptionRefinerAsync(
+        GoalId goalId,
         SubscriptionLaunchProfile subscription,
         string prompt,
         RefinementInvocationMetadata invocation,
+        int? declaredIndexUpperBound,
         CancellationToken cancellationToken)
     {
         try
@@ -887,15 +926,17 @@ internal sealed class GoalRefinementService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(_subscriptionTimeout);
             var stdout = await completer.CompleteAsync(prompt, "spec-refiner-prompt.md", cts.Token).ConfigureAwait(false);
-            var output = SpecRefinerPlanner.Parse(stdout);
+            var rawOutputDecision = await PersistRawOutputAsync(goalId, stdout).ConfigureAwait(false);
+            var output = SpecRefinerPlanner.Parse(stdout, declaredIndexUpperBound);
             return output.IsValid
-                ? new RefinerAttempt(output, invocation)
+                ? new RefinerAttempt(output, invocation, RawOutputDecision: rawOutputDecision)
                 : new RefinerAttempt(
                     output,
                     invocation,
                     new RefinementFailure(
                         "invalid-output",
-                        output.ValidationErrors.FirstOrDefault() ?? "Subscription spec refiner output was invalid."));
+                        output.ValidationErrors.FirstOrDefault() ?? "Subscription spec refiner output was invalid."),
+                    rawOutputDecision);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -916,6 +957,53 @@ internal sealed class GoalRefinementService
                 SpecRefinementOutput.Invalid(detail),
                 invocation,
                 new RefinementFailure("subscription-failed", detail));
+        }
+    }
+
+    private async Task<string> PersistRawOutputAsync(GoalId goalId, string responseText)
+    {
+        try
+        {
+            Directory.CreateDirectory(_rawOutputDirectory);
+            var prefix = goalId.Value[..Math.Min(8, goalId.Value.Length)];
+            var stamp = DateTimeOffset.UtcNow.ToString(
+                "yyyyMMddHHmmssfff",
+                System.Globalization.CultureInfo.InvariantCulture);
+            for (var attempt = 1; ; attempt++)
+            {
+                var suffix = attempt == 1 ? string.Empty : $"-{attempt}";
+                var path = Path.GetFullPath(Path.Combine(
+                    _rawOutputDirectory,
+                    $"spec-refinement-{prefix}-{stamp}{suffix}.refiner.txt"));
+                FileStream stream;
+                try
+                {
+                    stream = new FileStream(
+                        path,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.Read,
+                        4096,
+                        FileOptions.Asynchronous);
+                }
+                catch (IOException) when (File.Exists(path))
+                {
+                    // Preserve each attempt when two writes share the same millisecond stamp.
+                    continue;
+                }
+
+                await using (stream)
+                await using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
+                {
+                    await writer.WriteAsync(responseText.AsMemory(), CancellationToken.None).ConfigureAwait(false);
+                    await writer.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                return $"Spec refiner raw output: {path}";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return $"Spec refiner raw output not persisted: {ex.Message}";
         }
     }
 
@@ -1410,6 +1498,80 @@ internal sealed class GoalRefinementService
                 target.Add(criterion);
         }
     }
+
+    private static List<string> ResolveDeclaredOwnedCriteria(
+        IReadOnlyList<string> acceptanceCriteria,
+        IReadOnlyList<SpecRefinementCriterionOwnership> requestedOwners,
+        List<string> operatorOwnedCriteria,
+        List<string> diagnostics)
+    {
+        var acceptanceGateOwnedCriteria = new List<string>();
+        var claimedOwners = new Dictionary<int, string>();
+        var persistedOperatorIndexes = new HashSet<int>();
+        foreach (var criterion in operatorOwnedCriteria.ToArray())
+        {
+            var criterionIndex = FindCriterionIndex(acceptanceCriteria, criterion);
+            if (criterionIndex < 0)
+                continue;
+            claimedOwners[criterionIndex] = "operator";
+            persistedOperatorIndexes.Add(criterionIndex);
+        }
+
+        foreach (var requested in requestedOwners.Where(item =>
+                     item.Owner is "acceptance-gate" or "operator"))
+        {
+            var criterionIndex = requested.DeclaredIndex is { } declaredIndex
+                ? declaredIndex - 1
+                : FindCriterionIndex(acceptanceCriteria, requested.Text);
+            if (criterionIndex < 0 || criterionIndex >= acceptanceCriteria.Count)
+            {
+                diagnostics.Add(
+                    $"Spec refiner owner dropped: {requested.Owner} for '{PreviewCriterion(requested.Text)}' matched no declared criterion");
+                continue;
+            }
+
+            if (claimedOwners.TryGetValue(criterionIndex, out var existingOwner))
+            {
+                if (persistedOperatorIndexes.Contains(criterionIndex) &&
+                    requested.Owner == "operator" &&
+                    existingOwner == "operator")
+                {
+                    continue;
+                }
+
+                diagnostics.Add(
+                    $"Spec refiner owner conflict: {requested.Owner} for declared criterion {criterionIndex + 1} already owned by {existingOwner}");
+                continue;
+            }
+
+            claimedOwners[criterionIndex] = requested.Owner;
+            var criterion = acceptanceCriteria[criterionIndex];
+            if (requested.Owner == "operator")
+            {
+                if (!operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase))
+                    operatorOwnedCriteria.Add(criterion);
+            }
+            else
+            {
+                acceptanceGateOwnedCriteria.Add(criterion);
+            }
+        }
+
+        return acceptanceGateOwnedCriteria;
+    }
+
+    private static int FindCriterionIndex(IReadOnlyList<string> acceptanceCriteria, string requested) =>
+        acceptanceCriteria
+            .Select((criterion, index) => (criterion, index))
+            .FirstOrDefault(item => string.Equals(
+                item.criterion.Trim(),
+                requested.Trim(),
+                StringComparison.OrdinalIgnoreCase),
+                (criterion: string.Empty, index: -1))
+            .index;
+
+    private static string PreviewCriterion(string criterion) =>
+        criterion[..Math.Min(80, criterion.Length)];
 
     private static List<string> ResolveOwnedCriteria(
         IReadOnlyList<string> acceptanceCriteria,
