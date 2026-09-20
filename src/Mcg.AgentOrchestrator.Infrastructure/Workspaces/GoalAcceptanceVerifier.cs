@@ -8239,12 +8239,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // "unable to write file ...\mcg-hvp\AppData\Local\Temp" and failed
             // whole lanes on environment construction rather than on the code being verified. The parent
             // dirs above are created for the same reason; this is the one that was missed.
-            var stableTempPath = string.IsNullOrWhiteSpace(buildEnvironmentRoot)
-                ? Path.Combine(localAppData, "Temp")
-                : Path.GetFullPath(Path.Combine(localAppData, "..", "LocalLow", "mcg-vbcs-temp"));
-            Directory.CreateDirectory(stableTempPath);
-            if (!string.IsNullOrWhiteSpace(buildEnvironmentRoot))
-                environment["TEMP"] = environment["TMP"] = stableTempPath;
+            Directory.CreateDirectory(Path.Combine(localAppData, "Temp"));
             environment["HOMEDRIVE"] = profileRootPath.TrimEnd(Path.DirectorySeparatorChar);
             environment["HOMEPATH"] = Path.DirectorySeparatorChar +
                 profileRoot[profileRootPath.Length..].TrimStart(Path.DirectorySeparatorChar);

@@ -119,11 +119,6 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
             Assert.Equal(first["NUGET_PACKAGES"], second["NUGET_PACKAGES"]);
             Assert.Equal(Path.Combine(firstRoot, "nuget-http-cache"), first["NUGET_HTTP_CACHE_PATH"]);
             Assert.Equal(Path.Combine(secondRoot, "nuget-http-cache"), second["NUGET_HTTP_CACHE_PATH"]);
-            if (OperatingSystem.IsWindows())
-            {
-                Assert.Equal(first["TEMP"], second["TEMP"]);
-                Assert.DoesNotContain(buildEnvironmentRoot, first["TEMP"], StringComparison.OrdinalIgnoreCase);
-            }
             Assert.True(Directory.Exists(first["DOTNET_CLI_HOME"]));
             Assert.True(Directory.Exists(second["DOTNET_CLI_HOME"]));
         }

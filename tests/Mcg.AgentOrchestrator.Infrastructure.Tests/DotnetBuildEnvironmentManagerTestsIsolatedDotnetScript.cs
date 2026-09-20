@@ -207,10 +207,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
 
             Assert.NotEqual(0, process.ExitCode);
             Assert.Contains(expectedError, stderr, StringComparison.OrdinalIgnoreCase);
-            var log = File.ReadAllText(logPath);
-            Assert.DoesNotContain("args=build ", log, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("args=test ", log, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(".dll", log, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(logPath), "The dotnet shim must not run before request validation.");
             Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
         }
         finally
