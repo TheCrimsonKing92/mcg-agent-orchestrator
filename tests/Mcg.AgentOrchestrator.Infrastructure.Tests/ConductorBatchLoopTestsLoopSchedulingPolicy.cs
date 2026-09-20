@@ -797,6 +797,25 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_failure_reports_zero_timing_fields")]
+    public void TerminalGoalSweep_failure_reports_zero_timing_fields()
+    {
+        var (kernel, _) = SimpleGoal("sweep failure timing goal");
+        BatchTickSummary? tickSummary = null;
+
+        new ConductorBatchLoop(measuredSweep: _ => throw new InvalidOperationException("injected sweep failure")).Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: tick => tickSummary = tick);
+
+        var sweepLine = Assert.Single(tickSummary!.ProgressLines!, line =>
+            line.StartsWith("PHASE_TIMING tick=1 phase=sweep ", StringComparison.Ordinal));
+        Assert.Contains("sweep_git_index_ms=0 sweep_evidence_ms=0 sweep_ephemeral_ms=0 sweep_attention_ms=0 sweep_merge_evidence_ms=0 sweep_goals_ms=0 sweep_git_spawns=0 sweep_goals_swept=0", sweepLine, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_goal_write_invalidates_terminal_cache_entry")]
     public void TerminalGoalSweepGoalWriteInvalidatesTerminalCacheEntry()
     {
