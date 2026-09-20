@@ -143,6 +143,62 @@ public sealed class HermesExecutableIdentityTests
         Assert.Equal(pin.GetProperty("commit").GetString(), HermesPinnedIdentity.Default.Commit);
     }
 
+    [Xunit.Fact]
+    public void FixtureGitUsesSharedBudgetAndDrainTimeoutNamesCommand()
+    {
+        Assert.Equal(GitCli.DefaultTimeoutMilliseconds, HermesIdentityTestFixture.GitBudgetMilliseconds);
+        Assert.True(HermesIdentityTestFixture.GitBudgetMilliseconds >= 60_000);
+
+        string? root = null;
+        try
+        {
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                new HermesIdentityTestFixture(runGit: (workingDirectory, _) =>
+                {
+                    root = workingDirectory;
+                    return new GitCli.GitResult(
+                        ExitCode: 0,
+                        Output: string.Empty,
+                        Error: "output drain timed out",
+                        DrainTimedOut: true);
+                }));
+
+            Assert.Contains("git init", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (root is not null)
+                _ = TempRootJanitor.DeleteTreeWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FixtureCleanupRetriesLockedRootAndReturnsJanitorReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var fixture = new HermesIdentityTestFixture();
+        var lockedPath = Path.Combine(fixture.Root, "cleanup-lock.txt");
+        File.WriteAllText(lockedPath, "locked");
+
+        using (File.Open(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var error = Record.Exception(fixture.Dispose);
+
+            Assert.Null(error);
+            var receipt = Assert.IsType<TempRootJanitorDeleteResult>(fixture.CleanupReceipt);
+            Assert.Equal(Path.GetFullPath(fixture.Root), Path.GetFullPath(receipt.Path));
+            Assert.True(receipt.DeleteAttempts >= 2, $"Cleanup attempted {receipt.DeleteAttempts} time(s).");
+            Assert.True(
+                !Directory.Exists(fixture.Root) || receipt.Status == TempRootJanitorDeleteStatus.Failed,
+                $"Cleanup retained '{receipt.Path}' without a failed janitor receipt.");
+        }
+
+        fixture.Dispose();
+        Assert.False(Directory.Exists(fixture.Root), $"Cleanup retained '{fixture.Root}' after the lock closed.");
+    }
+
     private static string NativeOutput(string installRoot) =>
         $"Hermes Agent v0.20.6 (2026.8.27){Environment.NewLine}" +
         $"Install directory: {installRoot}{Environment.NewLine}" +
@@ -155,9 +211,13 @@ public sealed class HermesExecutableIdentityTests
 internal sealed class HermesIdentityTestFixture : IDisposable
 {
     private const string Release = "v2026.8.27";
+    private readonly Func<string, string[], GitCli.GitResult> runGit;
 
-    public HermesIdentityTestFixture(bool annotatedTag = true)
+    public HermesIdentityTestFixture(
+        bool annotatedTag = true,
+        Func<string, string[], GitCli.GitResult>? runGit = null)
     {
+        this.runGit = runGit ?? RunGitWithSharedBudget;
         Root = Path.Combine(Path.GetTempPath(), "mcg-hermes-identity", Guid.NewGuid().ToString("N"));
         var scripts = Path.Combine(Root, ".venv", "Scripts");
         Directory.CreateDirectory(scripts);
@@ -189,6 +249,8 @@ internal sealed class HermesIdentityTestFixture : IDisposable
     public HermesPinnedIdentity Pin { get; }
     public GitHermesExecutableIdentityVerifier Verifier { get; }
     public string NativeVersionOutput { get; }
+    internal static int GitBudgetMilliseconds => GitCli.DefaultTimeoutMilliseconds;
+    internal TempRootJanitorDeleteResult? CleanupReceipt { get; private set; }
 
     public HermesExecutableIdentityReceipt Receipt(DateTimeOffset verifiedAtUtc) => new(
         ExecutablePath, Root, Root, "git", Pin.Release, Pin.Commit, Pin.TagObject, Pin.Commit,
@@ -196,20 +258,20 @@ internal sealed class HermesIdentityTestFixture : IDisposable
 
     public void Dispose()
     {
-        if (!Directory.Exists(Root))
-            return;
-        foreach (var path in Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
-            File.SetAttributes(path, FileAttributes.Normal);
-        Directory.Delete(Root, recursive: true);
+        CleanupReceipt = TempRootJanitor.DeleteTreeWithRetry(Root);
     }
 
     private string Git(params string[] arguments)
     {
-        var result = GitCli.Run(Root, 5_000, arguments.Where(argument => !string.IsNullOrEmpty(argument)).ToArray());
+        var filteredArguments = arguments.Where(argument => !string.IsNullOrEmpty(argument)).ToArray();
+        var result = runGit(Root, filteredArguments);
         if (!result.Succeeded || result.DrainTimedOut)
             throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {result.Error}");
         return result.Output.Trim();
     }
 
     private void RunGit(params string[] arguments) => _ = Git(arguments);
+
+    private static GitCli.GitResult RunGitWithSharedBudget(string workingDirectory, string[] arguments) =>
+        GitCli.Run(workingDirectory, GitBudgetMilliseconds, arguments);
 }

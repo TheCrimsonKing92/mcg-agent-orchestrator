@@ -30,7 +30,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             """);
         var previousHeartbeat = TestOverrides.HeartbeatInterval;
         var previousProgress = TestOverrides.ProgressInterval;
-        var progress = new List<AcceptanceGateProgress>();
+        var progress = new ConcurrentQueue<AcceptanceGateProgress>();
+        var targetObserved = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             TryDeleteStableSlotHeartbeat(0);
@@ -39,16 +41,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             var verifier = new GoalAcceptanceVerifier(TestOverrides);
             var goalId = new GoalId("feedfacefeedfacefeedfacefeedface");
             using var cts = new CancellationTokenSource();
+            Action<AcceptanceGateProgress> progressSink = item =>
+            {
+                progress.Enqueue(item);
+                if (item.CurrentTarget == "hung gate receipt")
+                    targetObserved.TrySetResult(item);
+            };
             var run = verifier.RunOwnedAsync(
                 root, goalId, null, 0, null, cts.Token,
-                new AcceptanceRunExecutionOptions(ProgressSink: progress.Add));
+                new AcceptanceRunExecutionOptions(ProgressSink: progressSink));
 
-            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (!progress.Any(item => item.CurrentTarget == "hung gate receipt") &&
-                   DateTimeOffset.UtcNow < deadline)
-            {
-                await Task.Delay(100);
-            }
+            _ = await GateHeartbeatProgressFailsafe.WaitForTargetAsync(
+                targetObserved.Task,
+                "hung gate receipt",
+                cts,
+                run,
+                Task.Delay(TimeSpan.FromMinutes(2)));
 
             var heartbeatPath = Assert.Single(
                 progress
