@@ -208,6 +208,22 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
+    public async Task RawOutputUsesProvidedExecutorStamp()
+    {
+        const string stamp = "20260920044315000";
+        const string response =
+            "{\"behavioralContract\":\"Valid response.\",\"acceptanceCriteria\":[\"Criterion\"],\"verificationClass\":\"TestVerifiable\",\"decisions\":[],\"forks\":[]}";
+        var scenario = CreateRefinementScenario(response, rawOutputStamp: stamp);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var decision = Xunit.Assert.Single(scenario.Kernel.GetGoal(scenario.Goal.Id).Timeline.Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("Spec refiner raw output: ", StringComparison.Ordinal)));
+        Xunit.Assert.EndsWith($"-{stamp}.refiner.txt", decision.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public async Task DuplicateDeclaredOwnerClaimsKeepFirstAndRecordConflict()
     {
         const string objective = """
@@ -379,7 +395,8 @@ public sealed class GateOwnedCriterionRefinementTests
         CreateRefinementScenario(
             string response,
             string objective = "Integrate the billing system",
-            bool blockRawOutputDirectory = false)
+            bool blockRawOutputDirectory = false,
+            string? rawOutputStamp = null)
     {
         var provider = new FakeSmokeProvider(response, providerName: "fake-refiner");
         var collaboration = new FakeCollaborationItemStore();
@@ -398,7 +415,8 @@ public sealed class GateOwnedCriterionRefinementTests
             collaboration,
             new SpecRefinerPrecedentStore(Path.Combine(tempDirectory.FullName, "precedents.json")),
             WorkerProfileCatalog.Default(),
-            rawOutputDirectory: rawOutputDirectory);
+            rawOutputDirectory: rawOutputDirectory,
+            rawOutputStamp: rawOutputStamp);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(objective);
         return (service, kernel, goal, collaboration);

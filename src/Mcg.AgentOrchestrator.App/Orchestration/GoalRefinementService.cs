@@ -72,6 +72,7 @@ internal sealed class GoalRefinementService
     private readonly Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? _subscriptionCompleterFactory;
     private readonly TimeSpan _subscriptionTimeout;
     private readonly string _rawOutputDirectory;
+    private readonly string? _rawOutputStamp;
     private static readonly HashSet<string> QuestionStopWords = new(StringComparer.Ordinal)
     {
         "a", "an", "and", "are", "as", "be", "by", "for", "from", "how", "in", "is", "it", "of", "on",
@@ -87,7 +88,8 @@ internal sealed class GoalRefinementService
         Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
         CollaborationItemRaise? raiseCollaborationItem = null,
         TimeSpan? subscriptionTimeout = null,
-        string? rawOutputDirectory = null)
+        string? rawOutputDirectory = null,
+        string? rawOutputStamp = null)
     {
         _providers = providers;
         _catalog = catalog;
@@ -99,6 +101,12 @@ internal sealed class GoalRefinementService
         _subscriptionTimeout = subscriptionTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
         _rawOutputDirectory = Path.GetFullPath(rawOutputDirectory ??
             Path.Combine(Path.GetTempPath(), "mcg-spec-refiner", "logs"));
+        if (rawOutputStamp is not null &&
+            (rawOutputStamp.Length != 17 || rawOutputStamp.Any(character => !char.IsAsciiDigit(character))))
+        {
+            throw new ArgumentException("Raw-output stamp must contain exactly 17 ASCII digits.", nameof(rawOutputStamp));
+        }
+        _rawOutputStamp = rawOutputStamp;
     }
 
     public async Task<RefinementResult> RefineAsync(
@@ -966,7 +974,7 @@ internal sealed class GoalRefinementService
         {
             Directory.CreateDirectory(_rawOutputDirectory);
             var prefix = goalId.Value[..Math.Min(8, goalId.Value.Length)];
-            var stamp = DateTimeOffset.UtcNow.ToString(
+            var stamp = _rawOutputStamp ?? DateTimeOffset.UtcNow.ToString(
                 "yyyyMMddHHmmssfff",
                 System.Globalization.CultureInfo.InvariantCulture);
             for (var attempt = 1; ; attempt++)

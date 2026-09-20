@@ -87,7 +87,8 @@ internal static class GoalRefinementWorkCoordinator
         IModelProviderRegistry providers,
         WorkerProfileCatalog workerProfiles,
         GoalId goalId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? rawOutputStamp = null)
     {
         var attached = false;
         var claimed = await repository.TryProcessOutboxMessageAsync(
@@ -123,7 +124,7 @@ internal static class GoalRefinementWorkCoordinator
                     }
 
                     phase = "create-service";
-                    var service = CreateService(workspace, providers, workerProfiles);
+                    var service = CreateService(workspace, providers, workerProfiles, rawOutputStamp);
                     var eventWriter = new GoalLifecycleEventWriter(
                         workspace.GoalLifecycleEventsDirectory,
                         kernel: refinementKernel);
@@ -269,22 +270,7 @@ internal static class GoalRefinementWorkCoordinator
         {
             Directory.CreateDirectory(workspace.LogDirectory);
             var stamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
-            var prefix = goalId.Value[..Math.Min(8, goalId.Value.Length)];
-            var args = new List<string>();
-            if (workspace.IsProjectScoped)
-                args.Add($"--project={workspace.ProjectName}");
-            if (workspace.IsTenantScoped)
-                args.Add($"--tenant={workspace.TenantName}");
-            args.Add(CommandName);
-            args.Add(goalId.Value);
-
-            var request = new ConductLoopLaunchRequest(
-                $"spec-refinement-{prefix}",
-                args,
-                Path.Combine(workspace.LogDirectory, $"spec-refinement-{prefix}-{stamp}.out.log"),
-                Path.Combine(workspace.LogDirectory, $"spec-refinement-{prefix}-{stamp}.err.log"),
-                workspace.RootDirectory,
-                RenewalCount: 0);
+            var request = CreateLaunchRequest(workspace, goalId, stamp);
             var launched = ConductorLoopHandoff.LaunchDetached(request);
             return new GoalRefinementWorkLaunchResult(true, launched.ProcessId, launched.LaunchDetail);
         }
@@ -295,6 +281,30 @@ internal static class GoalRefinementWorkCoordinator
                 null,
                 $"executor-launch-failed:{ex.GetType().Name}:{SingleLine(ex.Message)}");
         }
+    }
+
+    internal static ConductLoopLaunchRequest CreateLaunchRequest(
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        string stamp)
+    {
+        var prefix = goalId.Value[..Math.Min(8, goalId.Value.Length)];
+        var args = new List<string>();
+        if (workspace.IsProjectScoped)
+            args.Add($"--project={workspace.ProjectName}");
+        if (workspace.IsTenantScoped)
+            args.Add($"--tenant={workspace.TenantName}");
+        args.Add(CommandName);
+        args.Add(goalId.Value);
+        args.Add(stamp);
+
+        return new ConductLoopLaunchRequest(
+            $"spec-refinement-{prefix}",
+            args,
+            Path.Combine(workspace.LogDirectory, $"spec-refinement-{prefix}-{stamp}.out.log"),
+            Path.Combine(workspace.LogDirectory, $"spec-refinement-{prefix}-{stamp}.err.log"),
+            workspace.RootDirectory,
+            RenewalCount: 0);
     }
 
     public static void TryLaunchFirstPending(
@@ -349,12 +359,14 @@ internal static class GoalRefinementWorkCoordinator
     private static GoalRefinementService CreateService(
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        WorkerProfileCatalog workerProfiles) =>
+        WorkerProfileCatalog workerProfiles,
+        string? rawOutputStamp) =>
         new(
             providers,
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
             workerProfiles,
-            rawOutputDirectory: workspace.LogDirectory);
+            rawOutputDirectory: workspace.LogDirectory,
+            rawOutputStamp: rawOutputStamp);
 }

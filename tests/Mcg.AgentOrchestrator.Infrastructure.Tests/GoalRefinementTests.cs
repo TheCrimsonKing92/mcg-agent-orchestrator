@@ -226,6 +226,20 @@ public sealed class GoalRefinementTests
     }
 
     [Xunit.Fact]
+    public void DetachedRefinementLaunchCarriesExecutorLogStamp()
+    {
+        const string stamp = "20260920044315000";
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var goalId = new GoalId("1234567890abcdef");
+
+        var request = GoalRefinementWorkCoordinator.CreateLaunchRequest(workspace, goalId, stamp);
+
+        Xunit.Assert.Equal(stamp, request.Args[^1]);
+        Xunit.Assert.EndsWith($"spec-refinement-12345678-{stamp}.out.log", request.StdoutPath, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith($"spec-refinement-12345678-{stamp}.err.log", request.StderrPath, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public async Task OutboxExactStateAndEnsureKeepPendingProcessingFailedAndQuarantinedDistinct()
     {
         var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
