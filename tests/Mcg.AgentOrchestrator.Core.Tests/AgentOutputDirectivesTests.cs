@@ -187,13 +187,20 @@ public sealed class AgentOutputDirectivesTests
             Assert.True(
                 requirements.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
                 requirements.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
-            Assert.Contains("candidate identity", requirements, StringComparison.Ordinal);
-            Assert.Contains("proven equivalent worktree/dispatch candidate identity/content", requirements, StringComparison.Ordinal);
-            Assert.Contains("`test_project`/`test_class`", requirements, StringComparison.Ordinal);
-            Assert.Contains("cite", requirements, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains("covered", requirements, StringComparison.Ordinal);
-            Assert.Contains("unproven", requirements, StringComparison.Ordinal);
-            Assert.Contains("stale narrative", requirements, StringComparison.Ordinal);
+            var receiptFirst = Assert.Single(
+                requirements.Split(Environment.NewLine),
+                line => line.StartsWith("- RECEIPT-FIRST:", StringComparison.Ordinal));
+            Assert.Contains("candidate", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("proven equivalent worktree/dispatch", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("`test_project`/`test_class`", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("cite", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("covered", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("missing", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("stale", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("mismatched", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("unreadable", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("unproven", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("stale narrative", receiptFirst, StringComparison.Ordinal);
         }
     }
 
