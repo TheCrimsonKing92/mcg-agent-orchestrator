@@ -459,6 +459,7 @@ internal sealed partial class ConductorBatchLoop
                         deferEmission: true);
                 }
             }
+            TerminalGoalJournalMetadataCache.BeginMeasurement();
             var sweepClock = Stopwatch.StartNew();
             var sweepResult = RunJanitorialPhase(
                 "sweep",
@@ -608,8 +609,9 @@ internal sealed partial class ConductorBatchLoop
                 unscopedStallTickThreshold,
                 nextTick);
             sweepClock.Stop();
+            var dependencyMetadataTiming = TerminalGoalJournalMetadataCache.CompleteMeasurement();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "sweep", sweepClock.Elapsed,
-                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count}{FormatSweepCacheDetail(sweepResult)}"));
+                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}"));
 
             var preWalkClock = Stopwatch.StartNew();
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);

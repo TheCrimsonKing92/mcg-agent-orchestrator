@@ -624,20 +624,26 @@ internal static class GoalOperationJournal
 
     public static GoalOperationJournalSummary Read(string executionDirectory, GoalId goalId)
     {
-        var path = PathFor(executionDirectory, goalId);
-        if (!File.Exists(path))
+        var path = ResolveReadPath(executionDirectory, goalId);
+        if (path is null)
         {
-            var archivePath = ArchivePathFor(executionDirectory, goalId);
-            if (!File.Exists(archivePath))
-            {
-                return new GoalOperationJournalSummary(path, [], [], []);
-            }
-
-            path = archivePath;
+            return new GoalOperationJournalSummary(PathFor(executionDirectory, goalId), [], [], []);
         }
 
         var entries = ReadEntries(path);
         return BuildSummary(path, entries);
+    }
+
+    internal static string? ResolveReadPath(string executionDirectory, GoalId goalId)
+    {
+        var path = PathFor(executionDirectory, goalId);
+        if (File.Exists(path))
+        {
+            return path;
+        }
+
+        var archivePath = ArchivePathFor(executionDirectory, goalId);
+        return File.Exists(archivePath) ? archivePath : null;
     }
 
     public static GoalOperationJournalSummary ReadActive(string executionDirectory, GoalId goalId)

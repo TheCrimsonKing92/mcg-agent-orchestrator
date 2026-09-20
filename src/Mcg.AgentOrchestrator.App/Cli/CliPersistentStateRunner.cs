@@ -1704,10 +1704,10 @@ internal static partial class CliPersistentStateRunner
             return new ConductLoopDependencyMetadata(summary.Id, summary.Status, IsLanded: false);
         }
 
-        var journal = GoalOperationJournal.Read(executionDirectory, new GoalId(summary.Id));
-        var isLanded = GoalOperationJournal.HasDurableLandingIntent(journal);
+        var journal = TerminalGoalJournalMetadataCache.Read(executionDirectory, new GoalId(summary.Id));
+        var isLanded = journal.IsLanded;
         var status = !isLanded &&
-            GoalOperationJournal.HasRetiredTerminalDisposition(journal) &&
+            journal.IsRetiredDisposition &&
             !IsConductLoopTerminalWithoutLandingStatus(summary.Status)
                 ? "Retired"
                 : summary.Status;
