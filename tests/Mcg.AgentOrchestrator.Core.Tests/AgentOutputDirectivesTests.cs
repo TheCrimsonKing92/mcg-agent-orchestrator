@@ -173,6 +173,71 @@ public sealed class AgentOutputDirectivesTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "Tester_requirements_consume_matching_receipts_before_requesting_a_run")]
+    public void TesterRequirementsConsumeMatchingReceiptsBeforeRequestingARun()
+    {
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            Assert.Contains("RECEIPT-FIRST", requirements, StringComparison.Ordinal);
+            Assert.Contains("PRIMARY PATH", requirements, StringComparison.Ordinal);
+            Assert.True(
+                requirements.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
+                requirements.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
+            var receiptFirst = Assert.Single(
+                requirements.Split(Environment.NewLine),
+                line => line.StartsWith("- RECEIPT-FIRST:", StringComparison.Ordinal));
+            Assert.Contains("candidate", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("proven equivalent worktree/dispatch", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("`test_project`/`test_class`", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("cite", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("covered", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("missing", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("stale", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("mismatched", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("unreadable", receiptFirst, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("unproven", receiptFirst, StringComparison.Ordinal);
+            Assert.Contains("stale narrative", receiptFirst, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Tester_compact_requirements_stay_within_prompt_budget")]
+    public void TesterCompactRequirementsStayWithinPromptBudget()
+    {
+        var compact = SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple);
+
+        Assert.True(
+            compact.Length <= SdlcRolePromptRequirements.TesterCompactRequirementsMaxChars,
+            $"Compact Tester requirements grew to {compact.Length} chars.");
+    }
+
+    [Xunit.Fact(DisplayName = "Tester_requirements_reject_unsupported_observation_change_pretexts_after_matching_timeout")]
+    public void TesterRequirementsRejectUnsupportedObservationChangePretextsAfterMatchingTimeout()
+    {
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            Assert.Contains("timeout/killed/no-results", requirements, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("inconclusive, not a pass", requirements, StringComparison.Ordinal);
+            Assert.Contains("candidate", requirements, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("`test_project`", requirements, StringComparison.Ordinal);
+            Assert.Contains("`test_class`", requirements, StringComparison.Ordinal);
+            Assert.Contains("selection", requirements, StringComparison.Ordinal);
+            Assert.Contains("only `test_project` and `test_class` define that selection", requirements, StringComparison.Ordinal);
+            Assert.Contains("unsupported fields", requirements, StringComparison.Ordinal);
+            Assert.Contains("cosmetic selector differences", requirements, StringComparison.Ordinal);
+            Assert.Contains("full-gate/operator/acceptance", requirements, StringComparison.Ordinal);
+            Assert.Contains("deadline", requirements, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("cause", requirements, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Researcher_requirements_lead_with_stdout_only_no_plan_file_contract")]
     public void ResearcherRequirementsLeadWithStdoutOnlyNoPlanFileContract()
     {

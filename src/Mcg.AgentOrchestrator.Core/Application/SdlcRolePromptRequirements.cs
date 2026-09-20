@@ -5,8 +5,17 @@ internal static class SdlcRolePromptRequirements
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private const string ResearcherStdoutOnlyContract =
         "- Stdout is the only channel the orchestrator reads: print the complete research artifact as your final message. Never write a plan file or any other file, and never reply with only a summary or a file path.";
+    private const string TesterReceiptFirstContract =
+        "- RECEIPT-FIRST: Before emitting `evidence_request`, inspect each supplied receipt. Accept a passing receipt only when its candidate identity (commit/SHA or proven equivalent worktree/dispatch candidate identity/content) and selection coverage (`test_project`/`test_class`) match this round; cite its identity/path, mark covered obligations closed, and do not request them again. A missing, stale, mismatched, or unreadable receipt is unproven; name that disposition. When it conflicts with stale narrative, the verified matching receipt controls.";
+    private const string TesterInconclusiveReceiptContract =
+        "- A matching timeout/killed/no-results receipt is inconclusive, not a pass, and closes nothing. For that same candidate, a claimed discriminating change must change the serialized `evidence_request` selection and the work it executes: only `test_project` and `test_class` define that selection. Description text, unsupported fields, and cosmetic selector differences are not a changed run. You may narrow with supported `test_class` syntax only while preserving unclosed coverage. If no justified changed selection is expressible, retain the open inconclusive finding and route the needed observation to its full-gate/operator/acceptance owner without emitting the identical request. A stale-candidate receipt may use the same selection against the current candidate. Do not lengthen deadlines by default or invent a cause. Keep full-gate/operator-owned obligations open and owned; do not widen conditional criteria.";
+    private const string TesterCompactReceiptFirstContract =
+        "- RECEIPT-FIRST: Inspect/cite. Pass iff candidate SHA/proven equivalent worktree/dispatch + `test_project`/`test_class` match; close covered/no repeat. Missing/stale/mismatched/unreadable=unproven; evidence > stale narrative.";
+    private const string TesterCompactInconclusiveReceiptContract =
+        "- Timeout/killed/no-results is inconclusive, not a pass. Rerun only on changed execution; only `test_project` and `test_class` define that selection. unsupported fields; cosmetic selector differences don't; full-gate/operator/acceptance owns rest. Never extend deadline/invent cause.";
     internal const int ReviewerComplexRequirementsMaxChars = 4371;
     internal const int ReviewerCompactRequirementsMaxChars = 3346;
+    internal const int TesterCompactRequirementsMaxChars = 3000;
 
     private const string ReviewerExhaustiveFindingsContract =
         "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
@@ -69,6 +78,8 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                TesterReceiptFirstContract,
+                TesterInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
                 "- A Developer-owned finding (`correctness`, `spec-compliance`, `code-quality`, `test-coverage`) that is still waiting on execution MUST carry `evidence_request`; the conductor runs that selection once per candidate before it re-dispatches Developer. Read the brief's `evidence_index` line to tell the two apart: `state=pending-execution` means no run exists for this `candidate_sha` yet and is NOT a pass, `state=executed-on-candidate` means the receipt for that exact candidate is already in hand. A finding with no `evidence_request` has no `evidence_index` line at all: it is writable source work now, never a pass. Never call the source correct, and never resolve a finding, from narrative or from a run that did not happen; keep it open and either cite the receipt or request one.",
                 "- Derive a focused verification matrix from the requested behavior, changed files, and known risks.",
@@ -213,7 +224,9 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
-                "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
+                TesterCompactReceiptFirstContract,
+                TesterCompactInconclusiveReceiptContract,
+                "- PRIMARY PATH: prefer Conductor-side runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming requested work. The Conductor returns receipts. Execute directly only if selection cannot settle it.",
                 "- A Developer-owned finding still waiting on execution MUST carry `evidence_request`; the conductor runs it once per candidate before re-dispatching Developer. In `evidence_index`, `state=pending-execution` means no run exists for that `candidate_sha` and is NOT a pass; `state=executed-on-candidate` means the receipt for that exact candidate exists. Never call the source correct, or resolve a finding, from narrative or a run that did not happen.",
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- ACCEPTANCE-GATE-OWNED: report not-verifiable naming the gate; this does not fail the round.",
