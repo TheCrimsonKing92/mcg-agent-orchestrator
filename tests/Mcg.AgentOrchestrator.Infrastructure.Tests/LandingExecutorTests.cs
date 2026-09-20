@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
+[Xunit.Collection(TestCollections.LandingGitRunner)]
 public sealed class LandingExecutorTests
 {
     [Xunit.Fact(DisplayName = "LandingExecutor_failed_count_excludes_auto_recovered_empty_output_flake")]
@@ -195,6 +195,346 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Theory(DisplayName = "LandingExecutor accepted sibling cannot carry an unaccepted candidate onto main")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void AcceptedSiblingCannotCarryUnacceptedCandidateOntoMain(bool attemptUnacceptedGoalFirst)
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, unaccepted) = CreateVerifiedGoal(repo);
+            var unacceptedBranch = GoalWorktrees.BranchName(unaccepted.Id);
+            AddGoalBranchCommit(repo, unacceptedBranch, "src/refused.txt", "must remain off main");
+            _ = GoalWorktrees.Ensure(repo, unaccepted.Id);
+
+            if (attemptUnacceptedGoalFirst)
+            {
+                var refused = LandingExecutor.Execute(kernel, unaccepted, workspace);
+                Assert.False(refused.MainAdvanced);
+                Assert.Equal("acceptance verification not passed", Assert.IsType<LandingDecision.Escalate>(refused.Decision).Reason);
+            }
+
+            var (siblingKernel, sibling) = CreateVerifiedGoal(repo);
+            var siblingBranch = GoalWorktrees.BranchName(sibling.Id);
+            AddGoalBranchCommit(repo, siblingBranch, "src/accepted.txt", "independent change");
+            var siblingWorktree = GoalWorktrees.Ensure(repo, sibling.Id);
+            GoalOperationJournal.AcceptancePassed(
+                repo,
+                sibling,
+                "conductor:acceptance",
+                ReadGit(siblingWorktree, "rev-parse", "HEAD"),
+                ReadGit(repo, "rev-parse", "main"),
+                "passing acceptance for the sibling");
+
+            var landed = LandingExecutor.Execute(siblingKernel, sibling, workspace);
+
+            Assert.True(landed.MainAdvanced, landed.Message);
+            Assert.Equal("independent change", ReadGit(repo, "show", "main:src/accepted.txt"));
+            Assert.False(
+                GitCli.Run(repo, "cat-file", "-e", "main:src/refused.txt").Succeeded,
+                "The sibling landing carried an unaccepted candidate onto main after that candidate was refused.");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor refusal leaves the candidate eligible for a later accepted landing")]
+    public void RefusedGoalCanLandAfterAcceptanceIsRecorded()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/later-accepted.txt", "eligible after acceptance");
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+
+            var refused = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(refused.MainAdvanced);
+            Assert.False(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
+            GoalOperationJournal.AcceptancePassed(
+                repo,
+                goal,
+                "conductor:acceptance",
+                ReadGit(worktree, "rev-parse", "HEAD"),
+                ReadGit(repo, "rev-parse", "main"),
+                "passing acceptance after the earlier refusal");
+
+            var landed = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(landed.MainAdvanced, landed.Message);
+            Assert.Equal("eligible after acceptance", ReadGit(repo, "show", "main:src/later-accepted.txt"));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor holds and preserves integration state ahead of bound main")]
+    public void IntegrationAheadOfBoundMainIsHeldWithoutMutation()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/candidate.txt");
+            RunGit(repo, "checkout", "-b", LandingExecutor.IntegrationBranchName);
+            AppendCommit(repo, "src/ahead.txt", "unlanded integration state");
+            RunGit(repo, "checkout", "main");
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
+            var integrationBefore = ReadGit(repo, "rev-parse", LandingExecutor.IntegrationBranchName);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            Assert.Contains("state not present on bound main", result.Message, StringComparison.Ordinal);
+            Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
+            Assert.Equal(integrationBefore, ReadGit(repo, "rev-parse", LandingExecutor.IntegrationBranchName));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor recovers an interrupted publication by restoring integration predecessor")]
+    public void InterruptedPublicationRestoresIntegrationPredecessorBeforeRetry()
+    {
+        var repo = CreateGitRepository();
+        var previousGitRunner = LandingExecutor.GitRunner;
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/interrupted.txt");
+            LandingExecutor.GitRunner = (workingDirectory, args) =>
+                args is ["update-ref", "refs/heads/main", _, _]
+                    ? throw new InvalidOperationException("simulated process interruption during main publication")
+                    : GitCli.Run(workingDirectory, args);
+
+            _ = Assert.Throws<InvalidOperationException>(() => LandingExecutor.Execute(kernel, goal, workspace));
+            Assert.True(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
+            LandingExecutor.GitRunner = previousGitRunner;
+
+            var retry = LandingExecutor.Execute(kernel, goal, workspace, mutationBlocker: () => "stop after recovery");
+
+            Assert.False(retry.MainAdvanced);
+            Assert.False(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
+            Assert.False(GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(repo, goal.Id)));
+        }
+        finally
+        {
+            LandingExecutor.GitRunner = previousGitRunner;
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor recovery reconciles an ancestor publication without rewinding a newer main checkout")]
+    public void RecoveredAncestorPublicationDoesNotRewriteCheckoutWhenMainHasAdvanced()
+    {
+        var repo = CreateGitRepository();
+        var previousGitRunner = LandingExecutor.GitRunner;
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-ancestor.txt");
+            var boundMain = ReadGit(repo, "rev-parse", "main");
+            var candidate = ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
+            RunGit(repo, "update-ref", "refs/heads/main", candidate, boundMain);
+            AppendCommit(repo, "src/sibling-after-recovery.txt", "newer sibling publication");
+            GoalOperationJournal.RecordLandingIntent(
+                repo,
+                goal,
+                GoalWorktrees.BranchName(goal.Id),
+                LandingExecutor.IntegrationBranchName,
+                candidate,
+                "fixture recovered ancestor",
+                boundMainRevision: boundMain);
+            var readTreeCalls = 0;
+            LandingExecutor.GitRunner = (workingDirectory, args) =>
+            {
+                if (args is ["read-tree", "-m", "-u", _, _])
+                {
+                    readTreeCalls++;
+                }
+                return GitCli.Run(workingDirectory, args);
+            };
+
+            var recovered = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(recovered.MainAdvanced, recovered.Message);
+            Assert.Equal(0, readTreeCalls);
+            Assert.Equal("newer sibling publication", ReadGit(repo, "show", "main:src/sibling-after-recovery.txt"));
+        }
+        finally
+        {
+            LandingExecutor.GitRunner = previousGitRunner;
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor recovery holds when its ancestor probe drains late")]
+    public void RecoveredPublicationDrainTimeoutFailsClosed()
+    {
+        var repo = CreateGitRepository();
+        var previousGitRunner = LandingExecutor.GitRunner;
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-drain-timeout.txt");
+            var boundMain = ReadGit(repo, "rev-parse", "main");
+            var candidate = ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
+            RunGit(repo, "update-ref", "refs/heads/main", candidate, boundMain);
+            GoalOperationJournal.RecordLandingIntent(
+                repo,
+                goal,
+                GoalWorktrees.BranchName(goal.Id),
+                LandingExecutor.IntegrationBranchName,
+                candidate,
+                "fixture drain timeout",
+                boundMainRevision: boundMain);
+            LandingExecutor.GitRunner = (workingDirectory, args) =>
+                args is ["merge-base", "--is-ancestor", _, _]
+                    ? new GitCli.GitResult(0, string.Empty, string.Empty, DrainTimedOut: true)
+                    : GitCli.Run(workingDirectory, args);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            Assert.Contains("timed out while draining", result.Message, StringComparison.Ordinal);
+            Assert.True(GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(repo, goal.Id)));
+        }
+        finally
+        {
+            LandingExecutor.GitRunner = previousGitRunner;
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor recovers a completed legacy landing intent without a bound main predecessor")]
+    public void CompletedPublicationWithLegacyIntentIsReconciledBeforeMissingPredecessorHold()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered.txt");
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            var candidate = ReadGit(repo, "rev-parse", goalBranch);
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
+            RunGit(repo, "update-ref", "refs/heads/main", candidate, mainBefore);
+            GoalOperationJournal.RecordLandingIntent(
+                repo,
+                goal,
+                goalBranch,
+                LandingExecutor.IntegrationBranchName,
+                candidate,
+                "fixture legacy intent");
+
+            var recovered = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(recovered.MainAdvanced, recovered.Message);
+            Assert.Equal(candidate, recovered.MergeCommitSha);
+            Assert.Contains("src/recovered.txt", recovered.ChangedFiles!);
+            Assert.Contains(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation.Equals("conductor:landing-recovery", StringComparison.Ordinal) &&
+                    entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor recovery uses the bound main revision and tombstones a reconciled intent")]
+    public void RecoveredNoOpCandidateUsesBoundMainAndIsNotReplayed()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            AppendCommit(repo, "baseline.txt", "baseline change");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var boundMain = ReadGit(repo, "rev-parse", "main");
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            RunGit(repo, "branch", goalBranch, boundMain);
+            GoalOperationJournal.RecordLandingIntent(
+                repo,
+                goal,
+                goalBranch,
+                LandingExecutor.IntegrationBranchName,
+                boundMain,
+                "fixture recovered no-op",
+                boundMainRevision: boundMain);
+
+            var recovered = LandingExecutor.Execute(kernel, goal, workspace);
+            var afterRecovery = GoalOperationJournal.Read(repo, goal.Id);
+
+            Assert.True(recovered.MainAdvanced, recovered.Message);
+            Assert.Empty(recovered.ChangedFiles!);
+            Assert.False(GoalOperationJournal.HasDurableLandingIntent(afterRecovery));
+            Assert.Contains(afterRecovery.Entries, entry =>
+                entry.Operation == "conductor:landing-recovery" && entry.Status == GoalOperationStatus.Completed);
+
+            var replay = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(replay.MainAdvanced);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingExecutor recovery applies post-landing state effects before closing its intent")]
+    public void RecoveredPublicationAppliesStateEffectsAndDoesNotReplay()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/recovered-effect.txt");
+            var boundMain = ReadGit(repo, "rev-parse", "main");
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            var goalWorktree = GoalWorktrees.Ensure(repo, goal.Id);
+            Directory.CreateDirectory(Path.Combine(goalWorktree, ".orchestrator-proposals"));
+            File.WriteAllText(Path.Combine(goalWorktree, ".orchestrator-proposals", "backlog-add-recovered.md"), """
+                ---
+                kind: backlog-add
+                title: Recovered follow-up
+                ---
+                Recovered publication proposal.
+                """);
+            RunGit(goalWorktree, "add", ".orchestrator-proposals/backlog-add-recovered.md");
+            RunGit(goalWorktree, "commit", "-m", "Add recovered state effect");
+            var candidate = ReadGit(goalWorktree, "rev-parse", "HEAD");
+            RunGit(repo, "update-ref", "refs/heads/main", candidate, boundMain);
+            GoalOperationJournal.RecordLandingIntent(
+                repo,
+                goal,
+                goalBranch,
+                LandingExecutor.IntegrationBranchName,
+                candidate,
+                "fixture recovered publication",
+                boundMainRevision: boundMain);
+
+            var recovered = LandingExecutor.Execute(kernel, goal, workspace);
+            var items = new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true).GetAwaiter().GetResult();
+            var replay = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(recovered.MainAdvanced, recovered.Message);
+            Assert.Contains(".orchestrator-proposals/backlog-add-recovered.md", recovered.ChangedFiles!);
+            Assert.Equal("Recovered follow-up", Assert.Single(items).Title);
+            Assert.False(GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(repo, goal.Id)));
+            Assert.False(replay.MainAdvanced);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LandingExecutor_applies_landed_backlog_add_proposal_once")]
     public void LandingExecutorAppliesLandedBacklogAddProposalOnce()
     {
@@ -264,6 +604,14 @@ public sealed class LandingExecutorTests
             RunGit(repo, "commit", "-m", "Candidate goal work");
             RunGit(repo, "checkout", "main");
             var mainBefore = GoalAcceptanceVerifier.ResolveGitText(repo, "rev-parse", "HEAD")!.Trim();
+            var goalWorktree = GoalWorktrees.Ensure(repo, goal.Id);
+            GoalOperationJournal.AcceptancePassed(
+                repo,
+                goal,
+                "conductor:acceptance",
+                ReadGit(goalWorktree, "rev-parse", "HEAD"),
+                mainBefore,
+                "passing acceptance for the candidate");
             var checks = 0;
 
             var result = LandingExecutor.Execute(
@@ -280,12 +628,7 @@ public sealed class LandingExecutorTests
             Assert.Contains("held before merge", result.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(2, checks);
             Assert.Equal(mainBefore, GoalAcceptanceVerifier.ResolveGitText(repo, "rev-parse", "HEAD")!.Trim());
-            Assert.Equal(
-                mainBefore,
-                GoalAcceptanceVerifier.ResolveGitText(
-                    repo,
-                    "rev-parse",
-                    LandingExecutor.IntegrationBranchName)!.Trim());
+            Assert.False(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
             Assert.False(File.Exists(Path.Combine(repo, "must-not-land.txt")));
         }
         finally
@@ -364,12 +707,18 @@ public sealed class LandingExecutorTests
             var (kernel, goal) = CreateVerifiedGoal(repo);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             AddGoalBranchCommit(repo, goalBranch, "src/intent-write-fails.txt", "goal work");
-            GoalOperationJournal.BeforeLandingIntentAppend = _ => throw new InvalidOperationException("simulated intent write failure");
+            var anchor = $"refs/orchestrator/landing/{goal.Id.Value}";
+            GoalOperationJournal.BeforeLandingIntentAppend = intent =>
+            {
+                Assert.Equal(intent.MergeCommitSha, ReadGit(repo, "rev-parse", "--verify", anchor));
+                throw new InvalidOperationException("simulated intent write failure");
+            };
 
             var ex = Assert.Throws<InvalidOperationException>(() => LandingExecutor.Execute(kernel, goal, workspace));
 
             Assert.Contains("simulated intent write failure", ex.Message);
             Assert.False(IsBranchReachableFromMain(repo, goalBranch));
+            Assert.False(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", anchor).Succeeded);
             Assert.False(GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(repo, goal.Id)));
         }
         finally
@@ -391,7 +740,7 @@ public sealed class LandingExecutorTests
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             AddGoalBranchCommit(repo, goalBranch, "src/main-merge-fails.txt", "goal work");
             LandingExecutor.GitRunner = (workingDirectory, args) =>
-                args.SequenceEqual(["merge", "--ff-only", LandingExecutor.IntegrationBranchName])
+                args is ["update-ref", "refs/heads/main", _, _]
                     ? new GitCli.GitResult(1, string.Empty, "simulated main merge failure")
                     : GitCli.Run(workingDirectory, args);
 
@@ -522,24 +871,21 @@ public sealed class LandingExecutorTests
     public void GoalMarkLandedPersistsLandedStateBeforeCleanupNeededEnqueue()
     {
         var repo = CreateGitRepository();
-        var previousWarningSink = GoalWorktrees.CleanupWarningSink;
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var innerRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-            var stateRepository = new CountingStateRepository(innerRepository);
             var (kernel, goal) = CreateVerifiedGoal(repo);
+            var hooks = new GoalWorktreeCleanupHooks
+            {
+                // Observe persisted debt irrespective of expiry; this probe tests ordering, not clocks.
+                CleanupUtcNow = static () => DateTimeOffset.UnixEpoch
+            };
+            var stateRepository = new CountingStateRepository(
+                innerRepository,
+                () => GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, hooks) is not null);
             innerRepository.SaveAsync(kernel).GetAwaiter().GetResult();
             stateRepository.ResetSaveCount();
-
-            var saveCountAtCleanupNeeded = 0;
-            GoalWorktrees.CleanupWarningSink = warning =>
-            {
-                if (warning.Operation.Equals("remove:cleanup-needed", StringComparison.OrdinalIgnoreCase))
-                {
-                    saveCountAtCleanupNeeded = stateRepository.SaveCount;
-                }
-            };
 
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
@@ -556,13 +902,17 @@ public sealed class LandingExecutorTests
                 ref currentGoal);
 
             Assert.True(changed);
-            Assert.True(saveCountAtCleanupNeeded > 0, "cleanup-needed was enqueued before a landed-state save");
+            Assert.True(stateRepository.SaveCount > 0, "landed state was not saved");
+            Assert.True(
+                stateRepository.SaveCountBeforeCleanupNeeded > 0,
+                "cleanup-needed was enqueued before a landed-state save");
             var persisted = innerRepository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
             Assert.Equal(GoalStatus.Completed, persisted.Status);
+            // Prove the same predicate eventually sees debt, so an always-false read cannot pass.
+            Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(repo, goal.Id, hooks));
         }
         finally
         {
-            GoalWorktrees.CleanupWarningSink = previousWarningSink;
             TryDeleteDirectory(repo);
         }
     }
@@ -616,7 +966,11 @@ public sealed class LandingExecutorTests
         try
         {
             var (kernel, goal) = CreateCompletedGoalWithLeftoverWorkspace(repo);
-            GoalWorktrees.RecordGoalCleanupNeeded(repo, goal.Id, "remove:simulated-cleanup-failure");
+            GoalWorktrees.RecordGoalCleanupNeeded(
+                repo,
+                goal.Id,
+                "remove:simulated-cleanup-failure",
+                new GoalWorktreeCleanupHooks { CleanupWarningSink = _ => { } });
 
             var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
 
@@ -1008,6 +1362,7 @@ public sealed class LandingExecutorTests
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal, developer, approvalPath, nonApprovalPath) = CreateVerifiedOwnershipApprovalGoal(repo);
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
 
             var result = LandingExecutor.Execute(kernel, goal, workspace, policy: policy);
 
@@ -1020,6 +1375,8 @@ public sealed class LandingExecutorTests
             Assert.Contains(approvalPath, hold.Evidence);
             Assert.DoesNotContain(nonApprovalPath, hold.Evidence);
             Assert.DoesNotContain(inbox.Items, item => item.Kind == OperatorInboxKind.LandingEscalation);
+            Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
+            Assert.False(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
         }
         finally
         {
@@ -1305,14 +1662,22 @@ public sealed class LandingExecutorTests
         }
     }
 
-    private sealed class CountingStateRepository(ITransactionalOrchestratorStateRepository inner)
+    private sealed class CountingStateRepository(
+        ITransactionalOrchestratorStateRepository inner,
+        Func<bool>? cleanupNeededExists = null)
         : ITransactionalOrchestratorStateRepository
     {
         private int _saveCount;
+        private int _saveCountBeforeCleanupNeeded;
 
         public int SaveCount => Volatile.Read(ref _saveCount);
+        public int SaveCountBeforeCleanupNeeded => Volatile.Read(ref _saveCountBeforeCleanupNeeded);
 
-        public void ResetSaveCount() => Volatile.Write(ref _saveCount, 0);
+        public void ResetSaveCount()
+        {
+            Volatile.Write(ref _saveCount, 0);
+            Volatile.Write(ref _saveCountBeforeCleanupNeeded, 0);
+        }
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default) =>
             inner.LoadAsync(cancellationToken);
@@ -1325,7 +1690,7 @@ public sealed class LandingExecutorTests
         public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
         {
             await inner.SaveAsync(kernel, cancellationToken).ConfigureAwait(false);
-            Interlocked.Increment(ref _saveCount);
+            RecordSave();
         }
 
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
@@ -1370,7 +1735,16 @@ public sealed class LandingExecutorTests
             await inner.SaveGoalSnapshotsAsync(goals, cancellationToken).ConfigureAwait(false);
             if (goals.Count > 0)
             {
-                Interlocked.Increment(ref _saveCount);
+                RecordSave();
+            }
+        }
+
+        private void RecordSave()
+        {
+            Interlocked.Increment(ref _saveCount);
+            if (cleanupNeededExists?.Invoke() is false)
+            {
+                Interlocked.Increment(ref _saveCountBeforeCleanupNeeded);
             }
         }
 
@@ -1398,7 +1772,7 @@ public sealed class LandingExecutorTests
                 .ConfigureAwait(false);
             if (saved)
             {
-                Interlocked.Increment(ref _saveCount);
+                RecordSave();
             }
 
             return result;

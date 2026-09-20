@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Mcg.AgentOrchestrator.Core.Tests;
@@ -9,6 +11,26 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     public RepositoryTestImpactFilterResolutionTests(Xunit.ITestOutputHelper output)
     {
         _output = output;
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceOwnerTestUsesItsIndependentProject()
+    {
+        const string path =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/AcceptanceAttemptExecutionOwnerTests.cs";
+        var reader = SourceDeclarationReader.ForFiles(
+            (path, TestSource("AcceptanceAttemptExecutionOwnerTests")));
+
+        var plan = RepositoryTestImpactPlanner.Plan(
+            RepositoryChangeClassifier.Classify([path]),
+            reader);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal(RepositoryTestProject.Acceptance, check.TestProject);
+        Assert.Contains(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
+            check.Command);
+        Assert.Equal("FullyQualifiedName~AcceptanceAttemptExecutionOwnerTests", check.Command[^1]);
     }
 
     [Xunit.Fact]
@@ -126,6 +148,276 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         Assert.Equal("FullyQualifiedName~RunGoalServiceTests", dependentCheck.Command[^1]);
         Assert.Equal(RepositoryTestProject.Infrastructure, dependentCheck.TestProject);
         Assert.Equal(["RunGoalServiceTests"], dependentCheck.TestClassSelections);
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheReusesEquivalentSnapshotWithoutChangingPlan()
+    {
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+
+        var first = RepositoryTestImpactPlanner.Plan([changedPath], repository.Root);
+        var second = RepositoryTestImpactPlanner.Plan([changedPath], repository.Root);
+
+        Assert.Equal(
+            first.Checks.Select(check => check.CommandLine),
+            second.Checks.Select(check => check.CommandLine));
+        var dependentCheck = Assert.Single(second.Checks, check =>
+            check.TestProject == RepositoryTestProject.Infrastructure);
+        Assert.Contains("reverse-dependency-cache=hit", dependentCheck.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheInvalidatesSameLengthContentWithOriginalTimestamp()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        const string consumerPath = "src/Mcg.AgentOrchestrator.App/Cli/RunGoalService.cs";
+        var first = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+        var absoluteConsumerPath = repository.GetPath(consumerPath);
+        var originalTimestamp = File.GetLastWriteTimeUtc(absoluteConsumerPath);
+        var originalSource = File.ReadAllText(absoluteConsumerPath);
+        var replacement = new string('X', "DispatchFailureClassifier".Length);
+
+        repository.Write(
+            consumerPath,
+            originalSource.Replace("DispatchFailureClassifier", replacement, StringComparison.Ordinal));
+        File.SetLastWriteTimeUtc(absoluteConsumerPath, originalTimestamp);
+        var second = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        Assert.Equal(originalSource.Length, File.ReadAllText(absoluteConsumerPath).Length);
+        Assert.Equal(originalTimestamp, File.GetLastWriteTimeUtc(absoluteConsumerPath));
+        Assert.Contains("RunGoalServiceTests", first.TestClassNames);
+        Assert.DoesNotContain("RunGoalServiceTests", second.TestClassNames);
+        Assert.Equal(ReverseDependencyCacheDisposition.Miss, second.CacheReceipt?.Disposition);
+        Assert.NotEqual(first.CacheReceipt?.Fingerprint, second.CacheReceipt?.Fingerprint);
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheInvalidatesAddedSourceMembership()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        _ = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        repository.Write(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AddedConsumerTests.cs",
+            "public sealed class AddedConsumerTests { " +
+            "private readonly DispatchFailureClassifier _classifier = new(); " +
+            "[Xunit.Fact] public void Runs() { } }");
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        Assert.Equal(ReverseDependencyCacheDisposition.Miss, selection.CacheReceipt?.Disposition);
+        Assert.Contains("AddedConsumerTests", selection.TestClassNames);
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheInvalidatesRemovedSourceMembership()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        _ = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        repository.Delete("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RunGoalServiceTests.cs");
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        Assert.Equal(ReverseDependencyCacheDisposition.Miss, selection.CacheReceipt?.Disposition);
+        Assert.DoesNotContain("RunGoalServiceTests", selection.TestClassNames);
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheInvalidatesRenamedSourceMembership()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        var first = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        repository.Move(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RunGoalServiceTests.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RenamedRunGoalServiceTests.cs");
+        var second = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        Assert.Equal(ReverseDependencyCacheDisposition.Miss, second.CacheReceipt?.Disposition);
+        Assert.NotEqual(first.CacheReceipt?.Fingerprint, second.CacheReceipt?.Fingerprint);
+        Assert.Equal(first.TestClassNames, second.TestClassNames);
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheInvalidatesProjectGraphContent()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        var first = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+        const string projectPath = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
+        repository.Write(projectPath, File.ReadAllText(repository.GetPath(projectPath)) + Environment.NewLine);
+
+        var second = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        Assert.Equal(ReverseDependencyCacheDisposition.Miss, second.CacheReceipt?.Disposition);
+        Assert.NotEqual(first.CacheReceipt?.Fingerprint, second.CacheReceipt?.Fingerprint);
+        Assert.Equal(first.TestClassNames, second.TestClassNames);
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheBindsToWorktreeRootAndGitHead()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var firstRepository = ReverseDependencyRepository.Create();
+        using var secondRepository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        firstRepository.Write(".git/HEAD", "ref: refs/heads/main");
+        firstRepository.Write(".git/refs/heads/main", new string('1', 40));
+
+        var first = ReverseDependencyTestImpactReader.Read(firstRepository.Root, [changedPath]);
+        var otherWorktree = ReverseDependencyTestImpactReader.Read(secondRepository.Root, [changedPath]);
+        firstRepository.Write(".git/refs/heads/main", new string('2', 40));
+        var nextCommit = ReverseDependencyTestImpactReader.Read(firstRepository.Root, [changedPath]);
+
+        Assert.Equal(ReverseDependencyCacheDisposition.Miss, otherWorktree.CacheReceipt?.Disposition);
+        Assert.Equal(ReverseDependencyCacheDisposition.Miss, nextCommit.CacheReceipt?.Disposition);
+        Assert.NotEqual(first.CacheReceipt?.Fingerprint, otherWorktree.CacheReceipt?.Fingerprint);
+        Assert.NotEqual(first.CacheReceipt?.Fingerprint, nextCommit.CacheReceipt?.Fingerprint);
+        Assert.Equal(first.TestClassNames, nextCommit.TestClassNames);
+    }
+
+    [Xunit.Fact]
+    public void CachedAndBypassedReverseDependencySelectionsAreOrdinallyEquivalent()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        _ = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+
+        var cached = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
+        var bypassed = ReverseDependencyTestImpactReader.Read(
+            repository.Root,
+            [changedPath],
+            bypassCache: true);
+
+        Assert.Equal(ReverseDependencyCacheDisposition.Hit, cached.CacheReceipt?.Disposition);
+        Assert.Equal(ReverseDependencyCacheDisposition.Bypass, bypassed.CacheReceipt?.Disposition);
+        Assert.Equal(cached.Outcome, bypassed.Outcome);
+        Assert.Equal(cached.TestClassNames, bypassed.TestClassNames);
+    }
+
+    [Xunit.Fact]
+    public void ConcurrentReverseDependencyCacheReadsRemainEquivalentAndBounded()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        using var repository = ReverseDependencyRepository.Create();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        var selections = new ConcurrentBag<ReverseDependencyTestSelection>();
+
+        Parallel.For(
+            0,
+            8,
+            _ => selections.Add(ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath])));
+
+        Assert.Equal(8, selections.Count);
+        Assert.All(selections, selection =>
+        {
+            Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+            Assert.Equal(["RunGoalServiceTests"], selection.TestClassNames);
+            Assert.InRange(selection.CacheReceipt!.RetainedSnapshotCount, 1, 4);
+        });
+    }
+
+    [Xunit.Fact]
+    public void ReverseDependencyCacheEvictsLeastRecentSnapshotAtFourEntryBound()
+    {
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+        var repositories = Enumerable.Range(0, 5)
+            .Select(_ => ReverseDependencyRepository.Create())
+            .ToArray();
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        try
+        {
+            var selections = repositories
+                .Select(repository => ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]))
+                .ToArray();
+            var revisitedFirst = ReverseDependencyTestImpactReader.Read(
+                repositories[0].Root,
+                [changedPath]);
+
+            Assert.All(selections, selection => Assert.InRange(
+                selection.CacheReceipt!.RetainedSnapshotCount,
+                1,
+                4));
+            Assert.Equal(4, selections[^1].CacheReceipt?.RetainedSnapshotCount);
+            Assert.Equal(ReverseDependencyCacheDisposition.Miss, revisitedFirst.CacheReceipt?.Disposition);
+            Assert.Equal(4, revisitedFirst.CacheReceipt?.RetainedSnapshotCount);
+        }
+        finally
+        {
+            foreach (var repository in repositories)
+            {
+                repository.Dispose();
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void RealRepositoryReverseDependencyCacheRecordsColdWarmPlanAndBypassEquivalence()
+    {
+        Assert.True(TryFindRepositoryRoot(out var root), "Repository root was not found.");
+        Assert.True(Directory.Exists(Path.Combine(root, ".git")) || File.Exists(Path.Combine(root, ".git")));
+        Assert.True(File.Exists(Path.Combine(
+            root,
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")));
+        const string changedPath =
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs";
+        Assert.True(File.Exists(Path.Combine(root, changedPath.Replace('/', Path.DirectorySeparatorChar))));
+        ReverseDependencyTestImpactReader.ClearCacheForTests();
+
+        var stopwatch = Stopwatch.StartNew();
+        var cold = RepositoryTestImpactPlanner.Plan([changedPath], root);
+        stopwatch.Stop();
+        var coldInfrastructure = Assert.Single(cold.Checks, check =>
+            check.TestProject == RepositoryTestProject.Infrastructure);
+        Assert.Contains("reverse-dependency-cache=miss", coldInfrastructure.Reason, StringComparison.Ordinal);
+        var coldMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
+        var warmMilliseconds = new List<double>();
+        RepositoryTestImpactPlan? warm = null;
+        for (var iteration = 0; iteration < 3; iteration++)
+        {
+            stopwatch.Restart();
+            warm = RepositoryTestImpactPlanner.Plan([changedPath], root);
+            stopwatch.Stop();
+            warmMilliseconds.Add(stopwatch.Elapsed.TotalMilliseconds);
+        }
+
+        var bypassed = ReverseDependencyTestImpactReader.Read(root, [changedPath], bypassCache: true);
+        var warmInfrastructure = Assert.Single(warm!.Checks, check =>
+            check.TestProject == RepositoryTestProject.Infrastructure);
+        Assert.Equal(bypassed.TestClassNames, warmInfrastructure.TestClassSelections);
+        Assert.Equal(
+            cold.Checks.Select(check => check.CommandLine),
+            warm.Checks.Select(check => check.CommandLine));
+        Assert.Contains("reverse-dependency-cache=hit", warmInfrastructure.Reason, StringComparison.Ordinal);
+        _output.WriteLine(
+            "REVERSE_DEPENDENCY_CACHE_MEASUREMENT indexed_files={0} source_bytes={1} cold_plan_ms={2:F2} " +
+            "warm_plan_ms={3} bypass_reparsed_files={4} fingerprint={5}",
+            bypassed.CacheReceipt!.IndexedFileCount,
+            bypassed.CacheReceipt.IndexedSourceBytes,
+            coldMilliseconds,
+            string.Join(',', warmMilliseconds.Select(value => value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))),
+            bypassed.CacheReceipt.ReparsedFileCount,
+            bypassed.CacheReceipt.Fingerprint);
     }
 
     [Xunit.Fact]
@@ -403,7 +695,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DirectConsumers.cs",
             string.Join(
                 Environment.NewLine,
-                Enumerable.Range(1, 33).Select(index =>
+                Enumerable.Range(1, ReverseDependencyTestImpactReader.MaximumSelectedTestClasses + 1).Select(index =>
                     $"public sealed class DirectConsumer{index}Tests {{ " +
                     "private readonly DispatchFailureClassifier _classifier = new(); " +
                     "[Xunit.Fact] public void Runs() { } }")));
@@ -417,7 +709,10 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             check.Command.Contains(
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
         Assert.DoesNotContain("--filter", infrastructureCheck.Command);
-        Assert.Contains("32-test-class bound", infrastructureCheck.Reason, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{ReverseDependencyTestImpactReader.MaximumSelectedTestClasses}-test-class bound",
+            infrastructureCheck.Reason,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -973,6 +1268,16 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         {
             var path = Path.Combine(Root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             File.Delete(path);
+        }
+
+        internal string GetPath(string relativePath) =>
+            Path.Combine(Root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+        internal void Move(string sourceRelativePath, string destinationRelativePath)
+        {
+            var destination = GetPath(destinationRelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Move(GetPath(sourceRelativePath), destination);
         }
 
         public void Dispose()

@@ -1,4 +1,4 @@
-﻿using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -10,7 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement : CliCommandTestBase
 {
     [Xunit.Fact]
@@ -1693,6 +1693,18 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var secondRequest = Guid.NewGuid();
         using var bothPrepared = new CountdownEvent(2);
         using var releaseCommit = new ManualResetEventSlim(initialState: false);
+        using var winnerCommitted = new ManualResetEventSlim(initialState: false);
+        var timeProvider = new ManualConductorTimeProviderForTests(
+            DateTimeOffset.Parse("2026-09-18T00:00:00Z"));
+        using var transferLeaseClock = GoalReplacementTransferLeaseClock.Push(
+            timeProvider,
+            _ =>
+            {
+                Xunit.Assert.True(
+                    winnerCommitted.Wait(TimeSpan.FromMinutes(1)),
+                    "A replacement winner did not commit before the loser lease deadline advanced.");
+                timeProvider.AdvanceForTests(TimeSpan.FromSeconds(16));
+            });
         GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
         {
             bothPrepared.Signal();
@@ -1729,11 +1741,25 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             }
         }
 
+        Exception? ReplaceAndSignalWinner(
+            ITransactionalOrchestratorStateRepository repository,
+            string brief,
+            Guid requestId)
+        {
+            var outcome = Replace(repository, brief, requestId);
+            if (outcome is null)
+            {
+                winnerCommitted.Set();
+            }
+
+            return outcome;
+        }
+
         Exception?[] outcomes;
         try
         {
-            var first = Task.Run(() => Replace(CreateMigratedStateRepository(workspace.SqliteStatePath), firstBrief, firstRequest));
-            var second = Task.Run(() => Replace(CreateMigratedStateRepository(workspace.SqliteStatePath), secondBrief, secondRequest));
+            var first = Task.Run(() => ReplaceAndSignalWinner(CreateMigratedStateRepository(workspace.SqliteStatePath), firstBrief, firstRequest));
+            var second = Task.Run(() => ReplaceAndSignalWinner(CreateMigratedStateRepository(workspace.SqliteStatePath), secondBrief, secondRequest));
             if (!bothPrepared.Wait(TimeSpan.FromMinutes(1)))
             {
                 releaseCommit.Set();
@@ -1780,6 +1806,99 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var audits = new[] { claimStore.FindAudit(firstRequest), claimStore.FindAudit(secondRequest) };
         Xunit.Assert.Single(audits, audit => audit?.Outcome == GoalReplacementOutcome.Succeeded);
         Xunit.Assert.Single(audits, audit => audit?.Outcome == GoalReplacementOutcome.CurrentOwnerConflict);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplace_CompetingReplacementTimeout_IsRetryableWithoutAudit_ThenConflictsAfterWinnerCommits()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("deterministic-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Retryable concurrent replacement source");
+        var setupRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor for retryable replacement");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await setupRepository.SaveAsync(initial);
+        var loserBrief = Path.Combine(root, "loser-replacement.md");
+        var winnerBrief = Path.Combine(root, "winner-replacement.md");
+        var reasonPath = Path.Combine(root, "replacement-reason.md");
+        await File.WriteAllTextAsync(loserBrief, "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with the retrying assertion.");
+        await File.WriteAllTextAsync(winnerBrief, "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with the winning assertion.");
+        await File.WriteAllTextAsync(reasonPath, "Competing corrected replacement.");
+        var loserRequest = Guid.NewGuid();
+        var winnerRequest = Guid.NewGuid();
+
+        void Replace(string brief, Guid requestId)
+        {
+            IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
+            var localProfiles = WorkerProfileCatalog.Default();
+            Goal? localGoal = null;
+            CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", brief,
+                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                CreateMigratedStateRepository(workspace.SqliteStatePath),
+                workspace,
+                ref localAgents,
+                new InMemoryModelProviderRegistry([new DeterministicGoalRefinerProvider()]),
+                ref localProfiles,
+                ref localGoal));
+        }
+
+        IDisposable? competingLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            .TryAcquireAcceptanceLease(
+                predecessor.Id.Value,
+                $"goal-replace:test:{Guid.NewGuid():N}",
+                TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(competingLease);
+        var timeProvider = new ManualConductorTimeProviderForTests(
+            DateTimeOffset.Parse("2026-09-18T00:00:00Z"));
+        var waitCount = 0;
+        GoalReplacementRetryableTimeoutException timeout;
+        try
+        {
+            using var transferLeaseClock = GoalReplacementTransferLeaseClock.Push(
+                timeProvider,
+                _ =>
+                {
+                    waitCount++;
+                    timeProvider.AdvanceForTests(TimeSpan.FromSeconds(16));
+                });
+            timeout = Xunit.Assert.Throws<GoalReplacementRetryableTimeoutException>(
+                () => Replace(loserBrief, loserRequest));
+        }
+        finally
+        {
+            competingLease.Dispose();
+        }
+
+        Xunit.Assert.Contains("GOAL_REPLACE_RETRYABLE_TIMEOUT", timeout.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"requestId={loserRequest:D}", timeout.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason=competing-replacement-timeout", timeout.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(1, waitCount);
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        Xunit.Assert.Null(claimStore.FindAudit(loserRequest));
+
+        Replace(winnerBrief, winnerRequest);
+        Xunit.Assert.Equal(GoalReplacementOutcome.Succeeded, claimStore.FindAudit(winnerRequest)!.Outcome);
+        var conflict = Xunit.Assert.Throws<SourceBacklogClaimConflictException>(
+            () => Replace(loserBrief, loserRequest));
+        Xunit.Assert.Contains("GOAL_REPLACE_CURRENT_OWNER_CONFLICT", conflict.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalReplacementOutcome.CurrentOwnerConflict, claimStore.FindAudit(loserRequest)!.Outcome);
+        var restored = await setupRepository.LoadAsync();
+        Xunit.Assert.Equal(2, restored.Goals.Count);
+        Xunit.Assert.Single(claimStore.ListLineage(item.Id));
     }
 
     [Xunit.Fact]
@@ -2452,7 +2571,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
 
         GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
         {
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath}");
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "UPDATE backlog_dependencies SET prerequisite_id = $missing WHERE dependent_id = $source";
@@ -2596,7 +2715,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel());
         repository.BeforeNextTransaction = _ =>
         {
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath}");
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath};Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "DELETE FROM backlog WHERE id = $id";
@@ -2624,146 +2743,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             ? Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
             : []);
     }
-
-
-    private sealed class BlockingGoalRefinerProvider : IModelProvider
-    {
-        public string ProviderName => "blocking-refiner";
-
-        public ManualResetEventSlim Entered { get; } = new(initialState: false);
-
-        public ManualResetEventSlim Release { get; } = new(initialState: false);
-
-        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
-        {
-            Entered.Set();
-            Release.Wait(cancellationToken);
-            const string response = """
-                ```json
-                {
-                  "behavioralContract": "Create the goal after unlocked refinement.",
-                  "acceptanceCriteria": ["The goal is committed atomically."],
-                  "verificationClass": "TestVerifiable",
-                  "decisions": [],
-                  "forks": []
-                }
-                ```
-                """;
-            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
-        }
-    }
-
-    private sealed class ClarifyingGoalRefinerProvider : IModelProvider
-    {
-        private int _invocationCount;
-
-        public string ProviderName => "clarifying-refiner";
-
-        public int InvocationCount => Volatile.Read(ref _invocationCount);
-
-        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _invocationCount);
-            const string response = """
-                ```json
-                {
-                  "behavioralContract": "Integrate with an external API selected by the operator.",
-                  "acceptanceCriteria": ["The selected API contract is implemented."],
-                  "verificationClass": "TestVerifiable",
-                  "decisions": [],
-                  "forks": [
-                    {
-                      "kind": "external-contract",
-                      "topicKey": "goal-create-api-contract",
-                      "refinerConfidence": "low",
-                      "blastRadius": "high",
-                      "question": "Which external API contract should the goal target?",
-                      "choice": "",
-                      "rationale": "Operator decision required."
-                    }
-                  ]
-                }
-                ```
-                """;
-            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
-        }
-    }
-
-    private sealed class CallbackGoalRefinerProvider(Action callback) : IModelProvider
-    {
-        private int _invoked;
-
-        public string ProviderName => "callback-refiner";
-
-        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
-        {
-            if (Interlocked.Exchange(ref _invoked, 1) == 0)
-                callback();
-            const string response = """
-                ```json
-                {
-                  "behavioralContract": "Create a corrected replacement goal.",
-                  "acceptanceCriteria": ["The replacement is committed atomically."],
-                  "verificationClass": "TestVerifiable",
-                  "decisions": [],
-                  "forks": []
-                }
-                ```
-                """;
-            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
-        }
-    }
-
-    private sealed class DeterministicGoalRefinerProvider : IModelProvider
-    {
-        public string ProviderName => "deterministic-refiner";
-
-        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
-        {
-            const string response = """
-                ```json
-                {
-                  "behavioralContract": "Create a deterministic goal.",
-                  "acceptanceCriteria": ["The goal output remains compatible."],
-                  "verificationClass": "TestVerifiable",
-                  "decisions": [],
-                  "forks": []
-                }
-                ```
-                """;
-            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
-        }
-    }
-
-    private sealed class BarrierGoalRefinerProvider(int expectedCalls) : IModelProvider
-    {
-        private readonly CountdownEvent _entered = new(expectedCalls);
-
-        public string ProviderName => "barrier-refiner";
-
-        public WaitHandle AllEntered => _entered.WaitHandle;
-
-        public ManualResetEventSlim Release { get; } = new(initialState: false);
-
-        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
-        {
-            _entered.Signal();
-            Release.Wait(cancellationToken);
-            const string response = """
-                ```json
-                {
-                  "behavioralContract": "Create exactly one linked goal.",
-                  "acceptanceCriteria": ["Exactly one goal is linked to the source backlog item."],
-                  "verificationClass": "TestVerifiable",
-                  "decisions": [],
-                  "forks": []
-                }
-                ```
-                """;
-            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
-        }
-    }
-
     private static int CountOccurrences(string text, string value)
     {
         var count = 0;

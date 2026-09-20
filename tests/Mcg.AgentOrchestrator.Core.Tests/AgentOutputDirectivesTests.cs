@@ -123,6 +123,11 @@ public sealed class AgentOutputDirectivesTests
             Assert.Contains("REVIEW DEFECT", requirements, StringComparison.Ordinal);
             Assert.Contains("demonstrably present in an earlier reviewed complete candidate diff", requirements, StringComparison.Ordinal);
             Assert.Contains("violated criterion index, normalized file path, line/region, then stable_id", requirements, StringComparison.Ordinal);
+            Assert.DoesNotContain("Use only `Core.Tests`", requirements, StringComparison.Ordinal);
+            Assert.Contains(
+                "Use a test project from `config/acceptance-manifest.json` by label, file name, or path",
+                requirements,
+                StringComparison.Ordinal);
         }
         Assert.True(
             complex.Length <= SdlcRolePromptRequirements.ReviewerComplexRequirementsMaxChars,
@@ -151,6 +156,21 @@ public sealed class AgentOutputDirectivesTests
             "blockers: premise-invalid - <fact and evidence>",
             SdlcRolePromptRequirements.BuildPlainText(AgentRole.Researcher, TaskComplexity.Simple),
             StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TesterRequirementsUseManagedRunnerMethodSymbolsNotDisplayText()
+    {
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            Assert.Contains("Name~Method-symbol", requirements, StringComparison.Ordinal);
+            Assert.Contains("reject DisplayName text", requirements, StringComparison.Ordinal);
+            Assert.DoesNotContain("DisplayName~Method", requirements, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact(DisplayName = "Researcher_requirements_lead_with_stdout_only_no_plan_file_contract")]
@@ -186,6 +206,51 @@ public sealed class AgentOutputDirectivesTests
             Assert.DoesNotContain(requirement, SdlcRolePromptRequirements.BuildPlainText(role), StringComparison.Ordinal);
             Assert.DoesNotContain(
                 requirement,
+                SdlcRolePromptRequirements.BuildPlainText(role, TaskComplexity.Simple),
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Tester_requirements_lock_the_pending_execution_evidence_distinction")]
+    public void TesterRequirementsLockThePendingExecutionEvidenceDistinction()
+    {
+        // The worker reads this bullet at the point of decision, so the guidance must name the same
+        // wire states the classifier emits into the brief. A renamed state that only moves in one of
+        // the two places leaves the Tester reading a token no brief will ever carry.
+        var pending = FindingEvidenceExecutionClassifier.ToWireValue(FindingEvidenceExecutionState.PendingExecution);
+        var executed = FindingEvidenceExecutionClassifier.ToWireValue(FindingEvidenceExecutionState.ExecutedOnCandidate);
+        var noneRequested = FindingEvidenceExecutionClassifier.ToWireValue(FindingEvidenceExecutionState.NoneRequested);
+
+        foreach (var requirements in new[]
+                 {
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),
+                     SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
+                 })
+        {
+            var bullet = Assert.Single(
+                requirements.Split(Environment.NewLine),
+                line => line.Contains("evidence_index", StringComparison.Ordinal));
+            Assert.Contains("MUST carry `evidence_request`", bullet, StringComparison.Ordinal);
+            Assert.Contains($"`state={pending}`", bullet, StringComparison.Ordinal);
+            Assert.Contains("is NOT a pass", bullet, StringComparison.Ordinal);
+            Assert.Contains($"`state={executed}`", bullet, StringComparison.Ordinal);
+            Assert.Contains("`candidate_sha`", bullet, StringComparison.Ordinal);
+            Assert.Contains("Never call the source correct", bullet, StringComparison.Ordinal);
+            // The brief renders evidence_index only for a finding that carries a request, so the
+            // guidance must not send the worker looking for a state no brief can ever print.
+            Assert.DoesNotContain($"state={noneRequested}", bullet, StringComparison.Ordinal);
+        }
+
+        // Negative control: roles that never emit evidence_request are not given the execution-state
+        // vocabulary, so the distinction stays with the role that decides on it.
+        foreach (var role in new[] { AgentRole.Planner, AgentRole.Researcher, AgentRole.Developer })
+        {
+            Assert.DoesNotContain(
+                "evidence_index",
+                SdlcRolePromptRequirements.BuildPlainText(role),
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "evidence_index",
                 SdlcRolePromptRequirements.BuildPlainText(role, TaskComplexity.Simple),
                 StringComparison.Ordinal);
         }
@@ -229,9 +294,40 @@ public sealed class AgentOutputDirectivesTests
         Assert.Equal(parsed.Directive.QuestionFingerprint, variant.Directive!.QuestionFingerprint);
     }
 
+    [Xunit.Fact]
+    public void ParseHumanInputRequestClassifiesPostImplementationPlannerEvidenceWithOwner()
+    {
+        const string output =
+            "PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":4,\"evidence_key\":\"live-crash-rehearsal\",\"availability\":\"post-implementation\",\"owner\":\"operator\",\"needed\":\"live and stopped two-process observation\",\"reason\":\"the candidate must exist before the observation can run\"}";
+
+        var parsed = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner);
+
+        Assert.False(parsed.IsMalformed, parsed.Diagnostic);
+        Assert.NotNull(parsed.Directive);
+        Assert.Equal("ProspectiveAcceptanceEvidence", parsed.Directive.Kind.ToString());
+        Assert.Equal("operator", parsed.Directive.EvidenceOwner);
+        Assert.Contains("Owner: operator", parsed.Directive.Question, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ParseHumanInputRequestKeepsNeverRecordedEvidenceAsBlockingPrerequisite()
+    {
+        const string output =
+            "PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":2,\"evidence_key\":\"missing-decision\",\"availability\":\"never-recorded\",\"needed\":\"the selected data contract\",\"reason\":\"the choice was never recorded\"}";
+
+        var parsed = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner);
+
+        Assert.False(parsed.IsMalformed, parsed.Diagnostic);
+        Assert.Equal(HumanWaitKind.PlannerPrerequisiteEvidence, parsed.Directive!.Kind);
+        Assert.Contains("Availability: never-recorded", parsed.Directive.Question, StringComparison.Ordinal);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"retrievable\",\"needed\":\"stdout\",\"reason\":\"inaccessible\"}")]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"never-recorded\",\"store\":\"somewhere\",\"needed\":\"stdout\",\"reason\":\"absent\"}")]
+    [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"never-recorded\",\"store\":\"\",\"needed\":\"stdout\",\"reason\":\"absent\"}")]
+    [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"post-implementation\",\"needed\":\"live observation\",\"reason\":\"candidate required\"}")]
+    [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"post-implementation\",\"owner\":\"operator\",\"store\":\"somewhere\",\"needed\":\"live observation\",\"reason\":\"candidate required\"}")]
     [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: not-json")]
     public void ParseHumanInputRequestRejectsMalformedPlannerEvidence(string output)
     {

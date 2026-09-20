@@ -257,7 +257,8 @@ public sealed record WorkerContextPackage(
     ContextContractVersion ContractVersion,
     AgentRole TargetRole,
     IReadOnlyList<WorkerContextArtifact> Artifacts,
-    ReviewFindingHistoryProjectionMetrics? ReviewFindingProjection = null)
+    ReviewFindingHistoryProjectionMetrics? ReviewFindingProjection = null,
+    InterruptedWorkCheckpointProjectionMetrics? InterruptedWorkCheckpointProjection = null)
 {
     // This is semantic attestation/cache identity only. It is not delivery, read, or acknowledgment evidence.
 }
@@ -342,6 +343,16 @@ public sealed record WorkerRetryFeedbackPromptReceipt(
     string GeneratedPromptSha256,
     ContextDeliveryMode DeliveryMode);
 
+public enum EarlyConvergenceEvidenceKind
+{
+    ReviewFindingReceipt,
+    InterruptedWorkCheckpoint
+}
+
+public sealed record InterruptedWorkCheckpointProjectionMetrics(
+    string CandidateSha,
+    string ReceiptHash);
+
 public sealed record WorkerContextPackageReceipt(
     string SemanticPackageId,
     IReadOnlyList<WorkerContextSectionReceipt> Sections,
@@ -368,7 +379,8 @@ public sealed record WorkerContextPackageReceipt(
     int BaselineDeliveredArtifactBytes = 0,
     int BaselineToolTranscriptCharacters = 0,
     int BaselineModelInputTokenEstimate = 0,
-    WorkerRetryFeedbackPromptReceipt? RetryFeedbackPromptReceipt = null)
+    WorkerRetryFeedbackPromptReceipt? RetryFeedbackPromptReceipt = null,
+    EarlyConvergenceEvidenceKind EarlyConvergenceEvidenceSource = EarlyConvergenceEvidenceKind.ReviewFindingReceipt)
 {
     public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
     {
@@ -391,7 +403,9 @@ public sealed record WorkerContextPackageReceipt(
                 string.Equals(section.ContentHash, hash, StringComparison.Ordinal) &&
                 string.Equals(
                     section.LogicalIdentity,
-                    $"goal/review-finding-receipts/{hash}.json",
+                    EarlyConvergenceEvidenceSource == EarlyConvergenceEvidenceKind.ReviewFindingReceipt
+                        ? $"goal/review-finding-receipts/{hash}.json"
+                        : $"goal/interrupted-work-checkpoint/{hash}.json",
                     StringComparison.Ordinal)));
     }
 

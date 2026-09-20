@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -11,6 +12,37 @@ using Microsoft.Extensions.Hosting;
 [Xunit.Collection("EnvMutation")]
 public sealed class DashboardDispatchStartFailureEndpointTests
 {
+    private static readonly TimeSpan WatchCompletionTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Awaits the per-watch completion signal instead of polling IsRunning against a wall clock.
+    /// On timeout the failure names IterationCount, elapsed milliseconds, and StopReason so a gate
+    /// TRX distinguishes a watch that never stopped from one that stopped late.
+    /// </summary>
+    private static async Task AwaitWatchCompletionAsync(
+        DashboardContinuationService service,
+        string goalId,
+        Stopwatch clock)
+    {
+        try
+        {
+            await service.WaitForWatchCompletionAsync(goalId).WaitAsync(WatchCompletionTimeout);
+        }
+        catch (TimeoutException)
+        {
+            var elapsedMs = clock.ElapsedMilliseconds;
+            var statuses = service.GetStatuses();
+            var status = statuses.FirstOrDefault(row =>
+                string.Equals(row.GoalId, goalId, StringComparison.OrdinalIgnoreCase));
+            var prefix = goalId.Length <= 8 ? goalId : goalId[..8];
+            Assert.Fail(status is null
+                ? $"no continuation status row for goal {prefix} after {elapsedMs} ms; rows present: {statuses.Count}"
+                : $"continuation watch for goal {prefix} did not stop within {WatchCompletionTimeout.TotalSeconds:0} s: " +
+                  $"IsRunning={status.IsRunning}, IterationCount={status.IterationCount}, " +
+                  $"elapsed={elapsedMs} ms, StopReason='{status.StopReason}'");
+        }
+    }
+
     [Xunit.Fact]
     public async Task TaskStart_RegistrationFailure_Returns503AndCommitsFailedState()
     {
@@ -140,17 +172,14 @@ public sealed class DashboardDispatchStartFailureEndpointTests
                 new TestHostLifetime(),
                 service);
 
+            var clock = Stopwatch.StartNew();
             var started = service.StartSubscriptionWatch(services, fixture.Goal.Id.Value);
             Assert.True(started.IsRunning);
-            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Single().IsRunning)
-            {
-                await Task.Delay(25);
-            }
+            await AwaitWatchCompletionAsync(service, fixture.Goal.Id.Value, clock);
 
             var status = service.GetStatuses().Single();
-            Assert.False(status.IsRunning);
-            Assert.True(status.IterationCount > 0);
+            Assert.False(status.IsRunning, $"watch still running after completion signal; StopReason='{status.StopReason}'");
+            Assert.True(status.IterationCount > 0, $"expected at least one iteration; StopReason='{status.StopReason}'");
             Assert.Contains("worker-process-registration-failed", status.StopReason, StringComparison.Ordinal);
             AssertPersistedRegistrationFailure(await fixture.Repository.LoadAsync(), fixture.Goal.Id, fixture.Task.Id);
         }

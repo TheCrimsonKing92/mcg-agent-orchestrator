@@ -7,9 +7,93 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerFocusedRunner)]
+public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuildEnvironmentManagerRootedTestBase
 {
+    // Failsafe budget for FocusedRunner_AllSlotsHeld_ReportsNoSlotWithoutStartingDotnet. It is
+    // inside the script's documented 1-to-300 BudgetSeconds range and exists only so a genuine
+    // hang still terminates; the fact asserts nothing about elapsed time.
+    private const int NoSlotBudgetFailsafeSeconds = 120;
+
+    private static (int ExitCode, string Stdout, string Stderr) RunFocusedScript(
+        string scriptPath,
+        string workDirectory,
+        string shimDirectory,
+        string isolatedRoot,
+        string receiptPath,
+        string logPath,
+        string goalPrefix,
+        int budgetSeconds,
+        int leaseWaitSeconds,
+        string projectFile = "Fake.Tests.csproj",
+        string testFilter = "FullyQualifiedName~FocusedTests")
+    {
+        var startInfo = CreateFocusedStartInfo(
+            scriptPath,
+            workDirectory,
+            shimDirectory,
+            isolatedRoot,
+            receiptPath,
+            logPath,
+            goalPrefix,
+            budgetSeconds,
+            leaseWaitSeconds,
+            projectFile,
+            testFilter);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start focused runner.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        // Supervision includes a fixed conservative cleanup allowance in addition to the
+        // focused runner's total budget. It is a ceiling, not a measured latency percentile.
+        var outerDeadline = TimeSpan.FromSeconds(checked(budgetSeconds + 7));
+        Assert.True(
+            process.WaitForExit(outerDeadline),
+            $"Focused runner did not exit within {outerDeadline.TotalSeconds} seconds for a {budgetSeconds}-second budget.");
+        return (process.ExitCode, stdout, stderr);
+    }
+
+    private static ProcessStartInfo CreateFocusedStartInfo(
+        string scriptPath,
+        string workDirectory,
+        string shimDirectory,
+        string isolatedRoot,
+        string receiptPath,
+        string logPath,
+        string goalPrefix,
+        int budgetSeconds,
+        int leaseWaitSeconds,
+        string projectFile = "Fake.Tests.csproj",
+        string testFilter = "FullyQualifiedName~FocusedTests")
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            WorkingDirectory = workDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var argument in new[]
+        {
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+            "-FocusedTest", "-GoalPrefix", goalPrefix,
+            "-TestFilter", testFilter,
+            "-ReceiptPath", receiptPath,
+            "-BudgetSeconds", budgetSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "-LeaseWaitSeconds", leaseWaitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "test", projectFile
+        })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
+        startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+        return startInfo;
+    }
+
     [Xunit.Fact]
     public void FocusedRunner_TestFailureSurvivesWorktreeDrift()
     {
@@ -453,6 +537,9 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
                 Assert.Fail(diagnostics);
             }
             Assert.Equal(2, result.ExitCode);
+            Assert.True(
+                File.Exists(startedPath),
+                "The focused child must execute the marker-writing test before the budget control terminates its tree.");
             Assert.True(File.Exists(receiptPath), diagnostics);
             using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
             Assert.Equal("BLOCKED", receipt.RootElement.GetProperty("outcome").GetString());
@@ -819,6 +906,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             return;
         }
 
+        // The budget is a failsafe that bounds a genuine hang; it is not a deadline this fact
+        // asserts against, and it must stay far above any setup latency a loaded gate machine can
+        // produce so the receipt reports no-slot rather than budget-exceeded. The one-second lease
+        // wait is the condition under test: it is the only phase allowed to decide the outcome.
+        const int leaseWaitSeconds = 1;
+
         var repoRoot = ResolveRepositoryRoot();
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
         var root = CreateTempDirectory();
@@ -864,8 +957,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
                 receiptPath,
                 logPath,
                 "no-slot-test",
-                budgetSeconds: 2,
-                leaseWaitSeconds: 1,
+                budgetSeconds: NoSlotBudgetFailsafeSeconds,
+                leaseWaitSeconds: leaseWaitSeconds,
                 projectFile);
 
             Assert.True(result.ExitCode == 3, $"Focused no-slot invocation exited {result.ExitCode}.{Environment.NewLine}{result.Stdout}{Environment.NewLine}{result.Stderr}");
@@ -876,6 +969,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             Assert.Equal("not-acquired", receipt.RootElement.GetProperty("leaseState").GetString());
             Assert.False(receipt.RootElement.GetProperty("leaseReleased").GetBoolean());
             Assert.Equal("not-started", receipt.RootElement.GetProperty("childProcess").GetProperty("stateAfter").GetString());
+            // This shim only observes PowerShell-resolved '& dotnet' calls. The receipt's
+            // not-started child state above is the child-launch oracle for this fixture.
             Assert.False(File.Exists(logPath));
         }
         finally
@@ -907,8 +1002,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
     [Xunit.Fact]
     public void AcceptanceLease_ReservesPriorityUntilFocusedSlotIsReleased()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+        var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot,
             new GoalId("cccccccccccccccccccccccccccccccc"),
             "priority-test");
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
@@ -932,7 +1026,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
     [Xunit.Fact]
     public void FocusedRunner_ConcurrentInvocations_NeverExceedSharedGrid()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var source = ReadIsolatedDotnetScript();
         Assert.Contains("Join-Path $lockDirectory \"build-$slot.lock\"", source, StringComparison.Ordinal);
 
@@ -947,7 +1040,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             var signaled = false;
             try
             {
-                var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+                var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot,
                     new GoalId((index + 1).ToString("x8", System.Globalization.CultureInfo.InvariantCulture) + new string('0', 24)),
                     $"focused-concurrency-{index}");
                 start.Wait();

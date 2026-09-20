@@ -39,8 +39,12 @@ public sealed record ConductorAutonomyPolicy(
     double EmptyOutputRetryMaxDelaySeconds = 30,
     int ReviewAutoRetryWarningRound = 4,
     int ReviewAutoRetryStopRound = 7,
-    int PlannerSampleCount = 1)
+    int PlannerSampleCount = 1,
+    int AcceptanceWidth = 2)
 {
+    public const int MinimumAcceptanceWidth = 1;
+    public const int MaximumAcceptanceWidth = 4;
+
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
 
@@ -163,6 +167,9 @@ public sealed record ConductorAutonomyPolicy(
         if (PlannerSampleCount is < PlannerSamplingPolicy.MinimumSampleCount or > PlannerSamplingPolicy.MaximumSampleCount)
             errors.Add($"plannerSampleCount must be between {PlannerSamplingPolicy.MinimumSampleCount} and {PlannerSamplingPolicy.MaximumSampleCount} (got {PlannerSampleCount}).");
 
+        if (AcceptanceWidth is < MinimumAcceptanceWidth or > MaximumAcceptanceWidth)
+            errors.Add($"acceptanceWidth must be between {MinimumAcceptanceWidth} and {MaximumAcceptanceWidth} (got {AcceptanceWidth}).");
+
         foreach (var state in AllStates)
         {
             if (!TransitionMap.ContainsKey(state))
@@ -188,6 +195,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"reviewAutoRetryWarningRound\": {ReviewAutoRetryWarningRound},");
         sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
         sb.AppendLine($"  \"plannerSampleCount\": {PlannerSampleCount},");
+        sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -258,6 +266,9 @@ public sealed record ConductorAutonomyPolicy(
             var plannerSampleCount = root.TryGetProperty("plannerSampleCount", out _)
                 ? RequireInt(root, "plannerSampleCount", src)
                 : 1;
+            var acceptanceWidth = root.TryGetProperty("acceptanceWidth", out _)
+                ? RequireInt(root, "acceptanceWidth", src)
+                : 2;
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
                 && thresholdEl.ValueKind != JsonValueKind.Null)
@@ -305,7 +316,8 @@ public sealed record ConductorAutonomyPolicy(
                 emptyOutputRetryMaxDelaySeconds,
                 reviewAutoRetryWarningRound,
                 reviewAutoRetryStopRound,
-                plannerSampleCount);
+                plannerSampleCount,
+                acceptanceWidth);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

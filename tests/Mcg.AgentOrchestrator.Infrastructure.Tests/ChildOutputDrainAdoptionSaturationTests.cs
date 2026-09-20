@@ -282,6 +282,7 @@ public sealed class ChildOutputDrainAdoptionSaturationTests
         public void CompleteInput() { }
         public void Kill() { }
         public Task WaitForExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task WaitForOwnedExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public void Dispose()
         {

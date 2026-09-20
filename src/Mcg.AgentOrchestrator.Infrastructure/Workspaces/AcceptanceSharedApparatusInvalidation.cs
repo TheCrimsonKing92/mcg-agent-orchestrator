@@ -46,10 +46,11 @@ internal static class TempRootApparatusLossReceiptStore
 
     internal static string? ResolvePath(string? acceptanceAttemptResultsPrefix)
     {
-        var directory = string.IsNullOrWhiteSpace(acceptanceAttemptResultsPrefix)
-            ? null
-            : Path.GetDirectoryName(acceptanceAttemptResultsPrefix);
-        return string.IsNullOrWhiteSpace(directory) ? null : Path.Combine(directory, FileName);
+        if (string.IsNullOrWhiteSpace(acceptanceAttemptResultsPrefix))
+            return null;
+        var prefix = Path.GetFullPath(acceptanceAttemptResultsPrefix)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return $"{prefix}.{FileName}";
     }
 
     internal static void Append(string path, TempRootApparatusLossReceiptV1 receipt)
@@ -103,15 +104,24 @@ internal static class TempRootApparatusLossReceiptStore
     internal static void ApplyCurrentScope(IDictionary<string, string?> environment)
     {
         ArgumentNullException.ThrowIfNull(environment);
-        if (CurrentContext.Value is not { } context)
+        ApplyScope(environment, CurrentContext.Value?.GateInvocationId, CurrentContext.Value?.Path);
+    }
+
+    internal static void ApplyScope(
+        IDictionary<string, string?> environment,
+        string? gateInvocationId,
+        string? path)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        if (string.IsNullOrWhiteSpace(gateInvocationId) || string.IsNullOrWhiteSpace(path))
         {
             environment.Remove(GateInvocationIdVariable);
             environment.Remove(ReceiptPathVariable);
             return;
         }
 
-        environment[GateInvocationIdVariable] = context.GateInvocationId;
-        environment[ReceiptPathVariable] = context.Path;
+        environment[GateInvocationIdVariable] = gateInvocationId;
+        environment[ReceiptPathVariable] = path;
     }
 
     internal static IReadOnlyList<TempRootApparatusLossReceiptV1> Read(string? path)

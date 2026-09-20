@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $testSummary = Join-Path $PSScriptRoot 'Invoke-TestSummary.ps1'
 $testProject = Join-Path $repoRoot 'tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj'
-$filter = 'DisplayName~DuplicateRegistrationProjectsIdentityDecision|DisplayName~RegistrationWithoutConflictProducesHarnessReceipt|DisplayName~ProcessLauncherConfirmsOwnedJobExitForRealChild|DisplayName~ProcessLauncherInventoriesAndKillsOwnedChild'
+$filter = 'Name~DuplicateRegistrationProjectsIdentityDecision|Name~RegistrationWithoutConflictProducesHarnessReceipt|Name~ProcessLauncherConfirmsOwnedJobExitForRealChild|Name~ProcessLauncherInventoriesAndKillsOwnedChild'
 
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
     $output = @(& powershell.exe -NoProfile -File $testSummary -Target $testProject -Filter $filter 2>&1)

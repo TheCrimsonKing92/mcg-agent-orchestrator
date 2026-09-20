@@ -7,6 +7,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record AcceptanceRetainedDiagnostic(string Path, string Sha256);
 
+internal sealed record AcceptanceAttemptArtifactCustodyContext(
+    string AttemptId,
+    string LivenessCheckHint,
+    int OwnerProcessId);
+
 public sealed class AcceptanceAttemptArtifactCustodyException : IOException
 {
     public AcceptanceAttemptArtifactCustodyException(string attemptId, string artifactsPath)

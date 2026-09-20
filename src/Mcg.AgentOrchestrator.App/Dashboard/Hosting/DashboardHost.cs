@@ -350,7 +350,6 @@ public static async Task RunDashboardHostAsync(
     var builder = WebApplication.CreateBuilder();
     builder.WebHost.UseUrls(args.UrlPrefix);
     builder.Services.AddSingleton(workspace);
-    builder.Services.AddHostedService<GoalWorktreeOrphanSweepHostedService>();
 
     var app = builder.Build();
     app.MapDashboardEndpoints(repository, workspace, providers, args, agentCatalogFallback);

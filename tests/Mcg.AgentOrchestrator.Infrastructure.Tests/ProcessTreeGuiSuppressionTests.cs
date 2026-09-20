@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -50,7 +51,7 @@ public sealed class ProcessTreeGuiSuppressionTests
             Process process;
             using (var suppressedSpawn = ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
             {
-                Assert.False(suppressedSpawn.HiddenConsoleAcquired);
+                Assert.False(suppressedSpawn.ChildConsolePolicyApplied);
                 Assert.Equal(
                     ProcessTreeGuiSuppression.SuppressedErrorModeFlags,
                     WindowsProbe.GetErrorMode() & ProcessTreeGuiSuppression.SuppressedErrorModeFlags);
@@ -111,6 +112,9 @@ public sealed class ProcessTreeGuiSuppressionTests
                     [DllImport("kernel32.dll")]
                     public static extern IntPtr GetConsoleWindow();
 
+                    [DllImport("kernel32.dll", SetLastError = true)]
+                    public static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
+
                     [DllImport("user32.dll")]
                     public static extern bool IsWindowVisible(IntPtr hWnd);
                 }
@@ -118,9 +122,13 @@ public sealed class ProcessTreeGuiSuppressionTests
 
                 $console = [McgNativeProbe]::GetConsoleWindow()
                 $visible = if ($console -eq [IntPtr]::Zero) { $false } else { [McgNativeProbe]::IsWindowVisible($console) }
+                $members = New-Object uint32[] 16
+                $memberCount = [McgNativeProbe]::GetConsoleProcessList($members, [uint32]$members.Length)
                 [pscustomobject]@{
                     errorMode = [uint32][McgNativeProbe]::GetErrorMode()
-                    hasConsole = ($console -ne [IntPtr]::Zero)
+                    # Windowless consoles deliberately have HWND=0. Process membership is the
+                    # reliable console-presence oracle for this descendant contract.
+                    hasConsole = ($memberCount -gt 0)
                     consoleVisible = $visible
                 } | ConvertTo-Json -Compress | Set-Content -LiteralPath $env:MCG_PROBE_OUTPUT -Encoding UTF8
                 """);
@@ -385,6 +393,131 @@ public sealed class ProcessTreeGuiSuppressionTests
         Assert.Contains("-NoNewWindow -PassThru -ErrorAction Stop", dispatchHostTests, StringComparison.Ordinal);
         Assert.DoesNotContain("burn" + "-cpu.ps1", dispatchHostTests, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact(DisplayName = "Process tree GUI suppression keeps console ownership in the child launch policy")]
+    public void ProcessTreeGuiSuppressionKeepsConsoleOwnershipInChildLaunchPolicy()
+    {
+        var root = FindRepoRoot();
+        var suppression = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Processes",
+            "ProcessTreeGuiSuppression.cs"));
+        var policy = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Processes",
+            "ChildConsoleLaunchPolicy.cs"));
+
+        Assert.DoesNotContain("Free" + "Console", suppression, StringComparison.Ordinal);
+        Assert.DoesNotContain("Attach" + "Console", suppression, StringComparison.Ordinal);
+        Assert.DoesNotContain("Thread.Sleep", suppression, StringComparison.Ordinal);
+        Assert.Contains("ChildConsoleLaunchPolicy.Prepare();", suppression, StringComparison.Ordinal);
+        Assert.Contains("PrepareDelayHookForTests?.Invoke();", policy, StringComparison.Ordinal);
+        Assert.True(
+            policy.IndexOf("PrepareDelayHookForTests?.Invoke();", StringComparison.Ordinal) <
+            policy.IndexOf("GetConsoleWindow", StringComparison.Ordinal));
+    }
+
+    [Fact(DisplayName = "Child console preparation preserves native errors and does not retain launch ownership")]
+    public void ChildConsolePreparationPreservesNativeErrorsAndLeavesLaunchPathsUsable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const int expectedNativeError = 1234;
+        var expected = new Win32Exception(expectedNativeError, "Injected child-console preparation failure.");
+        ChildConsoleLaunchPolicy.PrepareDelayHookForTests = () => throw expected;
+        try
+        {
+            Assert.Same(expected, Assert.Throws<Win32Exception>(() =>
+            {
+                using var _ = ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn();
+            }));
+            Assert.Same(expected, Assert.Throws<Win32Exception>(() =>
+            {
+                using var _ = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn();
+            }));
+            Assert.Same(expected, Assert.Throws<Win32Exception>(() =>
+            {
+                using var _ = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+            }));
+            Assert.Equal(expectedNativeError, expected.NativeErrorCode);
+        }
+        finally
+        {
+            ChildConsoleLaunchPolicy.PrepareDelayHookForTests = null;
+        }
+
+        using (ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn()) { }
+        using (ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn()) { }
+        using var process = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+        Assert.True(process.WaitForExit(15_000), "Launch remained blocked after preparation failure cleanup.");
+        Assert.Equal(0, process.ExitCode);
+    }
+
+    [Fact(DisplayName = "Child console preparation delay does not serialize an unrelated launch")]
+    public async Task ChildConsolePreparationDelayDoesNotSerializeUnrelatedLaunch()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var invocation = 0;
+        ChildConsoleLaunchPolicy.PrepareDelayHookForTests = () =>
+        {
+            if (Interlocked.Increment(ref invocation) == 1)
+            {
+                entered.Set();
+                release.Wait();
+            }
+        };
+
+        Task? delayedLaunch = null;
+        try
+        {
+            delayedLaunch = Task.Run(() =>
+            {
+                using var delayed = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+                Assert.True(delayed.WaitForExit(15_000), "Delayed launch did not exit after its barrier released.");
+                Assert.Equal(0, delayed.ExitCode);
+            });
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(15)), "Delayed launch never entered child-console preparation.");
+
+            using var unrelated = ProcessTreeGuiSuppression.Start(CreateExitProcessStartInfo());
+            Assert.True(unrelated.WaitForExit(15_000), "Unrelated launch did not complete while preparation was held.");
+            Assert.Equal(0, unrelated.ExitCode);
+            Assert.False(delayedLaunch.IsCompleted, "Delayed launch completed before its release barrier was opened.");
+
+            release.Set();
+            await delayedLaunch;
+        }
+        finally
+        {
+            release.Set();
+            if (delayedLaunch is not null)
+            {
+                await delayedLaunch;
+            }
+
+            ChildConsoleLaunchPolicy.PrepareDelayHookForTests = null;
+        }
+    }
+
+    private static ProcessStartInfo CreateExitProcessStartInfo() => new(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+        "/d /q /c exit 0")
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
 
     private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {

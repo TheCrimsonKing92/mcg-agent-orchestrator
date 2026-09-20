@@ -607,6 +607,46 @@ public static class DispatchFailureClassifier
                 BuildProviderModelRejectionEvidenceSummary(verification)));
         }
 
+        if (task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.TryFindMalformedEvidenceBoundOutcome(
+                verification.AuthoritativeStandardOutput ?? verification.StandardOutput,
+                out var outputContractDiagnostic))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.UnknownFailure,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.OperatorNeeded,
+                    $"Malformed WORKER_RESULT structured outcome: {outputContractDiagnostic}"));
+        }
+
+        if (task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.GetAssignedScopeComplete(verification) is false)
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.IncompleteScopeDeclaration,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.AutoRetry,
+                    "Developer declared the assigned implementation scope incomplete."));
+        }
+
         if (HasGreenCommittedWorkerResultEvidence(verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(
@@ -2063,16 +2103,16 @@ public static class DispatchFailureClassifier
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {
         retryAfter = default;
-        if (task.VerificationHistory.LastOrDefault() is not { Succeeded: false } latest ||
-            !IsRecoverableSubscriptionLimitFailure(latest))
-        {
-            return false;
-        }
-
         if (task.SubscriptionRetryAfter is { } storedRetryAfter)
         {
             retryAfter = storedRetryAfter;
             return true;
+        }
+
+        if (task.VerificationHistory.LastOrDefault() is not { Succeeded: false } latest ||
+            !IsRecoverableSubscriptionLimitFailure(latest))
+        {
+            return false;
         }
 
         // RetryTask is the operator's explicit reset boundary. Keep the historical receipt, but do not

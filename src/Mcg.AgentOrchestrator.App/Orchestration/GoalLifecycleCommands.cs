@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -196,7 +195,7 @@ internal static class GoalLifecycleCommands
                 workspace,
                 providers ?? new InMemoryModelProviderRegistry([]));
 
-        GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+        new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
             kernel,
             agents,
             profiles,

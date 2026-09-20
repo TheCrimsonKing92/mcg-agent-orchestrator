@@ -35,7 +35,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
             return;
         }
 
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 1;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 1;
         var root = CreateRealProcessShardManifestWorkspace();
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
         const string infrastructureTestProject =
@@ -47,6 +47,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
         var resultsDirectories = new System.Collections.Concurrent.ConcurrentBag<string>();
         var testProcessIds = new System.Collections.Concurrent.ConcurrentBag<int>();
         var ambientAttemptPrefix = Path.Combine(root, "ambient-gate-attempt", "not-a-slot");
+        var ownedAttemptPrefix = Path.Combine(root, "owned-gate-attempt", "attempt-1");
         var previousAttemptPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         IReadOnlyDictionary<string, string> shardEnvironment = new Dictionary<string, string>();
@@ -58,7 +59,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 ambientAttemptPrefix);
-            var verifier = new GoalAcceptanceVerifier(async (args, _, timeout, cancellationToken) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, async (args, _, timeout, cancellationToken) =>
             {
                 invocations.Enqueue(args);
                 var processArgs = args;
@@ -105,10 +106,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
             primaryEnvironment = primaryLease.Environment;
             var primarySlot = StableSlotIndex(primaryLease.Environment.ArtifactsPath);
             primaryBuildPermit = primarySlot;
-            var run = verifier.RunAsync(
+            var run = verifier.RunOwnedAsync(
                 root,
+                goalId: new GoalId("12345678123456781234567812345678"),
+                changedFiles: null,
                 stableSlotIndex: primarySlot,
-                stableSlotLease: primaryLease);
+                stableSlotLease: primaryLease,
+                cancellationToken: CancellationToken.None,
+                executionOptions: new AcceptanceRunExecutionOptions(ResultsPrefix: ownedAttemptPrefix));
             var result = await run;
             Assert.True(
                 result.Passed,
@@ -141,7 +146,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
                 "debug",
                 $"Mcg.AgentOrchestrator.RealProcessShardProbe{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}");
             Assert.True(File.Exists(expectedAppHost), $"Missing validated MTP apphost '{expectedAppHost}'.");
-            var attemptResultsDirectory = Path.GetDirectoryName(ambientAttemptPrefix)!;
+            var attemptResultsDirectory = Path.GetDirectoryName(ownedAttemptPrefix)!;
             Assert.Single(resultsDirectories);
             Assert.All(
                 resultsDirectories,
@@ -177,7 +182,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
                 DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(primaryEnvironment);
             }
 
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -188,8 +193,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
         var attemptDirectory = Path.Combine(
             Path.GetTempPath(),
             $"mcg-shard-attempt-{Guid.NewGuid():N}");
-        var previousPrefix = Environment.GetEnvironmentVariable(
-            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var attemptPrefix = Path.Combine(attemptDirectory, "attempt-123");
         var environment = new DotnetBuildEnvironment(
             "run-slot-1",
             Path.Combine(Path.GetTempPath(), "slot-1"),
@@ -197,27 +201,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
             Path.Combine(Path.GetTempPath(), "slot-1", "lease.lock"),
             [],
             "slot-1");
-        try
-        {
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(attemptDirectory, "attempt-123"));
+        var resultsDirectory = GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(
+            environment,
+            attemptPrefix);
 
-            var resultsDirectory =
-                GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment);
-
-            Assert.Equal(attemptDirectory, resultsDirectory, ignoreCase: true);
-            Assert.False(
-                resultsDirectory.StartsWith(
-                    environment.ArtifactsPath,
-                    StringComparison.OrdinalIgnoreCase));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                previousPrefix);
-        }
+        Assert.Equal(attemptDirectory, resultsDirectory, ignoreCase: true);
+        Assert.False(
+            resultsDirectory.StartsWith(
+                environment.ArtifactsPath,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_use_distinct_attempt_heartbeat_files")]
@@ -231,25 +223,28 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
             Path.Combine(root, "build-slots", "build-0.lock"),
             [],
             "goal-heartbeat");
-        using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-            Path.Combine(root, "attempt-owner"));
+        var attemptPrefix = Path.Combine(root, "attempt-owner");
 
         var first = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
             "infrastructure lane alpha",
             environment,
-            stableSlotIndex: 0);
+            stableSlotIndex: 0,
+            attemptResultsPrefix: attemptPrefix);
         var second = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
             "infrastructure lane beta",
             environment,
-            stableSlotIndex: 0);
+            stableSlotIndex: 0,
+            attemptResultsPrefix: attemptPrefix);
         var punctuationFirst = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
             "infrastructure lane alpha+beta",
             environment,
-            stableSlotIndex: 0);
+            stableSlotIndex: 0,
+            attemptResultsPrefix: attemptPrefix);
         var punctuationSecond = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
             "infrastructure lane alpha beta",
             environment,
-            stableSlotIndex: 0);
+            stableSlotIndex: 0,
+            attemptResultsPrefix: attemptPrefix);
 
         Assert.NotEqual(first, second);
         Assert.NotEqual(punctuationFirst, punctuationSecond);
@@ -346,9 +341,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
                         RecordMaximum(ref maximumConcurrentBuildOwners, concurrent);
                     }
 
-                    using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+                    var resolved = GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(
+                        environment,
                         Path.Combine(directory, "owner"));
-                    var resolved = GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(environment);
                     Directory.CreateDirectory(resolved);
                     var receipt = Path.Combine(resolved, "lane.trx");
                     File.WriteAllText(receipt, Trx(Guid.NewGuid().ToString("N"), testName));

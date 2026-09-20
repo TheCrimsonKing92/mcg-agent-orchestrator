@@ -45,6 +45,8 @@ public sealed class WorkerProfileTests
     Assert.DoesNotContain("{promptPath}", codex.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("claude -p --model {subscriptionModelName}", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--permission-mode {permissionMode}", claude.CommandTemplate, StringComparison.Ordinal);
+    // Without this the configured reasoning-effort policy is silently dropped before it reaches the CLI.
+    Assert.Contains("--effort {subscriptionReasoningEffort}", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains(" -p ", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("{promptPath}", claude.CommandTemplate, StringComparison.Ordinal);
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(claude, claudeProvider).IsPatchCapable);
@@ -219,6 +221,7 @@ public sealed class WorkerProfileTests
     Assert.Contains("--model {subscriptionModelName}", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("claude -p --model {subscriptionModelName} --permission-mode {permissionMode}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("--effort {subscriptionReasoningEffort}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.DoesNotContain("{promptPath}", restored.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
 }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_stale_default_subscription_profiles")]

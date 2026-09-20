@@ -1,4 +1,3 @@
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -27,7 +26,7 @@ internal static class DispatchReadinessEvaluator
         SubscriptionPlan plan,
         DateTimeOffset now)
     {
-        if (!GoalManagementCommandService.HasAssignedDispatchCandidates(goal))
+        if (!DispatchReadinessRules.HasAssignedDispatchCandidates(goal))
         {
             return new DispatchReadinessBlocked("No assigned dispatch candidates", HasCandidates: false);
         }

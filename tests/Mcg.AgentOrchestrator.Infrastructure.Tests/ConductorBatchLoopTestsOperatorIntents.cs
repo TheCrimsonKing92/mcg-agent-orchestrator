@@ -63,7 +63,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             Assert.Contains(goal.Id, persistedGoalIds);
             Assert.Contains(goal.Timeline, item =>
                 item.Kind == ProgressKind.GoalPolicyDecision &&
-                item.Message.Contains($"operator-intent:{intent.Id}", StringComparison.Ordinal));
+                item.OperatorIntentApplied?.IntentId == intent.Id);
             Assert.NotNull(outcome);
             Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
             Assert.Contains("Applied retry", outcome.Outcome, StringComparison.Ordinal);
@@ -673,7 +673,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             Assert.False(replay.MutatedGoalState);
             Assert.Single(restoredGoal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
             Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
-            Assert.Contains("recovered durable goal marker", outcome.Outcome, StringComparison.Ordinal);
+            Assert.Contains("recovered durable operator-intent payload", outcome.Outcome, StringComparison.Ordinal);
         }
         finally
         {
@@ -684,6 +684,123 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             catch
             {
             }
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ExecutePending_TypedPayloadWithoutMarker_SkipsReplay()
+    {
+        var root = CreateTempDirectory("mcg-loop-typed-intent-recovery");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Recover typed operator intent");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "typed-recovery-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("Must not replay.", null, RetryCause: RetryCause.ContractClarification),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var snapshot = kernel.ExportSnapshot();
+            var goalSnapshot = Assert.Single(snapshot.Goals);
+            var typedEvent = new ProgressEventSnapshot(
+                goal.Id.Value,
+                null,
+                ProgressKind.GoalPolicyDecision,
+                "Applied in an earlier process.",
+                DateTimeOffset.UtcNow,
+                OperatorIntentApplied: new OperatorIntentAppliedPayload(
+                    intent.Id,
+                    intent.Verb,
+                    intent.TaskId,
+                    intent.Actor,
+                    intent.Channel,
+                    intent.AuthenticationAssurance));
+            var restored = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = [goalSnapshot with { Timeline = goalSnapshot.Timeline.Append(typedEvent).ToArray() }]
+            });
+            var restoredGoal = restored.GetGoal(goal.Id);
+
+            var replay = new OperatorIntentCoordinator(store).ExecutePending(restored, restoredGoal);
+            var outcome = await store.GetAsync(intent.Id);
+
+            Assert.False(replay.MutatedGoalState);
+            Assert.DoesNotContain(restoredGoal.Timeline, item => item.Kind == ProgressKind.TaskRetried);
+            Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+            Assert.Contains("recovered durable operator-intent payload", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ExecutePending_LegacyMarkerWithoutPayload_SkipsReplay()
+    {
+        var root = CreateTempDirectory("mcg-loop-legacy-intent-recovery");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Recover legacy operator intent");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Needs operator repair.");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "legacy-recovery-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("Must not replay.", null, RetryCause: RetryCause.ContractClarification),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var snapshot = kernel.ExportSnapshot();
+            var goalSnapshot = Assert.Single(snapshot.Goals);
+            var legacyEvent = new ProgressEventSnapshot(
+                goal.Id.Value,
+                null,
+                ProgressKind.GoalPolicyDecision,
+                $"operator-intent:{intent.Id} verb={intent.Verb} task={intent.TaskId}",
+                DateTimeOffset.UtcNow);
+            var restored = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = [goalSnapshot with { Timeline = goalSnapshot.Timeline.Append(legacyEvent).ToArray() }]
+            });
+            var restoredGoal = restored.GetGoal(goal.Id);
+
+            var replay = new OperatorIntentCoordinator(store).ExecutePending(restored, restoredGoal);
+            var outcome = await store.GetAsync(intent.Id);
+
+            Assert.False(replay.MutatedGoalState);
+            Assert.DoesNotContain(restoredGoal.Timeline, item => item.Kind == ProgressKind.TaskRetried);
+            Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
+            Assert.Contains("recovered durable goal marker", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
         }
     }
 
@@ -744,6 +861,86 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             Assert.Equal(WorkTaskStatus.Completed, tester.Status);
             Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
             Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_applies_attributed_criterion_mapping_then_operator_receipt")]
+    public async Task OperatorIntentCoordinatorAppliesAttributedCriterionMappingThenOperatorReceipt()
+    {
+        var root = CreateTempDirectory("mcg-loop-criterion-evidence");
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Apply a criterion evidence intent");
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+                "Require a live operator observation.",
+                ["Operator evidence is attached to the current candidate."],
+                VerificationClass.RealWorldDependent,
+                [],
+                []));
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var mappingIntent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "criterion-map-1",
+                OperatorIntentVerbs.CriterionEvidenceMap,
+                goal.Id.Value,
+                TaskId: null,
+                JsonSerializer.Serialize(new CriterionEvidenceMappingOperatorIntentPayload(
+                    0,
+                    1,
+                    CriterionEvidenceOwner.Operator,
+                    "operator:controlled-replay",
+                    "manual-replay-observation",
+                    "candidate-abc"), new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator@example",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(mappingIntent);
+
+            var coordinator = new OperatorIntentCoordinator(store);
+            var mappingResult = coordinator.ExecutePending(kernel, goal);
+            coordinator.CompletePersisted([goal.Id]);
+            var mapped = Assert.Single(goal.CriterionEvidenceObligations);
+            Assert.True(mappingResult.MutatedGoalState);
+            Assert.Equal(CriterionEvidenceOwner.Operator, mapped.Owner);
+            Assert.Equal("candidate-abc", mapped.ExpectedCandidateSha);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(mappingIntent.Id))!.Status);
+
+            var receiptIntent = new OperatorIntentRecord(
+                Guid.NewGuid().ToString("N"),
+                "criterion-receipt-1",
+                OperatorIntentVerbs.CriterionEvidenceRecord,
+                goal.Id.Value,
+                TaskId: null,
+                JsonSerializer.Serialize(new CriterionEvidenceReceiptOperatorIntentPayload(
+                    mapped.Id,
+                    CriterionEvidenceOwner.Operator,
+                    "candidate-abc",
+                    "operator-receipt-1",
+                    "operator:controlled-replay",
+                    Passed: true,
+                    "Disposable replay observed the required behavior."), new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator@example",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(receiptIntent);
+
+            var receiptResult = coordinator.ExecutePending(kernel, goal);
+            coordinator.CompletePersisted([goal.Id]);
+
+            Assert.True(receiptResult.MutatedGoalState);
+            Assert.Equal(CriterionEvidenceState.Satisfied, Assert.Single(goal.CriterionEvidenceObligations).State);
+            Assert.Equal("operator-receipt-1", goal.CriterionEvidenceObligations.Single().ReceiptId);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(receiptIntent.Id))!.Status);
         }
         finally
         {

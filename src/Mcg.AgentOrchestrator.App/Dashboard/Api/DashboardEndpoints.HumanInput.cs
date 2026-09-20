@@ -8,7 +8,7 @@ internal static partial class DashboardEndpoints
     private static async Task<IResult> GetPendingInputAsync(HttpContext context, DashboardEndpointServices services)
     {
         var current = await LoadAsync(services, context.RequestAborted);
-        var pendingGoalFilter = DashboardRequestParser.GetQueryValue(context.Request, "goal");
+        var pendingGoalFilter = DashboardHttpRequestParser.GetQueryValue(context.Request, "goal");
         Goal? goal = string.IsNullOrWhiteSpace(pendingGoalFilter)
             ? null
             : ResolveGoal(current, pendingGoalFilter);

@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
@@ -54,7 +53,7 @@ private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> pa
     var complexModelName = GetFlagValue(parts, "--complex-model");
     var subscriptionModel = GetFlagValue(parts, "--subscription-model");
     var subscriptionReasoning = GetFlagValue(parts, "--subscription-reasoning");
-    return DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+    return AgentDefinitionFactory.Create(new AgentDefinitionInput(
         parts[1], parts[2], parts[3], agentName,
         SubscriptionModelAlias: subscriptionModel,
         SubscriptionReasoningEffort: subscriptionReasoning,

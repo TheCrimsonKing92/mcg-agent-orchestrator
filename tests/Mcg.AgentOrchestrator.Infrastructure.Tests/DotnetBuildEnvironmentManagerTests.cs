@@ -6,8 +6,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTests
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+public sealed class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvironmentManagerRootedTestBase
 {
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_lease_defaults_use_system_time_and_thread_sleep")]
     public void DotnetBuildEnvironmentManagerLeaseDefaultsUseSystemTimeAndThreadSleep()
@@ -44,14 +44,13 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_goal_lease_with_metadata_and_cleanup")]
     public void DotnetBuildEnvironmentManagerReusesGoalLeaseWithMetadataAndCleanup()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("feedbeeffeedbeeffeedbeeffeedbeef");
         try
         {
-            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "Acceptance");
-            var second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "Acceptance");
+            var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "Acceptance");
+            var second = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "Acceptance");
 
-            Assert.Equal(DotnetBuildEnvironmentManager.GoalRoot(goalId), first.RootPath);
+            Assert.Equal(RootedDotnetBuildEnvironmentManager.GoalRoot(StorageRoot, goalId), first.RootPath);
             Assert.Equal("goal-feedbeef", first.LeaseId);
             Assert.Equal(first.LeaseId, second.LeaseId);
             Assert.Equal(first.RootPath, second.RootPath);
@@ -69,30 +68,29 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Contains(first.Arguments, argument => argument.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !argument.Equals("-maxcpucount:1", StringComparison.Ordinal));
             Assert.True(first.Arguments.Contains(first.ArtifactsPath));
             var otherGoalId = new GoalId("cafebabecafebabecafebabecafebabe");
-            var other = DotnetBuildEnvironmentManager.CreateAttempt(otherGoalId, "Acceptance");
+            var other = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, otherGoalId, "Acceptance");
             Assert.Equal(Path.Combine(other.RootPath, "artifacts"), other.ArtifactsPath);
             Assert.NotEqual(first.ArtifactsPath, other.ArtifactsPath);
-            Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(otherGoalId));
+            Assert.True(RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, otherGoalId));
             using var metadata = JsonDocument.Parse(File.ReadAllText(second.LeaseMetadataPath!));
             Assert.Equal(goalId.Value, metadata.RootElement.GetProperty("goalId").GetString());
             Assert.Equal(first.LeaseId, metadata.RootElement.GetProperty("leaseId").GetString());
             Assert.Equal(second.ArtifactsPath, metadata.RootElement.GetProperty("artifactsPath").GetString());
 
-            Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId));
+            Assert.True(RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId));
             Assert.False(Directory.Exists(first.RootPath));
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_concurrent_goal_resolution_is_read_only")]
     public async Task DotnetBuildEnvironmentManagerConcurrentGoalResolutionIsReadOnly()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("1234567890abcdef1234567890abcdef");
-        var initial = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance");
+        var initial = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "acceptance");
         var metadataPath = initial.LeaseMetadataPath
             ?? throw new InvalidOperationException("Expected goal lease metadata.");
         try
@@ -102,7 +100,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             var resolved = await Task.WhenAll(
                 Enumerable.Range(0, 32)
                     .Select(_ => Task.Run(() =>
-                        DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId))));
+                        RootedDotnetBuildEnvironmentManager.ResolveGoalEnvironment(StorageRoot, goalId))));
 
             var metadataAfter = await File.ReadAllBytesAsync(metadataPath);
             Assert.Equal(metadataBefore, metadataAfter);
@@ -116,16 +114,15 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_manual_attempts_use_invocation_local_artifacts")]
     public void DotnetBuildEnvironmentManagerManualAttemptsUseInvocationLocalArtifacts()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var first = DotnetBuildEnvironmentManager.CreateAttempt(null, "Acceptance");
-        var second = DotnetBuildEnvironmentManager.CreateAttempt(null, "Retry");
+        var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, null, "Acceptance");
+        var second = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, null, "Retry");
 
         Assert.StartsWith("run-", first.LeaseId, StringComparison.Ordinal);
         Assert.NotEqual(first.RootPath, second.RootPath);
@@ -138,20 +135,19 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_candidate_slot_count_limits_goal_and_stable_attempts")]
     public void DotnetBuildEnvironmentManagerCandidateSlotCountLimitsGoalAndStableAttempts()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("facefeedfacefeedfacefeedfacefeed");
         try
         {
-            var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "Acceptance", slotCount: 1);
+            var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "Acceptance", slotCount: 1);
 
-            Assert.Equal(Path.Combine(DotnetBuildEnvironmentManager.GoalRoot(goalId), "artifacts"), environment.ArtifactsPath);
+            Assert.Equal(Path.Combine(RootedDotnetBuildEnvironmentManager.GoalRoot(StorageRoot, goalId), "artifacts"), environment.ArtifactsPath);
             var error = Assert.Throws<ArgumentOutOfRangeException>(
-                () => DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1, slotCount: 1));
+                () => RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 1, slotCount: 1));
             Assert.Contains("requested slot count", error.Message, StringComparison.Ordinal);
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 
@@ -216,7 +212,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBaseBuildCache_restores_into_slot_artifacts_without_using_cache_as_slot")]
     public void DotnetBaseBuildCacheRestoresIntoSlotArtifactsWithoutUsingCacheAsSlot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var cacheRoot = Path.Combine(CreateTempDirectory(), "cache");
         var cache = new DotnetBaseBuildCache(cacheRoot);
         var sourceArtifacts = Path.Combine(Path.GetTempPath(), "mcg-cache-source", Guid.NewGuid().ToString("N"));
@@ -225,7 +220,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             WriteProjectArtifacts(sourceArtifacts, project, "slot");
             cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", sourceArtifacts, [project]);
-            var slot = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+            var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
 
             var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", slot.ArtifactsPath, [project]);
 
@@ -274,8 +269,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_artifact_prep_unauthorized_returns_build_lock_blocked_with_holder_identity")]
     public void DotnetBuildEnvironmentManagerArtifactPrepUnauthorizedReturnsBuildLockBlockedWithHolderIdentity()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var shutdownCount = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -330,9 +324,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_live_attempt_custody_refuses_foreign_owner_takeover")]
     public void DotnetBuildEnvironmentManagerLiveAttemptCustodyRefusesForeignOwnerTakeover()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var attemptId = "live-attempt-123";
         var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
         var evidencePath = Path.Combine(environment.ArtifactsPath, "TestResults", "completed-lane.trx");
@@ -362,9 +354,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_terminal_attempt_custody_allows_foreign_owner_takeover")]
     public void DotnetBuildEnvironmentManagerTerminalAttemptCustodyAllowsForeignOwnerTakeover()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var attemptId = "failed-attempt-123";
         var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
         var evidencePath = Path.Combine(environment.ArtifactsPath, "TestResults", "stale.trx");
@@ -387,9 +377,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_lease_metadata_does_not_override_live_attempt_custody")]
     public void DotnetBuildEnvironmentManagerStaleLeaseMetadataDoesNotOverrideLiveAttemptCustody()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var attemptId = "stale-custody-attempt-123";
         var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
         var evidencePath = Path.Combine(environment.ArtifactsPath, "TestResults", "stale.trx");
@@ -415,9 +403,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_remote_custody_marker_allows_foreign_owner_takeover")]
     public void DotnetBuildEnvironmentManagerStaleRemoteCustodyMarkerAllowsForeignOwnerTakeover()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var evidencePath = Path.Combine(environment.ArtifactsPath, "stale.txt");
         File.WriteAllText(evidencePath, "stale");
         WriteForeignOwnerMarker(environment.ArtifactsPath);
@@ -441,9 +427,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_dead_local_custodian_marker_is_cleared_during_lease_reclaim")]
     public void DotnetBuildEnvironmentManagerDeadLocalCustodianMarkerIsClearedDuringLeaseReclaim()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var evidencePath = Path.Combine(environment.ArtifactsPath, "stale.txt");
         File.WriteAllText(evidencePath, "stale");
         File.WriteAllText(environment.ExecutionLockPath, "999999");
@@ -463,9 +447,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_missing_custody_marker_preserves_foreign_owner_takeover")]
     public void DotnetBuildEnvironmentManagerMissingCustodyMarkerPreservesForeignOwnerTakeover()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        using var __ = EnvVarScope.ForVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable, null);
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var evidencePath = Path.Combine(environment.ArtifactsPath, "stale.txt");
         File.WriteAllText(evidencePath, "stale");
         WriteForeignOwnerMarker(environment.ArtifactsPath);
@@ -478,8 +460,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_terminal_cleanup_releases_exact_run_custody")]
     public void DotnetBuildEnvironmentManagerTerminalCleanupReleasesExactRunCustody()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(null, "coverage-discovery");
+        var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, null, "coverage-discovery");
         var attemptId = "manual-slot-attempt";
         var metadataPath = Path.Combine(environment.RootPath, $"{attemptId}.attempt.json");
         WriteAttemptMetadata(metadataPath, attemptId, 0, Environment.ProcessId);
@@ -526,80 +507,6 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("[System.IO.Path]::IsPathRooted($Target)", source, StringComparison.Ordinal);
         Assert.Contains("[System.IO.Path]::GetFullPath($Target)", source, StringComparison.Ordinal);
         Assert.Contains("$solutionText.IndexOf($project", source, StringComparison.Ordinal);
-    }
-
-    internal static (int ExitCode, string Stdout, string Stderr) RunFocusedScript(
-        string scriptPath,
-        string workDirectory,
-        string shimDirectory,
-        string isolatedRoot,
-        string receiptPath,
-        string logPath,
-        string goalPrefix,
-        int budgetSeconds,
-        int leaseWaitSeconds,
-        string projectFile = "Fake.Tests.csproj",
-        string testFilter = "FullyQualifiedName~FocusedTests")
-    {
-        var startInfo = CreateFocusedStartInfo(
-            scriptPath,
-            workDirectory,
-            shimDirectory,
-            isolatedRoot,
-            receiptPath,
-            logPath,
-            goalPrefix,
-            budgetSeconds,
-            leaseWaitSeconds,
-            projectFile,
-            testFilter);
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start focused runner.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(15000), "Focused runner did not exit within 15 seconds.");
-        return (process.ExitCode, stdout, stderr);
-    }
-
-    internal static ProcessStartInfo CreateFocusedStartInfo(
-        string scriptPath,
-        string workDirectory,
-        string shimDirectory,
-        string isolatedRoot,
-        string receiptPath,
-        string logPath,
-        string goalPrefix,
-        int budgetSeconds,
-        int leaseWaitSeconds,
-        string projectFile = "Fake.Tests.csproj",
-        string testFilter = "FullyQualifiedName~FocusedTests")
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = WorkerShell.Executable,
-            WorkingDirectory = workDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var argument in new[]
-        {
-            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
-            "-FocusedTest", "-GoalPrefix", goalPrefix,
-            "-TestFilter", testFilter,
-            "-ReceiptPath", receiptPath,
-            "-BudgetSeconds", budgetSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "-LeaseWaitSeconds", leaseWaitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "test", projectFile
-        })
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-        startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
-        startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
-        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
-        startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
-        return startInfo;
     }
 
     internal static void PrepareFocusedArtifacts(

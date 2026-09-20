@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Rendering;
 
-internal static class ProcessHeartbeatText
+public static class ProcessHeartbeatText
 {
     public static string FormatInline(DispatchHeartbeatStatus heartbeat)
     {

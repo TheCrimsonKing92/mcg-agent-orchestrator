@@ -23,6 +23,8 @@ internal interface IHermesAcpProcess : IDisposable
     void CompleteInput();
     void Kill();
     Task WaitForExitAsync(CancellationToken cancellationToken);
+    // Wait for root and owned members; cancellation does not terminate survivors. Caller owns Kill.
+    Task WaitForOwnedExitAsync(CancellationToken cancellationToken);
 }
 
 internal interface IHermesAcpProcessLauncher
@@ -59,6 +61,8 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
         private readonly HashSet<SpawnProcessIdentity> _observedIdentities = [];
         private bool? _terminatedJobExitConfirmed;
         private JobExitObservation? _jobExitObservation;
+        private enum NaturalJobWaitOutcome { NotStarted, WaitingForRoot, WaitingForOwnedMembers, Completed, Cancelled, QueryFailed }
+        private NaturalJobWaitOutcome _naturalJobWaitOutcome;
 
         public HermesAcpProcess(OwnedProcessGroup.RedirectedOwnedProcessStart launched)
         {
@@ -91,7 +95,8 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
             }
         }
         public string DescribeJobExitObservation() =>
-            _jobExitObservation?.Describe() ?? "job-exit-observation=unavailable";
+            (_jobExitObservation?.Describe() ?? "job-exit-observation=unavailable") +
+            $"; natural_wait_outcome={_naturalJobWaitOutcome}";
         public bool SurvivorInventoryEmpty => _observedIdentities.All(identity =>
             DispatchProcessIdentityEvidence.ClassifyRecordedOwner(
                 identity.ProcessId,
@@ -146,6 +151,35 @@ internal sealed class HermesAcpProcessLauncher : IHermesAcpProcessLauncher
             ObserveOwnedProcesses();
             await _process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             ObserveOwnedProcesses();
+        }
+
+        public async Task WaitForOwnedExitAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                _naturalJobWaitOutcome = NaturalJobWaitOutcome.WaitingForRoot;
+                await WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                _naturalJobWaitOutcome = NaturalJobWaitOutcome.WaitingForOwnedMembers;
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!_processGroup.TryGetActiveProcessIds(out var activeProcessIds))
+                    {
+                        _naturalJobWaitOutcome = NaturalJobWaitOutcome.QueryFailed;
+                        throw new InvalidOperationException("Unable to confirm Hermes owned-job exit: active-member query failed.");
+                    }
+                    if (activeProcessIds.Count == 0) break;
+                    ObserveOwnedProcesses();
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+                }
+                ObserveOwnedProcesses();
+                _naturalJobWaitOutcome = NaturalJobWaitOutcome.Completed;
+            }
+            catch (OperationCanceledException)
+            {
+                _naturalJobWaitOutcome = NaturalJobWaitOutcome.Cancelled;
+                throw;
+            }
         }
 
         public void Dispose()
@@ -664,7 +698,7 @@ internal sealed class HermesAcpLifecycle
         timeoutCts.CancelAfter(timeout);
         try
         {
-            await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            await process.WaitForOwnedExitAsync(timeoutCts.Token).ConfigureAwait(false);
             return true;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)

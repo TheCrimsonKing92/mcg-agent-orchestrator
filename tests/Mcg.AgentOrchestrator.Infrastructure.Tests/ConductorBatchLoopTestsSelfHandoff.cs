@@ -17,6 +17,12 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     {
     }
 
+    // Failsafe for the parent-conductor wait in
+    // ConductorLoopHandoff_successor_survives_parent_job_exit_and_emits_loop_start. It bounds a
+    // genuine hang so the lane cannot stall forever; it is not a latency budget, and the fact
+    // asserts nothing about how long the parent actually takes to reach its handoff.
+    private const int ParentExitFailsafeMilliseconds = 300_000;
+
     public static bool IsWindows => OperatingSystem.IsWindows();
 
     [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
@@ -806,7 +812,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         Assert.Contains("ProcThreadAttributeHandleList", source, StringComparison.Ordinal);
         Assert.Contains("ExtendedStartupInfoPresent", source, StringComparison.Ordinal);
         Assert.Equal(0x01080600u, ConductorLoopHandoff.WindowsSuccessorCreationFlags);
-        Assert.DoesNotContain("WindowsCreationFlags.CreateNoWindow", source, StringComparison.Ordinal);
+        Assert.Contains("suppressionScope?.ChildCreationFlags", source, StringComparison.Ordinal);
+        Assert.Contains("CreateNoWindow = 0x08000000", source, StringComparison.Ordinal);
         Assert.DoesNotContain("WindowsCreationFlags.DetachedProcess", source, StringComparison.Ordinal);
 
         var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
@@ -845,7 +852,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
                 {
                     suppressionScopeActive = true;
                     return new ProcessTreeGuiSuppression.ConsoleSpawnScope(
-                        hiddenConsoleAcquired: true,
+                        childConsolePolicyApplied: true,
                         onDispose: () => suppressionScopeActive = false);
                 },
                 beforeCreateProcess: () => Assert.True(
@@ -864,7 +871,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             Assert.Contains("spawnPath=windows-createprocess", conductEvents, StringComparison.Ordinal);
             Assert.Matches("incumbentConsole=(present|absent)", conductEvents);
             Assert.Matches("incumbentConsoleAttached=(true|false)", conductEvents);
-            Assert.Contains("suppression=hidden-console-acquired", conductEvents, StringComparison.Ordinal);
+            Assert.Contains("suppression=child-owned-hidden-console", conductEvents, StringComparison.Ordinal);
             Assert.True(WaitUntil(
                 () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(stdoutMarker, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10)),
@@ -990,7 +997,17 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             var stderrTask = parent.StandardError.ReadToEndAsync();
             using (var parentJob = OwnedProcessGroup.Attach(parent))
             {
-                Assert.True(parent.WaitForExit(30000), "Parent conductor did not reach max-duration handoff.");
+                if (!parent.WaitForExit(ParentExitFailsafeMilliseconds))
+                {
+                    // Failsafe expiry, not a verdict on handoff behaviour. The redirected pipes
+                    // stay open while the parent tree lives, so end the job first and then read
+                    // whatever text reached them, to make the failure diagnosable.
+                    parentJob.Dispose();
+                    Assert.Fail(
+                        $"Parent conductor did not reach max-duration handoff within the {ParentExitFailsafeMilliseconds / 1000}-second failsafe. " +
+                        DescribeCapturedHandoffOutput(stdoutTask, stderrTask));
+                }
+
                 parentJob.Dispose();
             }
 
@@ -1034,6 +1051,27 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
 
             TryDeleteDirectory(root);
         }
+    }
+
+    private static string DescribeCapturedHandoffOutput(Task<string> stdoutTask, Task<string> stderrTask)
+    {
+        // Called only after the parent job has been disposed, so both pipes should close
+        // promptly. The short bound keeps a stuck pipe from swallowing the failure report.
+        var drainBound = TimeSpan.FromSeconds(5);
+        return DescribeCapturedStream("stdout", stdoutTask, drainBound) +
+            " " +
+            DescribeCapturedStream("stderr", stderrTask, drainBound);
+    }
+
+    private static string DescribeCapturedStream(string label, Task<string> readToEnd, TimeSpan drainBound)
+    {
+        if (!readToEnd.Wait(drainBound))
+        {
+            return $"{label}=<unavailable: redirected pipe did not close within {drainBound.TotalSeconds:0} seconds of ending the parent process tree>";
+        }
+
+        var text = readToEnd.GetAwaiter().GetResult();
+        return text.Length == 0 ? $"{label}=<empty>" : $"{label}={text}";
     }
 
     private static int ParseHandoffProcessId(string output)

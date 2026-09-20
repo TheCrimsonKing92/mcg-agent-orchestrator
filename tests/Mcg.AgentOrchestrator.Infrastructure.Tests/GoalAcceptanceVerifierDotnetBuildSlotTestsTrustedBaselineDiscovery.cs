@@ -17,15 +17,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         var goalId = GoalId.New();
         var calls = new List<(string[] Args, string Worktree)>();
         var mainBuildAttempts = 0;
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => mainRoot;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "foreign-csc", null, false)],
             "test");
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, worktree, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, worktree, _) =>
             {
                 calls.Add((args, worktree));
                 if (IsVstestExecution(args))
@@ -90,8 +90,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             LockAttribution.AttributeForTests = null;
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             DeleteDirectoryWithRetry(root);
@@ -105,15 +105,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         var (root, mainRoot) = CreateTrustedBaselineWorkspace();
         var goalId = GoalId.New();
         var mainBuildAttempts = 0;
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => mainRoot;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "foreign-csc", null, false)],
             "test");
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, worktree, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, worktree, _) =>
             {
                 if (IsVstestExecution(args))
                 {
@@ -153,8 +153,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             LockAttribution.AttributeForTests = null;
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             DeleteDirectoryWithRetry(root);
@@ -168,11 +168,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         var (root, mainRoot) = CreateTrustedBaselineWorkspace();
         var goalId = GoalId.New();
         var mainBuildAttempts = 0;
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => mainRoot;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, worktree, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, worktree, _) =>
             {
                 if (IsVstestExecution(args))
                 {
@@ -210,8 +210,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             DeleteDirectoryWithRetry(root);
             DeleteDirectoryWithRetry(mainRoot);

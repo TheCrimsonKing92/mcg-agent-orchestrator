@@ -60,7 +60,7 @@ public sealed record ConductorOperatorEvidenceSnapshot(string Kind, string Path,
         new(pointer.Kind, pointer.Path, pointer.Detail);
 }
 
-internal static class ConductorOperatorDispositionSnapshots
+public static class ConductorOperatorDispositionSnapshots
 {
     private static readonly JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
 

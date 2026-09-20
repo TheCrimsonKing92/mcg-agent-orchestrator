@@ -15,6 +15,7 @@ internal static class StateDbConnectionFactory
 {
     internal const int DefaultBusyTimeoutMilliseconds = 30_000;
     internal const int FastFailBusyTimeoutMilliseconds = 1_000;
+    internal static event Action<SqliteConnection, string>? ConnectionOpenedForDiagnostics;
 
     internal static SqliteConnection Open(
         string dbPath,
@@ -78,12 +79,33 @@ internal static class StateDbConnectionFactory
                     $"State database journal mode must be WAL; found '{journalMode}'.");
             }
 
+            NotifyConnectionOpenedForDiagnostics(connection, Path.GetFullPath(dbPath));
             return connection;
         }
         catch
         {
             connection.Dispose();
             throw;
+        }
+    }
+
+    private static void NotifyConnectionOpenedForDiagnostics(SqliteConnection connection, string databasePath)
+    {
+        if (ConnectionOpenedForDiagnostics is not { } observers)
+        {
+            return;
+        }
+
+        foreach (Action<SqliteConnection, string> observer in observers.GetInvocationList())
+        {
+            try
+            {
+                observer(connection, databasePath);
+            }
+            catch
+            {
+                // Diagnostics must never change connection-open behavior.
+            }
         }
     }
 

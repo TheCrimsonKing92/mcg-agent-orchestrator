@@ -139,7 +139,11 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     string? FocusedEvidenceReceiptId = null,
     string? PolicyJson = null,
     AcceptanceStableSlotExhaustionPolicy? StableSlotExhaustionPolicy = null,
-    string ExecutionProtocol = "out-of-process")
+    string ExecutionProtocol = "out-of-process",
+    // The conductor generation that started this attempt, and the one that later adopted it across a
+    // renewal. Null means an attempt written before generation identity was recorded: unknown, not mine.
+    int? ConductorGenerationId = null,
+    int? AdoptedByGenerationId = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -172,7 +176,8 @@ internal sealed record ConductorParallelAcceptanceAttemptDecision(
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunch(
     ConductorParallelAcceptanceAttempt Attempt,
-    Action<int> ExecuteInCurrentProcess);
+    Action<int> ExecuteInCurrentProcess,
+    DotnetBuildStorageRoot? BuildStorageRoot);
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(int ProcessId);
 
@@ -180,7 +185,8 @@ internal delegate ConductorParallelAcceptanceRunResult ConductorParallelAcceptan
     ConductorParallelAcceptanceCandidate candidate,
     ConductorAutonomyPolicy policy,
     DotnetBuildEnvironmentLease? stableSlotLease,
-    CancellationToken cancellationToken);
+    CancellationToken cancellationToken,
+    AcceptanceRunExecutionOptions executionOptions);
 
 internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAcceptanceTryRunPreSlot(
     ConductorParallelAcceptanceCandidate candidate,
@@ -354,6 +360,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly TimeSpan _buildPermitBusyTimeout;
     private readonly Action<TimeSpan>? _buildPermitSleep;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
+    private readonly DotnetBuildStorageRoot? _buildStorageRoot;
+    private readonly int _conductorGenerationId;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -375,7 +383,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         Action<TimeSpan>? buildPermitSleep = null,
         Action? attemptWriterLeaseAcquiringForTests = null,
         IReadOnlyDictionary<string, TextWriter>? attemptLogWriters = null,
-        Action<ConductorParallelAcceptanceAttempt>? resultPublishedForTests = null)
+        Action<ConductorParallelAcceptanceAttempt>? resultPublishedForTests = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null,
+        // Each conductor renewal is a fresh child process, so the loop pid is a sound generation
+        // identity and the driver needs no threading change to supply one.
+        int? conductorGenerationId = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -402,15 +414,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
         _attemptLogWriters = attemptLogWriters;
         _conductEventLogWriter = conductEventLogWriter;
+        // Only an explicit operation setting crosses the hermetic child boundary.
+        // An absent setting retains the existing per-process default resolution.
+        _buildStorageRoot = buildStorageRoot;
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
         _buildPermitSleep = buildPermitSleep;
+        _conductorGenerationId = conductorGenerationId ?? Environment.ProcessId;
     }
-
-    internal ConductorParallelAcceptanceAttemptDecision Evaluate(
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
-        Evaluate(candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
         ConductorParallelAcceptanceCandidate candidate,
@@ -510,7 +520,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
             timeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
             cancellationToken: cancellationToken,
-            slotCount: DotnetBuildEnvironmentManager.StableSlotCount);
+            slotCount: DotnetBuildEnvironmentManager.StableSlotCount,
+            storageRoot: _buildStorageRoot);
         Console.WriteLine(
             $"ACCEPTANCE_LEASE_ACQUIRE cohort={cohortId} permit=acceptance-{lease.Environment.BuildPermitIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} holderPid={Environment.ProcessId}");
         return lease;
@@ -528,7 +539,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return EvaluateCore(
             candidate,
             policy,
-            (attemptCandidate, _, lease, cancellationToken) => ConductorParallelAcceptanceRunResult.Focused(
+            (attemptCandidate, _, lease, cancellationToken, _) => ConductorParallelAcceptanceRunResult.Focused(
                 attemptCandidate,
                 runFocusedEvidence(attemptCandidate.Goal, request, lease, cancellationToken)),
             PreReviewEvidenceDispatchKind,
@@ -550,6 +561,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         if (current is not null && (IsLiveInvalidatedAttempt(current) || IsLiveAttempt(current)))
         {
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+
+        // Before any path that can reach Launch: an attempt left running by a dead generation whose gate
+        // child is still alive is adopted, not replaced. Its verdict is applied from artifacts by the
+        // existing completion path once the child publishes them, so the retry budget is charged once.
+        if (current is not null &&
+            MatchesCandidate(current, candidate, dispatchKind, focusedEvidenceRequest, requestContext) &&
+            TryAdoptOrphanAttempt(current) is { } adopted)
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(adopted);
         }
 
         _attemptWriterLeaseAcquiringForTests?.Invoke();
@@ -1041,7 +1062,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     }
 
                     RunAttemptWithArtifactLease(activeAttempt, candidate, policy, runAcceptance);
-                }));
+                },
+                _buildStorageRoot));
             var launched = TryPersistOwnerProcess(attempt, launch.ProcessId);
             if (launched.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
             {
@@ -1067,13 +1089,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(failed);
         }
     }
-
-    internal void RunAttemptForTests(
-        ConductorParallelAcceptanceAttempt attempt,
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
-        RunAttemptForTests(attempt, candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
 
     internal void RunAttemptForTests(
         ConductorParallelAcceptanceAttempt attempt,
@@ -1121,11 +1136,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var driver = new ConductorDriver(
                 kernel,
                 workspace,
-                new GoalAcceptanceVerifier(),
+                new GoalAcceptanceVerifier(DotnetBuildEnvironmentManager.CaptureStorageRoot()),
                 agents,
                 profiles,
                 NullOperatorChannel.Instance,
-                providers);
+                providers,
+                cleanupHooks: WorktreeCleanupContext.Load(
+                    attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
             var policy = ResolveAttemptPolicy(attempt);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -1158,7 +1175,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     activeAttempt,
                     candidate,
                     policy,
-                    (attemptCandidate, _, lease, cancellationToken) =>
+                    (attemptCandidate, _, lease, cancellationToken, _) =>
                         driver.RunPreReviewFocusedEvidence(
                             attemptCandidate,
                             activeAttempt.FocusedEvidenceRequest,
@@ -1174,12 +1191,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     activeAttempt,
                     candidate,
                     policy,
-                    (attemptCandidate, attemptPolicy, lease, cancellationToken) =>
+                    (attemptCandidate, attemptPolicy, lease, cancellationToken, executionOptions) =>
                         driver.RunParallelLandingAcceptance(
                             attemptCandidate,
                             attemptPolicy,
                             lease,
                             cancellationToken,
+                            executionOptions,
                             omitStableSlotIndexWithoutLease));
             }
             return 0;
@@ -1401,9 +1419,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             : "parallel-acceptance";
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
-            $"{purpose}-{attempt.AttemptId}");
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
+            $"{purpose}-{attempt.AttemptId}",
+            storageRoot: _buildStorageRoot);
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermitOwned(
             environment,
+            new AcceptanceAttemptArtifactCustodyContext(
+                attempt.AttemptId,
+                attempt.MetadataPath,
+                Environment.ProcessId),
             _buildPermitBusyTimeout,
             onWait: () => EmitAttemptLeaseReceipt(
                 "wait",
@@ -1465,57 +1488,40 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
         Action<DotnetBuildEnvironmentLease> leaseAcquired)
     {
-        var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
-        var previousAttemptId = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.AttemptIdVariable);
-        var previousLivenessHint = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
-        Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
-        Environment.SetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.AttemptIdVariable,
-            attempt.AttemptId);
-        Environment.SetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
-            attempt.MetadataPath);
+        DotnetBuildEnvironmentLease? stableSlotLease;
         try
         {
-            DotnetBuildEnvironmentLease? stableSlotLease;
-            try
-            {
-                stableSlotLease = _acquireStableSlotLease(attempt, candidate);
-            }
-            catch (Exception ex) when (
-                attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial &&
-                ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
-            {
-                EmitAttemptLeaseReceipt(
-                    "degrade",
-                    attempt,
-                    candidate,
-                    holderPid: null,
-                    permitName: AllBuildPermitNames(),
-                    waitReason: ex is DotnetBuildSlotsBusyException
-                        ? AcceptanceBuildPermitWaitReason.AllPermitsBusy
-                        : null);
-                stableSlotLease = null;
-            }
-            if (stableSlotLease is not null)
-            {
-                leaseAcquired(stableSlotLease);
-            }
-            return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
+            stableSlotLease = _acquireStableSlotLease(attempt, candidate);
         }
-        finally
+        catch (Exception ex) when (
+            attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial &&
+            ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
         {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
-            Environment.SetEnvironmentVariable(
-                AcceptanceAttemptArtifactCustody.AttemptIdVariable,
-                previousAttemptId);
-            Environment.SetEnvironmentVariable(
-                AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
-                previousLivenessHint);
+            EmitAttemptLeaseReceipt(
+                "degrade",
+                attempt,
+                candidate,
+                holderPid: null,
+                permitName: AllBuildPermitNames(),
+                waitReason: ex is DotnetBuildSlotsBusyException
+                    ? AcceptanceBuildPermitWaitReason.AllPermitsBusy
+                    : null);
+            stableSlotLease = null;
         }
+        if (stableSlotLease is not null)
+        {
+            leaseAcquired(stableSlotLease);
+        }
+        return runAcceptance(
+            candidate,
+            policy,
+            stableSlotLease,
+            CancellationToken.None,
+            new AcceptanceRunExecutionOptions(
+                RunId: attempt.AttemptId,
+                ResultsPrefix: prefix,
+                LivenessCheckHint: attempt.MetadataPath));
     }
 
     private void EmitAttemptLeaseReceipt(
@@ -1983,7 +1989,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions,
             PolicyJson: policy.ToJson(),
             StableSlotExhaustionPolicy: stableSlotExhaustionPolicy,
-            ExecutionProtocol: _runInline ? "in-process" : "out-of-process");
+            ExecutionProtocol: _runInline ? "in-process" : "out-of-process",
+            ConductorGenerationId: _conductorGenerationId);
     }
 
     private static int AllocateOrdinal(string directory)
@@ -2312,6 +2319,72 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
+    /// <summary>
+    /// Adopts an orphan gate attempt left running by another conductor generation, returning the adopted
+    /// attempt, or null when the attempt is not an orphan of a dead generation. Adoption refreshes the
+    /// heartbeat every tick so the attempt does not read stale to any other observer, and records the
+    /// adopting generation at most once, best-effort, for the reason given below.
+    /// </summary>
+    private ConductorParallelAcceptanceAttempt? TryAdoptOrphanAttempt(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (!ConductorOrphanGateAttemptAdoption.ShouldAdopt(
+                attempt,
+                _conductorGenerationId,
+                _isProcessAlive,
+                File.Exists))
+        {
+            return null;
+        }
+
+        var adopted = ConductorOrphanGateAttemptAdoption.NeedsAdoptionRecord(attempt, _conductorGenerationId)
+            ? TryPersistAdoption(attempt) ?? attempt
+            : attempt;
+        WriteHeartbeat(adopted, "adopted");
+        return adopted;
+    }
+
+    /// <summary>
+    /// Records the adopting generation on the attempt, or returns null when the writer lease is held.
+    ///
+    /// The running gate child holds that lease for its whole run, and the in-process metadata gate cannot
+    /// order a write against another process. The adoption record is evidence, not the fence — the fence
+    /// is the decision above, which does not depend on it — so a busy lease skips the record and retries
+    /// on a later tick rather than racing the child's terminal write and clobbering a published verdict.
+    /// </summary>
+    private ConductorParallelAcceptanceAttempt? TryPersistAdoption(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var goalDirectory = Path.GetDirectoryName(attempt.MetadataPath);
+        if (string.IsNullOrWhiteSpace(goalDirectory))
+        {
+            return null;
+        }
+
+        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        if (artifactLease is null)
+        {
+            return null;
+        }
+
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath);
+            if (current is null ||
+                !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal) ||
+                current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                return null;
+            }
+
+            var updated = current with
+            {
+                AdoptedByGenerationId = _conductorGenerationId,
+                LastHeartbeatAt = _utcNow()
+            };
+            WriteAttemptFile(updated);
+            return updated;
+        }
+    }
+
     private void WriteHeartbeat(ConductorParallelAcceptanceAttempt attempt, string state)
     {
         var now = _utcNow();
@@ -2347,7 +2420,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
-        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt);
+        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt, buildStorageRoot: launch.BuildStorageRoot);
         var process = ProcessTreeGuiSuppression.Start(startInfo)
             ?? throw new InvalidOperationException("failed to start acceptance attempt process");
         var processId = process.Id;
@@ -2357,6 +2430,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     internal static ProcessStartInfo BuildOwnedProcessStartInfo(
         ConductorParallelAcceptanceAttempt attempt,
+        DotnetBuildStorageRoot? buildStorageRoot,
         string? executable = null,
         IReadOnlyList<string>? commandLineArgs = null)
     {
@@ -2390,6 +2464,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
             attempt.ExecutionDirectory);
+        if (buildStorageRoot is { } storageRoot)
+        {
+            // This attempt selects the namespace; the child and its build descendants
+            // need the same value after ambient verification overrides are scrubbed.
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = storageRoot.RootPath;
+        }
         return startInfo;
     }
 

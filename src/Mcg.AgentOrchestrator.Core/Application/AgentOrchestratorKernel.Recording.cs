@@ -144,6 +144,9 @@ public sealed partial class AgentOrchestratorKernel
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
+                kind: verification.HumanInputKind
+                    ?? parsedHumanInput.Directive?.Kind
+                    ?? HumanWaitKind.SpecClarification,
                 questionFingerprint: verification.HumanInputQuestionFingerprint
                     ?? parsedHumanInput.Directive?.QuestionFingerprint
                     ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion),
@@ -156,7 +159,9 @@ public sealed partial class AgentOrchestratorKernel
                         accompanyingBlocker),
                 completedRound: verification.WorkerResultPresent ? completedRound : null,
                 workerResultLogReference: verification.StandardOutputPath,
-                recordDuplicateSuppression: verification.WorkerResultPresent);
+                recordDuplicateSuppression: verification.WorkerResultPresent,
+                evidenceOwner: verification.HumanInputEvidenceOwner
+                    ?? parsedHumanInput.Directive?.EvidenceOwner);
             if (verification.WorkerResultPresent &&
                 requestResult.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
@@ -169,7 +174,8 @@ public sealed partial class AgentOrchestratorKernel
                     completedRound,
                     verification.StandardOutputPath);
             }
-            if (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer)
+            if (HumanWaitPolicyDefaults.BlocksActiveWork(requestResult.Request.Kind) &&
+                (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer))
             {
                 return;
             }
@@ -177,6 +183,20 @@ public sealed partial class AgentOrchestratorKernel
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
+        if (HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verification))
+        {
+            // The worker still supplied a contract-conformant blocking report,
+            // but its authoritative finding is pending deterministic acceptance
+            // evidence rather than a paid-worker repair. Do not let the generic
+            // Tester blocker classifier reopen that worker.
+            outcome = outcome with
+            {
+                Kind = DispatchOutcomeKind.VerifiedSuccess,
+                EvidenceSummary = "Authoritatively mapped acceptance evidence remains pending.",
+                ClassifierReceipt = "CLASSIFIER rule=deferred-acceptance-owned-evidence; outcome_class=success; evidence=authoritative obligation pending.",
+                OutcomeClass = TaskOutcomeClass.Success
+            };
+        }
         if (verification.WorkerResultPresent &&
             task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
             WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var premiseEvidence))
@@ -545,15 +565,70 @@ public sealed partial class AgentOrchestratorKernel
                             refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
                             StringComparison.OrdinalIgnoreCase)))
                 .ToArray();
-            if (nonPassingVerdicts.Length > 0 &&
-                WorkerResultBlockers.TryFindPassVerdict(verification))
+            var workerOwnedNonPassingVerdicts = nonPassingVerdicts
+                .Where(item => !item.Verdict.Equals("not-verifiable", StringComparison.Ordinal) ||
+                    IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex))
+                .ToArray();
+            foreach (var deferred in nonPassingVerdicts.Except(workerOwnedNonPassingVerdicts))
+            {
+                var matches = goal.CriterionEvidenceObligations.Where(item =>
+                    item.CriterionIndex == deferred.CriterionIndex &&
+                    item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion!.Version).ToArray();
+                if (matches.Length != 1)
+                {
+                    nonPassingCriteriaDiagnostic =
+                        $"Reviewer WORKER_RESULT criteria attestation cannot be deferred: criterion_index={deferred.CriterionIndex} has {matches.Length} authoritative obligation records; operator repair is required.";
+                    continue;
+                }
+                var obligation = goal.BindDeferredCriterionObligation(
+                    deferred.CriterionIndex,
+                    goal.AuthoritativeRefinedSpecVersion.Version,
+                    verification.ReviewedCommit,
+                    _clock.UtcNow) ?? matches[0];
+                Append(goal, task.Id, ProgressKind.TaskNote,
+                    $"Deferred criterion evidence remains pending: obligation={obligation.Id}; owner={obligation.Owner}; " +
+                    $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}; " +
+                    $"expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
+            }
+            foreach (var advisory in registeredVerdicts.Where(item =>
+                         item.Verdict.Equals("met", StringComparison.Ordinal) &&
+                         !IsWorkerOwnedCriterionObligation(goal, item.CriterionIndex) &&
+                         !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction =>
+                             correction.IsWaiver &&
+                             string.Equals(
+                                 correction.SupersededCriterion,
+                                 refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
+                                 StringComparison.OrdinalIgnoreCase))))
+            {
+                var version = goal.AuthoritativeRefinedSpecVersion!.Version;
+                var obligation = goal.BindDeferredCriterionObligation(
+                    advisory.CriterionIndex,
+                    version,
+                    verification.ReviewedCommit,
+                    _clock.UtcNow);
+                if (obligation?.Owner != CriterionEvidenceOwner.Acceptance)
+                    continue;
+                Append(goal, task.Id, ProgressKind.TaskNote,
+                    $"Acceptance-gate-owned criterion met verdict is advisory; the gate remains the evidence: " +
+                    $"obligation={obligation.Id}; state={obligation.State}; expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
+            }
+            if (workerOwnedNonPassingVerdicts.Length > 0)
             {
                 var details = string.Join(
                     "; ",
-                    nonPassingVerdicts.Select(item =>
+                    workerOwnedNonPassingVerdicts.Select(item =>
                         $"criterion_index={item.CriterionIndex} verdict={item.Verdict} evidence={item.Evidence}"));
+                var repairCommands = string.Join(
+                    "; ",
+                    workerOwnedNonPassingVerdicts
+                        .Where(item => item.Verdict.Equals("not-verifiable", StringComparison.Ordinal))
+                        .Select(item =>
+                            $"criterion-evidence-map --goal {goal.Id.Value} {item.CriterionIndex} " +
+                            $"{goal.AuthoritativeRefinedSpecVersion!.Version} acceptance {CriterionEvidenceScopes.FullAcceptanceGate} " +
+                            $"deferred-criterion-{item.CriterionIndex} {verification.ReviewedCommit ?? "missing"}"));
                 nonPassingCriteriaDiagnostic =
-                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}.";
+                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}." +
+                    (repairCommands.Length == 0 ? string.Empty : $" Operator repair: {repairCommands}.");
             }
 
             foreach (var extra in criterionVerdicts.Where(item =>
@@ -615,13 +690,27 @@ public sealed partial class AgentOrchestratorKernel
         var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
             mergedFindings,
             goal.EffectiveAcceptanceCriteriaCorrections);
+        var workerBlockingFindings = openBlockingFindings
+            .Where(finding => FindAuthoritativelyDeferredAcceptanceObligation(goal, finding) is null)
+            .ToArray();
+        foreach (var deferredFinding in openBlockingFindings.Except(workerBlockingFindings))
+        {
+            var obligation = FindAuthoritativelyDeferredAcceptanceObligation(goal, deferredFinding)!;
+            Append(
+                goal,
+                task.Id,
+                ProgressKind.TaskNote,
+                $"Deferred acceptance-owned finding remains pending: stable_id={deferredFinding.StableId}; " +
+                $"obligation={obligation.Id}; owner={obligation.Owner}; state={obligation.State}; " +
+                $"next_action={obligation.RequiredScope}.");
+        }
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
-            openBlockingFindings.Count > 0)
+            workerBlockingFindings.Length > 0)
         {
             var openIds = string.Join(
                 ", ",
-                openBlockingFindings.Select(finding => finding.StableId));
+                workerBlockingFindings.Select(finding => finding.StableId));
             ReportTaskProgress(
                 goalId,
                 task.Id,
@@ -640,9 +729,15 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
+        // A non-pass verdict is required by the worker contract when a blocking
+        // finding remains. Its authoritative owner determines whether another
+        // worker correction can resolve it.
+        var onlyAuthoritativelyDeferredBlockingFindings =
+            openBlockingFindings.Count > 0 && workerBlockingFindings.Length == 0;
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
-            !WorkerResultBlockers.TryFindPassVerdict(verification))
+            !WorkerResultBlockers.TryFindPassVerdict(verification) &&
+            !onlyAuthoritativelyDeferredBlockingFindings)
         {
             ReportTaskProgress(
                 goalId,
@@ -652,7 +747,12 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
-        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
+        // A Tester/Reviewer can report its mandatory blocker text while the
+        // authoritative structured finding is already bound to Acceptance.
+        // The binding, not the prose, is what makes this a deferral.  Keep raw
+        // blockers load-bearing whenever any substantive worker finding remains.
+        if (!onlyAuthoritativelyDeferredBlockingFindings &&
+            WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
         {
             ReportTaskProgress(
                 goalId,
@@ -664,11 +764,11 @@ public sealed partial class AgentOrchestratorKernel
 
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Tester &&
-            openBlockingFindings.Count > 0)
+            workerBlockingFindings.Length > 0)
         {
             var openIds = string.Join(
                 ", ",
-                openBlockingFindings.Select(finding => finding.StableId));
+                workerBlockingFindings.Select(finding => finding.StableId));
             ReportTaskProgress(
                 goalId,
                 task.Id,
@@ -677,7 +777,8 @@ public sealed partial class AgentOrchestratorKernel
             return true;
         }
 
-        if (verification.Succeeded &&
+        if (!onlyAuthoritativelyDeferredBlockingFindings &&
+            verification.Succeeded &&
             task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(verification, out var blocker))
@@ -714,6 +815,55 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return false;
+    }
+
+    private static bool IsWorkerOwnedCriterionObligation(Goal goal, int criterionIndex)
+    {
+        var version = goal.AuthoritativeRefinedSpecVersion?.Version;
+        var matches = version is null
+            ? []
+            : goal.CriterionEvidenceObligations.Where(item =>
+                item.CriterionIndex == criterionIndex && item.CriterionVersion == version.Value).ToArray();
+        var obligation = matches.Length == 1 ? matches[0] : null;
+        // A legacy/malformed record has no authoritative ownership; do not
+        // convert it into a deferred obligation based on worker prose.
+        return matches.Length != 1 || obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
+    }
+
+    private static CriterionEvidenceObligation? FindAuthoritativelyDeferredAcceptanceObligation(Goal goal, ReviewFinding finding)
+    {
+        if (finding.Category != FindingCategory.AcceptanceOwned ||
+            string.IsNullOrWhiteSpace(finding.StableId))
+        {
+            return null;
+        }
+
+        // A worker's category is only a proposal. Deferral requires one live,
+        // explicit operator/refinement binding to the exact stable finding id.
+        var currentVersion = goal.AuthoritativeRefinedSpecVersion?.Version;
+        var matches = goal.CriterionEvidenceObligations.Where(item =>
+            item.Owner == CriterionEvidenceOwner.Acceptance &&
+            item.HasValidEvidenceState &&
+            item.CriterionVersion == currentVersion &&
+            string.Equals(item.FindingStableId, finding.StableId, StringComparison.Ordinal)).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    private static bool HasOnlyAuthoritativelyDeferredAcceptanceFindings(
+        Goal goal,
+        TaskVerificationRecord verification)
+    {
+        if (WorkerResultBlockers.TryFindCriteriaVerdicts(verification, out var verdicts, out _) &&
+            verdicts.Any(item => item.Verdict == "not-met" && goal.RefinedSpec is { } spec &&
+                item.CriterionIndex >= 0 && item.CriterionIndex < spec.AcceptanceCriteria.Count &&
+                !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction => correction.IsWaiver &&
+                    string.Equals(correction.SupersededCriterion, spec.AcceptanceCriteria[item.CriterionIndex].Trim(), StringComparison.OrdinalIgnoreCase))))
+            return false;
+        var openFindings = ReviewFindings.GetOpenBlockingFindings(
+            verification.MergedReviewFindings ?? [],
+            goal.EffectiveAcceptanceCriteriaCorrections);
+        return openFindings.Count > 0 && openFindings.All(finding =>
+            FindAuthoritativelyDeferredAcceptanceObligation(goal, finding) is not null);
     }
 
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryReviewFindings(GoalId goalId)
@@ -774,11 +924,20 @@ public sealed partial class AgentOrchestratorKernel
                 verification,
                 task.LastDispatch?.ReviewRetryCap,
                 out var mergedFindings,
-                out _,
+                out var diagnostic,
                 out var violation,
                 out var identityTransitionSalvaged,
                 out var canonicalizations))
         {
+            if (violation is null && !string.IsNullOrWhiteSpace(diagnostic))
+            {
+                Append(
+                    goal,
+                    task.Id,
+                    ProgressKind.TaskNote,
+                    ReviewFindingParseRejectionNote.Build(task.RequiredRole, verification, diagnostic));
+            }
+
             return verification with
             {
                 ReviewFindingContractViolation = violation,
@@ -1195,6 +1354,8 @@ public sealed partial class AgentOrchestratorKernel
 
         dispatch.BriefVersion = goal.AuthoritativeBrief.Version;
         dispatch.BriefSnapshot = goal.Objective;
+        dispatch.AssignedAgentId ??= task.AssignedAgentId?.Value;
+        dispatch.ConductorRoutingRevision = task.ConductorRoutingRevision;
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
@@ -1228,6 +1389,7 @@ public sealed partial class AgentOrchestratorKernel
             reservationOwnerId,
             reservationLeaseExpiresAt,
             reservationRecoveryConfirmed);
+        result = RetryAdmissionReceiptContext.Enrich(goal, task, task.LastDispatch, result);
         ApplyPreparedRetryAdmission(goalId, taskId, result);
         return result;
     }
@@ -1266,7 +1428,7 @@ public sealed partial class AgentOrchestratorKernel
                         goal,
                         taskId,
                         ProgressKind.NoProgressRedispatchPrevented,
-                        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                    FormatNoProgressRedispatchDisposition(result.Receipt));
                     return;
                 }
 
@@ -1282,7 +1444,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 taskId,
                 ProgressKind.NoProgressRedispatchPrevented,
-                $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={result.Receipt.Fingerprint.Value} cause={result.Receipt.Cause} route={result.Receipt.Route} attempt={result.Receipt.LinkedDispatchAt:O}");
+                FormatNoProgressRedispatchDisposition(result.Receipt));
             ApplyRetryAdmissionRoute(goal, task, result.Receipt);
         }
     }
@@ -1334,6 +1496,14 @@ public sealed partial class AgentOrchestratorKernel
                 throw new InvalidOperationException($"Unsupported retry-admission route '{receipt.Route}'.");
         }
     }
+
+    private static string FormatNoProgressRedispatchDisposition(RetryAdmissionReceipt receipt) =>
+        $"NO_PROGRESS_REDISPATCH_PREVENTED fingerprint={receipt.Fingerprint.Value} cause={receipt.Cause} route={receipt.Route} " +
+        $"attempt={receipt.LinkedDispatchAt:O} candidate_sha={receipt.CandidateSha ?? "unavailable"} " +
+        $"stable_finding_ids={string.Join(",", receipt.StableFindingIds ?? [])} " +
+        $"evidence_identities={string.Join(",", receipt.EvidenceIdentities ?? [])} " +
+        $"evidence_identities_truncated={receipt.EvidenceIdentitiesTruncated.ToString().ToLowerInvariant()} " +
+        $"task_must_change={receipt.RequiredTaskChangeId ?? "unavailable"}";
 
     private void RoutePreventedRetryToAcceptanceRegate(
         Goal goal,
@@ -1589,12 +1759,19 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
     {
-        if (task.Status == WorkTaskStatus.Completed || task.LastVerification is not { Succeeded: true })
+        if (task.Status == WorkTaskStatus.Completed ||
+            task.LastVerification is not { Succeeded: true } ||
+            (task.RequiredRole == AgentRole.Developer &&
+             WorkerResultBlockers.GetAssignedScopeComplete(task.LastVerification) is false))
         {
             return false;
         }
 
-        if (_humanInputRequests.Values.Any(request => request.GoalId == goal.Id && request.TaskId == task.Id && !request.IsCompleted))
+        if (_humanInputRequests.Values.Any(request =>
+                request.GoalId == goal.Id &&
+                request.TaskId == task.Id &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             return false;
         }

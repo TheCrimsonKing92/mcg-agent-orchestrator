@@ -181,6 +181,31 @@ public sealed class DispatchRecoveryPolicy
         worktreeInspection ??= DispatchWorktreeInspectionStatus.NotRequired;
 
         var exitArtifact = DispatchExitArtifactReader.Read(exitPath);
+        if (!hasLiveProcess && !heartbeat.IsAvailable && heartbeat.UnavailableReason is not "missing")
+        {
+            var unavailableReason = heartbeat.UnavailableReason ?? "unknown";
+            return Decision(
+                DispatchRecoveryAction.Hold,
+                heartbeat.Path,
+                $"heartbeat apparatus unavailable; unavailable_reason={unavailableReason}",
+                $"heartbeat-{unavailableReason}");
+        }
+
+        if (!hasLiveProcess && worktreeInspection.Availability is
+            DispatchWorktreeInspectionAvailability.Unavailable or
+            DispatchWorktreeInspectionAvailability.Unsafe)
+        {
+            var inspectionState = worktreeInspection.Availability == DispatchWorktreeInspectionAvailability.Unsafe
+                ? "unsafe"
+                : "unavailable";
+            return Decision(
+                DispatchRecoveryAction.Hold,
+                worktreeInspection.EvidencePath,
+                $"worktree inspection {inspectionState}; unavailable_reason={worktreeInspection.UnavailableReason ?? "unknown"}; " +
+                $"git_receipt={worktreeInspection.GitReceipt ?? "none"}",
+                $"worktree-inspection-{inspectionState}");
+        }
+
         if (!hasLiveProcess &&
             exitArtifact.Kind == ExitCodeReadKind.Valid &&
             exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic &&
@@ -213,31 +238,6 @@ public sealed class DispatchRecoveryPolicy
 
         if (!hasLiveProcess)
         {
-            if (!heartbeat.IsAvailable && heartbeat.UnavailableReason is not "missing")
-            {
-                var unavailableReason = heartbeat.UnavailableReason ?? "unknown";
-                return Decision(
-                    DispatchRecoveryAction.Hold,
-                    heartbeat.Path,
-                    $"heartbeat apparatus unavailable; unavailable_reason={unavailableReason}",
-                    $"heartbeat-{unavailableReason}");
-            }
-
-            if (worktreeInspection.Availability is
-                DispatchWorktreeInspectionAvailability.Unavailable or
-                DispatchWorktreeInspectionAvailability.Unsafe)
-            {
-                var inspectionState = worktreeInspection.Availability == DispatchWorktreeInspectionAvailability.Unsafe
-                    ? "unsafe"
-                    : "unavailable";
-                return Decision(
-                    DispatchRecoveryAction.Hold,
-                    worktreeInspection.EvidencePath,
-                    $"worktree inspection {inspectionState}; unavailable_reason={worktreeInspection.UnavailableReason ?? "unknown"}; " +
-                    $"git_receipt={worktreeInspection.GitReceipt ?? "none"}",
-                    $"worktree-inspection-{inspectionState}");
-            }
-
             var heartbeatEvidence = heartbeat.IsAvailable ? heartbeat.Path : "heartbeat-absent";
             var heartbeatStale = !heartbeat.IsAvailable ||
                 heartbeat.HeartbeatAge is null ||

@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum GoalOperationStatus
+public enum GoalOperationStatus
 {
     Begin,
     Completed,
@@ -17,7 +17,7 @@ internal enum GoalOperationStatus
     Aborted
 }
 
-internal sealed record GoalOperationJournalEntry(
+public sealed record GoalOperationJournalEntry(
     string IdempotencyKey,
     GoalId GoalId,
     string Operation,
@@ -77,7 +77,7 @@ internal sealed record AcceptanceRetryAuditPayload(
     int OperatorRegateCount,
     DateTimeOffset AcceptanceFailureOccurredAt);
 
-internal sealed record GoalOperationJournalSummary(
+public sealed record GoalOperationJournalSummary(
     string Path,
     IReadOnlyList<GoalOperationJournalEntry> Entries,
     IReadOnlyList<GoalOperationJournalEntry> LatestByOperation,
@@ -111,7 +111,9 @@ internal sealed record GoalLandingIntent(
     string IntegrationBranch,
     string MergeCommitSha,
     DateTimeOffset RecordedAt,
-    string Source);
+    string Source,
+    string? BoundMainRevision = null,
+    string? PreviousIntegrationRevision = null);
 
 internal sealed record GoalLifecycleJournalEntry(
     string IdempotencyKey,
@@ -125,6 +127,8 @@ internal static class GoalOperationJournal
     internal const string AcceptanceRetryAuditOutboxKind = "acceptance-retry-audit";
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
     public const string LandingIntentOperation = "conductor:landing-intent";
+    public const string AcceptanceApparatusRegateOperation = "conductor:acceptance-apparatus-regate";
+    public const string ApparatusRegateAcceptanceOutcome = "apparatus-regate";
     internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
     internal static Action? BeforeAcceptanceRetryAppend { get; set; }
     private static readonly ConcurrentDictionary<string, Lazy<SqliteRunEventStore>> RunEventStores =
@@ -272,7 +276,9 @@ internal static class GoalOperationJournal
         string integrationBranch,
         string mergeCommitSha,
         string source,
-        DateTimeOffset? recordedAt = null)
+        DateTimeOffset? recordedAt = null,
+        string? boundMainRevision = null,
+        string? previousIntegrationRevision = null)
     {
         var intent = new GoalLandingIntent(
             goal.Id.Value,
@@ -280,7 +286,9 @@ internal static class GoalOperationJournal
             integrationBranch,
             mergeCommitSha,
             recordedAt ?? DateTimeOffset.UtcNow,
-            source);
+            source,
+            NormalizeSha(boundMainRevision),
+            NormalizeSha(previousIntegrationRevision));
         BeforeLandingIntentAppend?.Invoke(intent);
         Append(
             executionDirectory,
@@ -354,6 +362,33 @@ internal static class GoalOperationJournal
         DateTimeOffset? attemptStartedAt = null,
         GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
         AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Aborted, "aborted:state-guard", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null);
+
+    /// <summary>
+    /// One record per apparatus re-gate, naming the classification, the failing tests and the evidence
+    /// used. The ordinal is part of the idempotency key so each re-gate of the same candidate is its
+    /// own record rather than a silent overwrite.
+    /// </summary>
+    public static void AcceptanceApparatusRegated(
+        string executionDirectory,
+        Goal goal,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string evidenceKind,
+        IReadOnlyList<string> failingTestIdentities,
+        IReadOnlyList<string> failedCheckNames,
+        int regateOrdinal) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            $"{CandidateKey(goal.Id, AcceptanceApparatusRegateOperation, branchHeadSha, mainHeadSha)}:{regateOrdinal}",
+            AcceptanceApparatusRegateOperation,
+            GoalOperationStatus.Completed,
+            $"classification=apparatus; evidence={evidenceKind}; re-gate={regateOrdinal}; " +
+            $"failing-tests={string.Join(", ", failingTestIdentities)}",
+            NormalizeSha(branchHeadSha),
+            NormalizeSha(mainHeadSha),
+            acceptanceOutcome: ApparatusRegateAcceptanceOutcome,
+            failedCheckNames: failedCheckNames);
 
     public static void AcceptanceRetried(
         string executionDirectory,
@@ -798,7 +833,8 @@ internal static class GoalOperationJournal
                     entry.At,
                     entry.MainHeadSha,
                     entry.AcceptanceOutcome,
-                    entry.FailedCheckNames));
+                    entry.FailedCheckNames,
+                    entry.BranchHeadSha));
             }
         }
 
@@ -836,7 +872,8 @@ internal static class GoalOperationJournal
         DateTimeOffset At,
         string? MainHeadSha,
         string? AcceptanceOutcome,
-        IReadOnlyList<string>? FailedCheckNames);
+        IReadOnlyList<string>? FailedCheckNames,
+        string? BranchHeadSha = null);
 
     private static GoalOperationJournalSummary BuildSummary(string path, GoalOperationJournalEntry[] entries)
     {

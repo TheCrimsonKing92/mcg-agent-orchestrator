@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record OrchestratorProjectSelection(string? ProjectName, IReadOnlyList<string> CommandArgs)
+public sealed record OrchestratorProjectSelection(string? ProjectName, IReadOnlyList<string> CommandArgs)
 {
     public const string ProjectEnvironmentVariable = "MCG_ORCHESTRATOR_PROJECT";
 

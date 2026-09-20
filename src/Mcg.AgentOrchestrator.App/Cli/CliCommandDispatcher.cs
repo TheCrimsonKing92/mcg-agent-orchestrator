@@ -43,10 +43,13 @@ public static bool ExecuteCommand(
     Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null,
     Action? reportGoalCreationProgress = null,
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalGoalKernel = null,
-    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+    WorktreeCleanupContext? cleanupContext = null)
 {
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
+    var operationCleanupContext = cleanupContext ?? WorktreeCleanupContext.Load(
+        attentionStoreDirectory: workspace.OrchestratorDirectory);
     var context = new CliExecutionContext(
         kernel,
         workspace,
@@ -81,11 +84,14 @@ public static bool ExecuteCommand(
         recordDurableGoalBaseline: recordDurableGoalBaseline)
     {
         EventWriter = eventWriter,
-        AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),
+        AcceptanceVerifier = acceptanceVerifier ?? (operationCleanupContext.Hooks.BuildStorageRoot is { } storageRoot
+            ? new GoalAcceptanceVerifier(storageRoot)
+            : new GoalAcceptanceVerifier()),
         RunInjectedAcceptanceVerifierInCurrentProcess = acceptanceVerifier is not null,
         GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds,
         StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,
-        StableSlotSelector = stableSlotSelector
+        StableSlotSelector = stableSlotSelector,
+        CleanupContext = operationCleanupContext
     };
     bool changed;
     try

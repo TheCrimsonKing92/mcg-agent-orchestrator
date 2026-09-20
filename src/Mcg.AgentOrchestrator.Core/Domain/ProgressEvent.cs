@@ -7,7 +7,16 @@ public sealed record ProgressEvent(
     string Message,
     DateTimeOffset OccurredAt,
     TaskRequeueSkippedPayload? RequeueSkipped = null,
-    IReadOnlyList<OperatorGateRecord>? OperatorGates = null);
+    IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
+    OperatorIntentAppliedPayload? OperatorIntentApplied = null);
+
+public sealed record OperatorIntentAppliedPayload(
+    string IntentId,
+    string Verb,
+    string? TaskId,
+    string Actor,
+    string Channel,
+    string? AuthenticationAssurance);
 
 public sealed record TaskRequeueSkippedPayload(
     string TaskId,

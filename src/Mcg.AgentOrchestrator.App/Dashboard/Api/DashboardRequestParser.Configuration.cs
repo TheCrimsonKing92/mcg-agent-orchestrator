@@ -53,60 +53,21 @@ public static AgentSubmissionDto ParseAgentSubmission(string body)
 
 public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submission)
 {
-    var role = CliArgumentParser.ParseAgentRole(submission.Role);
-    var providerName = submission.ProviderName.Trim();
-    var modelName = submission.ModelName.Trim();
-    var executionPolicy = ParseExecutionPolicy(submission.ExecutionPolicy, providerName);
-    var name = string.IsNullOrWhiteSpace(submission.Name)
-        ? $"{providerName} {role.ToString().ToLowerInvariant()}"
-        : submission.Name;
-    var allowsSubscription = AgentExecutionPolicies.AllowsSubscription(executionPolicy);
-    var subscriptionProfileName = allowsSubscription
-        ? string.IsNullOrWhiteSpace(submission.SubscriptionProfileName)
-            ? DefaultSubscriptionProfileName(providerName, executionPolicy)
-            : submission.SubscriptionProfileName
-        : null;
-    var subscriptionModelAlias = allowsSubscription
-        ? string.IsNullOrWhiteSpace(submission.SubscriptionModelAlias)
-            ? DefaultSubscriptionModelAlias(providerName, executionPolicy)
-            : submission.SubscriptionModelAlias
-        : null;
-    var subscriptionReasoningEffort = allowsSubscription
-        ? string.IsNullOrWhiteSpace(submission.SubscriptionReasoningEffort)
-            ? DefaultSubscriptionReasoningEffort(providerName, executionPolicy, subscriptionModelAlias)
-            : submission.SubscriptionReasoningEffort
-        : null;
-    var subscription = string.IsNullOrWhiteSpace(subscriptionProfileName)
-        ? null
-        : new SubscriptionLaunchProfile(
-            subscriptionProfileName,
-            string.IsNullOrWhiteSpace(subscriptionModelAlias) ? null : subscriptionModelAlias,
-            string.IsNullOrWhiteSpace(subscriptionReasoningEffort) ? null : subscriptionReasoningEffort);
-    var complexModel = !string.IsNullOrWhiteSpace(submission.ComplexProviderName) && !string.IsNullOrWhiteSpace(submission.ComplexModelName)
-        ? new ModelProfile(
-            submission.ComplexProviderName,
-            submission.ComplexModelName,
-            ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
-            DefaultSubscriptionMode(submission.ComplexProviderName),
-            string.IsNullOrWhiteSpace(submission.ComplexReasoningEffort) ? null : submission.ComplexReasoningEffort,
-            MaxOutputTokens: submission.ComplexMaxOutputTokens ?? DefaultComplexMaxOutputTokens(submission.ComplexProviderName))
-        : DefaultComplexModel(providerName);
-
-    return new AgentDefinition(
-        new AgentId($"{providerName.ToLowerInvariant()}-{role.ToString().ToLowerInvariant()}"),
-        name,
-        role,
-        new ModelProfile(
-            providerName,
-            modelName,
-            ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
-            DefaultSubscriptionMode(providerName),
-            string.IsNullOrWhiteSpace(submission.ReasoningEffort) ? DefaultReasoningEffort(providerName) : submission.ReasoningEffort,
-            submission.MaxOutputTokens ?? DefaultMaxOutputTokens(providerName)),
-        ExecutionPolicy: executionPolicy,
-        Subscription: subscription,
-        ComplexModel: complexModel,
-        IsProviderRoutingConstrained: true);
+    return AgentDefinitionFactory.Create(new AgentDefinitionInput(
+        submission.Role,
+        submission.ProviderName,
+        submission.ModelName,
+        submission.Name,
+        submission.ReasoningEffort,
+        submission.MaxOutputTokens,
+        submission.ExecutionPolicy,
+        submission.SubscriptionProfileName,
+        submission.SubscriptionModelAlias,
+        submission.SubscriptionReasoningEffort,
+        submission.ComplexProviderName,
+        submission.ComplexModelName,
+        submission.ComplexMaxOutputTokens,
+        submission.ComplexReasoningEffort));
 }
 
 private static SubscriptionMode DefaultSubscriptionMode(string providerName)

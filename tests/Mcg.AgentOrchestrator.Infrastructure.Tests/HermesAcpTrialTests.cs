@@ -486,14 +486,14 @@ public sealed class HermesAcpTrialTests
         process.CompleteInput();
         var stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        await process.WaitForOwnedExitAsync(TestContext.Current.CancellationToken);
         var stdoutText = await stdout;
         var stderrText = await stderr;
 
         Assert.True(
             process.ExitCode == 0,
             $"Expected exit 0, observed {process.ExitCode}. stdout='{stdoutText}' stderr='{stderrText}'.");
-        Assert.True(process.JobExitConfirmed);
+        Assert.True(process.JobExitConfirmed, process.DescribeJobExitObservation());
         var jobExitObservation = process.DescribeJobExitObservation();
         var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
         Assert.Contains("confirmed=true", jobExitObservation, StringComparison.Ordinal);
@@ -1273,6 +1273,7 @@ public sealed class HermesAcpTrialTests
         public void CompleteInput() => InputCompleted = true;
         public void Kill() => Killed = true;
         public Task WaitForExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task WaitForOwnedExitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public void Dispose()
         {
             OutputReachedEnd = _output.Peek() == -1;

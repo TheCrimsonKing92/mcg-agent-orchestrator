@@ -97,7 +97,7 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
         await repository.SaveAsync(kernel);
         var providers = new InMemoryModelProviderRegistry([]);
         var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                 kernel,
                 workspace,
                 providers,

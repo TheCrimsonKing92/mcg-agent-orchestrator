@@ -12,6 +12,16 @@ set "CORE_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Core\obj\project.assets.json"
 set "INFRASTRUCTURE_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure\obj\project.assets.json"
 set "PROVIDERS_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure.Providers\obj\project.assets.json"
 set "OPERATOR_COMMS_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Infrastructure.OperatorComms\obj\project.assets.json"
+set "DASHBOARD_ASSETS=%ROOT%src\Mcg.AgentOrchestrator.Dashboard\obj\project.assets.json"
+set "DASHBOARD_MODE=0"
+call :detect_dashboard_command "%~1"
+call :detect_dashboard_command "%~3"
+call :detect_dashboard_command "%~5"
+if "%DASHBOARD_MODE%"=="1" (
+    set "APP_PROJECT=%ROOT%src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj"
+    set "APP_DLL=%ROOT%src\Mcg.AgentOrchestrator.Dashboard\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+    set "APP_HEAD=%ROOT%src\Mcg.AgentOrchestrator.Dashboard\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll.git-head"
+)
 set "DOTNET_HOST=dotnet"
 if defined MCG_ORCHESTRATOR_DOTNET_PATH set "DOTNET_HOST=%MCG_ORCHESTRATOR_DOTNET_PATH%"
 
@@ -56,6 +66,7 @@ if not exist "%CORE_ASSETS%" goto missing_build_assets
 if not exist "%INFRASTRUCTURE_ASSETS%" goto missing_build_assets
 if not exist "%PROVIDERS_ASSETS%" goto missing_build_assets
 if not exist "%OPERATOR_COMMS_ASSETS%" goto missing_build_assets
+if "%DASHBOARD_MODE%"=="1" if not exist "%DASHBOARD_ASSETS%" goto missing_build_assets
 
 set "BUILD_LOG=%TEMP%\mcg-build-%RANDOM%.log"
 call "%DOTNET_HOST%" build "%APP_PROJECT%" --no-restore --nologo -v quiet -clp:ErrorsOnly -p:UseSharedCompilation=false -p:McgIsolatedArtifactsPath= >"%BUILD_LOG%" 2>&1
@@ -101,3 +112,13 @@ exit /b %BUILD_EXIT%
 rmdir /s /q "%LOCK_DIR%" 2>nul
 echo ERROR: App artifact is missing or stale and no-restored build assets are unavailable; run .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-PackageBootstrap.ps1, then retry. >&2
 exit /b 1
+
+:detect_dashboard_command
+if /I "%~1"=="dashboard" set "DASHBOARD_MODE=1"
+if /I "%~1"=="serve-dashboard" set "DASHBOARD_MODE=1"
+if /I "%~1"=="hosted-dashboard" set "DASHBOARD_MODE=1"
+if /I "%~1"=="simple-hosted-dashboard" set "DASHBOARD_MODE=1"
+if /I "%~1"=="open-dashboard" set "DASHBOARD_MODE=1"
+if /I "%~1"=="prototype-ui" set "DASHBOARD_MODE=1"
+if /I "%~1"=="transcript" set "DASHBOARD_MODE=1"
+exit /b 0

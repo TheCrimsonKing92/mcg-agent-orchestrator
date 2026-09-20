@@ -261,8 +261,19 @@ public sealed partial class AgentOrchestratorKernel
                 if (_humanInputRequests.Values.Any(request =>
                         request.GoalId == goal.Id &&
                         request.TaskId == task.Id &&
+                        !request.IsCompleted &&
+                        HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
+                {
+                    continue;
+                }
+
+                if (_humanInputRequests.Values.Any(request =>
+                        request.GoalId == goal.Id &&
+                        request.TaskId == task.Id &&
                         !request.IsCompleted))
                 {
+                    RestoreTaskAfterHumanInput(goal, task);
+                    clearedWait = true;
                     continue;
                 }
 

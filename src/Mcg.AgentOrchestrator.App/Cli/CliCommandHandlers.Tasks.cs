@@ -470,11 +470,37 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var targetAgent = new AgentCatalog(context.Agents).FindById(targetAgentId);
             if (targetAgent is null)
             {
-                Console.Error.WriteLine($"ERROR: agent id '{targetAgentId}' was not found.");
+                Console.Error.WriteLine($"ERROR: AGENT_REASSIGNMENT_HOLD code=AgentNotFound agent_id='{targetAgentId}'.");
                 return false;
             }
 
+            if (targetAgent.Role != reassignTarget.Task.RequiredRole)
+            {
+                Console.Error.WriteLine(
+                    $"ERROR: AGENT_REASSIGNMENT_HOLD code=RoleMismatch agent_id='{targetAgent.Id.Value}' " +
+                    $"agent_role={targetAgent.Role} required_role={reassignTarget.Task.RequiredRole}.");
+                return false;
+            }
+
+            if (targetAgent.Status != AgentStatus.Available)
+            {
+                Console.Error.WriteLine(
+                    $"ERROR: AGENT_REASSIGNMENT_HOLD code=AgentUnavailable agent_id='{targetAgent.Id.Value}' " +
+                    $"agent_status={targetAgent.Status}.");
+                return false;
+            }
+
+            var routingEffect = reassignTarget.Task.Status == WorkTaskStatus.Running &&
+                reassignTarget.Task.LastProcess is not null
+                ? "next-attempt"
+                : reassignTarget.Task.Status == WorkTaskStatus.Running &&
+                  reassignTarget.Task.LastDispatch is not null
+                    ? "rebuild-before-start"
+                    : "next-dispatch";
             context.Kernel.ReassignTaskAgent(context.CurrentGoal!.Id, reassignTarget.Task.Id, targetAgent);
+            Console.WriteLine(
+                $"AGENT_REASSIGNMENT_ACKNOWLEDGED task={reassignTarget.Task.Id.Value} " +
+                $"agent={targetAgent.Id.Value} harness={targetAgent.Subscription?.WorkerProfileName ?? "api"} effect={routingEffect}");
             ConsoleViews.PrintTask(context.CurrentGoal!, reassignTarget.Task);
             return true;
 

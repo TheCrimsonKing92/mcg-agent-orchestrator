@@ -32,7 +32,7 @@ public sealed class AcceptanceOverlappedCheckSchedulingTests
             """);
         var time = new RecordingTimeProvider();
         var progress = new List<AcceptanceGateProgress>();
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
         try
         {
             Task<GoalAcceptanceVerifier.CommandResult> RunAsync(
@@ -54,16 +54,18 @@ public sealed class AcceptanceOverlappedCheckSchedulingTests
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "passed deterministically"));
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunAsync, time);
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunAsync, time);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
             var expectedSlotWait = lease.SlotWaitDuration;
 
-            var result = await verifier.RunAsync(
+            var result = await verifier.RunOwnedAsync(
                 root,
                 new GoalId("55555555555555555555555555555555"),
+                changedFiles: null,
                 stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
-                stableSlotLease: lease);
+                stableSlotLease: lease,
+                CancellationToken.None,
+                new AcceptanceRunExecutionOptions(ProgressSink: progress.Add));
 
             Assert.True(result.Passed, result.OutputTail);
             var emitted = Assert.Single(progress, item => item.Phase == "gate-phase-breakdown");
@@ -78,7 +80,7 @@ public sealed class AcceptanceOverlappedCheckSchedulingTests
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -113,8 +115,8 @@ public sealed class AcceptanceOverlappedCheckSchedulingTests
               "forbiddenChangedPathGlobs": []
             }
             """);
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
-        GoalAcceptanceVerifier.OnStructuralCoverageStartedForTests = () =>
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.OnStructuralCoverageStartedForTests = () =>
             structuralCoverageObservedLaneCount = Volatile.Read(ref completedLaneCount);
         try
         {
@@ -139,7 +141,7 @@ public sealed class AcceptanceOverlappedCheckSchedulingTests
                 return new GoalAcceptanceVerifier.CommandResult(0, "passed deterministically");
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
             var result = await verifier.RunAsync(
                 root,
@@ -154,8 +156,8 @@ public sealed class AcceptanceOverlappedCheckSchedulingTests
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.OnStructuralCoverageStartedForTests = null;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.OnStructuralCoverageStartedForTests = null;
             DeleteDirectoryWithRetry(root);
         }
     }

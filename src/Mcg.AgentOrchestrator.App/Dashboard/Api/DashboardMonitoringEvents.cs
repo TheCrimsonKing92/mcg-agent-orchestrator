@@ -126,7 +126,7 @@ internal static class DashboardMonitoringEvents
     {
         var monitor = kernel.BuildMonitor(goal.Id);
         var verification = kernel.BuildVerificationGate(goal.Id);
-        var processSnapshot = ProcessCommandLines.SnapshotOperation();
+        var processSnapshot = ProcessInspectionSnapshots.SnapshotOperation();
         var dispatchStateSurface = new DispatchStateSurface();
         var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface(dispatchSurface: dispatchStateSurface).Evaluate(
             goal,

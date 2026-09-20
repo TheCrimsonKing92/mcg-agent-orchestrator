@@ -43,9 +43,10 @@ public sealed class GoalAcceptanceVerifierCancellationTests : GoalAcceptanceVeri
                     throw;
                 }
             });
-            using var probe = GoalAcceptanceVerifier.PushGateCancellationProbe(
-                () => Volatile.Read(ref stopRequested) == 1);
-            var verification = verifier.RunAsync(root);
+            var verification = verifier.RunOwnedAsync(
+                root, null, null, null, null, CancellationToken.None,
+                new AcceptanceRunExecutionOptions(
+                    CancellationProbe: () => Volatile.Read(ref stopRequested) == 1));
             await checkStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             var elapsed = Stopwatch.StartNew();
@@ -91,15 +92,17 @@ public sealed class GoalAcceptanceVerifierCancellationTests : GoalAcceptanceVeri
 
                 return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
             });
-            using var probe = GoalAcceptanceVerifier.PushGateCancellationProbe(
-                () => Volatile.Read(ref stopRequested) == 1);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
-            var verification = verifier.RunAsync(
+            var verification = verifier.RunOwnedAsync(
                 root,
+                goalId: null,
                 changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"],
                 stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
-                stableSlotLease: lease);
+                stableSlotLease: lease,
+                cancellationToken: CancellationToken.None,
+                executionOptions: new AcceptanceRunExecutionOptions(
+                    CancellationProbe: () => Volatile.Read(ref stopRequested) == 1));
             await buildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             var elapsed = Stopwatch.StartNew();
@@ -147,20 +150,22 @@ public sealed class GoalAcceptanceVerifierCancellationTests : GoalAcceptanceVeri
 
                 return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
             });
-            using var probe = GoalAcceptanceVerifier.PushGateCancellationProbe(() =>
+            Func<bool> dispositionProbe = () =>
             {
                 Interlocked.Increment(ref dispositionProbeCalls);
                 dispositionProbeObserved.TrySetResult();
                 return false;
-            });
+            };
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
-            var verification = verifier.RunAsync(
+            var verification = verifier.RunOwnedAsync(
                 root,
+                goalId: null,
                 changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"],
                 stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
                 stableSlotLease: lease,
-                cancellationToken: callerCancellation.Token);
+                cancellationToken: callerCancellation.Token,
+                executionOptions: new AcceptanceRunExecutionOptions(CancellationProbe: dispositionProbe));
             await buildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await dispositionProbeObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 

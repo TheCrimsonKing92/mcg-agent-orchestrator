@@ -58,7 +58,12 @@ internal sealed partial class ConductorDriver
         try
         {
             acceptance = RunInlineLandingSourceSizePreflight(goal) ??
-                _runAcceptanceVerification(goal, null, null, CancellationToken.None);
+                _runAcceptanceVerification(
+                    goal,
+                    null,
+                    null,
+                    CancellationToken.None,
+                    new AcceptanceRunExecutionOptions());
         }
         catch (AcceptanceInfrastructureDeferredException ex)
         {
@@ -145,12 +150,13 @@ internal sealed partial class ConductorDriver
 
         ConductorParallelAcceptanceRunAcceptance runAcceptance = _isConductorTick
             ? RunParallelLandingAcceptance
-            : (attemptCandidate, attemptPolicy, lease, cancellationToken) =>
+            : (attemptCandidate, attemptPolicy, lease, cancellationToken, executionOptions) =>
                 RunParallelLandingAcceptance(
                     attemptCandidate,
                     attemptPolicy,
                     lease,
                     cancellationToken,
+                    executionOptions,
                     omitStableSlotIndexWithoutLease: true);
         ConductorParallelAcceptanceAttemptDecision decision;
         try
@@ -372,12 +378,14 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        AcceptanceRunExecutionOptions executionOptions) =>
         RunParallelLandingAcceptance(
             candidate,
             policy,
             stableSlotLease,
             cancellationToken,
+            executionOptions,
             omitStableSlotIndexWithoutLease: false);
 
     internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
@@ -385,6 +393,7 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken,
+        AcceptanceRunExecutionOptions executionOptions,
         bool omitStableSlotIndexWithoutLease)
     {
         var effectiveCandidate = candidate;
@@ -422,7 +431,8 @@ internal sealed partial class ConductorDriver
                         ? null
                         : effectiveCandidate.SlotIndex,
                     stableSlotLease,
-                    cancellationToken));
+                    cancellationToken,
+                    executionOptions));
         }
         catch (Exception ex)
         {

@@ -27,18 +27,28 @@ public sealed class AcceptanceCohortMaterializationException : InvalidOperationE
 public sealed class AcceptanceCohortWorkspace : IDisposable
 {
     private readonly string _executionDirectory;
+    private readonly GoalWorktreeCleanupHooks _cleanupHooks;
     private bool _disposed;
-    internal static Action<string, string> WorkspaceRemover { get; set; } =
+    private static readonly Action<string, string> DefaultWorkspaceRemover =
         GoalWorktrees.RemoveAcceptanceCohortWorkspace;
+    private static readonly AsyncLocal<Action<string, string>?> WorkspaceRemoverOverride = new();
+
+    internal static Action<string, string> WorkspaceRemover
+    {
+        get => WorkspaceRemoverOverride.Value ?? DefaultWorkspaceRemover;
+        set => WorkspaceRemoverOverride.Value = ReferenceEquals(value, DefaultWorkspaceRemover) ? null : value;
+    }
 
     internal AcceptanceCohortWorkspace(
         string executionDirectory,
         string path,
         string commitRevision,
         string treeRevision,
-        IReadOnlyDictionary<GoalId, string> originalBranchRevisions)
+        IReadOnlyDictionary<GoalId, string> originalBranchRevisions,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
         _executionDirectory = executionDirectory;
+        _cleanupHooks = cleanupHooks ?? throw new ArgumentNullException(nameof(cleanupHooks));
         Path = path;
         CommitRevision = commitRevision;
         TreeRevision = treeRevision;
@@ -75,7 +85,7 @@ public sealed class AcceptanceCohortWorkspace : IDisposable
         }
         catch
         {
-            GoalWorktrees.RecordAcceptanceCohortCleanupNeeded(Path);
+            GoalWorktrees.RecordAcceptanceCohortCleanupNeeded(Path, _cleanupHooks);
             throw;
         }
     }
@@ -86,10 +96,12 @@ public static partial class GoalWorktrees
     public static AcceptanceCohortWorkspace CreateAcceptancePartitionWorkspace(
         string executionDirectory,
         string observedMainRevision,
-        AcceptanceCohortMemberBinding member)
+        AcceptanceCohortMemberBinding member,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(member);
+        var operationCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         var root = System.IO.Path.GetFullPath(executionDirectory);
         var normalizedMain = AcceptanceCohortMemberBinding.NormalizeRevision(
             observedMainRevision,
@@ -134,7 +146,8 @@ public static partial class GoalWorktrees
                 workspacePath,
                 ResolveRequiredRef(workspacePath, "HEAD"),
                 ResolveRequiredRef(workspacePath, "HEAD^{tree}"),
-                new Dictionary<GoalId, string> { [member.GoalId] = branch });
+                new Dictionary<GoalId, string> { [member.GoalId] = branch },
+                operationCleanupHooks);
             result.AssertGoalBranchesUnchanged();
             return result;
         }
@@ -144,7 +157,8 @@ public static partial class GoalWorktrees
                 root,
                 workspacePath,
                 "Acceptance partition",
-                materializationFailure);
+                materializationFailure,
+                operationCleanupHooks);
             throw;
         }
     }
@@ -152,10 +166,12 @@ public static partial class GoalWorktrees
     public static AcceptanceCohortWorkspace CreateAcceptanceCohortWorkspace(
         string executionDirectory,
         string observedMainRevision,
-        IReadOnlyList<AcceptanceCohortMemberBinding> members)
+        IReadOnlyList<AcceptanceCohortMemberBinding> members,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(members);
+        var operationCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         if (members.Count != 2 || members[0].GoalId == members[1].GoalId)
         {
             throw new ArgumentException("A disposable acceptance cohort requires exactly two distinct members.", nameof(members));
@@ -235,7 +251,8 @@ public static partial class GoalWorktrees
                 workspacePath,
                 commit,
                 tree,
-                branchRevisions);
+                branchRevisions,
+                operationCleanupHooks);
             result.AssertGoalBranchesUnchanged();
             return result;
         }
@@ -245,7 +262,8 @@ public static partial class GoalWorktrees
                 root,
                 workspacePath,
                 "Cohort",
-                materializationFailure);
+                materializationFailure,
+                operationCleanupHooks);
             throw;
         }
     }
@@ -270,14 +288,20 @@ public static partial class GoalWorktrees
         _ = GitCli.Run(executionDirectory, "worktree", "prune");
     }
 
-    internal static void RecordAcceptanceCohortCleanupNeeded(string workspacePath) =>
-        RecordCleanupNeeded(workspacePath, "cohort:worktree-remove-failed", hooks: GoalWorktreeCleanupHooks.Default);
+    internal static void RecordAcceptanceCohortCleanupNeeded(
+        string workspacePath,
+        GoalWorktreeCleanupHooks? hooks = null) =>
+        RecordCleanupNeeded(
+            workspacePath,
+            "cohort:worktree-remove-failed",
+            hooks: hooks ?? new GoalWorktreeCleanupHooks());
 
     private static void RemoveFailedMaterializationWorkspace(
         string executionDirectory,
         string workspacePath,
         string workspaceKind,
-        Exception materializationFailure)
+        Exception materializationFailure,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
         try
         {
@@ -285,7 +309,7 @@ public static partial class GoalWorktrees
         }
         catch (Exception cleanupFailure)
         {
-            RecordAcceptanceCohortCleanupNeeded(workspacePath);
+            RecordAcceptanceCohortCleanupNeeded(workspacePath, cleanupHooks);
             throw new AcceptanceCohortMaterializationException(
                 AcceptanceCohortMaterializationFailureKind.WorkspaceFailure,
                 $"{workspaceKind} materialization failed and its disposable workspace could not be removed: {cleanupFailure.Message}",

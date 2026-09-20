@@ -192,7 +192,7 @@ internal static partial class DashboardEndpoints
         return OrchestratorEntityResolver.ResolveGoal(
             kernel,
             OrchestratorEntityResolver.GetLatestGoal(kernel),
-            DashboardRequestParser.GetQueryValue(request, "goal"));
+            DashboardHttpRequestParser.GetQueryValue(request, "goal"));
     }
 
     private static Goal ResolveGoal(AgentOrchestratorKernel kernel, string goalId)

@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record OrchestratorWorkspace(
+public sealed record OrchestratorWorkspace(
     string RootDirectory,
     string ExecutionDirectory,
     string OrchestratorDirectory,

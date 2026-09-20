@@ -7,8 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTestsProcessSpawnGuard
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerProcessSpawnGuard)]
+public sealed class DotnetBuildEnvironmentManagerTestsProcessSpawnGuard : DotnetBuildEnvironmentManagerRootedTestBase
 {
     [Xunit.Fact(DisplayName = "ProcessSpawnGuard_clears_inheritable_state_db_file_handles")]
     public void ProcessSpawnGuardClearsInheritableStateDbFileHandles()
@@ -18,7 +18,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsProcessSpawnGuard
             return;
         }
 
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var directory = Path.Combine(Path.GetTempPath(), $"mcg-state-handle-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "state.db");
@@ -119,7 +118,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsProcessSpawnGuard
             return;
         }
 
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var directory = Path.Combine(Path.GetTempPath(), $"mcg-other-handle-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "worker-output.log");

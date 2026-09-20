@@ -28,6 +28,8 @@ public sealed record RefinedSpec(
 {
     public IReadOnlyList<string> OperatorOwnedAcceptanceCriteria { get; init; } = [];
 
+    public IReadOnlyList<string> AcceptanceGateOwnedAcceptanceCriteria { get; init; } = [];
+
     public IReadOnlyList<HumanInputAnswerRecord> ClarificationAnswerHistory { get; init; } = [];
 
     public IReadOnlyList<HumanInputAnswerRecord> AuthoritativeClarificationAnswerHistory =>
