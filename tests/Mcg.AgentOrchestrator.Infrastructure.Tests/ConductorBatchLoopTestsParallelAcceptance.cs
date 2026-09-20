@@ -3342,7 +3342,9 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var markerPath = Path.Combine(worktree, "background-owned-start.marker");
             if (useLegacyStartThenAttach)
             {
-                Assert.False(File.Exists(markerPath));
+                Assert.True(
+                    File.Exists(markerPath),
+                    "The legacy start-then-attach control waits for the unowned child to exit, so its first command must execute before attachment fails.");
                 Assert.Contains("stage=owned-process-group-attachment", completedAttempt.Detail, StringComparison.Ordinal);
                 Assert.Contains("native_error_code=", completedAttempt.Detail, StringComparison.Ordinal);
                 Assert.Contains("native_message=", completedAttempt.Detail, StringComparison.Ordinal);
