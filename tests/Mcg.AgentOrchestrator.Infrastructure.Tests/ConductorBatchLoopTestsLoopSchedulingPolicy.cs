@@ -760,7 +760,17 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                     return DispatchStartOutcome.Started();
                 });
 
-            new ConductorBatchLoop(measuredSweep: loopKernel => TerminalGoalSweep.Run(loopKernel, root, cache: cache)).Run(
+            new ConductorBatchLoop(measuredSweep: loopKernel => TerminalGoalSweep.Run(loopKernel, root, cache: cache) with
+            {
+                GitIndexDurationMs = 11,
+                EvidenceDurationMs = 12,
+                EphemeralDurationMs = 13,
+                AttentionDurationMs = 14,
+                MergeEvidenceDurationMs = 15,
+                GoalsDurationMs = 16,
+                GitSpawnCount = 17,
+                GoalsSweptCount = 18
+            }).Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Conservative,
@@ -774,9 +784,12 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                     }
                 });
 
-            Assert.Contains(secondTick!.ProgressLines!, line =>
+            var sweepLine = Assert.Single(secondTick!.ProgressLines!, line =>
                 line.StartsWith("PHASE_TIMING tick=2 phase=sweep ", StringComparison.Ordinal) &&
                 line.Contains("sweep_cache_hits=1", StringComparison.Ordinal));
+            Assert.Contains("dependency_metadata_ms=", sweepLine, StringComparison.Ordinal);
+            Assert.Contains("dependency_journals_read=0", sweepLine, StringComparison.Ordinal);
+            Assert.Contains("sweep_cache_hits=1 sweep_cache_misses=0 sweep_git_index_ms=11 sweep_evidence_ms=12 sweep_ephemeral_ms=13 sweep_attention_ms=14 sweep_merge_evidence_ms=15 sweep_goals_ms=16 sweep_git_spawns=17 sweep_goals_swept=18", sweepLine, StringComparison.Ordinal);
         }
         finally
         {

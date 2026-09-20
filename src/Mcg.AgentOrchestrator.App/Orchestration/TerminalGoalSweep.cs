@@ -58,6 +58,14 @@ internal sealed record TerminalGoalSweepResult(
     IReadOnlyList<string>? ProgressEvents = null,
     IReadOnlyList<GoalId>? TerminalizedGoalIds = null)
 {
+    public long GitIndexDurationMs { get; init; }
+    public long EvidenceDurationMs { get; init; }
+    public long EphemeralDurationMs { get; init; }
+    public long AttentionDurationMs { get; init; }
+    public long MergeEvidenceDurationMs { get; init; }
+    public long GoalsDurationMs { get; init; }
+    public int GitSpawnCount { get; init; }
+    public int GoalsSweptCount { get; init; }
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
     public IReadOnlyList<GoalId> ExplicitlySweptGoalIds =>
@@ -98,20 +106,21 @@ internal sealed class TerminalGoalSweepCache
     internal IGoalIntegrationEvidenceResolver GetIntegrationEvidenceResolver(
         string executionDirectory,
         string? mainSha,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunnerIdentity,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
         var fullDirectory = Path.GetFullPath(executionDirectory);
         if (_integrationEvidenceResolver is not null &&
             string.Equals(_integrationEvidenceDirectory, fullDirectory, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(_integrationEvidenceMainSha, mainSha, StringComparison.Ordinal) &&
-            ReferenceEquals(_integrationEvidenceGitRunner, gitRunner))
+            ReferenceEquals(_integrationEvidenceGitRunner, gitRunnerIdentity))
         {
             return _integrationEvidenceResolver;
         }
 
         _integrationEvidenceDirectory = fullDirectory;
         _integrationEvidenceMainSha = mainSha;
-        _integrationEvidenceGitRunner = gitRunner;
+        _integrationEvidenceGitRunner = gitRunnerIdentity;
         _integrationEvidenceResolver = GoalIntegrationEvidenceResolver.Build(fullDirectory, mainSha, gitRunner);
         return _integrationEvidenceResolver;
     }
@@ -362,6 +371,21 @@ internal sealed record TerminalGoalSweepCacheSweepFacts(
 
 internal static class TerminalGoalSweep
 {
+    private static readonly AsyncLocal<GitSpawnCounter?> CurrentGitSpawnCounter = new();
+
+    private sealed class GitSpawnCounter
+    {
+        public int Value;
+    }
+
+    private sealed class GitSpawnCounterScope(GitSpawnCounter counter) : IDisposable
+    {
+        private readonly GitSpawnCounter? _prior = CurrentGitSpawnCounter.Value;
+
+        public void Enter() => CurrentGitSpawnCounter.Value = counter;
+        public void Dispose() => CurrentGitSpawnCounter.Value = _prior;
+    }
+
     internal const int MaxMergeEvidenceTerminalizationsPerSweep = 25;
 
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner
@@ -386,17 +410,36 @@ internal static class TerminalGoalSweep
         string? orchestratorDirectory = null)
     {
         gitRunner ??= GitRunner;
+        var gitRunnerIdentity = gitRunner;
+        var gitSpawnCounter = new GitSpawnCounter();
+        using var gitSpawnCounterScope = new GitSpawnCounterScope(gitSpawnCounter);
+        gitSpawnCounterScope.Enter();
+        GitCli.GitResult CountingGitRunner(string workingDirectory, IReadOnlyList<string> arguments)
+        {
+            var activeCounter = CurrentGitSpawnCounter.Value
+                ?? throw new InvalidOperationException("Sweep git runner invoked outside an active sweep.");
+            Interlocked.Increment(ref activeCounter.Value);
+            return gitRunnerIdentity(workingDirectory, arguments);
+        }
+        gitRunner = CountingGitRunner;
         cleanupHooks ??= new GoalWorktreeCleanupHooks();
         orchestratorDirectory ??= OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory;
         var dispatchRunner = new BackgroundDispatchRunner();
+        var gitIndexTiming = System.Diagnostics.Stopwatch.StartNew();
         var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);
-        integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, branchFactIndex.MainSha, gitRunner)
+        gitIndexTiming.Stop();
+        var evidenceTiming = System.Diagnostics.Stopwatch.StartNew();
+        integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, branchFactIndex.MainSha, gitRunnerIdentity, gitRunner)
             ?? GoalIntegrationEvidenceResolver.Build(executionDirectory, branchFactIndex.MainSha, gitRunner);
+        evidenceTiming.Stop();
         attentionStore ??= CollaborationItemStore.ForDirectory(
             orchestratorDirectory);
+        var ephemeralTiming = System.Diagnostics.Stopwatch.StartNew();
+        var ephemeralDirectories = EnumerateEphemeralDirectories(executionDirectory);
+        ephemeralTiming.Stop();
         var cacheSweepFacts = new TerminalGoalSweepCacheSweepFacts(
             branchFactIndex,
-            EnumerateEphemeralDirectories(executionDirectory),
+            ephemeralDirectories,
             cleanupHooks);
         var results = new List<TerminalGoalSweepGoalResult>();
         var sweptGoalIds = new List<GoalId>();
@@ -404,14 +447,18 @@ internal static class TerminalGoalSweep
         var cacheHits = 0;
         var cacheMisses = 0;
         var terminalizedGoalCount = 0;
+        var attentionTiming = System.Diagnostics.Stopwatch.StartNew();
         var resolvedAttentionItemCount = ResolveAttentionForExistingTerminalGoals(
             kernel,
             onlyGoalId,
             attentionStore);
+        attentionTiming.Stop();
+        var mergeEvidenceTiming = System.Diagnostics.Stopwatch.StartNew();
         var integrationEvidenceByGoal = ResolveMergeEvidenceCandidates(
             kernel,
             onlyGoalId,
             integrationEvidenceResolver);
+        mergeEvidenceTiming.Stop();
         GoalId? mergeEvidenceBoundGoalId = null;
         var mergeEvidenceCandidateCount = integrationEvidenceByGoal.Count;
         if (integrationEvidenceByGoal.Count > MaxMergeEvidenceTerminalizationsPerSweep)
@@ -422,6 +469,7 @@ internal static class TerminalGoalSweep
             integrationEvidenceByGoal.Clear();
         }
 
+        var goalsTiming = System.Diagnostics.Stopwatch.StartNew();
         foreach (var originalGoal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {
             var cacheEvidenceKey = string.Empty;
@@ -799,6 +847,7 @@ internal static class TerminalGoalSweep
                 cache.Record(kernel, executionDirectory, currentGoal, currentEvidenceKey, blockers, cacheSweepFacts);
             }
         }
+        goalsTiming.Stop();
 
         cache?.Flush();
         return new TerminalGoalSweepResult(
@@ -809,7 +858,17 @@ internal static class TerminalGoalSweep
             sweptGoalIds,
             terminalizedGoalCount,
             resolvedAttentionItemCount,
-            TerminalizedGoalIds: terminalizedGoalIds);
+            TerminalizedGoalIds: terminalizedGoalIds)
+        {
+            GitIndexDurationMs = gitIndexTiming.ElapsedMilliseconds,
+            EvidenceDurationMs = evidenceTiming.ElapsedMilliseconds,
+            EphemeralDurationMs = ephemeralTiming.ElapsedMilliseconds,
+            AttentionDurationMs = attentionTiming.ElapsedMilliseconds,
+            MergeEvidenceDurationMs = mergeEvidenceTiming.ElapsedMilliseconds,
+            GoalsDurationMs = goalsTiming.ElapsedMilliseconds,
+            GitSpawnCount = gitSpawnCounter.Value,
+            GoalsSweptCount = sweptGoalIds.Count
+        };
     }
 
     private static Dictionary<GoalId, GoalIntegrationEvidence> ResolveMergeEvidenceCandidates(
