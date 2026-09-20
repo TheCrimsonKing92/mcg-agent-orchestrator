@@ -171,14 +171,15 @@ public sealed class LandingExecutorTests
             var (kernel, goal) = CreateVerifiedGoal(repo);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             AddGoalBranchCommit(repo, goalBranch, "src/not-accepted.txt", "goal work");
-            _ = GoalWorktrees.Ensure(repo, goal.Id);
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
             var mainBefore = ReadGit(repo, "rev-parse", "main");
+            var candidate = ReadGit(worktree, "rev-parse", "HEAD")[..8];
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
             Assert.False(result.MainAdvanced);
             var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
-            Assert.Equal("acceptance verification not passed", escalation.Reason);
+            Assert.Equal($"no passed acceptance outcome for candidate {candidate}", escalation.Reason);
             Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
             Assert.False(IsBranchReachableFromMain(repo, goalBranch));
             var inbox = OperatorInbox.Build(
@@ -207,13 +208,15 @@ public sealed class LandingExecutorTests
             var (kernel, unaccepted) = CreateVerifiedGoal(repo);
             var unacceptedBranch = GoalWorktrees.BranchName(unaccepted.Id);
             AddGoalBranchCommit(repo, unacceptedBranch, "src/refused.txt", "must remain off main");
-            _ = GoalWorktrees.Ensure(repo, unaccepted.Id);
+            var unacceptedWorktree = GoalWorktrees.Ensure(repo, unaccepted.Id);
 
             if (attemptUnacceptedGoalFirst)
             {
                 var refused = LandingExecutor.Execute(kernel, unaccepted, workspace);
                 Assert.False(refused.MainAdvanced);
-                Assert.Equal("acceptance verification not passed", Assert.IsType<LandingDecision.Escalate>(refused.Decision).Reason);
+                Assert.Equal(
+                    $"no passed acceptance outcome for candidate {ReadGit(unacceptedWorktree, "rev-parse", "HEAD")[..8]}",
+                    Assert.IsType<LandingDecision.Escalate>(refused.Decision).Reason);
             }
 
             var (siblingKernel, sibling) = CreateVerifiedGoal(repo);
@@ -235,6 +238,85 @@ public sealed class LandingExecutorTests
             Assert.False(
                 GitCli.Run(repo, "cat-file", "-e", "main:src/refused.txt").Succeeded,
                 "The sibling landing carried an unaccepted candidate onto main after that candidate was refused.");
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void PassedCandidateWithProspectiveWaitEscalatesWithHoldDetails()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/pending-evidence.txt", "goal work");
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+            GoalOperationJournal.AcceptancePassed(
+                repo,
+                goal,
+                "conductor:acceptance",
+                ReadGit(worktree, "rev-parse", "HEAD"),
+                ReadGit(repo, "rev-parse", "main"),
+                "passing acceptance for the candidate");
+            var wait = kernel.RequestHumanInput(
+                goal.Id,
+                goal.Tasks.Single().Id,
+                "Observe the accepted candidate.",
+                HumanWaitKind.ProspectiveAcceptanceEvidence);
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.Contains("acceptance passed", escalation.Reason, StringComparison.Ordinal);
+            Assert.Contains(wait.Id.Value[..8], escalation.Reason, StringComparison.Ordinal);
+            Assert.Contains(nameof(HumanWaitKind.ProspectiveAcceptanceEvidence), escalation.Reason, StringComparison.Ordinal);
+            Assert.NotEqual("acceptance verification not passed", escalation.Reason);
+            var inbox = OperatorInbox.Build(
+                kernel,
+                [],
+                WorkerProfileCatalog.Default(),
+                workspace,
+                goal.Id.Value[..8]);
+            var landingEscalation = Assert.Single(inbox.Items.Where(item => item.Kind == OperatorInboxKind.LandingEscalation));
+            Assert.Contains(escalation.Reason, landingEscalation.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void HoldDescriptionCapsPendingWaitIdsAtFive()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (_, kernel, goal) = CreateAcceptedCandidate(repo, "src/bounded-waits.txt");
+            var waits = Enumerable.Range(1, 6)
+                .Select(index => kernel.RequestHumanInput(
+                    goal.Id,
+                    goal.Tasks.Single().Id,
+                    $"Observe candidate condition {index}.",
+                    HumanWaitKind.ProspectiveAcceptanceEvidence))
+                .OrderBy(wait => wait.RequestedAt)
+                .ThenBy(wait => wait.Id.Value, StringComparer.Ordinal)
+                .ToArray();
+
+            var hold = GoalAcceptanceStatusProjector.Build(kernel, goal, repo).AcceptanceHoldDescription;
+
+            Assert.NotNull(hold);
+            Assert.All(waits.Take(5), wait => Assert.Contains(wait.Id.Value[..8], hold, StringComparison.Ordinal));
+            Assert.DoesNotContain(waits[5].Id.Value[..8], hold, StringComparison.Ordinal);
+            Assert.Contains("and 1 more", hold, StringComparison.Ordinal);
         }
         finally
         {
