@@ -288,9 +288,8 @@ public static class WorkerProcessJobs
     private static string? RegistryDbPath;
     private static readonly Func<Process, SpawnProcessIdentityReadResult> ProductionRegistrationIdentityReader =
         BuildRegistrationIdentityReader(ReadIdentityOnce, identityReadDelay: null);
-    private static readonly Func<int, bool> ProductionTryKillPidTree = DefaultTryKillPidTree;
 
-    internal static Func<int, bool> TryKillPidTree { get; set; } = ProductionTryKillPidTree;
+    internal static Func<int, bool> TryKillPidTree { get; set; } = DefaultTryKillPidTree;
 
     public static void ConfigureRegistry(string dbPath)
     {
@@ -1405,27 +1404,6 @@ public static class WorkerProcessJobs
         return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: false, out _);
     }
 
-    internal static bool TryKillOrFallbackForTests(
-        int processId,
-        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
-        Func<IEnumerable<int>, IReadOnlyList<TempRootJanitorOwnedRoot>> snapshotOwnedRoots,
-        Func<int, bool> tryKillPidTree,
-        Func<IEnumerable<TempRootJanitorOwnedRoot>, IReadOnlyList<TempRootJanitorReapResult>> reapOwnedRoots,
-        Action<string> emit)
-    {
-        return TryKillOrFallback(
-            processId,
-            allowProtectedDescendant: false,
-            markRegistryReleased: true,
-            out _,
-            useNativeLivenessPrecheck: true,
-            inspect,
-            snapshotOwnedRoots,
-            tryKillPidTree,
-            reapOwnedRoots,
-            emit);
-    }
-
     internal static bool WasGracefullyDetached(
         string ownerId,
         int processId,
@@ -1452,32 +1430,6 @@ public static class WorkerProcessJobs
         bool markRegistryReleased,
         out WorkerProcessJobAccounting? accounting)
     {
-        var tryKillPidTree = TryKillPidTree;
-        return TryKillOrFallback(
-            processId,
-            allowProtectedDescendant,
-            markRegistryReleased,
-            out accounting,
-            useNativeLivenessPrecheck: ReferenceEquals(tryKillPidTree, ProductionTryKillPidTree),
-            WindowsNativeProcessInspection.Read,
-            TempRootJanitor.SnapshotOwnedRoots,
-            tryKillPidTree,
-            ReapOwnedTempRoots,
-            Console.Error.WriteLine);
-    }
-
-    private static bool TryKillOrFallback(
-        int processId,
-        bool allowProtectedDescendant,
-        bool markRegistryReleased,
-        out WorkerProcessJobAccounting? accounting,
-        bool useNativeLivenessPrecheck,
-        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect,
-        Func<IEnumerable<int>, IReadOnlyList<TempRootJanitorOwnedRoot>> snapshotOwnedRoots,
-        Func<int, bool> tryKillPidTree,
-        Func<IEnumerable<TempRootJanitorOwnedRoot>, IReadOnlyList<TempRootJanitorReapResult>> reapOwnedRoots,
-        Action<string> emit)
-    {
         accounting = null;
         if (!CanKillProcess(processId, allowProtectedDescendant))
         {
@@ -1503,22 +1455,13 @@ public static class WorkerProcessJobs
             }
         }
 
-        if (useNativeLivenessPrecheck &&
-            removal == StaticRegistrationRemoval.Missing &&
-            OperatingSystem.IsWindows() &&
-            IsDefinitelyNotAlive(processId, inspect))
-        {
-            EmitFallbackKillSkipped(processId, emit);
-            return false;
-        }
-
-        var fallbackOwnedTempRoots = snapshotOwnedRoots([processId])
+        var fallbackOwnedTempRoots = TempRootJanitor.SnapshotOwnedRoots([processId])
             .Select(root => root with { CaptureSource = "worker-process-jobs/fallback-kill" })
             .ToArray();
-        var fallbackKilled = tryKillPidTree(processId);
+        var fallbackKilled = TryKillPidTree(processId);
         if (fallbackKilled)
         {
-            EmitTempRootReapResults(reapOwnedRoots(fallbackOwnedTempRoots), emit);
+            EmitTempRootReapResults(ReapOwnedTempRoots(fallbackOwnedTempRoots));
         }
         if (fallbackKilled && markRegistryReleased)
         {
@@ -1526,42 +1469,6 @@ public static class WorkerProcessJobs
         }
 
         return fallbackKilled;
-    }
-
-    private static bool IsDefinitelyNotAlive(
-        int processId,
-        Func<IEnumerable<int>?, WindowsNativeProcessInspection.ProcessInspectionResult> inspect)
-    {
-        WindowsNativeProcessInspection.ProcessInspectionResult inspection;
-        try
-        {
-            inspection = inspect([processId]);
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (inspection.Failure is not null)
-        {
-            return false;
-        }
-
-        return !inspection.Records.TryGetValue(processId, out var process) ||
-               process.Status == ProcessInspectionStatus.Exited;
-    }
-
-    private static void EmitFallbackKillSkipped(int processId, Action<string> emit)
-    {
-        try
-        {
-            emit($"fallback-kill skipped: pid {processId} not alive");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine(
-                $"[WorkerProcessJobs] Failed to emit fallback-kill receipt: {ex.GetType().Name}");
-        }
     }
 
     public static bool TryKillOrFallbackAndWait(int processId, TimeSpan timeout)
