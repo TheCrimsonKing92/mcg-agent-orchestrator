@@ -7,7 +7,23 @@ internal sealed record SpecRefinerPrecedent(
     string ForkKind,
     string Choice,
     string Rationale,
-    DateTimeOffset RecordedAt);
+    DateTimeOffset RecordedAt,
+    string? OriginItemId = null,
+    string? OriginGoalId = null,
+    string? OriginAnswerId = null,
+    int? OriginBriefVersion = null)
+{
+    internal bool HasAnyOriginReference =>
+        OriginItemId is not null ||
+        OriginGoalId is not null ||
+        OriginAnswerId is not null ||
+        OriginBriefVersion is not null;
+
+    internal bool HasCompleteOriginReference =>
+        !string.IsNullOrWhiteSpace(OriginItemId) &&
+        !string.IsNullOrWhiteSpace(OriginGoalId) &&
+        !string.IsNullOrWhiteSpace(OriginAnswerId);
+}
 
 internal sealed class SpecRefinerPrecedentStore
 {
@@ -37,11 +53,23 @@ internal sealed class SpecRefinerPrecedentStore
         string forkKind,
         string choice,
         string rationale,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? originItemId = null,
+        string? originGoalId = null,
+        string? originAnswerId = null,
+        int? originBriefVersion = null)
     {
         var all = (await LoadAllAsync(cancellationToken)).ToList();
         all.RemoveAll(p => string.Equals(p.ForkKind, forkKind, StringComparison.OrdinalIgnoreCase));
-        all.Add(new SpecRefinerPrecedent(forkKind, choice, rationale, DateTimeOffset.UtcNow));
+        all.Add(new SpecRefinerPrecedent(
+            forkKind,
+            choice,
+            rationale,
+            DateTimeOffset.UtcNow,
+            originItemId,
+            originGoalId,
+            originAnswerId,
+            originBriefVersion));
         await SaveAllAsync(all, cancellationToken);
     }
 

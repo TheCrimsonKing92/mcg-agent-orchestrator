@@ -658,6 +658,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                     supersedeGoal.AuthoritativeBrief.Version).GetAwaiter().GetResult();
                 authoritativeText = updated.AuthoritativeAnswer?.Text ?? updated.Resolution!;
                 supersededId = ClarificationId(updated, identityUniverse);
+                RefreshSpecRefinerPrecedentSnapshot(context.Workspace, updated);
             }
             context.CurrentGoal = supersedeGoal;
             Console.WriteLine(
@@ -694,6 +695,42 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         default:
             return null;
+    }
+}
+
+private static void RefreshSpecRefinerPrecedentSnapshot(
+    OrchestratorWorkspace workspace,
+    CollaborationItem clarification)
+{
+    var topicKey = clarification.CorrelationKey is null
+        ? null
+        : GoalRefinementService.ExtractTopicKey(clarification.CorrelationKey);
+    var authoritativeAnswer = clarification.AuthoritativeAnswer;
+    if (string.IsNullOrWhiteSpace(topicKey) ||
+        authoritativeAnswer is null ||
+        string.IsNullOrWhiteSpace(clarification.GoalId))
+    {
+        return;
+    }
+
+    try
+    {
+        new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath)
+            .RecordPrecedentAsync(
+                topicKey,
+                authoritativeAnswer.Text,
+                "Operator clarification answer.",
+                originItemId: clarification.Id,
+                originGoalId: clarification.GoalId,
+                originAnswerId: authoritativeAnswer.Id,
+                originBriefVersion: authoritativeAnswer.BriefVersion)
+            .GetAwaiter()
+            .GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(
+            $"Warning: authoritative answer was superseded, but its reusable precedent snapshot could not be refreshed: {ex.Message}");
     }
 }
 

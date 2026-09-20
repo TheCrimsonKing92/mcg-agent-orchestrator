@@ -1349,6 +1349,12 @@ public sealed class GoalRefinementTests
         var precedent = await precedentStore.TryGetPrecedentAsync("external-contract");
         Xunit.Assert.NotNull(precedent);
         Xunit.Assert.Equal("Stripe", precedent!.Choice);
+        var resolvedItem = Xunit.Assert.Single(collab.Items);
+        var authoritativeAnswer = Xunit.Assert.Single(resolvedItem.AnswerHistory!);
+        Xunit.Assert.Equal(resolvedItem.Id, precedent.OriginItemId);
+        Xunit.Assert.Equal(resolvedItem.GoalId, precedent.OriginGoalId);
+        Xunit.Assert.Equal(authoritativeAnswer.Id, precedent.OriginAnswerId);
+        Xunit.Assert.Equal(authoritativeAnswer.BriefVersion, precedent.OriginBriefVersion);
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_kernel_resolve_falls_back_when_goal_missing")]
@@ -1391,6 +1397,8 @@ public sealed class GoalRefinementTests
         var precedent = await precedentStore.TryGetPrecedentAsync("external-contract");
         Xunit.Assert.NotNull(precedent);
         Xunit.Assert.Equal("Stripe", precedent!.Choice);
+        Xunit.Assert.Equal(resolvedItem.Id, precedent.OriginItemId);
+        Xunit.Assert.Equal(resolvedItem.AuthoritativeAnswer!.Id, precedent.OriginAnswerId);
         Xunit.Assert.Contains("Warning:", warningOutput, StringComparison.Ordinal);
         Xunit.Assert.Contains(correlationKey, warningOutput, StringComparison.Ordinal);
     }
@@ -1432,6 +1440,187 @@ public sealed class GoalRefinementTests
         // The decision should record the precedent answer
         Xunit.Assert.Single(goal.RefinedSpec!.Decisions);
         Xunit.Assert.Equal("Stripe", goal.RefinedSpec!.Decisions[0].Choice);
+        Xunit.Assert.Contains(
+            "Unlinked legacy precedent",
+            goal.RefinedSpec.Decisions[0].Rationale,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_linked_precedent_with_missing_origin_fails_closed")]
+    public async Task LinkedPrecedentWithMissingOriginFailsClosed()
+    {
+        const string json = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "billing-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+        var tempDir = CreateTempDirectory();
+        var precedentStore = new SpecRefinerPrecedentStore(Path.Combine(tempDir, "precedents.json"));
+        await precedentStore.RecordPrecedentAsync(
+            "billing-provider",
+            "A",
+            "Malformed linked guidance.",
+            originItemId: "missing-item");
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: json,
+            precedentStore: precedentStore);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Empty(result.Spec.Decisions);
+        Xunit.Assert.Single(collab.Items);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_superseded_answer_is_authoritative_for_matching_later_fork")]
+    public async Task SupersededAnswerIsAuthoritativeForMatchingLaterFork()
+    {
+        const string matchingJson = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "billing-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+        const string differentTopicJson = """
+            ```json
+            {
+              "behavioralContract": "Integrates with shipping.",
+              "acceptanceCriteria": ["Shipment created"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "shipping-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "UPS or FedEx?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(text: matchingJson, providerName: "fake-refiner")
+        ]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var firstGoal = kernel.CreateGoal("Choose a billing provider");
+        var service = CreateWorkspaceService(workspace, providers);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+
+        await service.RefineAsync(kernel, firstGoal.Id);
+        var firstItem = Xunit.Assert.Single(await store.ListAsync(firstGoal.Id.Value));
+        Xunit.Assert.True(await service.TryResolveOpenClarificationAsync(firstItem.CorrelationKey!, "A"));
+        var superseded = await store.SupersedeClarificationAsync(
+            firstGoal.Id.Value,
+            firstItem.Id,
+            "B",
+            HumanInputAnswerOrigin.Operator,
+            firstGoal.AuthoritativeBrief.Version);
+
+        var secondGoal = kernel.CreateGoal("Choose the same billing provider again");
+        var matchingResult = await service.RefineAsync(kernel, secondGoal.Id);
+        var matchingDecision = Xunit.Assert.Single(matchingResult.Spec.Decisions);
+
+        Xunit.Assert.Equal("B", matchingDecision.Choice);
+        Xunit.Assert.Equal("B", superseded.AuthoritativeAnswer!.Text);
+        Xunit.Assert.Contains(superseded.Id, matchingDecision.Rationale, StringComparison.Ordinal);
+        Xunit.Assert.Contains(superseded.AuthoritativeAnswer.Id, matchingDecision.Rationale, StringComparison.Ordinal);
+        var firstAnswer = Xunit.Assert.Single(superseded.AnswerHistory!, answer => answer.Text == "A");
+        Xunit.Assert.True(firstAnswer.IsRetracted);
+        Xunit.Assert.NotNull(firstAnswer.SupersededByAnswerId);
+
+        await new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath)
+            .RecordPrecedentAsync(
+                "billing-provider",
+                "A",
+                "Legacy snapshot restored during rollback.");
+        var rollbackGoal = kernel.CreateGoal("Choose the billing provider after snapshot rollback");
+        var rollbackResult = await service.RefineAsync(kernel, rollbackGoal.Id);
+        var rollbackDecision = Xunit.Assert.Single(rollbackResult.Spec.Decisions);
+        Xunit.Assert.Equal("B", rollbackDecision.Choice);
+        Xunit.Assert.Contains(
+            superseded.AuthoritativeAnswer.Id,
+            rollbackDecision.Rationale,
+            StringComparison.Ordinal);
+
+        var differentProviders = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(text: differentTopicJson, providerName: "fake-refiner")
+        ]);
+        var thirdGoal = kernel.CreateGoal("Choose a shipping provider");
+        var differentResult = await CreateWorkspaceService(workspace, differentProviders)
+            .RefineAsync(kernel, thirdGoal.Id);
+
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, differentResult.Outcome);
+        Xunit.Assert.Empty(differentResult.Spec.Decisions);
+        Xunit.Assert.Single(await store.ListAsync(thirdGoal.Id.Value));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_linked_precedent_remains_applicable_after_origin_brief_revision")]
+    public async Task LinkedPrecedentRemainsApplicableAfterOriginBriefRevision()
+    {
+        const string matchingJson = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "billing-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(text: matchingJson, providerName: "fake-refiner")
+        ]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var originGoal = kernel.CreateGoal("Choose a billing provider.");
+        var service = CreateWorkspaceService(workspace, providers);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+
+        await service.RefineAsync(kernel, originGoal.Id);
+        var originItem = Xunit.Assert.Single(await store.ListAsync(originGoal.Id.Value));
+        Xunit.Assert.True(await service.TryResolveOpenClarificationAsync(
+            kernel,
+            originItem.CorrelationKey!,
+            "A"));
+        var authoritativeAnswer = Xunit.Assert.Single(
+            await store.ListAsync(originGoal.Id.Value)).AuthoritativeAnswer;
+        Xunit.Assert.NotNull(authoritativeAnswer);
+        kernel.ReviseGoalBrief(
+            originGoal.Id,
+            "Choose a billing provider under the revised compliance constraints.",
+            "Clarify the compliance basis without replacing the provider answer.");
+        var laterGoal = kernel.CreateGoal("Choose the same billing provider again.");
+
+        var result = await service.RefineAsync(kernel, laterGoal.Id);
+
+        var decision = Xunit.Assert.Single(result.Spec.Decisions);
+        Xunit.Assert.Equal(2, originGoal.AuthoritativeBrief.Version);
+        Xunit.Assert.Equal(1, authoritativeAnswer.BriefVersion);
+        Xunit.Assert.Equal("A", decision.Choice);
+        Xunit.Assert.Contains("brief: 1", decision.Rationale, StringComparison.Ordinal);
+        Xunit.Assert.Empty(await store.ListAsync(laterGoal.Id.Value));
     }
 
     // --- HasOpenClarification static helper ---
