@@ -2038,8 +2038,8 @@ internal sealed partial class ConductorBatchLoop
 
     private static string FormatSweepCacheDetail(TerminalGoalSweepResult? result) =>
         result is null
-            ? string.Empty
-            : $" sweep_cache_hits={result.CacheHitCount} sweep_cache_misses={result.CacheMissCount}";
+            ? " sweep_git_index_ms=0 sweep_evidence_ms=0 sweep_ephemeral_ms=0 sweep_attention_ms=0 sweep_merge_evidence_ms=0 sweep_goals_ms=0 sweep_git_spawns=0 sweep_goals_swept=0"
+            : $" sweep_cache_hits={result.CacheHitCount} sweep_cache_misses={result.CacheMissCount} sweep_git_index_ms={result.GitIndexDurationMs} sweep_evidence_ms={result.EvidenceDurationMs} sweep_ephemeral_ms={result.EphemeralDurationMs} sweep_attention_ms={result.AttentionDurationMs} sweep_merge_evidence_ms={result.MergeEvidenceDurationMs} sweep_goals_ms={result.GoalsDurationMs} sweep_git_spawns={result.GitSpawnCount} sweep_goals_swept={result.GoalsSweptCount}";
 
     private static HashSet<string> GetCompletedGoalIds(AgentOrchestratorKernel kernel) =>
         kernel.Goals

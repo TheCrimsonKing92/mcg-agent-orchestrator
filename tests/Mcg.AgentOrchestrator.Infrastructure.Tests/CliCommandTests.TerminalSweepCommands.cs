@@ -1958,6 +1958,57 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
+
+    [Xunit.Fact]
+    public void SweepTelemetry_CountsGitSpawnsAndTimesEachPhase()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var completedTask = new TaskSpec(TaskId.New(), "Complete work", AgentRole.Developer);
+            var completed = kernel.CreateGoal("Completed with unmerged branch", [completedTask]);
+            cleanupGoalId = completed.Id;
+            kernel.ActivateGoal(completed.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(completed.Id, completedTask.Id, new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, completed.Id, "src/measured.txt", "goal work");
+            kernel = WithGoalStatus(kernel, completed.Id, GoalStatus.Completed);
+            var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Cancelled goal");
+            kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
+            kernel.CancelGoal(cancelled.Id, "Test fixture: goal cancelled.");
+            _ = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Active goal");
+            var observedGitSpawns = 0;
+            GitCli.GitResult CountingGitRunner(string workingDirectory, IReadOnlyList<string> arguments)
+            {
+                Interlocked.Increment(ref observedGitSpawns);
+                return StableGitRunner(workingDirectory, arguments);
+            }
+
+            var phaseTiming = Stopwatch.StartNew();
+            var result = RunSweep(kernel, root, gitRunner: CountingGitRunner);
+            phaseTiming.Stop();
+
+            Assert.Equal(observedGitSpawns, result.GitSpawnCount);
+            Assert.Equal(3, result.GoalsSweptCount);
+            Assert.Equal(result.ExplicitlySweptGoalIds.Count, result.GoalsSweptCount);
+            var durations = new[]
+            {
+                result.GitIndexDurationMs,
+                result.EvidenceDurationMs,
+                result.EphemeralDurationMs,
+                result.AttentionDurationMs,
+                result.MergeEvidenceDurationMs,
+                result.GoalsDurationMs
+            };
+            Assert.All(durations, duration => Assert.True(duration >= 0));
+            Assert.True(durations.Sum() <= phaseTiming.ElapsedMilliseconds);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
     [Xunit.Fact]
     public void Resolver_RepeatedGoalAtSameMain_ProbesAncestryOnce()
     {
