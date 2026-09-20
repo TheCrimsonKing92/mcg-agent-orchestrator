@@ -2,6 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(CliTestCollections.ConsoleSerialized)]
 public sealed class CliGoalUnparkConflictTests : CliGoalUnparkTestSupport
 {
     [Xunit.Fact]

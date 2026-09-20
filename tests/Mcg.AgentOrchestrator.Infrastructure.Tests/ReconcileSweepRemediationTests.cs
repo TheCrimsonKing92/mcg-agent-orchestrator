@@ -2,7 +2,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Configuration;
 using System.Text.Json.Nodes;
 
 public sealed class ReconcileSweepRemediationTests
@@ -461,13 +460,11 @@ public sealed class ReconcileSweepRemediationTests
     {
         var values = new Dictionary<string, string?>
         {
-            ["ReconcileSweep:AutoRemediationAllowlist:0"] = string.Empty,
-            ["ReconcileSweep:MaximumAttempts"] = "2",
-            ["ReconcileSweep:HeartbeatInterval"] = "00:10:00"
+            ["MaximumAttempts"] = "2",
+            ["HeartbeatInterval"] = "00:10:00"
         };
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
-        var options = ReconcileSweepConfiguration.Read(configuration.GetSection("ReconcileSweep"));
+        var options = ReconcileSweepConfiguration.Read(values, allowlistConfigured: true);
 
         Xunit.Assert.Empty(options.AutoRemediationAllowlist);
         Xunit.Assert.Equal(2, options.MaximumAttempts);

@@ -50,7 +50,7 @@ public sealed class DashboardHostTests
         var task = goal.Tasks.Single();
         var port = GetAvailablePort();
         var url = $"http://localhost:{port}/";
-        var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
+        var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Dashboard", "Mcg.AgentOrchestrator.Dashboard.csproj");
         using var process = StartDashboardProcess(appProject, root, "simple-hosted-dashboard", url);
 
         try
@@ -165,7 +165,7 @@ public sealed class DashboardHostTests
         SeedSpecRefinerBinding(OrchestratorWorkspace.ForDirectory(PrototypeWorkspaceSeeder.GetWorkspacePath(root), root));
         var port = GetAvailablePort();
         var url = $"http://localhost:{port}/";
-        var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
+        var appProject = Path.Combine(FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Dashboard", "Mcg.AgentOrchestrator.Dashboard.csproj");
         using var process = StartPrototypeDashboardProcess(appProject, root, url);
 
         try
@@ -391,7 +391,9 @@ public sealed class DashboardHostTests
                 Assert.Equal("/api/system/stop-dashboard", cleanupDocument.RootElement.GetProperty("StopCurrentUrl").GetString());
                 Assert.Equal("/api/system/run-build-test-cycle", cleanupDocument.RootElement.GetProperty("RunBuildTestCycleUrl").GetString());
                 Assert.Contains("Invoke-IsolatedDotnet.ps1 build Mcg.AgentOrchestrator.sln --no-restore --verbosity minimal", cleanupPlan, StringComparison.Ordinal);
-                Assert.Contains("Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln", cleanupPlan, StringComparison.Ordinal);
+                Assert.Equal(
+                    ".\\scripts\\Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln",
+                    cleanupDocument.RootElement.GetProperty("TestCommand").GetString());
                 Assert.Contains("Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue", cleanupPlan, StringComparison.Ordinal);
                 Assert.Contains("Invoke-DashboardBuildTestCycle.ps1", cleanupPlan, StringComparison.Ordinal);
             }

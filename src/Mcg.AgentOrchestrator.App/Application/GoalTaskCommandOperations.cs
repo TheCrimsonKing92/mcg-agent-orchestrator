@@ -9,13 +9,18 @@ namespace Mcg.AgentOrchestrator.App.Application;
 /// cancelling its process, recording verification, and enqueueing an operator intent. Request
 /// parsing, status-code selection and response shaping stay with the calling transport adapter.
 /// </summary>
-internal sealed class GoalTaskCommandOperations
+public sealed class GoalTaskCommandOperations
 {
     private readonly GoalDispatchOperations _dispatch;
 
-    public GoalTaskCommandOperations(GoalDispatchOperations? dispatch = null)
+    public GoalTaskCommandOperations()
+        : this(new GoalDispatchOperations())
     {
-        _dispatch = dispatch ?? new GoalDispatchOperations();
+    }
+
+    internal GoalTaskCommandOperations(GoalDispatchOperations dispatch)
+    {
+        _dispatch = dispatch;
     }
 
     public void RecordDispatch(

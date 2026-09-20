@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum GoalOperationStatus
+public enum GoalOperationStatus
 {
     Begin,
     Completed,
@@ -17,7 +17,7 @@ internal enum GoalOperationStatus
     Aborted
 }
 
-internal sealed record GoalOperationJournalEntry(
+public sealed record GoalOperationJournalEntry(
     string IdempotencyKey,
     GoalId GoalId,
     string Operation,
@@ -77,7 +77,7 @@ internal sealed record AcceptanceRetryAuditPayload(
     int OperatorRegateCount,
     DateTimeOffset AcceptanceFailureOccurredAt);
 
-internal sealed record GoalOperationJournalSummary(
+public sealed record GoalOperationJournalSummary(
     string Path,
     IReadOnlyList<GoalOperationJournalEntry> Entries,
     IReadOnlyList<GoalOperationJournalEntry> LatestByOperation,

@@ -5,14 +5,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum GoalReadinessSeverity
+public enum GoalReadinessSeverity
 {
     Info,
     Warning,
     Blocker
 }
 
-internal enum GoalReadinessRecommendation
+public enum GoalReadinessRecommendation
 {
     Proceed,
     UseFiveRoleGoal,
@@ -22,13 +22,13 @@ internal enum GoalReadinessRecommendation
     Blocked
 }
 
-internal sealed record GoalReadinessFinding(
+public sealed record GoalReadinessFinding(
     GoalReadinessSeverity Severity,
     string Kind,
     string Message,
     bool CanOverride);
 
-internal sealed record GoalTaskReadiness(
+public sealed record GoalTaskReadiness(
     int TaskNumber,
     TaskId TaskId,
     AgentRole Role,
@@ -37,7 +37,7 @@ internal sealed record GoalTaskReadiness(
     bool HasAssignedAgent,
     IReadOnlyList<string> FileScopes);
 
-internal sealed record GoalReadinessPreflightReport(
+public sealed record GoalReadinessPreflightReport(
     GoalId GoalId,
     string Objective,
     GoalStatus Status,
@@ -55,7 +55,7 @@ internal sealed record GoalReadinessPreflightReport(
         !HasHardBlockers && (!RequiresOperatorConfirmation || confirmed);
 }
 
-internal static class GoalReadinessPreflight
+public static class GoalReadinessPreflight
 {
     private static readonly string[] HighRiskSignals =
     [

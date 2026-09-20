@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record GoalRecoveryReport(
+public sealed record GoalRecoveryReport(
     GoalId GoalId,
     string Objective,
     GoalStatus Status,
@@ -22,7 +22,7 @@ internal sealed record GoalRecoveryReport(
     IReadOnlyList<GoalRecoveryTaskFinding> TaskFindings,
     IReadOnlyList<string> RecommendedActions);
 
-internal sealed record GoalRecoveryTaskFinding(
+public sealed record GoalRecoveryTaskFinding(
     int TaskNumber,
     TaskId TaskId,
     AgentRole Role,
@@ -31,7 +31,7 @@ internal sealed record GoalRecoveryTaskFinding(
     string SuggestedCommand,
     DispatchRecoveryDecision? RecoveryDecision = null);
 
-internal static class GoalRecoveryPlanner
+public static class GoalRecoveryPlanner
 {
     public static GoalRecoveryReport Build(
         AgentOrchestratorKernel kernel,

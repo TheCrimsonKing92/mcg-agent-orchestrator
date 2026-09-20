@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -35,12 +34,21 @@ internal static class ReconcileSweepConfiguration
     public static ReconcileSweepOptions Load(string basePath)
     {
         var settingsPath = Path.Combine(basePath, "appsettings.json");
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(basePath)
-            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
-            .AddEnvironmentVariables()
-            .Build();
-        var options = Read(configuration.GetSection("ReconcileSweep"));
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(settingsPath))
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
+            if (document.RootElement.TryGetProperty("ReconcileSweep", out var section))
+            {
+                foreach (var property in section.EnumerateObject().Where(property => property.Value.ValueKind != JsonValueKind.Array))
+                    values[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString()
+                        : property.Value.ToString();
+            }
+        }
+        OverlayEnvironment(values, "MaximumAttempts");
+        OverlayEnvironment(values, "HeartbeatInterval");
+        var options = Read(values);
         if (TryReadConfiguredAllowlist(settingsPath, out var configuredAllowlist))
         {
             options = options with { AutoRemediationAllowlist = configuredAllowlist };
@@ -48,27 +56,30 @@ internal static class ReconcileSweepConfiguration
         return options.Validate();
     }
 
-    internal static ReconcileSweepOptions Read(IConfiguration section)
+    internal static ReconcileSweepOptions Read(
+        IReadOnlyDictionary<string, string?> values,
+        bool allowlistConfigured = false,
+        IReadOnlySet<string>? allowlist = null)
     {
         var defaults = ReconcileSweepOptions.Default;
-        var allowlistSection = section.GetSection("AutoRemediationAllowlist");
-        var configuredKinds = allowlistSection.GetChildren()
-            .Select(child => child.Value?.Trim())
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Cast<string>()
-            .ToHashSet(StringComparer.Ordinal);
-        var hasConfiguredAllowlist = allowlistSection.Exists();
-        var maximumAttempts = ReadInt(section, "MaximumAttempts", defaults.MaximumAttempts);
-        var heartbeatInterval = ReadTimeSpan(section, "HeartbeatInterval", defaults.HeartbeatInterval);
+        var maximumAttempts = ReadInt(values, "MaximumAttempts", defaults.MaximumAttempts);
+        var heartbeatInterval = ReadTimeSpan(values, "HeartbeatInterval", defaults.HeartbeatInterval);
         return new ReconcileSweepOptions(
-            hasConfiguredAllowlist ? configuredKinds : defaults.AutoRemediationAllowlist,
+            allowlistConfigured ? allowlist ?? new HashSet<string>(StringComparer.Ordinal) : defaults.AutoRemediationAllowlist,
             maximumAttempts,
             heartbeatInterval).Validate();
     }
 
-    private static int ReadInt(IConfiguration section, string key, int fallback)
+    private static void OverlayEnvironment(IDictionary<string, string?> values, string key)
     {
-        var value = section[key];
+        var value = Environment.GetEnvironmentVariable($"ReconcileSweep__{key}");
+        if (value is not null)
+            values[key] = value;
+    }
+
+    private static int ReadInt(IReadOnlyDictionary<string, string?> values, string key, int fallback)
+    {
+        values.TryGetValue(key, out var value);
         if (string.IsNullOrWhiteSpace(value))
         {
             return fallback;
@@ -79,9 +90,9 @@ internal static class ReconcileSweepConfiguration
             : throw new InvalidOperationException($"ReconcileSweep:{key} must be an integer.");
     }
 
-    private static TimeSpan ReadTimeSpan(IConfiguration section, string key, TimeSpan fallback)
+    private static TimeSpan ReadTimeSpan(IReadOnlyDictionary<string, string?> values, string key, TimeSpan fallback)
     {
-        var value = section[key];
+        values.TryGetValue(key, out var value);
         if (string.IsNullOrWhiteSpace(value))
         {
             return fallback;

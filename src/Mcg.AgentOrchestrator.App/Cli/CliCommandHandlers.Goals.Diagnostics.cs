@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
@@ -421,6 +420,6 @@ private static bool TryResolveIntegrationCommitAuthoredAt(
 private static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal)
 {
     var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, goal));
-    return DashboardResponseMapper.GoalStatusText(goal.Status, lifecycle);
+    return ApplicationGoalStatusText.Resolve(goal.Status, lifecycle);
 }
 }

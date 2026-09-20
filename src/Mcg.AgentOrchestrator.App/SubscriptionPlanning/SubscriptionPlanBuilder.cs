@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 
-internal sealed record SubscriptionPlan(
+public sealed record SubscriptionPlan(
     string GoalId,
     string Objective,
     GoalStatus Status,
@@ -21,7 +21,7 @@ internal sealed record SubscriptionPlan(
     IReadOnlyList<SubscriptionProviderBudgetSummary> ProviderBudgets,
     IReadOnlyList<SubscriptionPlanItem> Items);
 
-internal sealed record SubscriptionProviderBudgetSummary(
+public sealed record SubscriptionProviderBudgetSummary(
     string ProviderName,
     int TaskCount,
     int ReadyCount,
@@ -33,7 +33,7 @@ internal sealed record SubscriptionProviderBudgetSummary(
     int? SourceTaskNumber,
     string Detail);
 
-internal enum ProviderCapacityDisposition
+public enum ProviderCapacityDisposition
 {
     Ready,
     Deferred,
@@ -41,7 +41,7 @@ internal enum ProviderCapacityDisposition
     Review
 }
 
-internal sealed record ProviderCapacitySchedule(
+public sealed record ProviderCapacitySchedule(
     ProviderCapacityDisposition Disposition,
     string Recommendation,
     int ReadyNowCount,
@@ -50,7 +50,7 @@ internal sealed record ProviderCapacitySchedule(
     bool HasCostRisk,
     IReadOnlyList<ProviderCapacityAction> Actions);
 
-internal sealed record ProviderCapacityAction(
+public sealed record ProviderCapacityAction(
     int TaskNumber,
     string TaskId,
     string? ProviderName,
@@ -59,20 +59,20 @@ internal sealed record ProviderCapacityAction(
     string Recommendation,
     IReadOnlyList<string> Alternatives);
 
-internal enum WorkerRouteDisposition
+public enum WorkerRouteDisposition
 {
     Selected,
     Deferred,
     Blocked
 }
 
-internal sealed record WorkerRouteDecision(
+public sealed record WorkerRouteDecision(
     WorkerRouteDisposition Disposition,
     string Recommendation,
     IReadOnlyList<string> Reasons,
     IReadOnlyList<string> Alternatives);
 
-internal sealed record SubscriptionPlanModelSummary(
+public sealed record SubscriptionPlanModelSummary(
     string ProviderName,
     string ModelName,
     int ReadyCount,
@@ -89,7 +89,7 @@ internal sealed record SubscriptionPlanModelSummary(
     string? ModelFitRecommendation = null,
     bool UsesComplexModel = false);
 
-internal sealed record SubscriptionPlanItem(
+public sealed record SubscriptionPlanItem(
     int TaskNumber,
     string TaskId,
     AgentRole Role,
@@ -122,7 +122,7 @@ internal sealed record SubscriptionPlanItem(
     WorkerRouteDecision? Route = null,
     string? ReasoningEffortReason = null);
 
-internal static class SubscriptionPlanBuilder
+public static class SubscriptionPlanBuilder
 {
     public static SubscriptionPlan Build(
         Goal goal,

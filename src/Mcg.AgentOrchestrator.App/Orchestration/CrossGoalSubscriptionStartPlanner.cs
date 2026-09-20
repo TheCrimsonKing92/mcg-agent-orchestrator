@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record CrossGoalSubscriptionStartPlan(
+public sealed record CrossGoalSubscriptionStartPlan(
     IReadOnlyList<CrossGoalSubscriptionStartCandidate> Candidates,
     ParallelExecutionPlan ParallelPlan)
 {
@@ -16,7 +16,7 @@ internal sealed record CrossGoalSubscriptionStartPlan(
                 .ToList();
 }
 
-internal sealed record CrossGoalSubscriptionStartCandidate(
+public sealed record CrossGoalSubscriptionStartCandidate(
     string GoalId,
     string GoalPrefix,
     string Objective,
@@ -30,7 +30,7 @@ internal sealed record CrossGoalSubscriptionStartCandidate(
     string Detail,
     RepositoryScopeConfidence ScopeConfidence);
 
-internal static class CrossGoalSubscriptionStartPlanner
+public static class CrossGoalSubscriptionStartPlanner
 {
     public static CrossGoalSubscriptionStartPlan Build(
         AgentOrchestratorKernel kernel,

@@ -6,6 +6,12 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using ApplicationGoalMonitoringBatchDto = Mcg.AgentOrchestrator.App.Application.GoalMonitoringBatch;
+using ApplicationGoalMonitoringEventDto = Mcg.AgentOrchestrator.App.Application.GoalMonitoringEvent;
+using ApplicationGoalMonitoringSnapshotDto = Mcg.AgentOrchestrator.App.Application.GoalMonitoringSnapshot;
+using ApplicationQueryMonitorDto = Mcg.AgentOrchestrator.App.Application.QueryMonitorSnapshot;
+using ApplicationQueryProviderCapacityDto = Mcg.AgentOrchestrator.App.Application.QueryProviderCapacity;
+using ApplicationTaskMonitoringSnapshotDto = Mcg.AgentOrchestrator.App.Application.TaskMonitoringSnapshot;
 
 public sealed class GoalMonitoringSubscriptionCommandTests
 {
@@ -213,46 +219,25 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     public void MonitorGoalPrintsCompactSnapshotAndTimelineLines()
     {
         var observedAt = new DateTimeOffset(2026, 6, 13, 1, 0, 0, TimeSpan.Zero);
-        var batch = new GoalMonitoringBatchDto(
+        var batch = new ApplicationGoalMonitoringBatchDto(
             "abc12345",
             0,
             7,
-            new GoalMonitoringSnapshotDto(
+            new ApplicationGoalMonitoringSnapshotDto(
                 "abc12345",
                 observedAt,
                 7,
-                new MonitorDto(
-                    "abc12345",
-                    "Add monitoring",
-                    GoalStatus.Active,
-                    2,
-                    [],
-                    0,
-                    [],
-                    observedAt),
+                new ApplicationQueryMonitorDto(nameof(GoalStatus.Active), []),
                 [
-                    new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null),
-                    new TaskMonitoringSnapshotDto(2, "task2", AgentRole.Tester, WorkTaskStatus.Running, null, null)
+                    new ApplicationTaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null),
+                    new ApplicationTaskMonitoringSnapshotDto(2, "task2", AgentRole.Tester, WorkTaskStatus.Running, null, null)
                 ],
-                ProviderCapacity: new ProviderCapacityScheduleDto(
+                ProviderCapacity: new ApplicationQueryProviderCapacityDto(
                     ProviderCapacityDisposition.Deferred,
-                    "Wait for retry-after or route to another provider.",
                     0,
-                    1,
-                    observedAt.AddMinutes(30),
-                    false,
-                    [
-                        new ProviderCapacityActionDto(
-                            2,
-                            "task2",
-                            "OpenAI",
-                            ProviderCapacityDisposition.Deferred,
-                            observedAt.AddMinutes(30),
-                            "Retry later.",
-                            ["Route to a different provider profile."])
-                    ])),
+                    1)),
             [
-                new GoalMonitoringEventDto(
+                new ApplicationGoalMonitoringEventDto(
                     7,
                     "timeline",
                     "abc12345",
@@ -280,28 +265,17 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     public void MonitorGoalSnapshotPrefersVisibleLifecycleStatusText()
     {
         var observedAt = new DateTimeOffset(2026, 6, 13, 1, 0, 0, TimeSpan.Zero);
-        var batch = new GoalMonitoringBatchDto(
+        var batch = new ApplicationGoalMonitoringBatchDto(
             "abc12345",
             0,
             7,
-            new GoalMonitoringSnapshotDto(
+            new ApplicationGoalMonitoringSnapshotDto(
                 "abc12345",
                 observedAt,
                 7,
-                new MonitorDto(
-                    "abc12345",
-                    "Cleaned goal",
-                    GoalStatus.Completed,
-                    1,
-                    [],
-                    0,
-                    [],
-                    observedAt)
-                {
-                    StatusText = "CleanedUp"
-                },
+                new ApplicationQueryMonitorDto("CleanedUp", []),
                 [
-                    new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
+                    new ApplicationTaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
                 ]),
             [],
             "/api/goals/abc12345/events/stream");
@@ -318,25 +292,17 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     public void MonitorGoalPrintsCompactSnapshotGoalLabelWhenPresent()
     {
         var observedAt = new DateTimeOffset(2026, 6, 13, 1, 0, 0, TimeSpan.Zero);
-        var batch = new GoalMonitoringBatchDto(
+        var batch = new ApplicationGoalMonitoringBatchDto(
             "abc12345",
             0,
             7,
-            new GoalMonitoringSnapshotDto(
+            new ApplicationGoalMonitoringSnapshotDto(
                 "abc12345",
                 observedAt,
                 7,
-                new MonitorDto(
-                    "abc12345",
-                    "Add monitoring",
-                    GoalStatus.Active,
-                    1,
-                    [],
-                    0,
-                    [],
-                    observedAt),
+                new ApplicationQueryMonitorDto(nameof(GoalStatus.Active), []),
                 [
-                    new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
+                    new ApplicationTaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
                 ]),
             [],
             "/api/goals/abc12345/events/stream");
@@ -359,7 +325,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         var backlogItem = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Production backlog title");
         kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
         kernel.ActivateGoal(goal.Id, []);
-        var batch = GoalMonitoringStream.BuildBatch(
+        var batch = Mcg.AgentOrchestrator.App.Application.GoalMonitoringQuery.BuildBatch(
             kernel,
             kernel.GetGoal(goal.Id),
             0,
@@ -379,25 +345,17 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     public void MonitorGoalPrintsCompactSnapshotWithoutGoalLabelWhenAbsent()
     {
         var observedAt = new DateTimeOffset(2026, 6, 13, 1, 0, 0, TimeSpan.Zero);
-        var batch = new GoalMonitoringBatchDto(
+        var batch = new ApplicationGoalMonitoringBatchDto(
             "abc12345",
             0,
             7,
-            new GoalMonitoringSnapshotDto(
+            new ApplicationGoalMonitoringSnapshotDto(
                 "abc12345",
                 observedAt,
                 7,
-                new MonitorDto(
-                    "abc12345",
-                    "Add monitoring",
-                    GoalStatus.Active,
-                    1,
-                    [],
-                    0,
-                    [],
-                    observedAt),
+                new ApplicationQueryMonitorDto(nameof(GoalStatus.Active), []),
                 [
-                    new TaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
+                    new ApplicationTaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
                 ]),
             [],
             "/api/goals/abc12345/events/stream");
@@ -413,7 +371,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     [Xunit.Fact(DisplayName = "Monitor_goal_reads_server_sent_events")]
     public async Task MonitorGoalReadsServerSentEvents()
     {
-        var payload = new GoalMonitoringEventDto(
+        var payload = new ApplicationGoalMonitoringEventDto(
             3,
             "timeline",
             "abc12345",
@@ -486,6 +444,38 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.True(timelineIndex > snapshotIndex);
         Assert.Contains("event: task.status", text);
         Assert.Contains("Started local work.", text);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_ambiguous_prefix_emits_error_event")]
+    public async Task MonitorGoalLocalAmbiguousPrefixEmitsErrorEvent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        for (var index = 0; index < 17; index++)
+        {
+            kernel.CreateGoal(
+                $"Ambiguous monitor goal {index}",
+                [new TaskSpec(TaskId.New(), $"Task {index}", AgentRole.Developer)]);
+        }
+
+        var ambiguousPrefix = kernel.Goals
+            .GroupBy(goal => goal.Id.Value[..1], StringComparer.OrdinalIgnoreCase)
+            .First(group => group.Count() > 1)
+            .Key;
+        using var output = new StringWriter();
+
+        var exception = await Record.ExceptionAsync(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", ambiguousPrefix, "--once"],
+            output,
+            kernel,
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.Null(exception);
+        Assert.Contains("event: monitor.error", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("is ambiguous", output.ToString(), StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Monitor_goal_local_ndjson_resumes_from_cursor")]
@@ -831,7 +821,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         {"pid":123,"childPid":456,"ownedPids":[123,456],"state":"running","lastObservedAt":"2026-06-12T20:00:30Z","lastProgressAt":"2026-06-12T20:00:20Z","stdoutBytes":2,"stderrBytes":0,"ownedCpuMs":10}
         """);
         kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process, verification: null);
-        var batch = GoalMonitoringStream.BuildBatch(
+        var batch = Mcg.AgentOrchestrator.App.Application.GoalMonitoringQuery.BuildBatch(
             kernel,
             kernel.GetGoal(goal.Id),
             sinceEventId: 0,
@@ -1469,6 +1459,60 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Assert.Contains("\"Code\": \"goal_not_found\"", text);
     }
 
+    [Xunit.Fact(DisplayName = "Goals_subscribe_unknown_goal_propagates_resolution_failure")]
+    public async Task GoalsSubscribeUnknownGoalPropagatesResolutionFailure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        using var output = new StringWriter();
+
+        await Xunit.Assert.ThrowsAsync<KeyNotFoundException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["goals", "subscribe", "--goal-prefix", "missing"],
+            output,
+            new AgentOrchestratorKernel(),
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.DoesNotContain("event: monitor.error", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_human_unknown_goal_propagates_resolution_failure")]
+    public async Task MonitorGoalLocalHumanUnknownGoalPropagatesResolutionFailure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        using var output = new StringWriter();
+
+        await Xunit.Assert.ThrowsAsync<KeyNotFoundException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", "missing", "--once", "--format", "human"],
+            output,
+            new AgentOrchestratorKernel(),
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.DoesNotContain("event: monitor.error", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Monitor_goal_local_wait_terminal_unknown_goal_propagates_resolution_failure")]
+    public async Task MonitorGoalLocalWaitTerminalUnknownGoalPropagatesResolutionFailure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        using var output = new StringWriter();
+
+        await Xunit.Assert.ThrowsAsync<KeyNotFoundException>(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", "missing", "--wait-terminal", "--format", "ndjson"],
+            output,
+            new AgentOrchestratorKernel(),
+            workspace,
+            [],
+            WorkerProfileCatalog.Default()));
+
+        Assert.DoesNotContain("event: monitor.error", output.ToString(), StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Goal_monitoring_stream_continuous_emits_initial_snapshot_before_poll_interval")]
     public async Task GoalMonitoringStreamContinuousEmitsInitialSnapshotBeforePollInterval()
     {
@@ -1543,26 +1587,18 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         File.WriteAllText(Path.Combine(path, ".git"), "gitdir: test");
     }
 
-    private static GoalMonitoringBatchDto BuildEmptyMonitoringBatch(Goal goal)
+    private static ApplicationGoalMonitoringBatchDto BuildEmptyMonitoringBatch(Goal goal)
     {
         var observedAt = DateTimeOffset.UnixEpoch;
-        return new GoalMonitoringBatchDto(
+        return new ApplicationGoalMonitoringBatchDto(
             goal.Id.Value,
             0,
             1,
-            new GoalMonitoringSnapshotDto(
+            new ApplicationGoalMonitoringSnapshotDto(
                 goal.Id.Value,
                 observedAt,
                 1,
-                new MonitorDto(
-                    goal.Id.Value,
-                    goal.Objective,
-                    goal.Status,
-                    goal.Tasks.Count,
-                    [],
-                    0,
-                    [],
-                    observedAt),
+                new ApplicationQueryMonitorDto(goal.Status.ToString(), []),
                 []),
             [],
             "/events/stream");

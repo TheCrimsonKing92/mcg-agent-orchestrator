@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record GoalDrainPolicy(
+public sealed record GoalDrainPolicy(
     string Name,
     int MaxSubscriptionStartsPerDrain,
     IReadOnlyList<string> AllowedRoles,
@@ -68,7 +68,7 @@ internal sealed record GoalDrainPolicy(
     }
 }
 
-internal sealed record GoalDrainTimeWindow(TimeOnly Start, TimeOnly End)
+public sealed record GoalDrainTimeWindow(TimeOnly Start, TimeOnly End)
 {
     public bool Contains(TimeOnly time)
     {
@@ -85,12 +85,12 @@ internal sealed record GoalDrainTimeWindow(TimeOnly Start, TimeOnly End)
     public override string ToString() => $"{Start:HH:mm}-{End:HH:mm}";
 }
 
-internal sealed record GoalDrainScheduleDecision(
+public sealed record GoalDrainScheduleDecision(
     bool IsOpen,
     string Detail,
     DateTime? NextAllowedLocalStart);
 
-internal static class GoalDrainPolicyStore
+public static class GoalDrainPolicyStore
 {
     public const string FileName = "drain-policy.json";
     private static readonly JsonSerializerOptions JsonOptions = new()

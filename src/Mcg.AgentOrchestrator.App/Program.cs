@@ -91,6 +91,12 @@ catch (ArgumentException ex)
     return 1;
 }
 
+var commandCapability = CliCommandCapabilities.Classify(startupArgs);
+if (commandCapability == CliCommandCapability.DashboardHost)
+{
+    return OptionalDashboardHostLauncher.Run(args);
+}
+
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
 // that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
 // a Git repository root so .orchestrator is rooted with the target repo regardless of launch CWD.
@@ -242,14 +248,18 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-var providers = ProviderRegistryFactory.CreateDefaultProviders();
-var agentFallback = ProviderRegistryFactory.IsLlamaCppReachable() ? AgentCatalog.LlamaCppDefault() : null;
+var providers = commandCapability == CliCommandCapability.Execution
+    ? ProviderRegistryFactory.CreateDefaultProviders()
+    : new InMemoryModelProviderRegistry([]);
+var agentFallback = commandCapability == CliCommandCapability.Execution && ProviderRegistryFactory.IsLlamaCppReachable()
+    ? AgentCatalog.LlamaCppDefault()
+    : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
 var operatorBotToken = OperatorChannelFactory.ResolveBotToken();
 IOperatorChannel operatorChannel;
-if (SkipsStartupOperatorChannel(startupArgs))
+if (commandCapability != CliCommandCapability.Execution || SkipsStartupOperatorChannel(startupArgs))
 {
     operatorChannel = NullOperatorChannel.Instance;
 }
@@ -263,11 +273,6 @@ else
     {
         operatorChannel = NullOperatorChannel.Instance;
     }
-}
-
-if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))
-{
-    return DashboardHost.RunPrototypeUi(startupArgs, providers, agentFallback, tenantSelection.TenantName);
 }
 
 if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison.OrdinalIgnoreCase))
@@ -366,12 +371,15 @@ try
 
     ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
-    ProgramStartupLifecycle.InitializeWorkerProcessTracking(
-        RunsStartupCleanup(startupArgs),
-        authorityTransferRequested,
-        workspace.SqliteStatePath,
-        workspace.ExecutionDirectory,
-        cleanupContext);
+    if (commandCapability == CliCommandCapability.Execution)
+    {
+        ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+            RunsStartupCleanup(startupArgs),
+            authorityTransferRequested,
+            workspace.SqliteStatePath,
+            workspace.ExecutionDirectory,
+            cleanupContext);
+    }
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);

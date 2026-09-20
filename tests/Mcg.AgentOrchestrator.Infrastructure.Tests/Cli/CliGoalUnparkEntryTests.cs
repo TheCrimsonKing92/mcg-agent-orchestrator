@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(CliTestCollections.ConsoleSerialized)]
 public sealed class CliGoalUnparkEntryTests : CliGoalUnparkTestSupport
 {
     [Xunit.Fact]

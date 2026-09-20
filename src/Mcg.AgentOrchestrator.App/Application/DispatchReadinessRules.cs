@@ -9,7 +9,7 @@ namespace Mcg.AgentOrchestrator.App.Application;
 /// process probe or a clock the caller can replace, so these stay static and callers such as
 /// <c>ConductorDriver</c> need no operation instance.
 /// </summary>
-internal static class DispatchReadinessRules
+public static class DispatchReadinessRules
 {
     internal static bool HasAssignedDispatchCandidates(Goal goal) =>
         goal.Tasks.Any(IsSubscriptionStartCandidate);

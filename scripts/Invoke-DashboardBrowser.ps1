@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Force -Path $profile | Out-Null
 
 function Test-DevTools {
     try {
-        Invoke-WebRequest -UseBasicParsing "http://localhost:$Port/json/version" -TimeoutSec 1 | Out-Null
+        Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/json/version" -TimeoutSec 1 | Out-Null
         return $true
     } catch {
         return $false
@@ -52,11 +52,11 @@ function New-DashboardTarget {
     $escaped = [Uri]::EscapeDataString($Url)
     $created = $null
     try {
-        $created = Invoke-WebRequest -UseBasicParsing -Method Put "http://localhost:$Port/json/new?$escaped" |
+        $created = Invoke-WebRequest -UseBasicParsing -Method Put "http://127.0.0.1:$Port/json/new?$escaped" |
             Select-Object -ExpandProperty Content |
             ConvertFrom-Json
     } catch {
-        $created = Invoke-WebRequest -UseBasicParsing "http://localhost:$Port/json/new?$escaped" |
+        $created = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/json/new?$escaped" |
             Select-Object -ExpandProperty Content |
             ConvertFrom-Json
     }
@@ -66,7 +66,7 @@ function New-DashboardTarget {
     }
 
     Start-Sleep -Milliseconds 500
-    $pages = Invoke-WebRequest -UseBasicParsing "http://localhost:$Port/json/list" | Select-Object -ExpandProperty Content | ConvertFrom-Json
+    $pages = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/json/list" | Select-Object -ExpandProperty Content | ConvertFrom-Json
     return $pages |
         Where-Object { $_.type -eq "page" -and $_.url -like "$Url*" } |
         Sort-Object id -Descending |
@@ -204,7 +204,7 @@ try {
     $socket.Dispose()
     if ($target.PSObject.Properties.Name -contains "id") {
         try {
-            Invoke-WebRequest -UseBasicParsing "http://localhost:$Port/json/close/$($target.id)" | Out-Null
+            Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$Port/json/close/$($target.id)" | Out-Null
         } catch {
         }
     }

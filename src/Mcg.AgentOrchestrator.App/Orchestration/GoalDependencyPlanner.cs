@@ -2,32 +2,32 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record GoalDependencyPlan(
+public sealed record GoalDependencyPlan(
     IReadOnlyList<GoalPlanNode> Nodes,
     IReadOnlyList<GoalPlanEdge> Edges,
     CompiledGoalGraph CompiledGraph,
     ParallelExecutionPlan ParallelPlan);
 
-internal sealed record GoalPlanNode(
+public sealed record GoalPlanNode(
     string Id,
     string Heading,
     BacklogIntakeItem Intake,
     IReadOnlyList<string> DependsOn,
     string ReadyObjective);
 
-internal sealed record GoalPlanEdge(
+public sealed record GoalPlanEdge(
     string FromId,
     string ToId,
     string Reason);
 
-internal sealed record CompiledGoalGraph(
+public sealed record CompiledGoalGraph(
     string GraphId,
     IReadOnlyList<CompiledGoalNode> Nodes,
     IReadOnlyList<CompiledGoalEdge> Edges,
     IReadOnlyList<CompiledGoalValidationFinding> Findings,
     bool IsRunnable);
 
-internal sealed record CompiledGoalNode(
+public sealed record CompiledGoalNode(
     string Id,
     string Heading,
     IReadOnlyList<string> FileScopes,
@@ -38,17 +38,17 @@ internal sealed record CompiledGoalNode(
     ParallelExecutionDisposition ParallelDisposition,
     bool CanCreateGoal);
 
-internal sealed record CompiledGoalEdge(
+public sealed record CompiledGoalEdge(
     string FromId,
     string ToId,
     string Reason);
 
-internal sealed record CompiledGoalValidationFinding(
+public sealed record CompiledGoalValidationFinding(
     string Severity,
     string NodeId,
     string Message);
 
-internal static class GoalDependencyPlanner
+public static class GoalDependencyPlanner
 {
     public static GoalDependencyPlan Build(BacklogIntakePlan intake)
     {

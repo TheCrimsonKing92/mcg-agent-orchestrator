@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Rendering;
 
-internal static class DashboardDisplayNames
+public static class DashboardDisplayNames
 {
     public static string Display(GoalStatus status) => status switch
     {

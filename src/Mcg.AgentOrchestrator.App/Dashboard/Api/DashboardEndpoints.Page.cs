@@ -24,7 +24,7 @@ internal static partial class DashboardEndpoints
             ?? (context.Request.Query.TryGetValue("goal", out var focusGoalValues)
                 ? focusGoalValues.FirstOrDefault()
                 : null);
-        var operatorInbox = OperatorInbox.Build(
+        var operatorInbox = DashboardApplicationServices.BuildOperatorInbox(
             current,
             agentCatalog.Agents,
             workerProfiles,

@@ -3,9 +3,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Application;
 
-internal sealed record DispatchProcessStartFailure(TaskId TaskId, string Reason);
+public sealed record DispatchProcessStartFailure(TaskId TaskId, string Reason);
 
-internal enum DispatchAssignmentHoldCode
+public enum DispatchAssignmentHoldCode
 {
     AgentNotFound,
     AgentUnavailable,
@@ -14,7 +14,7 @@ internal enum DispatchAssignmentHoldCode
     HarnessRebindUnsupported
 }
 
-internal sealed record DispatchAssignmentHold(
+public sealed record DispatchAssignmentHold(
     DispatchAssignmentHoldCode Code,
     string Message,
     string? AssignedAgentId = null,
@@ -26,12 +26,12 @@ internal sealed class DispatchAssignmentHoldException(DispatchAssignmentHold hol
     internal DispatchAssignmentHold Hold { get; } = hold;
 }
 
-internal sealed record DispatchProcessStartRefusal(
+public sealed record DispatchProcessStartRefusal(
     TaskId TaskId,
     string Reason,
     DispatchAssignmentHold? AssignmentHold = null);
 
-internal sealed record ProcessBatchExecutionResult(
+public sealed record ProcessBatchExecutionResult(
     ProcessBatchPlan Plan,
     IReadOnlyList<TaskSpec> Tasks,
     IReadOnlyList<WorkerSandboxPrepRecoverableAction>? RecoveryActions = null,
@@ -40,7 +40,7 @@ internal sealed record ProcessBatchExecutionResult(
     IReadOnlyList<DispatchRefreshOutcome>? RefreshOutcomes = null,
     IReadOnlyList<DispatchProcessStartRefusal>? StartRefusals = null);
 
-internal sealed record SubscriptionStartResult(
+public sealed record SubscriptionStartResult(
     IReadOnlyList<WorkerProfileDispatchResult> Dispatches,
     ProcessBatchExecutionResult Processes,
     ParallelExecutionPlan ParallelPlan,

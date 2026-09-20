@@ -296,11 +296,11 @@ public static partial class DashboardRenderer
             html.AppendLine("<td>");
             if (run.HasOutputLog)
             {
-                html.AppendLine($"<a href=\"{Encode(DashboardEndpoints.BuildTestLogFileUrl(run.OutputLogPath))}\" target=\"_blank\" rel=\"noreferrer\">output</a>");
+                html.AppendLine($"<a href=\"{Encode(BuildTestLogFileUrl(run.OutputLogPath))}\" target=\"_blank\" rel=\"noreferrer\">output</a>");
             }
             if (run.HasErrorLog)
             {
-                html.AppendLine($" <a href=\"{Encode(DashboardEndpoints.BuildTestLogFileUrl(run.ErrorLogPath))}\" target=\"_blank\" rel=\"noreferrer\">error</a>");
+                html.AppendLine($" <a href=\"{Encode(BuildTestLogFileUrl(run.ErrorLogPath))}\" target=\"_blank\" rel=\"noreferrer\">error</a>");
             }
             html.AppendLine($"<br><code>{Encode(run.OutputLogPath)}</code>");
             html.AppendLine("</td>");
@@ -325,6 +325,9 @@ public static partial class DashboardRenderer
         html.AppendLine("</tbody></table>");
         html.AppendLine("</details>");
     }
+
+    private static string BuildTestLogFileUrl(string path) =>
+        "/api/system/build-test-runs/log?path=" + Uri.EscapeDataString(path);
 
     private static string ExtractDashboardUrl(DashboardWorkspaceContext workspace)
     {
