@@ -96,6 +96,178 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
+    public async Task DeclaredIndexesMapParaphrasedOwnersToDeclaredCriteria()
+    {
+        const string declaredOne = "The acceptance gate runs the focused tests.";
+        const string declaredTwo = "The operator records the live observation.";
+        const string declaredThree = "The implementation preserves existing behavior.";
+        var objective = $"""
+            Implement evidence-owner mapping.
+
+            ## Acceptance criteria
+
+            1. {declaredOne}
+            2. {declaredTwo}
+            3. {declaredThree}
+            """;
+        const string response = """
+            ```json
+            {
+              "behavioralContract": "Keep declared criteria and their evidence owners.",
+              "acceptanceCriteria": [
+                {"text": "Run focused acceptance checks", "declared_index": 1, "evidence_owner": "acceptance-gate"},
+                {"text": "Observe the deployed behavior.", "declared_index": 2, "evidence_owner": "operator"},
+                {"text": "Do not regress existing behavior.", "declared_index": 3}
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([declaredOne, declaredTwo, declaredThree], recorded.RefinedSpec!.AcceptanceCriteria);
+        Xunit.Assert.Equal([declaredOne], recorded.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Equal([declaredTwo], recorded.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.DoesNotContain(recorded.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Spec refiner owner dropped", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task UnmatchedParaphrasedOwnerRecordsOneDroppedDecision()
+    {
+        const string entryText = "Observe the rewritten deployment behavior.";
+        const string objective = """
+            Implement evidence-owner mapping.
+
+            ## Acceptance criteria
+
+            1. The operator observes the deployment.
+            """;
+        const string response = """
+            {"behavioralContract":"Keep declared criteria.","acceptanceCriteria":[{"text":"Observe the rewritten deployment behavior.","evidence_owner":"operator"}],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Empty(recorded.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        var decision = Xunit.Assert.Single(recorded.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Spec refiner owner dropped", StringComparison.Ordinal)));
+        Xunit.Assert.Contains(entryText[..20], decision.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task RawOutputIsPersistedBeforeValidAndInvalidParsing()
+    {
+        var responses = new[]
+        {
+            """
+            {"behavioralContract":"Valid response.","acceptanceCriteria":["Criterion"],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            """,
+            "This response is not parseable JSON."
+        };
+
+        foreach (var response in responses)
+        {
+            var scenario = CreateRefinementScenario(response);
+
+            await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+            var decision = Xunit.Assert.Single(scenario.Kernel.GetGoal(scenario.Goal.Id).Timeline.Where(evt =>
+                evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.StartsWith("Spec refiner raw output: ", StringComparison.Ordinal)));
+            var path = decision.Message["Spec refiner raw output: ".Length..];
+            Xunit.Assert.True(File.Exists(path), $"Expected raw refiner sidecar '{path}' to exist.");
+            Xunit.Assert.Equal(response, await File.ReadAllTextAsync(path));
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task RawOutputWriteFailureIsAdvisory()
+    {
+        const string response = """
+            {"behavioralContract":"Valid response.","acceptanceCriteria":["Criterion"],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            """;
+        var scenario = CreateRefinementScenario(response, blockRawOutputDirectory: true);
+
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        Xunit.Assert.Equal(RefinementDisposition.Completed, result.Disposition);
+        Xunit.Assert.Single(scenario.Kernel.GetGoal(scenario.Goal.Id).Timeline.Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("Spec refiner raw output not persisted: ", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
+    public async Task RawOutputUsesProvidedExecutorStamp()
+    {
+        const string stamp = "20260920044315000";
+        const string response =
+            "{\"behavioralContract\":\"Valid response.\",\"acceptanceCriteria\":[\"Criterion\"],\"verificationClass\":\"TestVerifiable\",\"decisions\":[],\"forks\":[]}";
+        var scenario = CreateRefinementScenario(response, rawOutputStamp: stamp);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var decision = Xunit.Assert.Single(scenario.Kernel.GetGoal(scenario.Goal.Id).Timeline.Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("Spec refiner raw output: ", StringComparison.Ordinal)));
+        Xunit.Assert.EndsWith($"-{stamp}.refiner.txt", decision.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task DuplicateDeclaredOwnerClaimsKeepFirstAndRecordConflict()
+    {
+        const string objective = """
+            Implement evidence-owner mapping.
+
+            ## Acceptance criteria
+
+            1. The focused test passes.
+            """;
+        const string response = """
+            {"behavioralContract":"Keep one owner.","acceptanceCriteria":[{"text":"First wording","declared_index":1,"evidence_owner":"acceptance-gate"},{"text":"Second wording","declared_index":1,"evidence_owner":"operator"}],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal(["The focused test passes."], recorded.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Single(recorded.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Spec refiner owner conflict: operator for declared criterion 1 already owned by acceptance-gate", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
+    public void DeclaredIndexParsingDiagnosesMalformedValuesAndPreservesLegacyEntries()
+    {
+        var output = SpecRefinerPlanner.Parse("""
+            {"behavioralContract":"Parse indexes.","acceptanceCriteria":[{"text":"One","declared_index":1,"evidence_owner":"acceptance-gate"},{"text":"Two","declared_index":"two","evidence_owner":"operator"},{"text":"Three","declared_index":9,"evidence_owner":"operator"},"Four"],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            """);
+
+        Xunit.Assert.True(output.IsValid);
+        Xunit.Assert.Equal(["One", "Two", "Three", "Four"], output.AcceptanceCriteria);
+        Xunit.Assert.Equal(["One"], output.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Equal(["Two", "Three"], output.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Equal([1, null, null, null], output.CriterionOwnerships.Select(item => item.DeclaredIndex));
+        Xunit.Assert.Contains(output.ParseDiagnostics, diagnostic =>
+            diagnostic.Contains("non-integer declared_index", StringComparison.Ordinal) &&
+            diagnostic.Contains("two", StringComparison.Ordinal));
+        Xunit.Assert.Contains(output.ParseDiagnostics, diagnostic =>
+            diagnostic.Contains("out-of-range declared_index '9'", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public async Task OperatorOwnedFeasibilityAnswerCreatesExactlyOneOperatorObligation()
     {
         const string criterion =
@@ -220,11 +392,18 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     private static (GoalRefinementService Service, AgentOrchestratorKernel Kernel, Goal Goal, FakeCollaborationItemStore Collaboration)
-        CreateRefinementScenario(string response)
+        CreateRefinementScenario(
+            string response,
+            string objective = "Integrate the billing system",
+            bool blockRawOutputDirectory = false,
+            string? rawOutputStamp = null)
     {
         var provider = new FakeSmokeProvider(response, providerName: "fake-refiner");
         var collaboration = new FakeCollaborationItemStore();
         var tempDirectory = Directory.CreateTempSubdirectory("gate-owned-refinement-");
+        var rawOutputDirectory = Path.Combine(tempDirectory.FullName, "logs");
+        if (blockRawOutputDirectory)
+            File.WriteAllText(rawOutputDirectory, "This file prevents directory creation.");
         var service = new GoalRefinementService(
             new InMemoryModelProviderRegistry([provider]),
             new ModelFunctionCatalog([
@@ -235,9 +414,11 @@ public sealed class GateOwnedCriterionRefinementTests
             ]),
             collaboration,
             new SpecRefinerPrecedentStore(Path.Combine(tempDirectory.FullName, "precedents.json")),
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            rawOutputDirectory: rawOutputDirectory,
+            rawOutputStamp: rawOutputStamp);
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Integrate the billing system");
+        var goal = kernel.CreateGoal(objective);
         return (service, kernel, goal, collaboration);
     }
 

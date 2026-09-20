@@ -3660,8 +3660,8 @@ internal static partial class CliPersistentStateRunner
         WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
-        if (args.Count != 2 || string.IsNullOrWhiteSpace(args[1]))
-            throw new InvalidOperationException($"Usage: {GoalRefinementWorkCoordinator.CommandName} <goal-id>");
+        if (args.Count is < 2 or > 3 || string.IsNullOrWhiteSpace(args[1]))
+            throw new InvalidOperationException($"Usage: {GoalRefinementWorkCoordinator.CommandName} <goal-id> [executor-stamp]");
         if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
             throw new InvalidOperationException("Goal refinement requires durable outbox support.");
 
@@ -3670,7 +3670,8 @@ internal static partial class CliPersistentStateRunner
                 workspace,
                 providers,
                 workerProfiles,
-                new GoalId(args[1]))
+                new GoalId(args[1]),
+                rawOutputStamp: args.Count == 3 ? args[2] : null)
             .GetAwaiter()
             .GetResult();
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();

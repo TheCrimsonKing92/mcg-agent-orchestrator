@@ -19,6 +19,8 @@ public sealed class GoalRefinementTests
             "Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.",
             prompt,
             StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"declared_index\": integer", prompt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("1-based declared_index", prompt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -221,6 +223,20 @@ public sealed class GoalRefinementTests
             command.Parameters.AddWithValue("$id", messageId);
             return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
         }
+    }
+
+    [Xunit.Fact]
+    public void DetachedRefinementLaunchCarriesExecutorLogStamp()
+    {
+        const string stamp = "20260920044315000";
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var goalId = new GoalId("1234567890abcdef");
+
+        var request = GoalRefinementWorkCoordinator.CreateLaunchRequest(workspace, goalId, stamp);
+
+        Xunit.Assert.Equal(stamp, request.Args[^1]);
+        Xunit.Assert.EndsWith($"spec-refinement-12345678-{stamp}.out.log", request.StdoutPath, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith($"spec-refinement-12345678-{stamp}.err.log", request.StderrPath, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -1957,6 +1973,17 @@ public sealed class GoalRefinementTests
     [Xunit.Fact(DisplayName = "GoalRefinementService_uses_subscription_cli_when_binding_has_subscription")]
     public async Task GoalRefinementServiceUsesSubscriptionCliWhenBindingHasSubscription()
     {
+        const string response = """
+            ```json
+            {
+              "behavioralContract": "Subscription CLI refined the goal.",
+              "acceptanceCriteria": ["No API provider is required"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
         var catalog = new ModelFunctionCatalog([
             new ModelFunctionBinding(
                 ModelFunctionPurposes.SpecRefiner,
@@ -1975,17 +2002,7 @@ public sealed class GoalRefinementTests
                 sub.WorkerProfileName,
                 sub.ModelAlias ?? string.Empty,
                 sub.ReasoningEffort,
-                (_, _, _) => Task.FromResult("""
-                    ```json
-                    {
-                      "behavioralContract": "Subscription CLI refined the goal.",
-                      "acceptanceCriteria": ["No API provider is required"],
-                      "verificationClass": "TestVerifiable",
-                      "decisions": [],
-                      "forks": []
-                    }
-                    ```
-                    """)));
+                (_, _, _) => Task.FromResult(response)));
 
         var result = await service.RefineAsync(kernel, goalId);
 
@@ -1994,7 +2011,13 @@ public sealed class GoalRefinementTests
         var receipt = GoalRefinementGate.BuildPolicyReceipt(result);
         Xunit.Assert.Contains("outcome=completed", receipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("reason_code=", receipt, StringComparison.Ordinal);
-        Xunit.Assert.Equal("Subscription CLI refined the goal.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
+        var recordedGoal = kernel.GetGoal(goalId);
+        Xunit.Assert.Equal("Subscription CLI refined the goal.", recordedGoal.RefinedSpec!.BehavioralContract);
+        var rawDecision = Xunit.Assert.Single(recordedGoal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("Spec refiner raw output: ", StringComparison.Ordinal)));
+        var rawPath = rawDecision.Message["Spec refiner raw output: ".Length..];
+        Xunit.Assert.Equal(response, await File.ReadAllTextAsync(rawPath));
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_subscription_timeout_records_fallback_reason_and_invocation")]
@@ -2990,7 +3013,8 @@ public sealed class GoalRefinementTests
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            rawOutputDirectory: workspace.LogDirectory);
 
     private static (
         GoalRefinementService Service,
@@ -3028,7 +3052,8 @@ public sealed class GoalRefinementTests
             prec,
             workerProfiles,
             subscriptionCompleterFactory,
-            subscriptionTimeout: subscriptionTimeout);
+            subscriptionTimeout: subscriptionTimeout,
+            rawOutputDirectory: Path.Combine(tempDir, "logs"));
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(objective);
 
