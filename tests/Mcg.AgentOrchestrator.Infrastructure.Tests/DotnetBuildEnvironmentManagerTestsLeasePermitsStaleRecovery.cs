@@ -156,8 +156,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(acquisition);
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_early_release_shuts_down_build_servers_before_releasing_permit")]
-    public void DotnetBuildEnvironmentManagerEarlyReleaseShutsDownBuildServersBeforeReleasingPermit()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_ordinary_early_release_does_not_shutdown_build_servers")]
+    public void DotnetBuildEnvironmentManagerOrdinaryEarlyReleaseDoesNotShutdownBuildServers()
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var shutdowns = 0;
@@ -170,7 +170,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
             lease.ReleaseExecutionLock();
             lease.ReleaseExecutionLock();
 
-            Assert.Equal(1, shutdowns);
+            Assert.Equal(0, shutdowns);
             Assert.True(RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0));
         }
         finally
@@ -235,8 +235,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_dispose_shuts_down_build_servers_before_releasing_permit")]
-    public void DotnetBuildEnvironmentManagerDisposeShutsDownBuildServersBeforeReleasingPermit()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_compiler_lock_recovery_shuts_down_after_releasing_the_permit")]
+    public void DotnetBuildEnvironmentManagerCompilerLockRecoveryShutsDownAfterReleasingThePermit()
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         bool? permitAvailableDuringShutdown = null;
@@ -248,9 +248,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
             var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
                 DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
 
+            lease.MarkCompilerLockRemediationRequired();
             lease.Dispose();
 
-            Assert.False(permitAvailableDuringShutdown ?? true);
+            Assert.True(permitAvailableDuringShutdown ?? false);
             Assert.True(RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0));
         }
         finally

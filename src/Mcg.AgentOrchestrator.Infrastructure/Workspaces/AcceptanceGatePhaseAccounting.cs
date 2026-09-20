@@ -5,7 +5,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class AcceptanceGatePhaseNames
 {
     internal const string GatePlan = "gate-plan";
-    internal const string BuildServerShutdown = "build-server-shutdown";
     internal const string PlanConstruction = "plan-construction";
     internal const string SharedPrebuild = "shared-prebuild";
     internal const string LaneExecution = "lane-execution";

@@ -29,7 +29,7 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
 
             Assert.False(result.Passed);
             Assert.Empty(calls);
-            Assert.DoesNotContain(AcceptanceGatePhaseNames.BuildServerShutdown, phases);
+            Assert.DoesNotContain(AcceptanceGatePhaseNames.PlanConstruction, phases);
             Assert.Contains("guarded.cs", result.OutputTail, StringComparison.Ordinal);
             Assert.Contains("3 lines", result.OutputTail, StringComparison.Ordinal);
             Assert.Contains("recorded ceiling of 2", result.OutputTail, StringComparison.Ordinal);
@@ -80,7 +80,7 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
     }
 
     [Xunit.Fact]
-    public async Task CompliantAuthority_ProceedsToBuildServerShutdown()
+    public async Task CompliantAuthorityProceedsWithoutSessionWideBuildServerShutdown()
     {
         var root = CreateManifestWorkspace(EmptyManifest);
         WriteAuthority(root, maximumLineCount: 3, actualLineCount: 3);
@@ -96,8 +96,7 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.NotEmpty(calls);
-            Assert.Equal(["dotnet", "build-server", "shutdown"], calls[0]);
+            Assert.Empty(calls);
         }
         finally
         {

@@ -26,11 +26,6 @@ public sealed class GoalAcceptanceVerifierCancellationTests : GoalAcceptanceVeri
         {
             var verifier = new GoalAcceptanceVerifier(async (arguments, _, cancellationToken) =>
             {
-                if (arguments.SequenceEqual(["dotnet", "build-server", "shutdown"]))
-                {
-                    return new GoalAcceptanceVerifier.CommandResult(0, string.Empty);
-                }
-
                 checkStarted.TrySetResult();
                 try
                 {

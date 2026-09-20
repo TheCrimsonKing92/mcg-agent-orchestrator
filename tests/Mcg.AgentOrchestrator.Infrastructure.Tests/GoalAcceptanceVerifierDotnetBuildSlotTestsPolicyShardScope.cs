@@ -89,8 +89,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             changedFiles: ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.Tasks.cs"]);
 
         Assert.True(result.Passed);
-        // shutdown + whitespace git-diff + focused shard (dotnet build + MTP executable); no extra runs.
-        Assert.Equal(4, calls.Count);
+        // Whitespace git-diff + focused shard (dotnet build + MTP executable); no extra runs.
+        Assert.Equal(3, calls.Count);
         var focusedCall = Assert.Single(calls, call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
         Assert.DoesNotContain(focusedCall, argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase));
         Assert.Contains("--filter-class", focusedCall);
@@ -139,9 +139,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerProfileTests.cs"]);
 
         Assert.True(result.Passed);
-        // shutdown + whitespace git-diff + focused shard (dotnet build + MTP executable) + the two
+        // Whitespace git-diff + focused shard (dotnet build + MTP executable) + the two
         // tamper-guard git diffs (name-only, then the per-file unified diff); the core policy shard is skipped.
-        Assert.Equal(6, calls.Count);
+        Assert.Equal(5, calls.Count);
         Assert.DoesNotContain(calls, call => call.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparer.OrdinalIgnoreCase));
         var focusedCall = Assert.Single(calls, call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
         Assert.Contains("--filter-class", focusedCall);
@@ -396,7 +396,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             var result = await verifier.RunAsync(root, changedFiles: changedFiles);
 
             Assert.True(result.Passed);
-            Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
+            Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[1][2]);
             var infrastructureCalls = calls
                 .Where(call => call.Length > 2 &&
                     call[0] == "dotnet" &&
@@ -453,7 +453,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
-            new(0, ""),
             new(0, "Tests passed.")
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -465,12 +464,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var result = await verifier.RunAsync(root);
 
         Assert.True(result.Passed);
-        Assert.Equal(3, calls.Count);
-        Assert.True(calls[1].SequenceEqual(["git", "diff", "--check"]));
-        Assert.Equal("dotnet", calls[2][0]);
-        Assert.Equal("test", calls[2][1]);
-        Assert.Equal("tests/Example.Tests.csproj", calls[2][2]);
-        Assert.True(calls[2].Contains("--filter", StringComparer.Ordinal));
+        Assert.Equal(2, calls.Count);
+        Assert.True(calls[0].SequenceEqual(["git", "diff", "--check"]));
+        Assert.Equal("dotnet", calls[1][0]);
+        Assert.Equal("test", calls[1][1]);
+        Assert.Equal("tests/Example.Tests.csproj", calls[1][2]);
+        Assert.True(calls[1].Contains("--filter", StringComparer.Ordinal));
         Assert.Equal(2, result.Checks!.Count);
         Assert.Equal("whitespace", result.Checks[0].Name);
         Assert.Equal("focused tests", result.Checks[1].Name);
@@ -490,7 +489,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             """);
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -502,10 +500,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var result = await verifier.RunAsync(root, new GoalId("13572468135724681357246813572468"));
 
         Assert.True(result.Passed);
-        Assert.Equal(2, calls.Count);
-        Assert.Equal("dotnet", calls[1][0]);
-        Assert.Equal("test", calls[1][1]);
-        AssertIsolatedTestCommand(calls[1]);
+        Assert.Single(calls);
+        Assert.Equal("dotnet", calls[0][0]);
+        Assert.Equal("test", calls[0][1]);
+        AssertIsolatedTestCommand(calls[0]);
         var check = Xunit.Assert.Single(result.Checks!);
         Assert.Equal("custom dotnet", check.Name);
         Assert.Equal("goal-13572468", check.LeaseId);
@@ -531,7 +529,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
-            new(0, ""),
             new(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5.")
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -543,10 +540,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var result = await verifier.RunAsync(root);
 
         Assert.True(result.Passed);
-        Assert.Equal(3, calls.Count);
-        Assert.True(calls[1].SequenceEqual(["git", "diff", "--check"]));
-        AssertIsolatedTestCommand(calls[2]);
-        Assert.False(calls[2].Any(a => a.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(2, calls.Count);
+        Assert.True(calls[0].SequenceEqual(["git", "diff", "--check"]));
+        AssertIsolatedTestCommand(calls[1]);
+        Assert.False(calls[1].Any(a => a.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)));
         Assert.Equal(4, result.Checks!.Count);
 
         var fullCheck = result.Checks.Single(c => c.Name == "full dotnet tests");
@@ -582,7 +579,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
-            new(0, ""),
             new(1, "Failed! - Failed: 2, Passed: 3, Skipped: 0, Total: 5.")
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -595,7 +591,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         Assert.False(result.Passed);
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal(3, calls.Count);
+        Assert.Equal(2, calls.Count);
         Assert.Equal(4, result.Checks!.Count);
 
         var fullCheck = result.Checks.Single(c => c.Name == "full dotnet tests");
@@ -631,7 +627,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(0, "Passed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3."),
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
         ]);
@@ -644,8 +639,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var result = await verifier.RunAsync(root);
 
         Assert.True(result.Passed);
-        // shutdown + sln run + extra tests (not in solution)
-        Assert.Equal(3, calls.Count);
+        // Solution run + extra tests (not in solution).
+        Assert.Equal(2, calls.Count);
         Assert.Equal(3, result.Checks!.Count);
 
         Assert.True(result.Checks.Single(c => c.Name == "full dotnet tests").Passed);
@@ -696,9 +691,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.True(result.Passed);
-        // shutdown + whitespace git-diff + the injected core shard (dotnet build + MTP executable).
-        Assert.Equal(4, calls.Count);
-        Assert.True(calls[1].SequenceEqual(["git", "diff", "--check"]));
+        // Whitespace git-diff + the injected core shard (dotnet build + MTP executable).
+        Assert.Equal(3, calls.Count);
+        Assert.True(calls[0].SequenceEqual(["git", "diff", "--check"]));
         // Core.Tests is an MTP project, so the injected "core tests" check runs the MTP executable
         // (preceded by a dotnet build), never the VSTest `dotnet test` runner.
         Assert.Single(calls, call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
@@ -730,9 +725,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         Assert.True(result.Passed);
         Assert.Equal(
-            CountChangeScopedInfrastructureTestLanes(root) + 5,
+            CountChangeScopedInfrastructureTestLanes(root) + 4,
             calls.Count);
-        Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[1][2]);
         var infrastructureCalls = calls
             .Where(call => call.Length > 2 &&
                 call[0] == "dotnet" &&
@@ -841,7 +836,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         Assert.True(result.Passed);
         // The manifest "core tests" check has no explicit runner, so it runs via VSTest `dotnet test`.
-        Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
+        Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[1][2]);
         Assert.DoesNotContain(calls, call => call.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         var infrastructureCalls = calls
             .Where(IsInfrastructurePartitionTestCall)
@@ -872,7 +867,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
-            new(0, ""),
             new(0, "Full tests passed.")
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -884,7 +878,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var result = await verifier.RunAsync(root, changedFiles: ["Directory.Build.props"]);
 
         Assert.True(result.Passed);
-        Assert.Contains("Mcg.AgentOrchestrator.sln", calls[2], StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("Mcg.AgentOrchestrator.sln", calls[1], StringComparer.OrdinalIgnoreCase);
         Assert.True(result.Checks!.Any(check => check.Name == "full dotnet tests"));
         Assert.True(result.Checks.Any(check => check.ResultSummary == "covered by: full dotnet tests"));
     }
@@ -900,7 +894,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             var calls = new List<string[]>();
             var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
                 new(0, ""),
-                new(0, ""),
                 new(0, "Full tests passed.")
             ]);
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -914,7 +907,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
                 changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
             Assert.True(result.Passed);
-            Assert.Contains("Mcg.AgentOrchestrator.sln", calls[2], StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("Mcg.AgentOrchestrator.sln", calls[1], StringComparer.OrdinalIgnoreCase);
             Assert.True(result.Checks!.Any(check => check.Name == "full dotnet tests"));
             Assert.True(result.Checks.Any(check => check.ResultSummary == "covered by: full dotnet tests"));
         }
@@ -948,7 +941,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
                 changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workers/Foo.cs"]);
 
             Assert.True(result.Passed);
-            Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
+            Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[1][2]);
             var infrastructureCalls = calls
                 .Where(call => call.Length > 2 &&
                     call[0] == "dotnet" &&
@@ -979,7 +972,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             """);
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),                                                        // build-server shutdown
             new(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5.")    // core tests (manifest)
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -994,7 +986,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.True(result.Passed);
-        Assert.Equal(2, calls.Count);
+        Assert.Single(calls);
         // "core tests" runs exactly once (not duplicated by injection)
         Assert.Equal(1, result.Checks!.Count(c => c.Name == "core tests"));
         Assert.Equal(0, result.Checks!.Count(c => c.Name == "infrastructure tests"));
@@ -1025,7 +1017,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.True(result.Passed);
-        Assert.Equal(2, calls.Count);
+        Assert.Single(calls);
         Assert.Equal(1, result.Checks!.Count(c => c.Name == "renamed core coverage"));
         var policyAlias = result.Checks.Single(c => c.Name == "core tests");
         Assert.True(policyAlias.Passed);
@@ -1044,7 +1036,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             """);
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),                                                            // build-server shutdown
             new(1, "Failed! - Failed: 2, Passed: 3, Skipped: 0, Total: 5.")       // core tests (injected, fails)
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -1060,7 +1051,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         Assert.False(result.Passed);
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal(2, calls.Count);
+        Assert.Single(calls);
         // "core tests" ran (injected) and failed; "infrastructure tests" was not reached
         Assert.True(result.Checks!.Any(c => c.Name == "core tests" && !c.Passed));
         Assert.False(result.Checks.Any(c => c.Name == "infrastructure tests"));

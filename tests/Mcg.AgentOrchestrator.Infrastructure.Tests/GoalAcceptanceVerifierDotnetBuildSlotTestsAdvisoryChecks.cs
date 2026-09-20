@@ -25,7 +25,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : G
 
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),                                                         // build-server shutdown
             new(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5."),   // dotnet test
             new(0, "src/Foo.cs:JsonSerializerOptions opts = new JsonSerializerOptions();") // git grep (pattern found)
         ]);
@@ -64,7 +63,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : G
 
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),   // build-server shutdown
             new(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2."), // dotnet test
             new(1, "")    // git grep exit 1 = pattern not found
         ]);
@@ -99,7 +97,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : G
 
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),  // build-server shutdown
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")  // dotnet test
         ]);
 
@@ -118,7 +115,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : G
 
         // Create the file and verify it now passes
         var responses2 = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")
         ]);
         File.WriteAllText(Path.Combine(root, ".orchestrator", "output.txt"), "done");
@@ -150,7 +146,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : G
 
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),   // build-server shutdown
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),   // dotnet test
             new(0, "Build succeeded.")  // dotnet build (advisory command-exit)
         ]);
@@ -191,7 +186,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : G
 
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),   // build-server shutdown
             new(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")  // dotnet test FAILS
         ]);
 

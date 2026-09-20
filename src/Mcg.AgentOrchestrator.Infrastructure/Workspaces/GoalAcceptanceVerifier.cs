@@ -725,16 +725,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Checks: [manifestTrustFailure]);
         }
 
-        // Shut down build servers to release file locks before running tests.
-        phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.BuildServerShutdown);
-        phaseAccountant.SetTarget("dotnet build-server shutdown");
-        await _runner(
-            ["dotnet", "build-server", "shutdown"],
-            worktreePath,
-            engineSettings.ResolveBuildServerShutdownTimeout(),
-            cancellationToken).ConfigureAwait(false);
-        phaseAccountant.SetTarget(null);
-
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.PlanConstruction);
         var shardCoreBudget =
             _testOverrides.ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
@@ -1487,7 +1477,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 executionEnvironment: null,
-                shutdownBuildServers: true,
                 cancellationToken: executionOwner.CancellationToken,
                 executionOwner: executionOwner).ConfigureAwait(false);
         }
@@ -1578,7 +1567,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         DotnetBuildEnvironment? executionEnvironment,
-        bool shutdownBuildServers,
         CancellationToken cancellationToken,
         bool continueAfterFailure = false,
         IAcceptanceRunExecutionContext? executionOwner = null,
@@ -1599,21 +1587,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 executionEnvironment,
-                shutdownBuildServers,
                 cancellationToken,
                 continueAfterFailure,
                 armContext,
                 armContextApplied: true).ConfigureAwait(false);
-        }
-
-        var engineSettings = EngineSettings;
-        if (shutdownBuildServers)
-        {
-            await _runner(
-                ["dotnet", "build-server", "shutdown"],
-                worktreePath,
-                engineSettings.ResolveBuildServerShutdownTimeout(),
-                cancellationToken).ConfigureAwait(false);
         }
 
         var dotnetTestBuildPhase = CreateDotnetTestBuildPhase(
@@ -1624,7 +1601,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         dotnetTestBuildPhase.BuildEnvironment = executionEnvironment;
         var shardCoreBudget =
             _testOverrides.ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
-        var shardConcurrencyBudget = Math.Min(engineSettings.MaxConcurrentShards, shardCoreBudget);
+        var shardConcurrencyBudget = Math.Min(EngineSettings.MaxConcurrentShards, shardCoreBudget);
         var batch = await RunCheckBatchAsync(
             focusedChecks,
             cacheContext: null,
@@ -1744,7 +1721,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     stableSlotIndex,
                     stableSlotLease,
                     baselineEnvironment,
-                    shutdownBuildServers: true,
                     cancellationToken: cancellationToken,
                     continueAfterFailure: classifyMissingSelectionsAsAbsent,
                     executionOwner: executionOwner).ConfigureAwait(false);
@@ -4755,6 +4731,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     goalId,
                     stableSlotIndex,
                     stableSlotLease,
+                    stableSlotLease ?? leaseLock,
+                    IsTransientCompilerLockFailure(result.Output),
                     environment,
                     attemptName,
                     attribution,
@@ -4848,6 +4826,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 goalId,
                 stableSlotIndex,
                 stableSlotLease,
+                stableSlotLease ?? leaseLock,
+                compilerLockRemediationRequired: false,
                 environment,
                 attemptName,
                 attribution,
@@ -4958,17 +4938,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetBuildEnvironmentLease? recoveryLease,
+        bool compilerLockRemediationRequired,
         DotnetBuildEnvironment currentEnvironment,
         string attemptName,
         BuildLockAttribution attribution,
         Action<DotnetBuildEnvironment> reacquireLease,
         CancellationToken cancellationToken)
     {
-        await _runner(
-            ["dotnet", "build-server", "shutdown"],
-            worktreePath,
-            EngineSettings.ResolveBuildServerShutdownTimeout(),
-            cancellationToken).ConfigureAwait(false);
+        if (compilerLockRemediationRequired)
+        {
+            recoveryLease?.MarkCompilerLockRemediationRequired();
+        }
 
         if (IsTransientNoHolderBuildArtifactLock(attribution, currentEnvironment))
         {
@@ -8166,12 +8147,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var profileRoot = Path.Combine(Path.GetTempPath(), "mcg-hvp");
         Directory.CreateDirectory(profileRoot);
+        var dotnetCliHome = string.IsNullOrWhiteSpace(buildEnvironmentRoot)
+            ? profileRoot : Path.Combine(buildEnvironmentRoot, "dotnet-cli-home");
+        Directory.CreateDirectory(dotnetCliHome);
         nugetPackages = string.IsNullOrWhiteSpace(nugetPackages)
             ? Path.Combine(string.IsNullOrWhiteSpace(userProfile) ? profileRoot : userProfile, ".nuget", "packages")
             : nugetPackages;
         environment["HOME"] = profileRoot;
         environment["USERPROFILE"] = profileRoot;
-        environment["DOTNET_CLI_HOME"] = profileRoot;
+        environment["DOTNET_CLI_HOME"] = dotnetCliHome;
 
         // Git resolves user.name/user.email from $HOME/.gitconfig, and the profile root above is empty, so a
         // verification child inherits NO GIT IDENTITY. Read-only git is unaffected, which is why this hid for
@@ -8255,7 +8239,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // "unable to write file ...\mcg-hvp\AppData\Local\Temp" and failed
             // whole lanes on environment construction rather than on the code being verified. The parent
             // dirs above are created for the same reason; this is the one that was missed.
-            Directory.CreateDirectory(Path.Combine(localAppData, "Temp"));
+            var stableTempPath = string.IsNullOrWhiteSpace(buildEnvironmentRoot)
+                ? Path.Combine(localAppData, "Temp")
+                : Path.GetFullPath(Path.Combine(localAppData, "..", "LocalLow", "mcg-vbcs-temp"));
+            Directory.CreateDirectory(stableTempPath);
+            if (!string.IsNullOrWhiteSpace(buildEnvironmentRoot))
+                environment["TEMP"] = environment["TMP"] = stableTempPath;
             environment["HOMEDRIVE"] = profileRootPath.TrimEnd(Path.DirectorySeparatorChar);
             environment["HOMEPATH"] = Path.DirectorySeparatorChar +
                 profileRoot[profileRootPath.Length..].TrimStart(Path.DirectorySeparatorChar);

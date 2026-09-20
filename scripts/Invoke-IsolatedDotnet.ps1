@@ -1575,6 +1575,7 @@ function Invoke-FocusedTestMode {
             $receipt.buildPerformed = $true
             $buildArguments = @($request.BuildArguments) + @(
                 "--artifacts-path", $artifactsPath,
+                "-p:McgIsolatedArtifactsPath=$artifactsPath",
                 "-maxcpucount:$(Get-BuildMaxCpuCount)",
                 "-p:BuildInParallel=false"
             )
@@ -1713,17 +1714,6 @@ function Invoke-FocusedTestMode {
         catch {
             $receipt.worktreeStateAfter = [ordered]@{ error = $_.Exception.Message; unchanged = $false }
         }
-        if ($receipt.buildPerformed) {
-            try {
-                & dotnet build-server shutdown *> $null
-                if ($LASTEXITCODE -ne 0) {
-                    $receipt.buildServerShutdownError = "dotnet build-server shutdown exited $LASTEXITCODE."
-                }
-            }
-            catch {
-                $receipt.buildServerShutdownError = $_.Exception.Message
-            }
-        }
         if ($null -ne $slotLease) {
             try {
                 if (Test-Path -LiteralPath $slotLease.HeartbeatPath -PathType Leaf) {
@@ -1832,6 +1822,7 @@ else {
 $isolatedArguments = @(
     "--artifacts-path",
     $artifactsPath,
+    "-p:McgIsolatedArtifactsPath=$artifactsPath",
     "-maxcpucount:$(Get-BuildMaxCpuCount)",
     "-p:BuildInParallel=false"
 )
@@ -1926,7 +1917,6 @@ try {
         $appDllBeforeDotnet = Get-AppDllSnapshot
         if ($ReuseArtifacts) {
             $mtpArguments = Get-MtpTestArguments -Values $DotnetArguments
-            & dotnet build-server shutdown *> $null
             $lockStream.Unlock(0, 1)
             $lockStream.Dispose()
             $lockStream = $null
@@ -1958,7 +1948,6 @@ try {
                     else {
                         Write-Host "Running managed test assembly '$($builtArtifacts.AssemblyPath)' through dotnet; native apphost '$($builtArtifacts.ExecutablePath)' will not be launched."
                         $mtpArguments = Get-MtpTestArguments -Values $DotnetArguments
-                        & dotnet build-server shutdown *> $null
                         $lockStream.Unlock(0, 1)
                         $lockStream.Dispose()
                         $lockStream = $null
@@ -1988,7 +1977,6 @@ finally {
         $acceptancePriorityStream.Dispose()
     }
     if ($lockHeld -and $null -ne $lockStream) {
-        & dotnet build-server shutdown *> $null
         $lockStream.Unlock(0, 1)
         $lockStream.Dispose()
     }

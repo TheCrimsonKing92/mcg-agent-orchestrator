@@ -63,10 +63,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             var result = await verifier.RunAsync(root, goalId);
 
             Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-
-            var dotnetArgs = calls[1];
+            var dotnetArgs = Assert.Single(calls);
             AssertIsolatedTestCommand(dotnetArgs);
             Assert.Equal("Mcg.AgentOrchestrator.sln", dotnetArgs[2]);
             Assert.Contains("--filter", dotnetArgs);

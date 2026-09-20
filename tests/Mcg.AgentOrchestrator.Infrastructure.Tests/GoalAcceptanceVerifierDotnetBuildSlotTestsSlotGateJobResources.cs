@@ -31,10 +31,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             "System.InvalidOperationException",
             exception.GetType().GetProperty("FaultType")?.GetValue(exception));
         Assert.Equal(
-            "build-server-shutdown",
+            "check-execution",
             exception.GetType().GetProperty("GatePhase")?.GetValue(exception));
         Assert.Equal(
-            "dotnet build-server shutdown",
+            "dotnet test",
             exception.GetType().GetProperty("GateTarget")?.GetValue(exception));
         var faultStack = Assert.IsType<string>(
             exception.GetType().GetProperty("FaultStack")?.GetValue(exception));
@@ -1133,9 +1133,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     {
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),                                                                                 // build-server shutdown
             new(1, "error CS2012: Cannot open 'Core.dll' for writing because it is being used by another process."),
-            new(0, ""),                                                                                 // build-server shutdown (retry)
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")                              // dotnet test - retry passes
         ]);
 
@@ -1152,11 +1150,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         Assert.True(result.Retried);
         Assert.True(result.OutputTail is null);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(4, calls.Count);
-        Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
+        Assert.Equal(2, calls.Count);
+        AssertIsolatedTestCommand(calls[0]);
         AssertIsolatedTestCommand(calls[1]);
-        AssertIsolatedTestCommand(calls[3]);
-        Assert.Equal(GetArtifactsPath(calls[1]), GetArtifactsPath(calls[3]));
+        Assert.Equal(GetArtifactsPath(calls[0]), GetArtifactsPath(calls[1]));
         Assert.True(result.ArtifactsPath is not null);
         Assert.Contains(Path.Combine("goals", "abcd1234", "artifacts"), result.ArtifactsPath!, StringComparison.OrdinalIgnoreCase);
         var check = result.Checks!.Single(item => item.Name == "dotnet test");
@@ -1230,9 +1227,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
         var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(1, "MSB3491: Could not write lines to file because it is being used by another process."),
-            new(0, ""),
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process.")
         ]);
@@ -1254,10 +1249,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
             Assert.NotNull(blocked);
             Assert.Equal(lockedPath, blocked!.Attribution.Path);
-            Assert.Equal(5, calls.Count);
+            Assert.Equal(3, calls.Count);
+            AssertIsolatedTestCommand(calls[0]);
             AssertIsolatedTestCommand(calls[1]);
-            AssertIsolatedTestCommand(calls[3]);
-            AssertIsolatedTestCommand(calls[4]);
+            AssertIsolatedTestCommand(calls[2]);
             Assert.Contains("LOCK_TRANSIENT_WAIT ", output, StringComparison.Ordinal);
             Assert.Contains("max-cycles=2", output, StringComparison.Ordinal);
             Assert.Contains("cycle=2", output, StringComparison.Ordinal);
@@ -1279,9 +1274,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var killed = new List<int>();
         var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
-            new(0, ""),
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
             new(1, $"MSB3491: Could not write lines to file '{lockedPath}' because it is being used by another process.")
         ]);
@@ -1308,10 +1301,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
             Assert.Equal(lockedPath, blocked.Attribution.Path);
             Assert.Equal([987654], killed);
-            Assert.Equal(5, calls.Count);
+            Assert.Equal(3, calls.Count);
+            AssertIsolatedTestCommand(calls[0]);
             AssertIsolatedTestCommand(calls[1]);
-            AssertIsolatedTestCommand(calls[3]);
-            AssertIsolatedTestCommand(calls[4]);
+            AssertIsolatedTestCommand(calls[2]);
         }
         finally
         {
@@ -1325,7 +1318,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     {
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(1, "error CS2012: Cannot open 'Core.dll' for writing")
         ]);
 
@@ -1341,8 +1333,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         Assert.False(result.Retried);
         Assert.True(result.OutputTail is not null);
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal(2, calls.Count);
-        AssertIsolatedTestCommand(calls[1]);
+        Assert.Single(calls);
+        AssertIsolatedTestCommand(calls[0]);
         Assert.False(result.Checks!.Single(item => item.Name == "dotnet test").LockRemediationApplied);
     }
 
@@ -1364,16 +1356,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(calls.Count == 1
-                    ? new GoalAcceptanceVerifier.CommandResult(0, "")
-                    : new GoalAcceptanceVerifier.CommandResult(
-                        -1,
-                        "restore complete\nstill running infrastructure tests",
-                        TimedOut: true,
-                        CommandLine: "dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-                        StdoutPath: "C:\\temp\\acceptance.out",
-                        StderrPath: "C:\\temp\\acceptance.err",
-                        Timeout: TimeSpan.FromMinutes(10)));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    -1,
+                    "restore complete\nstill running infrastructure tests",
+                    TimedOut: true,
+                    CommandLine: "dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    StdoutPath: "C:\\temp\\acceptance.out",
+                    StderrPath: "C:\\temp\\acceptance.err",
+                    Timeout: TimeSpan.FromMinutes(10)));
             });
 
             var result = await verifier.RunAsync(
@@ -1382,7 +1372,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
             Assert.False(result.Passed);
             Assert.Equal(-1, result.ExitCode);
-            Assert.Equal(2, calls.Count);
+            Assert.Single(calls);
             var check = Assert.Single(result.Checks!.Where(check => !check.Passed));
             Assert.Equal("acceptance-check-timeout: focused-cli-infrastructure-tests elapsed=10m budget=10m", check.Name);
             Assert.False(check.Passed);
@@ -1406,7 +1396,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     {
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(0, "Test run succeeded.")
         ]);
 
@@ -1422,8 +1411,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         Assert.False(result.Retried);
         Assert.True(result.OutputTail is null);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal(2, calls.Count);
-        AssertIsolatedTestCommand(calls[1]);
+        Assert.Single(calls);
+        AssertIsolatedTestCommand(calls[0]);
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("dotnet test", result.Checks![0].Name);
     }

@@ -101,13 +101,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
             Assert.True(log.Contains("args=build Fake.Tests.csproj --no-restore --artifacts-path ", StringComparison.Ordinal));
+            Assert.True(log.Contains("-p:McgIsolatedArtifactsPath=", StringComparison.Ordinal));
             Assert.True(log.Contains("-maxcpucount:7 -p:BuildInParallel=false", StringComparison.Ordinal));
             Assert.Contains("args=", log, StringComparison.Ordinal);
             Assert.Contains("Fake.Tests.dll --filter-class *FocusedTests* --no-ansi --progress off", log, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("args=test", log, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("--filter FullyQualifiedName~FocusedTests", log, StringComparison.Ordinal);
             Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
-            Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
+            Assert.DoesNotContain("args=build-server shutdown", log, StringComparison.Ordinal);
             Assert.DoesNotContain("--disable-build-servers", log);
             Assert.DoesNotContain("-p:UseSharedCompilation=false", log);
             Assert.DoesNotContain("sandbox=1", log);

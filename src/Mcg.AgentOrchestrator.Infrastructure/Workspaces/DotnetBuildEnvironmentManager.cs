@@ -34,6 +34,10 @@ public sealed record DotnetBuildEnvironment(
         }
 
         arguments[artifactSwitches[0] + 1] = artifactsPath;
+        var isolatedArtifactsProperty = arguments
+            .Select((argument, index) => (argument, index))
+            .Single(item => item.argument.StartsWith("-p:McgIsolatedArtifactsPath=", StringComparison.OrdinalIgnoreCase));
+        arguments[isolatedArtifactsProperty.index] = $"-p:McgIsolatedArtifactsPath={artifactsPath}";
         return this with
         {
             ArtifactsPath = artifactsPath,
@@ -111,6 +115,7 @@ public static class DotnetBuildEnvironmentManager
     private const string LandingTestFixtureMarkerFileName = ".mcg-landing-fixture.json";
     private static readonly TimeSpan LandingFixtureMarkerStaleAge = TimeSpan.FromHours(2);
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
+    public const string GateBuildMaxCpuCountVariable = "MCG_GATE_BUILD_MAXCPUCOUNT";
     private const int ArtifactPrepBusyRetryLimit = 3;
     private static readonly TimeSpan ArtifactPrepBusyRetryDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan SlotBusyPollDelay = TimeSpan.FromMilliseconds(100);
@@ -120,6 +125,9 @@ public static class DotnetBuildEnvironmentManager
     private static readonly object LeaseJournalDrainGate = new();
     private static readonly HashSet<string> CurrentLandingFixtureRoots = new(StringComparer.OrdinalIgnoreCase);
     private static int s_nextStableSlotScanStart = -1;
+    private static int s_heldExecutionLeaseCount;
+    private static int s_compilerLockRecoveryRequested;
+    private static readonly object s_buildServerRecoverySync = new();
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
     internal static Action<int>? BeforeStaleLeaseIntegrityProbeForTests { get; set; }
     internal static Action? ShutdownBuildServersForTests { get; set; }
@@ -537,6 +545,49 @@ public static class DotnetBuildEnvironmentManager
         catch
         {
             // Best effort cleanup only; build/test result handling owns the real verdict.
+        }
+    }
+
+    private static bool ShutdownBuildServersForCompilerLockRecovery(bool requestRecovery = true)
+    {
+        lock (s_buildServerRecoverySync)
+        {
+            if (requestRecovery)
+                s_compilerLockRecoveryRequested = 1;
+            if (s_heldExecutionLeaseCount != 0 || s_compilerLockRecoveryRequested == 0)
+                return false;
+
+            s_compilerLockRecoveryRequested = 0;
+            ShutdownBuildServersBestEffort();
+            return true;
+        }
+    }
+
+    internal static void RegisterExecutionLease()
+    {
+        lock (s_buildServerRecoverySync)
+            s_heldExecutionLeaseCount++;
+    }
+
+    internal static void RequestCompilerLockRecovery()
+    {
+        lock (s_buildServerRecoverySync)
+            s_compilerLockRecoveryRequested = 1;
+    }
+
+    internal static void ReleaseExecutionLease(bool attemptPendingRecovery)
+    {
+        lock (s_buildServerRecoverySync)
+        {
+            s_heldExecutionLeaseCount--;
+            if (s_heldExecutionLeaseCount < 0)
+            {
+                s_heldExecutionLeaseCount = 0;
+                throw new InvalidOperationException("The held dotnet build execution lease count became negative.");
+            }
+
+            if (attemptPendingRecovery && s_heldExecutionLeaseCount == 0)
+                ShutdownBuildServersForCompilerLockRecovery(requestRecovery: false);
         }
     }
 
@@ -992,14 +1043,21 @@ public static class DotnetBuildEnvironmentManager
     [
         "--artifacts-path",
         artifactsPath,
+        $"-p:McgIsolatedArtifactsPath={artifactsPath}",
         $"-maxcpucount:{ResolveMaxCpuCount()}",
         "-p:BuildInParallel=false"
     ];
 
     private static int ResolveMaxCpuCount()
     {
-        var configured = Environment.GetEnvironmentVariable(BuildMaxCpuCountVariable);
+        var configured = Environment.GetEnvironmentVariable(GateBuildMaxCpuCountVariable);
         if (int.TryParse(configured, out var value) && value > 1)
+        {
+            return value;
+        }
+
+        configured = Environment.GetEnvironmentVariable(BuildMaxCpuCountVariable);
+        if (int.TryParse(configured, out value) && value > 1)
         {
             return value;
         }
@@ -1404,7 +1462,7 @@ public static class DotnetBuildEnvironmentManager
         if (!attemptedCompilerLockRemediation && IsCompilerLock(attribution))
         {
             attemptedCompilerLockRemediation = true;
-            ShutdownBuildServersBestEffort();
+            ShutdownBuildServersForCompilerLockRecovery();
             return ArtifactPrepLockRemediation.RetryImmediately;
         }
 
@@ -2676,6 +2734,7 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
         Environment = environment;
         _stream = stream;
         SlotWaitDuration = slotWaitDuration;
+        DotnetBuildEnvironmentManager.RegisterExecutionLease();
     }
 
     public DotnetBuildEnvironment Environment { get; }
@@ -2685,9 +2744,17 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
     internal FileStream DetachStreamForLegacyCaller()
     {
-        Interlocked.Exchange(ref _state, 1);
+        if (Interlocked.CompareExchange(ref _state, 1, 0) != 0)
+        {
+            throw new InvalidOperationException("The execution lock has already left lease custody.");
+        }
+
+        DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: false);
         return _stream;
     }
+
+    internal void MarkCompilerLockRemediationRequired() =>
+        DotnetBuildEnvironmentManager.RequestCompilerLockRecovery();
 
     internal void ReleaseExecutionLock()
     {
@@ -2728,11 +2795,11 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
         try
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersBestEffort();
+            _stream.Dispose();
         }
         finally
         {
-            _stream.Dispose();
+            DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: true);
         }
 
         Action? observer;

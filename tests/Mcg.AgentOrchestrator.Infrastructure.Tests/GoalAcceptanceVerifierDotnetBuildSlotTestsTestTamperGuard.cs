@@ -654,8 +654,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard : 
                 call.Contains("--filter-class") || call.Contains("--filter-not-class"),
                 "Each infrastructure shard must carry a translated MTP class filter.");
         // Each MTP shard runs a `dotnet build` before its executable, and there is no git diff
-        // call because no test files changed: shutdown + lane count * (build + executable).
-        Assert.Equal(1 + (laneCount * 2), calls.Count);
+        // call because no test files changed: lane count * (build + executable).
+        Assert.Equal(laneCount * 2, calls.Count);
         Assert.DoesNotContain(calls, call => call.Length >= 2 && call[0] == "git" && call[1] == "diff");
         DeleteDirectoryWithRetry(root);
     }
