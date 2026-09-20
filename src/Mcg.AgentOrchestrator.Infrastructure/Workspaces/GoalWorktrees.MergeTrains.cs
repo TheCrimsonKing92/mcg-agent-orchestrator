@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed class MergeTrainWorkspace : IDisposable
 {
     private readonly string _executionDirectory;
+    private readonly GoalWorktreeCleanupHooks _cleanupHooks;
     private bool _disposed;
 
     internal MergeTrainWorkspace(
@@ -14,9 +15,11 @@ public sealed class MergeTrainWorkspace : IDisposable
         string treeRevision,
         IReadOnlyList<MergeTrainMemberBinding> members,
         IReadOnlyList<MergeTrainEjection> ejections,
-        IReadOnlyDictionary<GoalId, string> originalBranchRevisions)
+        IReadOnlyDictionary<GoalId, string> originalBranchRevisions,
+        GoalWorktreeCleanupHooks cleanupHooks)
     {
         _executionDirectory = executionDirectory;
+        _cleanupHooks = cleanupHooks ?? throw new ArgumentNullException(nameof(cleanupHooks));
         Path = path;
         CommitRevision = commitRevision;
         TreeRevision = treeRevision;
@@ -57,7 +60,7 @@ public sealed class MergeTrainWorkspace : IDisposable
         }
         catch
         {
-            GoalWorktrees.RecordAcceptanceCohortCleanupNeeded(Path);
+            GoalWorktrees.RecordAcceptanceCohortCleanupNeeded(Path, _cleanupHooks);
             throw;
         }
     }
@@ -68,10 +71,12 @@ public static partial class GoalWorktrees
     public static MergeTrainWorkspace CreateMergeTrainWorkspace(
         string executionDirectory,
         string observedMainRevision,
-        IReadOnlyList<MergeTrainMemberBinding> members)
+        IReadOnlyList<MergeTrainMemberBinding> members,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(members);
+        var operationCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         if (members.Count is < 2 or > 3 || members.Select(member => member.GoalId).Distinct().Count() != members.Count)
         {
             throw new ArgumentException("A disposable merge train requires two or three distinct members.", nameof(members));
@@ -158,7 +163,8 @@ public static partial class GoalWorktrees
                 ResolveRequiredRef(workspacePath, "HEAD^{tree}"),
                 Array.AsReadOnly(materialized.ToArray()),
                 Array.AsReadOnly(ejections.ToArray()),
-                originalBranches);
+                originalBranches,
+                operationCleanupHooks);
             result.AssertGoalBranchesUnchanged();
             return result;
         }

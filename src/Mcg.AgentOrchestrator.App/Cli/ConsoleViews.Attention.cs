@@ -34,7 +34,13 @@ internal static partial class ConsoleViews
             }
             Console.WriteLine($"    flags: auto-defaultable={request.IsAutoDefaultable}; dismissible={request.IsDismissible}; answer-required={request.IsAnswerRequired}; externally-blocked={request.IsExternallyBlocked}");
             Console.WriteLine($"    question: {request.Question}");
-            Console.WriteLine($"    resume: {request.ResumeCommand}");
+            var resumeCommand = string.Equals(
+                request.ResumeCommand,
+                HumanInputRequest.BuildDefaultResumeCommand(request.Id),
+                StringComparison.Ordinal)
+                ? $"attention answer {request.GoalId.Value[..8]} {request.Id.Value[..8]} <answer>"
+                : request.ResumeCommand;
+            Console.WriteLine($"    resume: {resumeCommand}");
         }
 
         Console.WriteLine();

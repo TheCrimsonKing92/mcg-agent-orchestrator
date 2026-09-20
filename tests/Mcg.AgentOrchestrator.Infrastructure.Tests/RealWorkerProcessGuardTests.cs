@@ -224,7 +224,7 @@ public sealed class RealWorkerProcessGuardTests
 
         try
         {
-            var result = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+            var result = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
                 kernel,
                 [agent],
                 WorkerProfileCatalog.Default(),
@@ -381,23 +381,23 @@ public sealed class RealWorkerProcessGuardTests
 
     private sealed class PassingAcceptanceVerifier : IGoalAcceptanceVerifier
     {
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default) =>
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner) =>
             Task.FromResult(new AcceptanceVerificationResult(true, false, 0, "ok"));
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             Task.FromResult(new FocusedEvidenceRunResult(
                 request,
                 Accepted: true,

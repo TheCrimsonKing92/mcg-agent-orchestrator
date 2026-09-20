@@ -80,7 +80,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<double> _writeJitter;
-    private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
+    private readonly Func<string, ConductorGoalReloadObservation> _goalReloadObservation;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
     private readonly OrchestratorWorkspace? _workspace;
     // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
@@ -111,7 +111,7 @@ internal sealed partial class ConductorBatchLoop
         bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled,
         PostLandingCanaryCoordinator? postLandingCanary = null,
         AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null,
-        Func<string, GoalStatus?>? evictedGoalStatusLookup = null,
+        Func<string, ConductorGoalReloadObservation>? goalReloadObservation = null,
         ConductorLifecycleRecorder? lifecycleRecorder = null,
         Func<double>? writeJitter = null,
         TimeSpan? blockedRecheckHeartbeatInterval = null,
@@ -130,7 +130,7 @@ internal sealed partial class ConductorBatchLoop
         }
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
-        _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
+        _recoverInterruptedDispatches = kernel => { StaleDispatchProcessReconciler.Reconcile(kernel); recoverInterruptedDispatches?.Invoke(kernel); };
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => null);
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _operatorIntents = operatorIntents;
@@ -145,7 +145,7 @@ internal sealed partial class ConductorBatchLoop
         _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _writeJitter = writeJitter ?? Random.Shared.NextDouble;
-        _evictedGoalStatusLookup = evictedGoalStatusLookup ?? (_ => null);
+        _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
         if (_blockedRecheckHeartbeatInterval <= TimeSpan.Zero || _blockedRecheckHeartbeatInterval > TimeSpan.FromMinutes(10))
@@ -248,6 +248,7 @@ internal sealed partial class ConductorBatchLoop
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var setAsideGoals = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
         var selfClearedSetAsideEntries = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
+        var readmittedRetryReservations = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
         var escalatedGoals = new HashSet<string>(StringComparer.Ordinal);
         var reapedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -354,7 +355,8 @@ internal sealed partial class ConductorBatchLoop
             $"LOOP_START policy={Sanitize(policy.Name)} policySource={SanitizeReason(policySource)} maxIterations={maxIterations?.ToString() ?? "none"} " +
             $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +
             $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
-            $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap}" +
+            $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap} " +
+            $"acceptanceWidth={policy.AcceptanceWidth}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
         while (true)
@@ -588,7 +590,9 @@ internal sealed partial class ConductorBatchLoop
                 excludedGoals,
                 escalatedGoals,
                 reapedGoals,
-                goalProjectionCache);
+                goalProjectionCache,
+                _utcNow(),
+                readmittedRetryReservations);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
             ReconcileUnscopedDispatchableGoals(
                 kernel,
@@ -611,6 +615,7 @@ internal sealed partial class ConductorBatchLoop
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
             var preWalkIntentLines = new List<string>();
             var preWalkIntentProcessed = false;
+            var intentsAwaitingReload = 0;
             if (_operatorIntents is not null)
             {
                 try
@@ -646,19 +651,17 @@ internal sealed partial class ConductorBatchLoop
                             continue;
                         }
 
-                        var isOutsideScope = kernel.Goals.Any(goal => goal.Id.Value == actionableGoalId);
-                        var evictedStatus = isOutsideScope ? null : _evictedGoalStatusLookup(actionableGoalId);
-                        var reason = isOutsideScope
-                            ? $"goal is outside conductor scope {ShortGoalId(onlyGoalId!)}"
-                            : evictedStatus is not null
-                                ? $"goal was evicted from the conductor working set because its stored status is {evictedStatus}; the intent was not applicable"
-                                : "goal was not found in conductor state";
-                        var reasonCode = evictedStatus is not null
-                            ? OperatorIntentCoordinator.TerminalGoalEvictedReasonCode
-                            : null;
+                        var disposition = UnloadedGoalIntentDisposition.Decide(actionableGoalId, onlyGoalId, _goalReloadObservation);
+                        if (disposition is UnloadedGoalIntentDisposition.AwaitingReload)
+                        {
+                            intentsAwaitingReload++;
+                            EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=deferred reason=awaiting-goal-reload");
+                            continue;
+                        }
+                        var rejection = (UnloadedGoalIntentDisposition.Rejected)disposition;
                         try
                         {
-                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, reason, reasonCode);
+                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, rejection.Reason, rejection.ReasonCode);
                             preWalkIntentLines.AddRange(rejectedLines);
                             preWalkIntentProcessed |= rejectedLines.Count > 0;
                         }
@@ -832,9 +835,9 @@ internal sealed partial class ConductorBatchLoop
                     setAsideGoals,
                     transientRecheckableGoalIds: checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal));
                 var transientLoadRecheckPending = hasTransientLoadHold?.Invoke() == true;
-                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0 || transientLoadRecheckPending)
+                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0 || transientLoadRecheckPending || intentsAwaitingReload > 0)
                 {
-                    if (recheckableBlockedGoals > 0 || transientLoadRecheckPending)
+                    if (recheckableBlockedGoals > 0 || transientLoadRecheckPending || intentsAwaitingReload > 0)
                     {
                         blockedRecheckCycles++;
                         totalBlockedRechecks++;
@@ -1837,7 +1840,7 @@ internal sealed partial class ConductorBatchLoop
             return;
 
         var required = kind is "loop-start-deferred" or "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
-            "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
+            "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or "exit-unapplied" or
             "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
@@ -1876,6 +1879,8 @@ internal sealed partial class ConductorBatchLoop
             "ACCEPTANCE_LEASE_RELEASE" => "acceptance-lease",
             "ACCEPTANCE_LEASE_YIELD" or "ACCEPTANCE_LEASE_DEGRADE" => "acceptance-lease",
             "BUILD_LOCK_BLOCKED" => "lock-blocker",
+            // Named from the emitter so the operator-visible token and its classification cannot drift.
+            ConductorUnappliedExitWatch.EventName => "exit-unapplied",
             "GOAL" => ClassifyGoalEvent(line),
             "GOAL_STALLED" => "goal-stalled",
             "LOCK" => "lock-blocker",
@@ -2728,8 +2733,8 @@ internal sealed partial class ConductorBatchLoop
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds)
     {
-        var configuredAcceptanceWidth = DefaultParallelAcceptanceCapacity;
-        if (configuredAcceptanceWidth < 2)
+        var configuredAcceptanceWidth = policy.AcceptanceWidth;
+        if (configuredAcceptanceWidth < ConductorAutonomyPolicy.MinimumAcceptanceWidth)
         {
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         }
@@ -2764,7 +2769,7 @@ internal sealed partial class ConductorBatchLoop
             return results;
         }
 
-        var liveAttempts = activeReservations.Attempts;
+        var liveAttempts = activeReservations.Attempts.ToList();
         var activeCandidates = activeReservations.Candidates;
         var activeAttemptIds = activeReservations.AttemptIds;
         var activeAttemptSlotIndexes = activeReservations.StableSlotIndexes;
@@ -2955,13 +2960,30 @@ internal sealed partial class ConductorBatchLoop
             .Select(attempt => attempt.GoalId)
             .ToHashSet(StringComparer.Ordinal);
         var activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+        var activeCohortMemberGoalIds = driver.GetActiveCohortGateMemberGoalIds((memberGoalIds, detail) =>
+        {
+            var memberIds = memberGoalIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+            EmitProgress(
+                $"ACCEPTANCE_COHORT_INFLIGHT tick={tick} goal={memberIds[0][..8]} " +
+                $"members={string.Join(',', memberIds.Select(id => id[..8]))} {detail}");
+        });
+        var acceptanceCensus = CaptureLiveAcceptanceCensus(
+            liveAttempts,
+            activeAttemptIds,
+            activeCohortCapacity,
+            tick,
+            changedGoalLines,
+            blockAdmissionOnFailure: true);
         var cohortEligible = orderedEligible
-            .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value))
+            .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value) &&
+                           !activeCohortMemberGoalIds.Contains(goal.Id.Value))
             .ToArray();
         var productionCandidates = speculativeCandidates
-            .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
+            .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value) &&
+                                !activeCohortMemberGoalIds.Contains(candidate.GoalId.Value))
             .ToArray();
-        if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount < configuredAcceptanceWidth &&
+        var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
+        if (trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -2992,7 +3014,8 @@ internal sealed partial class ConductorBatchLoop
                 .ToArray();
         }
         GoalId? forcedCohortCandidate = null;
-        if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount < configuredAcceptanceWidth &&
+        var cohortAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
+        if (cohortAdmission.IsAdmitted &&
             driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -3011,22 +3034,61 @@ internal sealed partial class ConductorBatchLoop
                 EmitProgress(
                     $"ACCEPTANCE_COHORT_ENTRY tick={tick} goal={markerGoal} members={memberIds}");
                 ConductorAcceptanceCohortRunResult cohortRun;
+                ConductorAcceptanceCohortGateFault? gateFault;
                 var exitOutcome = "exception";
                 var exitReason = string.Empty;
                 try
                 {
-                    cohortRun = driver.RunAcceptanceCohort(
+                    var cohortOutcome = driver.RunAcceptanceCohortForTick(
                         cohortSelection,
                         cohortEligible,
                         policy,
                         onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
                         runGateInBackground: true);
-                    (exitOutcome, exitReason) = DescribeAcceptanceCohortExit(cohortRun);
+                    cohortRun = cohortOutcome.Run;
+                    gateFault = cohortOutcome.Fault;
+                    if (gateFault is { } observedFault)
+                    {
+                        var observedMemberIds = observedFault.MemberGoalIds
+                            .OrderBy(id => id, StringComparer.Ordinal)
+                            .ToArray();
+                        memberIds = string.Join(',', observedMemberIds.Select(id => id[..8]));
+                        markerGoal = observedMemberIds[0][..8];
+                    }
+                    (exitOutcome, exitReason) = gateFault is { } backgroundFault
+                        ? DescribeAcceptanceCohortGateFault(backgroundFault)
+                        : DescribeAcceptanceCohortExit(cohortRun);
+                }
+                catch (Exception cohortGateException)
+                {
+                    // The cohort gate is the conductor's own machinery. Nothing it throws is allowed to end
+                    // the tick: a transient fault is held and retried like the background attempt path does,
+                    // and anything else escalates both members on the spot. Either way it leaves as data.
+                    gateFault = ConductorDriver.CreateCohortGateFault(
+                        cohortSelection,
+                        cohortGateException);
+                    cohortRun = new ConductorAcceptanceCohortRunResult(
+                        Receipt: null,
+                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                        $"outcome=gate-fault fingerprint={gateFault.PairFingerprint} " +
+                        $"fault={gateFault.FaultType} detail={SanitizeReason(gateFault.Message)}");
+                    (exitOutcome, exitReason) = DescribeAcceptanceCohortGateFault(gateFault);
                 }
                 finally
                 {
                     EmitProgress(
                         $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}{exitReason}");
+                }
+                if (gateFault is { } cohortGateFault)
+                {
+                    cohortRun = ResolveFaultedAcceptanceCohort(
+                        driver,
+                        policy,
+                        cohortEligible,
+                        cohortRun,
+                        cohortGateFault,
+                        tick,
+                        changedGoalLines);
                 }
                 foreach (var pair in cohortRun.MemberResults)
                 {
@@ -3041,6 +3103,13 @@ internal sealed partial class ConductorBatchLoop
                     $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]))} {cohortRun.Detail}",
                     changedGoalLines);
                 activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+                acceptanceCensus = CaptureLiveAcceptanceCensus(
+                    liveAttempts,
+                    activeAttemptIds,
+                    activeCohortCapacity,
+                    tick,
+                    changedGoalLines,
+                    blockAdmissionOnFailure: true);
             }
             else if (cohortDecision.Exclusions.Count > 0)
             {
@@ -3122,6 +3191,7 @@ internal sealed partial class ConductorBatchLoop
                     throw new InvalidDataException(
                         $"Acceptance slot count {acceptanceSlotCount} must be between 1 and maximum {MaxParallelAcceptanceCapacity}.");
                 }
+                acceptanceSlotCount = Math.Min(acceptanceSlotCount, configuredAcceptanceWidth);
             }
             catch (Exception ex)
             {
@@ -3137,14 +3207,15 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            if (activeAttemptIds.Count + activeCohortCapacity.ActiveRootCount >= acceptanceSlotCount)
+            var ordinaryAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, acceptanceSlotCount);
+            if (!ordinaryAdmission.IsAdmitted)
             {
                 deferredByAdmission++;
                 results[goal.Id.Value] = new ParallelLandingOutcome(
                     ParallelAcceptanceHeld(
                         goal,
                         policy,
-                        $"candidate manifest slot cap {acceptanceSlotCount} reached; retry on next conduct tick"),
+                        ordinaryAdmission.Reason),
                     null);
                 continue;
             }
@@ -3320,6 +3391,7 @@ internal sealed partial class ConductorBatchLoop
                     ReserveParallelAcceptanceCandidate(
                         candidate,
                         decision.Attempt,
+                        liveAttempts,
                         activeCandidates,
                         activeAttemptIds,
                         activeAttemptSlotIndexes);
@@ -3349,6 +3421,7 @@ internal sealed partial class ConductorBatchLoop
                     ReserveParallelAcceptanceCandidate(
                         candidate,
                         decision.Attempt,
+                        liveAttempts,
                         activeCandidates,
                         activeAttemptIds,
                         activeAttemptSlotIndexes);
@@ -3410,6 +3483,13 @@ internal sealed partial class ConductorBatchLoop
                         changedGoalLines);
                     break;
             }
+            acceptanceCensus = CaptureLiveAcceptanceCensus(
+                liveAttempts,
+                activeAttemptIds,
+                activeCohortCapacity,
+                tick,
+                changedGoalLines,
+                blockAdmissionOnFailure: true);
             }
             catch (AcceptanceArtifactWriterLeaseBusyException ex)
             {
@@ -4366,7 +4446,9 @@ internal sealed partial class ConductorBatchLoop
         HashSet<string> excludedGoals,
         HashSet<string> escalatedGoals,
         HashSet<string> reapedGoals,
-        GoalProjectionCache goalProjectionCache)
+        GoalProjectionCache goalProjectionCache,
+        DateTimeOffset now,
+        HashSet<string> readmittedRetryReservations)
     {
         foreach (var entry in setAsideGoals.Values.ToArray())
         {
@@ -4378,6 +4460,26 @@ internal sealed partial class ConductorBatchLoop
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == entry.GoalId);
             if (goal is null || IsTerminalGoal(goal))
             {
+                continue;
+            }
+
+            if (entry.Condition == BatchSetAsideCondition.LifecycleEscalation &&
+                RetryReservationReadmission.TrySelectExpired(
+                    goal,
+                    now,
+                    readmittedRetryReservations,
+                    out var expiredTask,
+                    out var expiredReceipt))
+            {
+                readmittedRetryReservations.Add(expiredReceipt.ReceiptId);
+                goalProjectionCache.Invalidate(goal.Id);
+                setAsideGoals.Remove(entry.GoalId);
+                escalatedGoals.Remove(entry.GoalId);
+                reapedGoals.Remove(entry.GoalId);
+                kernel.RecordGoalPolicyDecision(
+                    goal.Id,
+                    $"Batch loop re-admitted goal after retry reservation expired: task={expiredTask.Id.Value[..8]}; " +
+                    $"receipt={expiredReceipt.ReceiptId}; expired={expiredReceipt.ReservationLeaseExpiresAt:O}.");
                 continue;
             }
 
@@ -4623,7 +4725,7 @@ internal sealed partial class ConductorBatchLoop
             return false;
         }
 
-        if (kernel.GetPendingHumanInput(goal.Id).Count > 0)
+        if (kernel.GetPendingBlockingHumanInput(goal.Id).Count > 0)
         {
             return false;
         }
@@ -4651,114 +4753,6 @@ internal sealed partial class ConductorBatchLoop
         foreach (var goal in scopedGoals)
         {
             unscopedDispatchableTicks.Remove(goal.Id.Value);
-        }
-    }
-
-    private static BatchSetAsideCondition GetSetAsideCondition(ConductorAdvanceResult result) =>
-        result.Outcome switch
-        {
-            ConductorAdvanceOutcome.Escalated { State: GoalLifecycleState.AwaitingClarification } =>
-                BatchSetAsideCondition.AwaitingClarification,
-            ConductorAdvanceOutcome.Escalated
-            {
-                State: GoalLifecycleState.Verified,
-                Reason: var reason
-            } when reason.StartsWith("pre-landing rebase conflict", StringComparison.OrdinalIgnoreCase) =>
-                BatchSetAsideCondition.PreLandingRebaseConflict,
-            _ => BatchSetAsideCondition.LifecycleEscalation
-        };
-
-    private static void SetAside(
-        AgentOrchestratorKernel kernel,
-        ConductorDriver driver,
-        Goal goal,
-        BatchSetAsideCondition condition,
-        Dictionary<string, BatchSetAsideEntry> setAsideGoals,
-        Dictionary<string, BatchSetAsideEntry>? selfClearedSetAsideEntries = null,
-        TerminalGoalSweepResult? sweepResult = null)
-    {
-        goal = kernel.GetGoal(goal.Id);
-        BatchSetAsideEntry? selfClearedEntry = null;
-        if (selfClearedSetAsideEntries is not null)
-        {
-            selfClearedSetAsideEntries.TryGetValue(goal.Id.Value, out selfClearedEntry);
-        }
-        var lastSelfClearEvidenceFingerprint =
-            condition is BatchSetAsideCondition.PreLandingRebaseConflict or BatchSetAsideCondition.LifecycleEscalation
-                ? selfClearedEntry?.LastSelfClearEvidenceFingerprint
-                : null;
-        var sweepBlocker = condition == BatchSetAsideCondition.LifecycleEscalation
-            ? SelectControllingSweepBlocker(sweepResult?.Goals
-                .Where(result => result.GoalId == goal.Id)
-                .SelectMany(result => result.Blockers) ?? [])
-            : null;
-        selfClearedSetAsideEntries?.Remove(goal.Id.Value);
-        setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(
-            goal.Id.Value,
-            condition,
-            BuildEscalatedGoalStateFingerprint(goal),
-            lastSelfClearEvidenceFingerprint,
-            sweepBlocker?.Kind,
-            sweepBlocker is null
-                ? null
-                : BuildSweepBlockerFingerprint(sweepBlocker));
-    }
-
-    private static TerminalGoalSweepBlocker? SelectControllingSweepBlocker(
-        IEnumerable<TerminalGoalSweepBlocker> blockers) =>
-        blockers
-            .OrderBy(blocker => blocker.Remedy.SafetyClass == TerminalGoalRemedySafetyClass.OperatorOnly ? 0 : 1)
-            .ThenBy(blocker => blocker.Kind, StringComparer.Ordinal)
-            .ThenBy(blocker => blocker.Evidence, StringComparer.Ordinal)
-            .ThenBy(blocker => blocker.Command, StringComparer.Ordinal)
-            .FirstOrDefault();
-
-    private static string BuildSweepBlockerFingerprint(TerminalGoalSweepBlocker blocker) =>
-        $"{blocker.Kind}\n{blocker.Evidence}\n{blocker.Command}";
-
-    private static string BuildEscalatedGoalStateFingerprint(Goal goal)
-    {
-        var taskParts = goal.Tasks
-            .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
-            .Select(task =>
-                string.Join(
-                    ":",
-                    new[]
-                    {
-                    task.Id.Value,
-                    $"candidate={task.LastDispatch?.ResultCommit?.Trim() ?? task.LastVerification?.ReviewedCommit?.Trim() ?? "none"}",
-                    task.Status.ToString(),
-                    task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}",
-                    task.LatestRetryAt is null ? "retry=none" : $"retry={task.LatestRetryAt.Value.UtcTicks}"
-                    }));
-
-        return string.Join("|", taskParts);
-    }
-
-    private static string TryResolveLifecycleState(ConductorDriver driver, Goal goal)
-    {
-        try
-        {
-            return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString();
-        }
-        catch
-        {
-            return "LifecycleState=unknown";
-        }
-    }
-
-    private static string TryResolveLifecycleState(
-        GoalProjectionCache goalProjectionCache,
-        ConductorDriver driver,
-        Goal goal)
-    {
-        try
-        {
-            return goalProjectionCache.ResolveState(goal, driver).ToString();
-        }
-        catch
-        {
-            return "LifecycleState=unknown";
         }
     }
 

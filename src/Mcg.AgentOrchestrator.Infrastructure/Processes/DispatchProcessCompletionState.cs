@@ -21,4 +21,24 @@ public static class DispatchProcessCompletionState
         process is { CompletedAt: not null, ExitCode: not null } &&
         !process.WasCancelled &&
         !HasAlreadyBeenApplied(task, process);
+
+    /// <summary>
+    /// Widens <see cref="IsExitedWithoutAppliedCompletion(TaskSpec, TaskProcessRecord)"/> to also count a
+    /// round whose exit artifact is already on disk but has never been read back onto the process record.
+    /// That shape — a durably Running process with a present exit artifact — is precisely the round whose
+    /// exit sits unapplied, and it is invisible to the record-only predicate.
+    /// </summary>
+    public static bool IsExitedWithoutAppliedCompletion(
+        TaskSpec task,
+        TaskProcessRecord process,
+        Func<string, bool> exitArtifactExists)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(exitArtifactExists);
+
+        return !process.WasCancelled &&
+               !HasAlreadyBeenApplied(task, process) &&
+               (process is { CompletedAt: not null, ExitCode: not null } ||
+                (!string.IsNullOrWhiteSpace(process.ExitCodePath) && exitArtifactExists(process.ExitCodePath)));
+    }
 }

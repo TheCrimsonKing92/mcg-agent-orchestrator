@@ -3,48 +3,47 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal static class GoalWorktreeOrphanSweepScheduler
+internal sealed class GoalWorktreeOrphanSweepScheduler
 {
-    private static readonly object Gate = new();
-    private static readonly Dictionary<string, DateTimeOffset> LastSweepByDirectory = new(StringComparer.OrdinalIgnoreCase);
+    private readonly GoalWorktreeCleanupHooks hooks;
+    private readonly object gate = new();
+    private readonly Dictionary<string, DateTimeOffset> lastSweepByDirectory = new(StringComparer.OrdinalIgnoreCase);
 
-    public static GoalWorktreeCleanupOptions Options { get; private set; } = GoalWorktreeCleanupOptions.Default;
-
-    public static void Configure(GoalWorktreeCleanupOptions options, string? attentionStoreDirectory = null)
+    public GoalWorktreeOrphanSweepScheduler(GoalWorktreeCleanupHooks hooks)
     {
-        Options = options.Validate();
-        GoalWorktrees.ConfigureCleanup(Options, attentionStoreDirectory);
+        this.hooks = hooks ?? throw new ArgumentNullException(nameof(hooks));
+        Options = hooks.CleanupOptions().Validate();
     }
 
-    public static GoalWorktreeSweepResult SweepNow(
+    public GoalWorktreeCleanupOptions Options { get; }
+
+    public GoalWorktreeSweepResult SweepNow(
         string executionDirectory,
-        AgentOrchestratorKernel? kernel = null,
-        GoalWorktreeCleanupHooks? hooks = null)
+        AgentOrchestratorKernel? kernel = null)
     {
         var result = GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, hooks);
-        lock (Gate)
+        lock (gate)
         {
-            LastSweepByDirectory[Normalize(executionDirectory)] = DateTimeOffset.UtcNow;
+            lastSweepByDirectory[Normalize(executionDirectory)] = hooks.CleanupUtcNow();
         }
 
         return result;
     }
 
-    public static GoalWorktreeSweepResult SweepIfDue(
+    public GoalWorktreeSweepResult SweepIfDue(
         string executionDirectory,
-        AgentOrchestratorKernel? kernel = null,
-        GoalWorktreeCleanupHooks? hooks = null)
+        AgentOrchestratorKernel? kernel = null)
     {
-        lock (Gate)
+        lock (gate)
         {
-            if (LastSweepByDirectory.TryGetValue(Normalize(executionDirectory), out var lastSweep) &&
-                DateTimeOffset.UtcNow - lastSweep < Options.SweepInterval)
+            if (lastSweepByDirectory.TryGetValue(Normalize(executionDirectory), out var lastSweep) &&
+                hooks.CleanupUtcNow() - lastSweep < Options.SweepInterval)
             {
                 return new GoalWorktreeSweepResult(0, []);
             }
         }
 
-        return SweepNow(executionDirectory, kernel, hooks);
+        return SweepNow(executionDirectory, kernel);
     }
 
     private static string Normalize(string path) =>

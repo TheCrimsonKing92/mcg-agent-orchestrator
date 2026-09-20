@@ -1298,7 +1298,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     }
     finally
     {
-        _ = GoalWorktrees.DeleteDirectory(root);
+        _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
     }
 }
 
@@ -1351,7 +1351,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     }
     finally
     {
-        _ = GoalWorktrees.DeleteDirectory(root);
+        _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
     }
 }
 

@@ -900,6 +900,44 @@ public sealed class ConductorDriverTestsContractRepairBounds
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_retry_warning_is_recorded_on_the_target_task")]
+    public void ConductorDriverReviewerRetryWarningIsRecordedOnTheTargetTask()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            PassVerification(kernel, goal, task);
+
+        for (var round = 1; round <= 3; round++)
+        {
+            kernel.RetryTask(goal.Id, developer.Id, $"auto-review-retry round {round}: prior reviewer finding");
+            PassVerification(kernel, goal, developer);
+        }
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Developer still misses the review blocker.");
+        var notes = new List<(TaskId TaskId, string Message)>();
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+            recordTaskNote: (goalId, taskId, message) =>
+            {
+                notes.Add((taskId, message));
+                kernel.RecordTaskNote(goalId, taskId, message);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Contains(notes, note =>
+            note.TaskId == developer.Id &&
+            note.Message.Contains("auto-review-retry escalation-warning round 4/6", StringComparison.Ordinal));
+        Assert.Contains(goal.Timeline, item =>
+            item.TaskId == developer.Id &&
+            item.Message.Contains("auto-review-retry escalation-warning round 4/6", StringComparison.Ordinal));
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_needs_work_round_7_stops_and_escalates")]
     public void ConductorDriverReviewerNeedsWorkRound7StopsAndEscalates()
     {
@@ -1139,7 +1177,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             var profiles = WorkerProfileCatalog.Default();
             if (path == "ready-batch")
             {
-                var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+                var batch = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(
                     kernel,
                     workspace,
                     goal,
@@ -1149,7 +1187,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             }
             else if (path == "profile")
             {
-                GoalManagementCommandService.ProfileDispatchTask(
+                new GoalDispatchOperations().ProfileDispatchTask(
                     kernel,
                     workspace,
                     goal,
@@ -1159,7 +1197,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             }
             else
             {
-                GoalManagementCommandService.SubscriptionDispatchTask(
+                new GoalDispatchOperations().SubscriptionDispatchTask(
                     kernel,
                     workspace,
                     goal,
@@ -1168,7 +1206,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
                     profiles);
                 if (path == "refresh")
                 {
-                    GoalManagementCommandService.RefreshPreparedDispatchBeforeStart(
+                    new GoalDispatchOperations().RefreshPreparedDispatchBeforeStart(
                         kernel,
                         workspace,
                         goal,

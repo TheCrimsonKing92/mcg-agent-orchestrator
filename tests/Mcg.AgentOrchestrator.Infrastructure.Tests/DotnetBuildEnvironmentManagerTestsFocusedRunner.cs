@@ -7,9 +7,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerFocusedRunner)]
+public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuildEnvironmentManagerRootedTestBase
 {
+    // Failsafe budget for FocusedRunner_AllSlotsHeld_ReportsNoSlotWithoutStartingDotnet. It is
+    // inside the script's documented 1-to-300 BudgetSeconds range and exists only so a genuine
+    // hang still terminates; the fact asserts nothing about elapsed time.
+    private const int NoSlotBudgetFailsafeSeconds = 120;
+
     private static (int ExitCode, string Stdout, string Stderr) RunFocusedScript(
         string scriptPath,
         string workDirectory,
@@ -901,9 +906,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             return;
         }
 
-        // This is a conservative setup/cleanup ceiling, not a measured setup-latency percentile.
-        // The lease phase remains the one-second condition exercised by this fixture.
-        const int totalBudgetSeconds = 8;
+        // The budget is a failsafe that bounds a genuine hang; it is not a deadline this fact
+        // asserts against, and it must stay far above any setup latency a loaded gate machine can
+        // produce so the receipt reports no-slot rather than budget-exceeded. The one-second lease
+        // wait is the condition under test: it is the only phase allowed to decide the outcome.
         const int leaseWaitSeconds = 1;
 
         var repoRoot = ResolveRepositoryRoot();
@@ -951,7 +957,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
                 receiptPath,
                 logPath,
                 "no-slot-test",
-                budgetSeconds: totalBudgetSeconds,
+                budgetSeconds: NoSlotBudgetFailsafeSeconds,
                 leaseWaitSeconds: leaseWaitSeconds,
                 projectFile);
 
@@ -996,8 +1002,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
     [Xunit.Fact]
     public void AcceptanceLease_ReservesPriorityUntilFocusedSlotIsReleased()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+        var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot,
             new GoalId("cccccccccccccccccccccccccccccccc"),
             "priority-test");
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
@@ -1021,7 +1026,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
     [Xunit.Fact]
     public void FocusedRunner_ConcurrentInvocations_NeverExceedSharedGrid()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var source = ReadIsolatedDotnetScript();
         Assert.Contains("Join-Path $lockDirectory \"build-$slot.lock\"", source, StringComparison.Ordinal);
 
@@ -1036,7 +1040,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner
             var signaled = false;
             try
             {
-                var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+                var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot,
                     new GoalId((index + 1).ToString("x8", System.Globalization.CultureInfo.InvariantCulture) + new string('0', 24)),
                     $"focused-concurrency-{index}");
                 start.Wait();

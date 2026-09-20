@@ -91,9 +91,10 @@ internal static class GateLoadContextProbe
 {
     private const string CrossProcessCounterUnavailable = "cross-process-counter-unavailable";
     private const double MinimumCpuSampleWindowMilliseconds = 200;
-    private static readonly TimeSpan LiveGateHeartbeatFreshness = TimeSpan.FromMinutes(2);
+    internal static readonly TimeSpan LiveGateHeartbeatFreshness = TimeSpan.FromMinutes(2);
     private static readonly object CpuSync = new();
     private static readonly AsyncLocal<Func<int?>?> ConcurrentGateCountProbeOverride = new();
+    private static readonly AsyncLocal<Func<IReadOnlyList<LiveGateOccupant>>?> LiveGateOccupantProbeOverride = new();
     private static readonly AsyncLocal<Func<int?>?> InFlightWorkerDispatchProbeOverride = new();
     private static readonly AsyncLocal<Func<HostCpuSample>?> HostCpuProbeOverride = new();
     private static CpuTimes? _previousCpuTimes;
@@ -176,6 +177,14 @@ internal static class GateLoadContextProbe
     internal static IDisposable PushConcurrentGateCountProbe(Func<int?> probe) =>
         PushCountProbe(ConcurrentGateCountProbeOverride, probe);
 
+    internal static IDisposable PushLiveGateOccupantProbe(Func<IReadOnlyList<LiveGateOccupant>> probe)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        var previous = LiveGateOccupantProbeOverride.Value;
+        LiveGateOccupantProbeOverride.Value = probe;
+        return new RestoreAction(() => LiveGateOccupantProbeOverride.Value = previous);
+    }
+
     internal static IDisposable PushInFlightWorkerDispatchProbe(Func<int?> probe) =>
         PushCountProbe(InFlightWorkerDispatchProbeOverride, probe);
 
@@ -227,38 +236,61 @@ internal static class GateLoadContextProbe
 
     private static int? CaptureUnavailableWorkerDispatchCount() => null;
 
-    private static int? CaptureConcurrentGateCount()
+    internal static IReadOnlyList<LiveGateOccupant> CaptureLiveGateOccupants()
+    {
+        var observed = (LiveGateOccupantProbeOverride.Value ?? ReadLiveGateOccupants)();
+        return observed
+            .Where(occupant => occupant.HeartbeatAge <= LiveGateHeartbeatFreshness)
+            .GroupBy(occupant => occupant.Identity, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(occupant => occupant.Identity, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants()
     {
         var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0));
-        if (string.IsNullOrWhiteSpace(heartbeatDirectory) || !Directory.Exists(heartbeatDirectory))
+        if (string.IsNullOrWhiteSpace(heartbeatDirectory))
         {
             throw new LoadProbeUnavailableException("gate-heartbeat-directory-unavailable");
         }
 
-        var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(heartbeatDirectory))
+        {
+            return [];
+        }
+
+        var occupants = new List<LiveGateOccupant>();
         foreach (var status in GateHeartbeatArtifacts.ReadStableSlots())
         {
             var snapshot = status.Snapshot;
             if (!status.IsAvailable ||
                 snapshot is null ||
                 !string.Equals(snapshot.State, "running", StringComparison.OrdinalIgnoreCase) ||
-                status.HeartbeatAge is not { } heartbeatAge ||
-                heartbeatAge > LiveGateHeartbeatFreshness)
+                status.HeartbeatAge is not { } heartbeatAge)
             {
                 continue;
             }
 
-            if (snapshot.ProcessId == Environment.ProcessId)
-            {
-                continue;
-            }
-
-            identities.Add(snapshot.ProcessId is > 0
-                ? $"pid:{snapshot.ProcessId.Value}"
-                : $"goal:{snapshot.GoalId ?? status.Path}");
+            occupants.Add(new LiveGateOccupant(
+                snapshot.ProcessId,
+                snapshot.GoalId,
+                status.SlotIndex,
+                heartbeatAge,
+                status.Path));
         }
 
-        return identities.Count + 1;
+        return occupants;
+    }
+
+    private static int? CaptureConcurrentGateCount()
+    {
+        var otherGateCount = CaptureLiveGateOccupants()
+            .Where(occupant => occupant.ProcessId != Environment.ProcessId)
+            .Select(occupant => occupant.Identity)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        return otherGateCount + 1;
     }
 
     private static string Format(GateLoadSample? sample) =>
@@ -332,6 +364,18 @@ internal static class GateLoadContextProbe
     private readonly record struct CpuTimes(ulong Idle, ulong Kernel, ulong User, long Timestamp);
 
     internal readonly record struct HostCpuSample(double UtilizationPercent, int ProcessorCount, double WindowMilliseconds);
+
+    internal sealed record LiveGateOccupant(
+        int? ProcessId,
+        string? GoalId,
+        int SlotIndex,
+        TimeSpan HeartbeatAge,
+        string SourcePath = "")
+    {
+        internal string Identity => ProcessId is > 0
+            ? $"pid:{ProcessId.Value}"
+            : $"goal:{GoalId ?? SourcePath}";
+    }
 
     internal sealed class LoadProbeUnavailableException(string reason) : Exception(reason)
     {

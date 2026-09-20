@@ -100,7 +100,7 @@ public static partial class DashboardRenderer
     {
         options ??= new DashboardRenderOptions();
         var processInspection = new ProcessInspectionSnapshotScope(
-            processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation);
+            processSnapshotFactory ?? ProcessInspectionSnapshots.SnapshotOperation);
         var goals = kernel.Goals
             .OrderByDescending(goal => goal.Timeline.LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
             .ToList();

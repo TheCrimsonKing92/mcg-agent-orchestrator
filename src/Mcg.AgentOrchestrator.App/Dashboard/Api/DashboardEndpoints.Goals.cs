@@ -20,12 +20,16 @@ internal static partial class DashboardEndpoints
                 (current, enqueue) =>
                 {
                     var isSimple = submission.Workflow?.Equals("simple", StringComparison.OrdinalIgnoreCase) is true;
-                    var goal = isSimple
-                        ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(current, agents, submission.Objective, services.Workspace, services.Providers)
-                        : GoalLifecycleCommands.CreateAndActivateGoal(current, agents, submission.Objective, services.Workspace, services.Providers);
+                    var goal = DashboardApplicationServices.CreateAndActivateGoal(
+                        current,
+                        agents,
+                        submission.Objective,
+                        services.Workspace,
+                        services.Providers,
+                        isSimple);
                     createdGoalId = goal.Id;
-                    GoalRefinementWorkCoordinator.RecordPending(current, goal.Id);
-                    enqueue(GoalRefinementWorkCoordinator.CreateMessage(goal.Id));
+                    DashboardApplicationServices.RecordRefinementPending(current, goal.Id);
+                    enqueue(DashboardApplicationServices.CreateRefinementMessage(goal.Id));
                     return Task.FromResult<IResult>(Json(
                         BuildCreatedGoalResponse(current, goal, services.Workspace.ExecutionDirectory),
                         StatusCodes.Status201Created));
@@ -35,7 +39,7 @@ internal static partial class DashboardEndpoints
             var goalId = createdGoalId
                 ?? throw new InvalidOperationException("Dashboard goal creation did not return a goal identity.");
 
-            _ = GoalRefinementWorkCoordinator.TryLaunch(services.Workspace, goalId);
+            DashboardApplicationServices.LaunchRefinement(services.Workspace, goalId);
             if (!submission.AutoHandoff)
                 return creationResult;
 
@@ -137,7 +141,7 @@ internal static partial class DashboardEndpoints
             current,
             goal,
             workerProfiles,
-            ProcessCommandLines.SnapshotOperation(),
+            ProcessInspectionSnapshots.SnapshotOperation(),
             agents,
             BuildHostInfo(services),
             services.Workspace.ExecutionDirectory,
@@ -625,7 +629,7 @@ internal static partial class DashboardEndpoints
         }
 
         var runner = new BackgroundDispatchRunner();
-        var processInspection = new ProcessInspectionSnapshotScope(ProcessCommandLines.SnapshotOperation);
+        var processInspection = new ProcessInspectionSnapshotScope(ProcessInspectionSnapshots.SnapshotOperation);
         var outcome = runner.ReconcileLatestProcess(snapshot, snapshotGoal.Id, snapshotTask.Id);
         return await MutateAsync(
             services,

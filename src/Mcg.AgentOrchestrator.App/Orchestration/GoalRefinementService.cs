@@ -145,14 +145,23 @@ internal sealed class GoalRefinementService
 
         var acceptanceCriteria = ResolveAcceptanceCriteria(goal.Objective, output.AcceptanceCriteria);
         var operatorOwnedCriteria = goal.RefinedSpec?.OperatorOwnedAcceptanceCriteria.ToList() ?? [];
+        AddOwnedCriteria(operatorOwnedCriteria, acceptanceCriteria, output.OperatorOwnedAcceptanceCriteria);
         var scenarioBackedCriteria = ApplyFeasibilityResolutions(
             acceptanceCriteria,
             operatorOwnedCriteria,
             resolvedClarifications);
+        var acceptanceGateOwnedCriteria = ResolveOwnedCriteria(
+            acceptanceCriteria,
+            output.AcceptanceGateOwnedAcceptanceCriteria,
+            operatorOwnedCriteria);
         var feasibilityFindings = AcceptanceCriterionFeasibility
             .Evaluate(acceptanceCriteria, AgentRole.Developer)
-            .Where(finding => !scenarioBackedCriteria.Contains(finding.Criterion))
+            .Where(finding =>
+                !scenarioBackedCriteria.Contains(finding.Criterion) &&
+                !operatorOwnedCriteria.Contains(finding.Criterion, StringComparer.OrdinalIgnoreCase))
             .ToList();
+        foreach (var diagnostic in output.ParseDiagnostics)
+            kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner parse diagnostic: {diagnostic}");
 
         var openQuestions = new List<RefinedSpecOpenQuestion>();
         var raisedClarificationRound = false;
@@ -325,6 +334,7 @@ internal sealed class GoalRefinementService
             openQuestions)
         {
             OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria,
+            AcceptanceGateOwnedAcceptanceCriteria = acceptanceGateOwnedCriteria,
             ClarificationAnswerHistory = clarificationAnswerHistory
         };
 
@@ -903,6 +913,7 @@ internal sealed class GoalRefinementService
 
         var workerCriteria = spec.AcceptanceCriteria.ToList();
         var operatorOwnedCriteria = spec.OperatorOwnedAcceptanceCriteria.ToList();
+        var acceptanceGateOwnedCriteria = spec.AcceptanceGateOwnedAcceptanceCriteria.ToList();
         var criterionIndex = workerCriteria.FindIndex(criterion =>
             string.Equals(criterion.Trim(), question.Criterion.Trim(), StringComparison.OrdinalIgnoreCase));
         if (criterionIndex < 0 && disposition.Kind is not FeasibilityDisposition.ReproducingScenario)
@@ -915,14 +926,20 @@ internal sealed class GoalRefinementService
         if (disposition.Kind == FeasibilityDisposition.ReScope && criterionIndex >= 0)
         {
             replacement = disposition.Value!;
+            var previousCriterion = workerCriteria[criterionIndex];
             workerCriteria[criterionIndex] = replacement;
+            var gateIndex = acceptanceGateOwnedCriteria.FindIndex(item =>
+                string.Equals(item.Trim(), previousCriterion.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (gateIndex >= 0)
+                acceptanceGateOwnedCriteria[gateIndex] = replacement;
         }
         else if (disposition.Kind == FeasibilityDisposition.OperatorOwned && criterionIndex >= 0)
         {
             var operatorCriterion = workerCriteria[criterionIndex];
-            workerCriteria.RemoveAt(criterionIndex);
             if (!operatorOwnedCriteria.Contains(operatorCriterion, StringComparer.OrdinalIgnoreCase))
                 operatorOwnedCriteria.Add(operatorCriterion);
+            acceptanceGateOwnedCriteria.RemoveAll(item =>
+                string.Equals(item.Trim(), operatorCriterion.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
         var questions = spec.OpenQuestions
@@ -1013,7 +1030,8 @@ internal sealed class GoalRefinementService
             AcceptanceCriteria = workerCriteria,
             Decisions = decisions,
             OpenQuestions = questions,
-            OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria
+            OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria,
+            AcceptanceGateOwnedAcceptanceCriteria = acceptanceGateOwnedCriteria
         };
         kernel.SetGoalRefinedSpec(goalId, updated);
         if (raisedClarificationRound)
@@ -1240,7 +1258,6 @@ internal sealed class GoalRefinementService
                     break;
                 case FeasibilityDisposition.OperatorOwned when criterionIndex >= 0:
                     var operatorCriterion = workerCriteria[criterionIndex];
-                    workerCriteria.RemoveAt(criterionIndex);
                     if (!operatorOwnedCriteria.Contains(operatorCriterion, StringComparer.OrdinalIgnoreCase))
                         operatorOwnedCriteria.Add(operatorCriterion);
                     break;
@@ -1251,6 +1268,32 @@ internal sealed class GoalRefinementService
         }
 
         return scenarioBacked;
+    }
+
+    private static void AddOwnedCriteria(
+        List<string> target,
+        IReadOnlyList<string> acceptanceCriteria,
+        IReadOnlyList<string> requestedOwners)
+    {
+        foreach (var criterion in ResolveOwnedCriteria(acceptanceCriteria, requestedOwners, []))
+        {
+            if (!target.Contains(criterion, StringComparer.OrdinalIgnoreCase))
+                target.Add(criterion);
+        }
+    }
+
+    private static List<string> ResolveOwnedCriteria(
+        IReadOnlyList<string> acceptanceCriteria,
+        IReadOnlyList<string> requestedOwners,
+        IReadOnlyList<string> excludedOwners)
+    {
+        return acceptanceCriteria
+            .Where(criterion => requestedOwners.Any(requested =>
+                string.Equals(requested.Trim(), criterion.Trim(), StringComparison.OrdinalIgnoreCase)))
+            .Where(criterion => !excludedOwners.Any(excluded =>
+                string.Equals(excluded.Trim(), criterion.Trim(), StringComparison.OrdinalIgnoreCase)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string BuildResolutionText(CollaborationItem item) =>

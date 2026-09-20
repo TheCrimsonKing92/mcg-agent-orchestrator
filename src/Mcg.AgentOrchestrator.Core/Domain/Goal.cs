@@ -11,6 +11,7 @@ public sealed class Goal
     private readonly List<GoalBriefVersion> _briefVersions = [];
     private readonly List<RefinedSpecVersion> _refinedSpecVersions = [];
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
+    private readonly List<CriterionEvidenceObligation> _criterionEvidenceObligations = [];
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
@@ -111,6 +112,24 @@ public sealed class Goal
 
     public IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> EffectiveAcceptanceCriteriaCorrections => _effectiveAcceptanceCriteriaCorrections;
 
+    // The invariant is a goal-level outstanding proof obligation, not a task
+    // result. Only refinement or an attributed operator action may set Owner.
+    public IReadOnlyList<CriterionEvidenceObligation> CriterionEvidenceObligations => _criterionEvidenceObligations;
+
+    public IReadOnlyList<CriterionEvidenceObligation> OutstandingCriterionEvidenceObligations =>
+        _criterionEvidenceObligations.Where(obligation =>
+            obligation.State is not (CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired) &&
+            IsCurrentCriterionEvidenceObligation(obligation)).ToArray();
+
+    public IReadOnlyList<CriterionEvidenceObligation> GetOutstandingCriterionEvidenceObligations(string? candidateSha) =>
+        _criterionEvidenceObligations.Where(obligation =>
+            obligation.State != CriterionEvidenceState.Repaired &&
+            IsCurrentCriterionEvidenceObligation(obligation) && !obligation.HasSatisfiedEvidenceFor(candidateSha)).ToArray();
+
+    private bool IsCurrentCriterionEvidenceObligation(CriterionEvidenceObligation obligation) =>
+        obligation.Owner == CriterionEvidenceOwner.Unknown ||
+        !_refinedSpecVersions.Any(version => version.Version == obligation.CriterionVersion && version.IsSuperseded);
+
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
 
     public bool IsMetadataOnly { get; }
@@ -190,11 +209,382 @@ public sealed class Goal
                 spec,
                 recordedAt,
                 AuthoritativeBrief.Version));
+            EnsureCriterionEvidenceObligations(spec, criterionVersion: 1, recordedAt);
             return;
         }
 
         var currentIndex = _refinedSpecVersions.FindIndex(version => version.Version == current.Version);
         _refinedSpecVersions[currentIndex] = current with { Spec = spec };
+        EnsureCriterionEvidenceObligations(spec, current.Version, recordedAt);
+    }
+
+    internal void RestoreCriterionEvidenceObligations(IReadOnlyList<CriterionEvidenceObligation>? obligations)
+    {
+        _criterionEvidenceObligations.Clear();
+        foreach (var obligation in obligations ?? [])
+        {
+            if (!IsValidCriterionEvidenceObligation(obligation) ||
+                _criterionEvidenceObligations.Any(existing => string.Equals(existing.Id, obligation.Id, StringComparison.Ordinal)))
+            {
+                _criterionEvidenceObligations.Add(CreateMalformedCriterionEvidenceObligation(obligation));
+                continue;
+            }
+
+            _criterionEvidenceObligations.Add(obligation);
+        }
+
+        // Persisted receipts supplement the spec's obligations; a missing row
+        // cannot remove a proof requirement during restore.
+        foreach (var version in _refinedSpecVersions)
+        {
+            EnsureCriterionEvidenceObligations(version.Spec, version.Version, version.RecordedAt);
+        }
+
+        ValidateRepairedCriterionEvidenceObligationTargets();
+    }
+
+    private bool IsValidCriterionEvidenceObligation(CriterionEvidenceObligation? obligation)
+    {
+        if (obligation is null) return false;
+        // A repaired malformed claim deliberately retains its original, possibly
+        // non-criterion-shaped identity as an audited history record.  Its
+        // replacement is the only live evidence obligation.
+        if (obligation.Owner == CriterionEvidenceOwner.Unknown &&
+            obligation.State == CriterionEvidenceState.Repaired)
+        {
+            return !string.IsNullOrWhiteSpace(obligation.Id) &&
+                !string.IsNullOrWhiteSpace(obligation.RequiredScope) &&
+                !string.IsNullOrWhiteSpace(obligation.Provenance) &&
+                obligation.CandidateSha is null && obligation.ReceiptId is null && obligation.Detail is null &&
+                !string.IsNullOrWhiteSpace(obligation.ReplacementObligationId) &&
+                obligation.ReplacementOwner is CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator &&
+                !string.Equals(obligation.Id, obligation.ReplacementObligationId, StringComparison.Ordinal);
+        }
+        var version = _refinedSpecVersions.SingleOrDefault(item => item.Version == obligation.CriterionVersion);
+        return version is not null && obligation.CriterionIndex >= 0 &&
+            obligation.CriterionIndex < version.Spec.AcceptanceCriteria.Count &&
+            obligation.Id == CriterionEvidenceObligation.BuildId(obligation.CriterionVersion, obligation.CriterionIndex) &&
+            string.Equals(obligation.Criterion, version.Spec.AcceptanceCriteria[obligation.CriterionIndex].Trim(), StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(obligation.RequiredScope) &&
+            !string.IsNullOrWhiteSpace(obligation.Provenance) && obligation.HasValidEvidenceState;
+    }
+
+    private CriterionEvidenceObligation CreateMalformedCriterionEvidenceObligation(CriterionEvidenceObligation? malformed)
+    {
+        // Retain the claimed identity for diagnosis even when it cannot be
+        // resolved. Unknown/Pending prevents treating the claim as authority.
+        var criterionVersion = malformed?.CriterionVersion ?? 0;
+        var criterionIndex = malformed?.CriterionIndex ?? -1;
+        var version = _refinedSpecVersions.SingleOrDefault(item => item.Version == criterionVersion);
+        var canRecoverIdentity = version is not null &&
+            criterionIndex >= 0 && criterionIndex < version.Spec.AcceptanceCriteria.Count;
+        var id = canRecoverIdentity
+            ? CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex)
+            : $"malformed-persisted-{_criterionEvidenceObligations.Count}";
+        while (_criterionEvidenceObligations.Any(existing => string.Equals(existing.Id, id, StringComparison.Ordinal)))
+        {
+            id = $"{id}-duplicate";
+        }
+
+        return new CriterionEvidenceObligation(
+            id,
+            criterionIndex,
+            criterionVersion,
+            canRecoverIdentity
+                ? version!.Spec.AcceptanceCriteria[criterionIndex]
+                : "Malformed persisted criterion evidence obligation",
+            CriterionEvidenceOwner.Unknown,
+            CriterionEvidenceState.Pending,
+            "ownership mapping required",
+            "malformed persisted obligation; operator mapping or explicit audited correction required",
+            malformed?.RecordedAt ?? DateTimeOffset.UnixEpoch);
+    }
+
+    private void ValidateRepairedCriterionEvidenceObligationTargets()
+    {
+        for (var index = 0; index < _criterionEvidenceObligations.Count; index++)
+        {
+            var repaired = _criterionEvidenceObligations[index];
+            if (repaired.State != CriterionEvidenceState.Repaired)
+                continue;
+
+            var target = _criterionEvidenceObligations.SingleOrDefault(item =>
+                string.Equals(item.Id, repaired.ReplacementObligationId, StringComparison.Ordinal));
+            if (target is not null && target.Owner == repaired.ReplacementOwner &&
+                target.State != CriterionEvidenceState.Repaired && IsValidCriterionEvidenceObligation(target))
+                continue;
+
+            _criterionEvidenceObligations[index] = repaired with
+            {
+                Owner = CriterionEvidenceOwner.Unknown,
+                State = CriterionEvidenceState.Pending,
+                RequiredScope = "ownership mapping required",
+                Provenance = $"{repaired.Provenance}; repair target '{repaired.ReplacementObligationId ?? "missing"}' is absent or incompatible; explicit operator remapping required",
+                CandidateSha = null,
+                ReceiptId = null,
+                Detail = null,
+                ExpectedCandidateSha = null,
+                ReplacementObligationId = null,
+                ReplacementOwner = null
+            };
+        }
+    }
+
+    internal CriterionEvidenceObligation MapCriterionEvidenceOwner(
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        DateTimeOffset recordedAt,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null)
+    {
+        if (owner is not (CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator))
+            throw new ArgumentOutOfRangeException(nameof(owner), "Only Acceptance or Operator may be assigned by an operator mapping.");
+        if (string.IsNullOrWhiteSpace(expectedCandidateSha))
+            throw new ArgumentException("An operator mapping must bind the obligation to the current candidate SHA.", nameof(expectedCandidateSha));
+
+        var specVersion = _refinedSpecVersions.SingleOrDefault(version => version.Version == criterionVersion)
+            ?? throw new InvalidOperationException($"Criterion version {criterionVersion} is not present on goal '{Id.Value}'.");
+        if (specVersion.IsSuperseded)
+            throw new InvalidOperationException($"Criterion version {criterionVersion} is superseded and cannot receive a new ownership mapping.");
+        if (criterionIndex < 0 || criterionIndex >= specVersion.Spec.AcceptanceCriteria.Count)
+            throw new ArgumentOutOfRangeException(nameof(criterionIndex), "Criterion index is not present in the requested version.");
+
+        var id = CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex);
+        var existingIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == id);
+        var normalizedScope = RequireText(
+            requiredScope ?? (owner == CriterionEvidenceOwner.Acceptance
+                ? CriterionEvidenceScopes.FullAcceptanceGate
+                : "operator observation"),
+            nameof(requiredScope));
+        if (owner == CriterionEvidenceOwner.Acceptance &&
+            !string.Equals(normalizedScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Acceptance-owned evidence must require '{CriterionEvidenceScopes.FullAcceptanceGate}', the only scope the deterministic acceptance executor can prove.",
+                nameof(requiredScope));
+        }
+
+        var mapped = new CriterionEvidenceObligation(
+            id,
+            criterionIndex,
+            criterionVersion,
+            RequireText(specVersion.Spec.AcceptanceCriteria[criterionIndex], nameof(criterionIndex)),
+            owner,
+            existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].State : CriterionEvidenceState.Pending,
+            normalizedScope,
+            $"operator mapping by {NormalizeSingleLine(actor, nameof(actor))}",
+            recordedAt,
+            FindingStableId: string.IsNullOrWhiteSpace(findingStableId)
+                ? null
+                : NormalizeSingleLine(findingStableId, nameof(findingStableId)),
+            CandidateSha: existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].CandidateSha : null,
+            ReceiptId: existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].ReceiptId : null,
+            Detail: existingIndex >= 0 ? _criterionEvidenceObligations[existingIndex].Detail : null,
+            ExpectedCandidateSha: NormalizeSha(expectedCandidateSha));
+        if (existingIndex < 0)
+        {
+            _criterionEvidenceObligations.Add(mapped);
+            return mapped;
+        }
+
+        var existing = _criterionEvidenceObligations[existingIndex];
+        if (existing.Owner == owner &&
+            string.Equals(existing.RequiredScope, mapped.RequiredScope, StringComparison.Ordinal) &&
+            string.Equals(existing.ExpectedCandidateSha, mapped.ExpectedCandidateSha, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(existing.FindingStableId, mapped.FindingStableId, StringComparison.Ordinal))
+            return existing;
+
+        if (existing.State == CriterionEvidenceState.Satisfied &&
+            string.Equals(existing.CandidateSha, mapped.ExpectedCandidateSha, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Criterion obligation '{id}' is already satisfied for this candidate and cannot be re-owned.");
+
+        mapped = mapped with
+        {
+            State = CriterionEvidenceState.Pending,
+            CandidateSha = null,
+            ReceiptId = null,
+            Detail = null,
+            PriorReceipts = existing.ArchiveCurrentReceipt()
+        };
+        _criterionEvidenceObligations[existingIndex] = mapped;
+        return mapped;
+    }
+
+    internal CriterionEvidenceObligation RecordCriterionEvidence(
+        string obligationId,
+        CriterionEvidenceOwner owner,
+        string candidateSha,
+        string receiptId,
+        string scope,
+        bool passed,
+        string detail,
+        DateTimeOffset recordedAt)
+    {
+        var index = _criterionEvidenceObligations.FindIndex(item => item.Id == obligationId);
+        if (index < 0)
+            throw new KeyNotFoundException($"Criterion evidence obligation '{obligationId}' was not found.");
+
+        var existing = _criterionEvidenceObligations[index];
+        if (owner is not (CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator) ||
+            existing.Owner != owner ||
+            (existing.Owner == CriterionEvidenceOwner.Acceptance && string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha)) ||
+            (!string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha) &&
+             !string.Equals(existing.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) ||
+            !string.Equals(existing.RequiredScope, RequireText(scope, nameof(scope)), StringComparison.Ordinal))
+            throw new InvalidOperationException($"Evidence receipt is incompatible with obligation '{obligationId}'.");
+
+        candidateSha = RequireText(candidateSha, nameof(candidateSha));
+        receiptId = RequireText(receiptId, nameof(receiptId));
+        detail = RequireText(detail, nameof(detail));
+        var incoming = new CriterionEvidenceReceipt(owner, candidateSha, receiptId, scope.Trim(), passed,
+            detail, existing.Provenance, recordedAt);
+        if (existing.FindReceipt(receiptId) is { } recorded)
+        {
+            if (recorded.HasSamePayload(incoming)) return existing;
+            throw new InvalidOperationException($"Receipt '{receiptId}' already identifies different evidence for obligation '{obligationId}'.");
+        }
+        if (existing.State == CriterionEvidenceState.Satisfied)
+        {
+            throw new InvalidOperationException($"Criterion obligation '{obligationId}' is already satisfied by an incompatible receipt.");
+        }
+
+        var updated = existing with
+        {
+            State = passed ? CriterionEvidenceState.Satisfied : CriterionEvidenceState.Failed,
+            CandidateSha = candidateSha,
+            ReceiptId = receiptId,
+            Detail = detail,
+            RecordedAt = recordedAt,
+            PriorReceipts = existing.ArchiveCurrentReceipt()
+        };
+        _criterionEvidenceObligations[index] = updated;
+        return updated;
+    }
+
+    internal CriterionEvidenceObligation? BindDeferredCriterionObligation(
+        int criterionIndex,
+        int criterionVersion,
+        string? candidateSha,
+        DateTimeOffset recordedAt)
+    {
+        var normalizedCandidate = NormalizeSha(candidateSha);
+        if (normalizedCandidate is null)
+            return null;
+
+        var id = CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex);
+        var index = _criterionEvidenceObligations.FindIndex(item => item.Id == id);
+        if (index < 0)
+            return null;
+
+        var obligation = _criterionEvidenceObligations[index];
+        if (obligation.Owner != CriterionEvidenceOwner.Acceptance ||
+            obligation.State != CriterionEvidenceState.Pending)
+        {
+            return obligation;
+        }
+
+        var bound = obligation with
+        {
+            ExpectedCandidateSha = normalizedCandidate,
+            RecordedAt = recordedAt
+        };
+        _criterionEvidenceObligations[index] = bound;
+        return bound;
+    }
+
+    internal CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
+        string malformedObligationId,
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        string reason,
+        DateTimeOffset recordedAt,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null)
+    {
+        var sourceIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == malformedObligationId);
+        if (sourceIndex < 0)
+            throw new KeyNotFoundException($"Malformed criterion evidence obligation '{malformedObligationId}' was not found.");
+
+        var source = _criterionEvidenceObligations[sourceIndex];
+        if (source.Owner != CriterionEvidenceOwner.Unknown || source.State != CriterionEvidenceState.Pending)
+            throw new InvalidOperationException($"Criterion evidence obligation '{malformedObligationId}' is not an unresolved malformed claim.");
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException("A malformed obligation repair reason is required.", nameof(reason));
+
+        var replacement = MapCriterionEvidenceOwner(
+            criterionIndex, criterionVersion, owner, actor, recordedAt, requiredScope, findingStableId, expectedCandidateSha);
+        var repairProvenance = $"repaired by {NormalizeSingleLine(actor, nameof(actor))} at {recordedAt:u}; reason={NormalizeSingleLine(reason, nameof(reason))}";
+        if (string.Equals(source.Id, replacement.Id, StringComparison.Ordinal))
+        {
+            var replacementIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == replacement.Id);
+            var storedReplacement = replacement with { Provenance = $"{replacement.Provenance}; {repairProvenance}" };
+            _criterionEvidenceObligations[replacementIndex] = storedReplacement;
+            return storedReplacement;
+        }
+
+        _criterionEvidenceObligations[sourceIndex] = source with
+        {
+            State = CriterionEvidenceState.Repaired,
+            Provenance = $"{source.Provenance}; {repairProvenance}",
+            Detail = null,
+            ReplacementObligationId = replacement.Id,
+            ReplacementOwner = replacement.Owner
+        };
+        return replacement;
+    }
+
+    private void EnsureCriterionEvidenceObligations(RefinedSpec spec, int criterionVersion, DateTimeOffset recordedAt)
+    {
+        for (var index = 0; index < spec.AcceptanceCriteria.Count; index++)
+        {
+            var id = CriterionEvidenceObligation.BuildId(criterionVersion, index);
+            if (_criterionEvidenceObligations.Any(existing => existing.Id == id))
+            {
+                continue;
+            }
+
+            var criterion = RequireText(spec.AcceptanceCriteria[index], nameof(spec));
+            var operatorOwnershipEntries = spec.OperatorOwnedAcceptanceCriteria.Count(item =>
+                string.Equals(item.Trim(), criterion, StringComparison.Ordinal));
+            if (operatorOwnershipEntries > 0)
+            {
+                _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
+                    id,
+                    index,
+                    criterionVersion,
+                    criterion,
+                    operatorOwnershipEntries == 1 ? CriterionEvidenceOwner.Operator : CriterionEvidenceOwner.Unknown,
+                    CriterionEvidenceState.Pending,
+                    operatorOwnershipEntries == 1 ? "operator observation" : "ownership mapping required",
+                    operatorOwnershipEntries == 1 ? "authoritative refined spec" : "ambiguous authoritative refined spec ownership",
+                    recordedAt));
+                continue;
+            }
+
+            var acceptanceOwnershipEntries = spec.AcceptanceGateOwnedAcceptanceCriteria.Count(item =>
+                string.Equals(item.Trim(), criterion, StringComparison.Ordinal));
+            if (acceptanceOwnershipEntries > 0)
+            {
+                _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
+                    id,
+                    index,
+                    criterionVersion,
+                    criterion,
+                    acceptanceOwnershipEntries == 1 ? CriterionEvidenceOwner.Acceptance : CriterionEvidenceOwner.Unknown,
+                    CriterionEvidenceState.Pending,
+                    acceptanceOwnershipEntries == 1 ? CriterionEvidenceScopes.FullAcceptanceGate : "ownership mapping required",
+                    acceptanceOwnershipEntries == 1 ? "authoritative refined spec" : "ambiguous authoritative refined spec ownership",
+                    recordedAt));
+            }
+            // Worker verification stays on task verification records. This
+            // collection represents only proof that survives worker scope.
+        }
     }
 
     internal RefinedSpecVersion RecordRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
@@ -204,6 +594,7 @@ public sealed class Goal
         {
             var initial = new RefinedSpecVersion(1, spec, recordedAt, AuthoritativeBrief.Version);
             _refinedSpecVersions.Add(initial);
+            EnsureCriterionEvidenceObligations(spec, initial.Version, recordedAt);
             return initial;
         }
 
@@ -216,7 +607,75 @@ public sealed class Goal
             recordedAt,
             AuthoritativeBrief.Version);
         _refinedSpecVersions.Add(replacement);
+        PreserveExplicitMappingsAcrossEquivalentRefinement(current, replacement, recordedAt);
+        EnsureCriterionEvidenceObligations(spec, replacement.Version, recordedAt);
         return replacement;
+    }
+
+    private void PreserveExplicitMappingsAcrossEquivalentRefinement(
+        RefinedSpecVersion superseded,
+        RefinedSpecVersion replacement,
+        DateTimeOffset recordedAt)
+    {
+        foreach (var existing in _criterionEvidenceObligations
+                     .Where(item => item.CriterionVersion == superseded.Version &&
+                                    item.Owner is CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator &&
+                                    item.Provenance.StartsWith("operator mapping by ", StringComparison.Ordinal))
+                     .ToArray())
+        {
+            var matches = replacement.Spec.AcceptanceCriteria
+                .Select((criterion, index) => (criterion: criterion.Trim(), index))
+                .Where(item => string.Equals(item.criterion, existing.Criterion, StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length != 1)
+            {
+                MarkExplicitMappingUnresolved(existing, replacement, recordedAt);
+                continue;
+            }
+
+            var target = matches[0];
+            var targetId = CriterionEvidenceObligation.BuildId(replacement.Version, target.index);
+            if (_criterionEvidenceObligations.Any(item => item.Id == targetId))
+            {
+                MarkExplicitMappingUnresolved(existing, replacement, recordedAt);
+                continue;
+            }
+
+            _criterionEvidenceObligations.Add(existing with
+            {
+                Id = targetId,
+                CriterionIndex = target.index,
+                CriterionVersion = replacement.Version,
+                Criterion = target.criterion,
+                State = CriterionEvidenceState.Pending,
+                CandidateSha = null,
+                ReceiptId = null,
+                Detail = null,
+                PriorReceipts = existing.ArchiveCurrentReceipt(),
+                Provenance = $"{existing.Provenance}; carried forward from criterion-v{superseded.Version}-{existing.CriterionIndex}",
+                RecordedAt = recordedAt
+            });
+        }
+    }
+
+    private void MarkExplicitMappingUnresolved(
+        CriterionEvidenceObligation existing,
+        RefinedSpecVersion replacement,
+        DateTimeOffset recordedAt)
+    {
+        var existingIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == existing.Id);
+        _criterionEvidenceObligations[existingIndex] = existing with
+        {
+            Owner = CriterionEvidenceOwner.Unknown,
+            State = CriterionEvidenceState.Pending,
+            RequiredScope = "ownership mapping required",
+            Provenance = $"{existing.Provenance}; unresolved during refinement v{replacement.Version}; explicit operator remapping required",
+            CandidateSha = null,
+            ReceiptId = null,
+            Detail = null,
+            ExpectedCandidateSha = null,
+            PriorReceipts = existing.ArchiveCurrentReceipt()
+        };
     }
 
     internal void RecordClarificationRound() => ClarificationRoundCount++;
@@ -462,7 +921,8 @@ public sealed class Goal
                 evt.Message,
                 evt.OccurredAt,
                 evt.RequeueSkipped,
-                evt.OperatorGates)).ToList(),
+                evt.OperatorGates,
+                evt.OperatorIntentApplied)).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
             RefinedSpec is null ? null : ToRefinedSpecSnapshot(RefinedSpec),
@@ -508,7 +968,8 @@ public sealed class Goal
                 .ToArray(),
             SourceBacklogCoverage: SourceBacklogCoverage,
             SliceBatchParentId: SliceBatchParentId?.Value,
-            AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry);
+            AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry,
+            CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray());
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -546,7 +1007,8 @@ public sealed class Goal
                 evt.Message,
                 evt.OccurredAt,
                 evt.RequeueSkipped,
-                evt.OperatorGates));
+                evt.OperatorGates,
+                evt.OperatorIntentApplied));
         }
 
         foreach (var depId in snapshot.DependsOn ?? [])
@@ -574,6 +1036,8 @@ public sealed class Goal
         {
             goal.SetRefinedSpec(FromRefinedSpecSnapshot(legacyRefinedSpec), initialRecordedAt);
         }
+
+        goal.RestoreCriterionEvidenceObligations(snapshot.CriterionEvidenceObligations);
 
         if (snapshot.LatestAcceptanceFailure is { } failure)
         {
@@ -675,7 +1139,8 @@ public sealed class Goal
                 question.Criterion,
                 question.BlastRadius)).ToList(),
             spec.OperatorOwnedAcceptanceCriteria.ToList(),
-            spec.ClarificationAnswerHistory.ToList());
+            spec.ClarificationAnswerHistory.ToList(),
+            spec.AcceptanceGateOwnedAcceptanceCriteria.ToList());
 
     private static RefinedSpec FromRefinedSpecSnapshot(RefinedSpecSnapshot snapshot) =>
         new(
@@ -700,6 +1165,7 @@ public sealed class Goal
                 question.BlastRadius)).ToList())
         {
             OperatorOwnedAcceptanceCriteria = snapshot.OperatorOwnedAcceptanceCriteria ?? [],
+            AcceptanceGateOwnedAcceptanceCriteria = snapshot.AcceptanceGateOwnedAcceptanceCriteria ?? [],
             ClarificationAnswerHistory = snapshot.ClarificationAnswerHistory ?? []
         };
 

@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record OrchestratorTenantSelection(string TenantName, IReadOnlyList<string> CommandArgs)
+public sealed record OrchestratorTenantSelection(string TenantName, IReadOnlyList<string> CommandArgs)
 {
     public const string TenantEnvironmentVariable = "MCG_ORCHESTRATOR_TENANT";
 

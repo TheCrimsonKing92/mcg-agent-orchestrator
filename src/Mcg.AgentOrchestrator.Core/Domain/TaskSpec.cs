@@ -3,10 +3,12 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed class TaskSpec
 {
     internal const int VerificationHistoryLimit = 20;
+    internal const int PreReviewEvidenceHistoryLimit = 20;
 
     private readonly CappedVerificationHistory _verificationHistory = [];
     private readonly List<TaskDispatchRecord> _dispatchHistory = [];
     private readonly List<RetryAdmissionReceipt> _retryAdmissionHistory = [];
+    private readonly List<PreReviewEvidenceReceipt> _preReviewEvidenceHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -52,6 +54,8 @@ public sealed class TaskSpec
 
     public AgentId? AssignedAgentId { get; private set; }
 
+    public int ConductorRoutingRevision { get; private set; }
+
     public TaskExecutionRecord? LastExecution { get; private set; }
 
     public TaskVerificationRecord? LastVerification { get; private set; }
@@ -70,15 +74,27 @@ public sealed class TaskSpec
 
     public string? InterruptedDispatchRecoveryId { get; private set; }
 
+    public InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint { get; private set; }
+
     public bool WasCancelledByConductor { get; private set; }
 
     public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
+
+    public IReadOnlyList<PreReviewEvidenceReceipt> PreReviewEvidenceHistory => _preReviewEvidenceHistory;
+
+    // This is durable attempt accounting, not the bounded receipt cache length.
+    public int PreReviewEvidenceAttemptCount { get; private set; }
 
     internal void AssignTo(AgentId agentId)
     {
         AssignedAgentId = agentId;
         Status = WorkTaskStatus.Assigned;
         WasCancelledByConductor = false;
+    }
+
+    internal void AdvanceConductorRoutingRevision()
+    {
+        ConductorRoutingRevision = checked(ConductorRoutingRevision + 1);
     }
 
     internal void SetStatus(WorkTaskStatus status)
@@ -147,7 +163,8 @@ public sealed class TaskSpec
                     LastVerification.FullStandardErrorUnavailableReason,
                     LastVerification.PlannerCandidateDivergence,
                     LastVerification.CompletionVerdictVerifiedSuccess,
-                    LastVerification.CompletionVerdictRule),
+                    LastVerification.CompletionVerdictRule,
+                    LastVerification.AssignedScopeComplete),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -176,40 +193,12 @@ public sealed class TaskSpec
                     verification.FullStandardErrorUnavailableReason,
                     verification.PlannerCandidateDivergence,
                     verification.CompletionVerdictVerifiedSuccess,
-                    verification.CompletionVerdictRule))
+                    verification.CompletionVerdictRule,
+                    verification.AssignedScopeComplete))
                 .ToList(),
             LastDispatch is null
                 ? null
-                : new TaskDispatchSnapshot(
-                    LastDispatch.WorkerName,
-                    LastDispatch.Command,
-                    LastDispatch.WorkingDirectory,
-                    LastDispatch.DispatchedAt,
-                    LastDispatch.ProviderName,
-                    LastDispatch.ModelName,
-                    LastDispatch.ReasoningEffort,
-                    LastDispatch.TaskComplexity,
-                    LastDispatch.PromptCharacterCount,
-                    LastDispatch.UsesComplexModel,
-                    LastDispatch.BaseCommit,
-                    LastDispatch.ResultCommit,
-                    LastDispatch.SandboxLowIntegrity,
-                    LastDispatch.PromptPath,
-                    LastDispatch.WorkerProviderKind,
-                    LastDispatch.ReasoningEffortReason,
-                    LastDispatch.DispatchLane,
-                    LastDispatch.ModelSelectionReason,
-                    LastDispatch.ProviderSessionId,
-                    LastDispatch.WorktreeHeadSha,
-                    LastDispatch.DirtyStateHash,
-                    LastDispatch.ProviderSessionRetiredAt,
-                    LastDispatch.ReviewFindingTouchedAnchors,
-                    LastDispatch.BriefVersion,
-                    LastDispatch.BriefSnapshot,
-                    LastDispatch.ReviewFindingTouchProofDiagnostic,
-                    LastDispatch.ReviewRetryCap,
-                    LastDispatch.ContextPackageReceipt,
-                    LastDispatch.PlannerSampleCount),
+                : ToDispatchSnapshot(LastDispatch),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -258,7 +247,11 @@ public sealed class TaskSpec
             _retryAdmissionHistory.ToArray(),
             RetryAdmissionHoldRoute,
             PendingReviewFindingRepairCheckpoint,
-            AcceptedRetryFeedback);
+            AcceptedRetryFeedback,
+            _preReviewEvidenceHistory.ToArray(),
+            PreReviewEvidenceAttemptCount,
+            PendingInterruptedWorkCheckpoint,
+            ConductorRoutingRevision);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -269,6 +262,8 @@ public sealed class TaskSpec
         {
             task.AssignTo(new AgentId(snapshot.AssignedAgentId));
         }
+
+        task.ConductorRoutingRevision = snapshot.ConductorRoutingRevision;
 
         task.SetStatus(snapshot.Status);
 
@@ -327,7 +322,8 @@ public sealed class TaskSpec
                     StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null,
                     PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
                     CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
-                    CompletionVerdictRule: verification.CompletionVerdictRule));
+                    CompletionVerdictRule: verification.CompletionVerdictRule,
+                    AssignedScopeComplete: verification.AssignedScopeComplete));
             }
         }
 
@@ -366,7 +362,8 @@ public sealed class TaskSpec
                 StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null,
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
-                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule);
+                CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
+                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -403,6 +400,24 @@ public sealed class TaskSpec
                 dispatch => dispatch.DispatchedAt == currentDispatch.DispatchedAt);
             if (historyIndex >= 0)
             {
+                var historical = task._dispatchHistory[historyIndex];
+                // Older snapshots omitted both admission fields from LastDispatch while
+                // preserving them in history. Recover only from the same dispatch identity.
+                if (currentDispatch.RetryContextFingerprint is null &&
+                    currentDispatch.PaidRoute == PaidRouteClassification.Unknown &&
+                    historical.RetryContextFingerprint is not null &&
+                    currentDispatch.WorkerName == historical.WorkerName &&
+                    currentDispatch.Command == historical.Command &&
+                    currentDispatch.WorkingDirectory == historical.WorkingDirectory &&
+                    currentDispatch.ProviderName == historical.ProviderName &&
+                    currentDispatch.ModelName == historical.ModelName)
+                {
+                    currentDispatch = currentDispatch with
+                    {
+                        RetryContextFingerprint = historical.RetryContextFingerprint,
+                        PaidRoute = historical.PaidRoute
+                    };
+                }
                 task._dispatchHistory[historyIndex] = currentDispatch;
             }
             else
@@ -458,8 +473,16 @@ public sealed class TaskSpec
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
-        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
+        task._preReviewEvidenceHistory.AddRange(
+            snapshot.PreReviewEvidenceHistory ??
+            (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
+        task.PreReviewEvidenceAttemptCount = Math.Max(
+            task._preReviewEvidenceHistory.Count(receipt =>
+                receipt is not null && !receipt.IsSyntheticReuse),
+            snapshot.PreReviewEvidenceAttemptCount);
+        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt ?? task._preReviewEvidenceHistory.LastOrDefault();
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
+        task.PendingInterruptedWorkCheckpoint = snapshot.PendingInterruptedWorkCheckpoint;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
         return task;
     }
@@ -475,6 +498,9 @@ public sealed class TaskSpec
     internal void SetInterruptedDispatchRecovery(string? dispatchId) =>
         InterruptedDispatchRecoveryId = string.IsNullOrWhiteSpace(dispatchId) ? null : dispatchId.Trim();
 
+    internal void SetInterruptedWorkCheckpoint(InterruptedWorkCheckpoint? checkpoint) =>
+        PendingInterruptedWorkCheckpoint = checkpoint;
+
     internal void SetVerificationPlan(string verificationPlan) => VerificationPlan = RequireText(verificationPlan, nameof(verificationPlan));
 
     internal void RecordVerification(TaskVerificationRecord verification)
@@ -482,6 +508,12 @@ public sealed class TaskSpec
         SubscriptionRetryAfter = null;
         PendingRetryRoundKind = null;
         PendingReviewFindingRepairCheckpoint = null;
+        if (PendingInterruptedWorkCheckpoint is { } checkpoint &&
+            verification.DispatchStartedAt is { } dispatchStartedAt &&
+            dispatchStartedAt > checkpoint.RecordedAt)
+        {
+            PendingInterruptedWorkCheckpoint = null;
+        }
         // EmptyOutputRetryCount is the shared bounded transient-dispatch retry budget. It covers
         // missing worker output, sandbox preflight failures, and structured Tester inconclusive
         // results without consuming Developer or Reviewer convergence allowances.
@@ -635,6 +667,15 @@ public sealed class TaskSpec
             return false;
         }
 
+        _preReviewEvidenceHistory.Add(receipt);
+        if (!receipt.IsSyntheticReuse)
+        {
+            PreReviewEvidenceAttemptCount++;
+        }
+        if (_preReviewEvidenceHistory.Count > PreReviewEvidenceHistoryLimit)
+        {
+            _preReviewEvidenceHistory.RemoveRange(0, _preReviewEvidenceHistory.Count - PreReviewEvidenceHistoryLimit);
+        }
         PreReviewEvidenceReceipt = receipt;
         return true;
     }
@@ -947,7 +988,11 @@ public sealed class TaskSpec
         dispatch.ContextPackageReceipt,
         dispatch.PlannerSampleCount,
         dispatch.RetryContextFingerprint,
-        dispatch.PaidRoute);
+        dispatch.PaidRoute,
+        dispatch.ClaudeCredentialSourceDirectory,
+        dispatch.ClaudeCredentialSourceIsExplicit,
+        dispatch.AssignedAgentId,
+        dispatch.ConductorRoutingRevision);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -980,7 +1025,11 @@ public sealed class TaskSpec
         dispatch.ContextPackageReceipt,
         dispatch.PlannerSampleCount,
         dispatch.RetryContextFingerprint,
-        dispatch.PaidRoute);
+        dispatch.PaidRoute,
+        dispatch.ClaudeCredentialSourceDirectory,
+        dispatch.ClaudeCredentialSourceIsExplicit,
+        dispatch.AssignedAgentId,
+        dispatch.ConductorRoutingRevision);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

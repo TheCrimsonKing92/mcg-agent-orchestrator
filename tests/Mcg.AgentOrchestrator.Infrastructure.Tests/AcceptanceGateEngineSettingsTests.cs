@@ -5,6 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class AcceptanceGateEngineSettingsTests
 {
+    private GoalAcceptanceVerifierTestOverrides TestOverrides { get; } = new();
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_checked_in_manifest_splits_heavy_lanes_without_narrowing_coverage")]
     public void AcceptanceGateEngineCheckedInManifestSplitsHeavyLanesWithoutNarrowingCoverage()
     {
@@ -12,11 +14,11 @@ public sealed class AcceptanceGateEngineSettingsTests
         var settings = AcceptanceGateEngineSettings.Load(repositoryRoot);
         var startupContract = GoalAcceptanceVerifier.ValidateStartupContract(repositoryRoot);
 
-        Xunit.Assert.Equal(6, settings.MaxConcurrentShards);
+        Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(20, settings.InfrastructureTestLanes.Count);
-        Xunit.Assert.Equal(7, startupContract.ManifestCheckCount);
+        Xunit.Assert.Equal(22, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(8, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
         var manifestLanes = manifestDocument.RootElement
@@ -71,20 +73,20 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
         Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
         Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
-        Xunit.Assert.Equal(
-            ["xunit:GoalWorktreeCleanupHooks"],
-            settings.InfrastructureTestLanes
-                .Single(lane => lane.Name == "Goal lifecycle commands")
-                .ExclusiveResourceKeys);
-        Xunit.Assert.Equal(
-            ["xunit:GoalWorktreeCleanupHooks"],
-            settings.InfrastructureTestLanes
-                .Single(lane => lane.Name == "Goal worktree cleanup")
-                .ExclusiveResourceKeys);
-        AssertLanePairPreservesCoverage(
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal lifecycle commands")
+            .ExclusiveResourceKeys);
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal worktree cleanup")
+            .ExclusiveResourceKeys);
+        AssertLaneSetPreservesCoverage(
             settings,
-            "Worker profiles",
-            "Worker dispatch fixtures",
+            [
+                "Worker profiles",
+                "Worker dispatch fixtures A",
+                "Worker dispatch fixtures B",
+                "Worker dispatch fixtures C"
+            ],
             [
                 "AdvanceLoopTests",
                 "ConductLoopLockTests",
@@ -345,11 +347,38 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Contains("does not match any runnable test class", error.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "PostLandingCanary_collection_is_nonparallel_and_owns_canary_tests")]
+    public void PostLandingCanaryCollectionIsNonParallelAndOwnsCanaryTests()
+    {
+        var testAssembly = typeof(PostLandingCanaryTests).Assembly;
+        var definition = Xunit.Assert.Single(
+            testAssembly.GetTypes()
+                .Select(type => type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>())
+                .Where(attribute => attribute?.Name == TestCollections.PostLandingCanary));
+        Xunit.Assert.True(definition.DisableParallelization);
+
+        var membership = typeof(PostLandingCanaryTests)
+            .GetCustomAttribute<Xunit.CollectionAttribute>();
+        Xunit.Assert.NotNull(membership);
+        Xunit.Assert.Equal(TestCollections.PostLandingCanary, membership.Name);
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource")]
     public void AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource()
     {
         var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
         var testAssembly = typeof(AcceptanceGateEngineSettingsTests).Assembly;
+        var processLocalCollections = testAssembly.GetTypes()
+            .Where(type => type.IsDefined(typeof(ProcessLocalTestCollectionAttribute), inherit: false))
+            .Select(type =>
+            {
+                var definition = type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>();
+                Xunit.Assert.NotNull(definition);
+                Xunit.Assert.True(definition.DisableParallelization,
+                    $"Process-local collection '{type.Name}' must retain in-process serialization.");
+                return definition.Name;
+            })
+            .ToHashSet(StringComparer.Ordinal);
         var disabledCollections = testAssembly
             .GetTypes()
             .Select(type => type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>())
@@ -395,7 +424,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 .Select(entry => entry.Lane)
                 .DistinctBy(lane => lane.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            if (lanes.Length < 2)
+            if (lanes.Length < 2 || processLocalCollections.Contains(collection.Key))
             {
                 continue;
             }
@@ -443,7 +472,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var calls = new List<(string[] Arguments, TimeSpan Timeout)>();
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, timeout, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, timeout, _) =>
             {
                 calls.Add((arguments, timeout));
                 if (arguments.Length >= 2 &&
@@ -558,20 +587,20 @@ public sealed class AcceptanceGateEngineSettingsTests
         var activeSharedShards = 0;
         var peakSharedShards = 0;
         DotnetBuildEnvironmentLease? buildLease = null;
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 6;
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-raised-cap";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-raised-cap";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-raised-cap";
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 6;
+        TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-raised-cap";
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-raised-cap";
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-raised-cap";
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
             buildLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             var stableSlotIndex = buildLease.Environment.BuildPermitIndex
                 ?? throw new InvalidOperationException("Expected a scheduler-managed build permit.");
-            var verifier = new GoalAcceptanceVerifier(async (arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, async (arguments, _, _) =>
             {
                 if (!arguments.Contains("--report-trx-filename"))
                 {
@@ -660,13 +689,13 @@ public sealed class AcceptanceGateEngineSettingsTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -690,7 +719,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Length >= 2 &&
                     arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
@@ -749,7 +778,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var calls = new List<string[]>();
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 calls.Add(arguments);
                 if (arguments.Contains("--report-trx-filename"))
@@ -901,15 +930,15 @@ public sealed class AcceptanceGateEngineSettingsTests
         var buildPermitChecks = 0;
         var discoveryInvocationCount = 0;
         DotnetBuildEnvironmentLease? buildLease = null;
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [relocatedSource];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [relocatedSource];
         try
         {
             buildLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             var buildPermitIndex = buildLease.Environment.BuildPermitIndex
                 ?? throw new InvalidOperationException("Expected a scheduler-managed build permit.");
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 calls.Add(arguments);
                 if (arguments.Length >= 2 &&
@@ -977,8 +1006,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         finally
         {
             buildLease?.Dispose();
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1183,11 +1212,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             }
             """);
         var executions = new List<string[]>();
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Contains("--list-tests"))
                 {
@@ -1219,8 +1248,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1275,11 +1304,11 @@ public sealed class AcceptanceGateEngineSettingsTests
                   "checks": [{{checks}}]
                 }
                 """);
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+            TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+            TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
             try
             {
-                var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+                var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
                 {
                     if (arguments.Contains("--list-tests"))
                     {
@@ -1312,8 +1341,8 @@ public sealed class AcceptanceGateEngineSettingsTests
             }
             finally
             {
-                GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-                GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+                TestOverrides.ResolveMainWorktreePathForTests = null;
+                TestOverrides.ResolveDeletedTestFilesForTests = null;
                 Directory.Delete(root, recursive: true);
             }
         }
@@ -1350,11 +1379,11 @@ public sealed class AcceptanceGateEngineSettingsTests
               ]
             }
             """);
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Contains("--list-tests"))
                 {
@@ -1382,8 +1411,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1560,15 +1589,15 @@ public sealed class AcceptanceGateEngineSettingsTests
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var partitionExecutions = 0;
         var partitionArguments = new List<string[]>();
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-mixed-trx";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-mixed-trx";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-mixed-trx";
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-mixed-trx";
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-mixed-trx";
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-mixed-trx";
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Contains("--list-tests"))
                 {
@@ -1636,12 +1665,12 @@ public sealed class AcceptanceGateEngineSettingsTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1670,11 +1699,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             omittedProject,
             "<Project><PropertyGroup><IsTestProject>true</IsTestProject><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>");
         var calls = new List<string[]>();
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 calls.Add(arguments);
                 var addedProject = arguments.Any(argument =>
@@ -1718,8 +1747,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1749,11 +1778,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             }
             """);
         var calls = new List<string[]>();
-        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveMainWorktreePathForTests = _ => root;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 calls.Add(arguments);
                 if (arguments.Contains("--list-tests"))
@@ -1787,8 +1816,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
-            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            TestOverrides.ResolveMainWorktreePathForTests = null;
+            TestOverrides.ResolveDeletedTestFilesForTests = null;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1827,16 +1856,16 @@ public sealed class AcceptanceGateEngineSettingsTests
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var attemptPrefix = Path.Combine(root, ".orchestrator", "semantic-dedup-attempt");
         var invocations = 0;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-semantic-dedup";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-semantic-dedup";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-semantic-dedup";
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-semantic-dedup";
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-semantic-dedup";
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-semantic-dedup";
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
             var planned = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(root);
             Xunit.Assert.Single(planned, check => check.Name == checkName);
 
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Length < 2 ||
                     !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
@@ -1895,10 +1924,10 @@ public sealed class AcceptanceGateEngineSettingsTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
-            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1979,16 +2008,16 @@ public sealed class AcceptanceGateEngineSettingsTests
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var attemptPrefix = Path.Combine(root, ".orchestrator", "same-name-attempt");
         var invocation = 0;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-same-name";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-same-name";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-same-name";
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-same-name";
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-same-name";
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-same-name";
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
             var planned = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(root);
             Xunit.Assert.Equal(2, planned.Count(check => check.Name == checkName));
 
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Length < 2 ||
                     !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
@@ -2035,10 +2064,10 @@ public sealed class AcceptanceGateEngineSettingsTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
-            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -2081,12 +2110,12 @@ public sealed class AcceptanceGateEngineSettingsTests
         sleeperStartInfo.ArgumentList.Add("Start-Sleep -Seconds 30");
         using var sleeper = System.Diagnostics.Process.Start(sleeperStartInfo)
             ?? throw new InvalidOperationException("Failed to start heartbeat child process.");
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-heartbeat-rerun";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-heartbeat-rerun";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-heartbeat-rerun";
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-heartbeat-rerun";
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-heartbeat-rerun";
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-heartbeat-rerun";
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Length < 2 ||
                     !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
@@ -2099,7 +2128,10 @@ public sealed class AcceptanceGateEngineSettingsTests
                 if (currentInvocation == 0)
                 {
                     var environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
-                    var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(checkName, environment);
+                    var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                        checkName,
+                        environment,
+                        attemptResultsPrefix: attemptPrefix);
                     GateHeartbeatArtifacts.Write(
                         heartbeatPath,
                         new GateHeartbeatSnapshot(
@@ -2156,9 +2188,9 @@ public sealed class AcceptanceGateEngineSettingsTests
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
-            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -2184,13 +2216,13 @@ public sealed class AcceptanceGateEngineSettingsTests
             """);
         var goalId = new Mcg.AgentOrchestrator.Core.GoalId("99999999999999999999999999999999");
         var invocations = 0;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-missing-heartbeat";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-missing-heartbeat";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-missing-heartbeat";
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-missing-heartbeat";
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-missing-heartbeat";
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-missing-heartbeat";
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Length < 2 || arguments[0] != "dotnet" || arguments[1] != "test")
                 {
@@ -2220,10 +2252,10 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
             Directory.Delete(root, recursive: true);
         }
@@ -2263,13 +2295,13 @@ public sealed class AcceptanceGateEngineSettingsTests
         var previousPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var attemptPrefix = Path.Combine(root, ".orchestrator", "distinct-name-attempt");
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-distinct-name";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-distinct-name";
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-distinct-name";
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-distinct-name";
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-distinct-name";
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-distinct-name";
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (arguments, _, _) =>
             {
                 if (arguments.Length < 2 ||
                     !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
@@ -2309,20 +2341,26 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "distinct-name-heartbeat");
             Xunit.Assert.Equal(
                 $"distinct-name-attempt.infrastructure-tests-alpha-{GoalAcceptanceVerifier.ShortHash(alphaName)}.{GateHeartbeatArtifacts.FileName}",
-                Path.GetFileName(GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(alphaName, heartbeatEnvironment)));
+                Path.GetFileName(GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                    alphaName,
+                    heartbeatEnvironment,
+                    attemptResultsPrefix: attemptPrefix)));
             Xunit.Assert.Equal(
                 $"distinct-name-attempt.infrastructure-tests-beta-{GoalAcceptanceVerifier.ShortHash(betaName)}.{GateHeartbeatArtifacts.FileName}",
-                Path.GetFileName(GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(betaName, heartbeatEnvironment)));
+                Path.GetFileName(GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                    betaName,
+                    heartbeatEnvironment,
+                    attemptResultsPrefix: attemptPrefix)));
         }
         finally
         {
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);
-            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+            TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             Directory.Delete(root, recursive: true);
         }
     }

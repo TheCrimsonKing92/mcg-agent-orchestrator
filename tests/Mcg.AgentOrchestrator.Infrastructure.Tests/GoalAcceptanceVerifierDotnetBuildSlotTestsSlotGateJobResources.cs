@@ -20,7 +20,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             CancellationToken ___) =>
             throw new InvalidOperationException("owned process lifecycle failed");
 
-        var verifier = new GoalAcceptanceVerifier(ThrowUnexpectedRunnerFault);
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, ThrowUnexpectedRunnerFault);
 
         var exception = await Xunit.Record.ExceptionAsync(() =>
             verifier.RunAsync("C:\\fake\\worktree"));
@@ -562,7 +562,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "should not run"));
@@ -604,7 +604,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(async (args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, async (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test" && args.Contains("tests/First.Tests.csproj"))
@@ -673,7 +673,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
@@ -778,7 +778,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
                 {
@@ -885,7 +885,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier();
+            var verifier = new GoalAcceptanceVerifier(TestOverrides);
             var result = await verifier.RunAsync(
                 root,
                 new GoalId("24682468246824682468246824682468"),
@@ -934,7 +934,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier();
+            var verifier = new GoalAcceptanceVerifier(TestOverrides);
             var result = await verifier.RunAsync(
                 root,
                 new GoalId("13571357135713571357135713571357"),
@@ -983,7 +983,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 """);
             File.WriteAllText(Path.Combine(root, "Program.cs"), "Console.WriteLine(\"slow gate\");");
 
-            var verifier = new GoalAcceptanceVerifier();
+            var verifier = new GoalAcceptanceVerifier(TestOverrides);
             var result = await verifier.RunAsync(
                 root,
                 new GoalId("24682468246824682468246824682468"),
@@ -1025,9 +1025,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var leaseTimeStartedAt = fakeTimeProvider.GetUtcNow();
         var slotEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
         var leasePrepareAttempts = 0;
-        var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
-        var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
-        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        var previousWindow = TestOverrides.TransientNoHolderBuildLockWaitWindow;
+        var previousPoll = TestOverrides.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
         DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
         {
             if (current.ExecutionLockPath == slotEnvironment.ExecutionLockPath &&
@@ -1041,13 +1041,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
             "handle64-timeout");
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(2);
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
+        TestOverrides.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromSeconds(2);
+        TestOverrides.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = 1;
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
@@ -1118,9 +1118,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         }
         finally
         {
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            TestOverrides.TransientNoHolderBuildLockWaitWindow = previousWindow;
+            TestOverrides.TransientNoHolderBuildLockPollInterval = previousPoll;
+            TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
             LockAttribution.AttributeForTests = null;
             TryDeleteStableSlotHeartbeat(0);
@@ -1139,7 +1139,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.")                              // dotnet test - retry passes
         ]);
 
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(responses.Dequeue());
@@ -1189,7 +1189,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         try
         {
             Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, attemptPrefix);
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -1228,7 +1228,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     {
         var calls = new List<string[]>();
         var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
-        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, ""),
             new(1, "MSB3491: Could not write lines to file because it is being used by another process."),
@@ -1239,8 +1239,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 2;
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = 2;
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(responses.Dequeue());
@@ -1268,7 +1268,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         }
         finally
         {
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
         }
     }
 
@@ -1298,7 +1298,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(responses.Dequeue());
@@ -1329,7 +1329,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             new(1, "error CS2012: Cannot open 'Core.dll' for writing")
         ]);
 
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(responses.Dequeue());
@@ -1361,7 +1361,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var calls = new List<string[]>();
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(calls.Count == 1
@@ -1410,7 +1410,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             new(0, "Test run succeeded.")
         ]);
 
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(responses.Dequeue());

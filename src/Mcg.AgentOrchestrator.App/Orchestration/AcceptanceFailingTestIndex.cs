@@ -1,0 +1,198 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
+
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal static class AcceptanceFailingTestIndexKinds
+{
+    internal const string GateFailure = "gate-failure";
+    internal const string ApparatusRegate = "apparatus-regate";
+}
+
+/// <summary>
+/// One line of the cross-goal failing-test census. A single record shape with a kind discriminator
+/// keeps both record families cheap to read in one pass, which is what lets the per-goal re-gate
+/// bound be counted at the same moment the classifier already reads the store.
+/// </summary>
+internal sealed record AcceptanceFailingTestIndexRecord(
+    int ContractVersion,
+    string Kind,
+    string GoalId,
+    DateTimeOffset RecordedAt,
+    string? CandidateSha = null,
+    string? CheckName = null,
+    string? TestIdentity = null,
+    string? ExceptionSignature = null,
+    string? ResolvedSourcePath = null,
+    bool InsideChangedPaths = false,
+    string? EvidenceKind = null);
+
+/// <summary>
+/// The durable failing-test census. It lives at the root of the acceptance-gate-attempts family,
+/// beside the per-goal attempt directories rather than inside one: both retention walkers enumerate
+/// directories, so a root-level file survives per-goal cleanup, which is exactly what cross-goal
+/// flake detection requires.
+///
+/// Every operation is best effort. An index failure must never fail or alter a gate outcome.
+/// </summary>
+internal sealed class AcceptanceFailingTestIndex
+{
+    internal const int ContractVersion = 1;
+    internal const string FileName = "failing-test-index.v1.jsonl";
+
+    // Bounds pathological growth. Census records are evicted oldest-first; re-gate records are never
+    // evicted by age, because pruning them would silently reset the per-goal bound.
+    internal const int MaximumRecords = 5000;
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly string _path;
+    private readonly TimeSpan _censusRetention;
+    private readonly object _pruneGate = new();
+
+    internal AcceptanceFailingTestIndex(string path, TimeSpan? censusRetention = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        _path = path;
+        _censusRetention = censusRetention ?? TimeSpan.FromDays(14);
+    }
+
+    internal string Path => _path;
+
+    internal void Append(IReadOnlyList<AcceptanceFailingTestIndexRecord> records, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        if (records.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var directory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(_path));
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            SharedJsonlFile.AppendLines(
+                _path,
+                records.Select(record => JsonSerializer.Serialize(record, JsonOptions)));
+            Prune(now);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // The census is an accelerator, never a gate input of record.
+        }
+    }
+
+    internal IReadOnlyList<AcceptanceFailingTestIndexRecord> Read()
+    {
+        var records = new List<AcceptanceFailingTestIndexRecord>();
+        try
+        {
+            foreach (var line in SharedJsonlFile.ReadAllLines(_path))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (JsonSerializer.Deserialize<AcceptanceFailingTestIndexRecord>(line, JsonOptions) is
+                        { ContractVersion: ContractVersion } record)
+                    {
+                        records.Add(record);
+                    }
+                }
+                catch (JsonException)
+                {
+                    // A partially written or corrupt line must not hide the rest of the census.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+
+        return records;
+    }
+
+    /// <summary>
+    /// True when the same test identity already failed a gate under a <em>different</em> goal inside
+    /// the window, on an attempt whose own candidate did not touch that test's source.
+    /// </summary>
+    internal static bool HasCrossGoalOccurrence(
+        IReadOnlyList<AcceptanceFailingTestIndexRecord> records,
+        string goalId,
+        string testIdentity,
+        DateTimeOffset now,
+        TimeSpan window) =>
+        records.Any(record =>
+            record.Kind.Equals(AcceptanceFailingTestIndexKinds.GateFailure, StringComparison.Ordinal) &&
+            !record.InsideChangedPaths &&
+            !record.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(record.TestIdentity, testIdentity, StringComparison.Ordinal) &&
+            now - record.RecordedAt <= window &&
+            record.RecordedAt <= now);
+
+    internal static int CountRegates(
+        IReadOnlyList<AcceptanceFailingTestIndexRecord> records,
+        string goalId) =>
+        records.Count(record =>
+            record.Kind.Equals(AcceptanceFailingTestIndexKinds.ApparatusRegate, StringComparison.Ordinal) &&
+            record.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase));
+
+    private void Prune(DateTimeOffset now)
+    {
+        if (!Monitor.TryEnter(_pruneGate))
+        {
+            // Another append is already rewriting the file; skipping keeps the concurrent-gate path
+            // append-only, which is the safe direction.
+            return;
+        }
+
+        try
+        {
+            var records = Read();
+            var retained = records
+                .Where(record =>
+                    !record.Kind.Equals(AcceptanceFailingTestIndexKinds.GateFailure, StringComparison.Ordinal) ||
+                    now - record.RecordedAt <= _censusRetention)
+                .ToList();
+            if (retained.Count > MaximumRecords)
+            {
+                var censusOverflow = retained.Count - MaximumRecords;
+                var evicted = retained
+                    .Where(record => record.Kind.Equals(
+                        AcceptanceFailingTestIndexKinds.GateFailure,
+                        StringComparison.Ordinal))
+                    .OrderBy(record => record.RecordedAt)
+                    .Take(censusOverflow)
+                    .ToHashSet();
+                retained = retained.Where(record => !evicted.Contains(record)).ToList();
+            }
+
+            if (retained.Count == records.Count)
+            {
+                return;
+            }
+
+            var temporaryPath = _path + ".prune-" + Guid.NewGuid().ToString("N")[..8];
+            File.WriteAllLines(
+                temporaryPath,
+                retained.Select(record => JsonSerializer.Serialize(record, JsonOptions)));
+            File.Move(temporaryPath, _path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // Pruning is maintenance; a busy file simply keeps the existing census.
+        }
+        finally
+        {
+            Monitor.Exit(_pruneGate);
+        }
+    }
+}

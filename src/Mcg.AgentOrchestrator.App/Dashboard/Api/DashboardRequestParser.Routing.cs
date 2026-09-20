@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
-internal static partial class DashboardRequestParser
+internal static class DashboardHttpRequestParser
 {
 public static GoalOperationPath ParseGoalOperationPath(string path)
 {
@@ -38,7 +38,7 @@ public static TaskQuery ParseTaskQueryFromRequest(HttpRequest request)
     AddQueryToken(tokens, "id", GetQueryValue(request, "id"));
     AddQueryToken(tokens, "evidence", GetQueryValue(request, "evidence"));
     AddQueryToken(tokens, "event", GetQueryValue(request, "event"));
-    return CliArgumentParser.ParseTaskQuery(tokens);
+    return DashboardApplicationServices.ParseTaskQuery(tokens);
 }
 
 public static string? GetQueryValue(HttpRequest request, string name)

@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -27,19 +28,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
               "forbiddenChangedPathGlobs": []
             }
             """);
-        var previousHeartbeat = GoalAcceptanceVerifier.HeartbeatInterval;
-        var previousProgress = GoalAcceptanceVerifier.ProgressInterval;
+        var previousHeartbeat = TestOverrides.HeartbeatInterval;
+        var previousProgress = TestOverrides.ProgressInterval;
         var progress = new List<AcceptanceGateProgress>();
         try
         {
             TryDeleteStableSlotHeartbeat(0);
-            GoalAcceptanceVerifier.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
-            GoalAcceptanceVerifier.ProgressInterval = TimeSpan.FromMilliseconds(200);
-            var verifier = new GoalAcceptanceVerifier();
+            TestOverrides.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
+            TestOverrides.ProgressInterval = TimeSpan.FromMilliseconds(200);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides);
             var goalId = new GoalId("feedfacefeedfacefeedfacefeedface");
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
             using var cts = new CancellationTokenSource();
-            var run = verifier.RunAsync(root, goalId, stableSlotIndex: 0, cancellationToken: cts.Token);
+            var run = verifier.RunOwnedAsync(
+                root, goalId, null, 0, null, cts.Token,
+                new AcceptanceRunExecutionOptions(ProgressSink: progress.Add));
 
             var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
             while (!progress.Any(item => item.CurrentTarget == "hung gate receipt") &&
@@ -70,8 +72,110 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
         }
         finally
         {
-            GoalAcceptanceVerifier.HeartbeatInterval = previousHeartbeat;
-            GoalAcceptanceVerifier.ProgressInterval = previousProgress;
+            TestOverrides.HeartbeatInterval = previousHeartbeat;
+            TestOverrides.ProgressInterval = previousProgress;
+            try { DeleteDirectoryWithRetry(root); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_progress_comes_from_live_visible_output")]
+    public async Task GoalAcceptanceVerifierGateHeartbeatProgressComesFromLiveVisibleOutput()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "live output gate receipt", "type": "command", "command": "powershell", "arguments": ["-NoProfile", "-Command", "Write-Output 'heartbeat-visible-output'; Start-Sleep -Seconds 30"], "timeoutMinutes": 1 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var previousHeartbeat = TestOverrides.HeartbeatInterval;
+        var previousProgress = TestOverrides.ProgressInterval;
+        var previousCapturePublication = TestOverrides.CapturePublicationInterval;
+        var observed = new ConcurrentQueue<AcceptanceGateProgress>();
+        var commandStarted = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var outputObserved = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var unchangedOutputObserved = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        Task<AcceptanceVerificationResult>? run = null;
+        AcceptanceGateProgress? firstOutput = null;
+        try
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            TestOverrides.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
+            TestOverrides.ProgressInterval = TimeSpan.FromMilliseconds(200);
+            TestOverrides.CapturePublicationInterval = TimeSpan.FromMilliseconds(100);
+            Action<AcceptanceGateProgress> progressSink = item =>
+            {
+                observed.Enqueue(item);
+                if (item.CurrentTarget != "live output gate receipt" ||
+                    item.ChildProcessId is null)
+                {
+                    return;
+                }
+
+                commandStarted.TrySetResult(item);
+                if (item.OutputBytes <= 0)
+                {
+                    return;
+                }
+
+                var prior = Interlocked.CompareExchange(ref firstOutput, item, null);
+                if (prior is null)
+                {
+                    outputObserved.TrySetResult(item);
+                }
+                else if (item.OutputBytes == prior.OutputBytes &&
+                         item.LastObservedAt > prior.LastObservedAt)
+                {
+                    unchangedOutputObserved.TrySetResult(item);
+                }
+            };
+            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            run = verifier.RunOwnedAsync(
+                root,
+                new GoalId("decafbaddecafbaddecafbaddecafbad"),
+                changedFiles: null,
+                stableSlotIndex: 0,
+                stableSlotLease: null,
+                cancellationToken: cancellation.Token,
+                executionOptions: new AcceptanceRunExecutionOptions(ProgressSink: progressSink));
+
+            await commandStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            var first = await outputObserved.Task.WaitAsync(TimeSpan.FromSeconds(6));
+            var unchanged = await unchangedOutputObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Xunit.Assert.NotNull(first.ChildProcessId);
+            Xunit.Assert.True(first.OutputBytes > 0);
+            Xunit.Assert.Equal(first.OutputBytes, unchanged.OutputBytes);
+            Xunit.Assert.Equal(first.LastProgressAt, unchanged.LastProgressAt);
+            Xunit.Assert.True(unchanged.LastObservedAt > first.LastObservedAt);
+
+            cancellation.Cancel();
+            await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+            Xunit.Assert.Contains(observed, item =>
+                item.CurrentTarget == "live output gate receipt" &&
+                item.ChildProcessId.HasValue &&
+                item.OutputBytes > 0);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            if (run is not null)
+            {
+                try { await run.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            }
+            TestOverrides.HeartbeatInterval = previousHeartbeat;
+            TestOverrides.ProgressInterval = previousProgress;
+            TestOverrides.CapturePublicationInterval = previousCapturePublication;
             try { DeleteDirectoryWithRetry(root); } catch { }
         }
     }
@@ -105,17 +209,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             // reads.
             string firstPrimaryPath;
             string? firstMirrorPath;
-            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-                Path.Combine(root, "attempt-owner-a")))
-            {
-                (firstPrimaryPath, firstMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
-                    "infrastructure lane",
-                    firstGoalId,
-                    environment,
-                    childPid,
-                    stdoutPath,
-                    stderrPath);
-            }
+            var firstAttemptPrefix = Path.Combine(root, "attempt-owner-a");
+            (firstPrimaryPath, firstMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                "infrastructure lane",
+                firstGoalId,
+                environment,
+                childPid,
+                stdoutPath,
+                stderrPath,
+                attemptResultsPrefix: firstAttemptPrefix);
 
             var expectedStableSlotPath = GateHeartbeatArtifacts.GetStableSlotPath(buildSlot);
 
@@ -136,17 +238,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
 
             string secondPrimaryPath;
             string? secondMirrorPath;
-            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-                Path.Combine(root, "attempt-owner-b")))
-            {
-                (secondPrimaryPath, secondMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
-                    "infrastructure lane",
-                    secondGoalId,
-                    environment,
-                    childPid + 1,
-                    stdoutPath,
-                    stderrPath);
-            }
+            var secondAttemptPrefix = Path.Combine(root, "attempt-owner-b");
+            (secondPrimaryPath, secondMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                "infrastructure lane",
+                secondGoalId,
+                environment,
+                childPid + 1,
+                stdoutPath,
+                stderrPath,
+                attemptResultsPrefix: secondAttemptPrefix);
             Assert.NotEqual(firstMirrorPath, secondMirrorPath);
 
             var runningSlots = GateHeartbeatArtifacts.ReadStableSlots()
@@ -160,18 +260,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
                 status.Snapshot?.GoalId == secondGoalId.Value &&
                 status.Snapshot.State == "running");
 
-            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-                Path.Combine(root, "attempt-owner-a")))
-            {
-                GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
-                    "infrastructure lane",
-                    firstGoalId,
-                    environment,
-                    childPid,
-                    stdoutPath,
-                    stderrPath,
-                    finalState: "completed");
-            }
+            GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                "infrastructure lane",
+                firstGoalId,
+                environment,
+                childPid,
+                stdoutPath,
+                stderrPath,
+                finalState: "completed",
+                attemptResultsPrefix: firstAttemptPrefix);
 
             Assert.False(File.Exists(firstMirrorPath));
             var remainingSlot = GateHeartbeatArtifacts.ReadStableSlots()
@@ -180,31 +277,25 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             Assert.Equal("running", remainingSlot.Snapshot?.State);
             Assert.Equal(secondGoalId.Value, remainingSlot.Snapshot?.GoalId);
 
-            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-                Path.Combine(root, "attempt-owner-b")))
-            {
-                GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
-                    "infrastructure lane",
-                    secondGoalId,
-                    environment,
-                    childPid,
-                    stdoutPath,
-                    stderrPath,
-                    finalState: "completed");
-            }
+            GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                "infrastructure lane",
+                secondGoalId,
+                environment,
+                childPid,
+                stdoutPath,
+                stderrPath,
+                finalState: "completed",
+                attemptResultsPrefix: secondAttemptPrefix);
 
             string? orphanMirrorPath;
-            using (GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-                Path.Combine(root, "attempt-owner-orphan")))
-            {
-                (_, orphanMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
-                    "infrastructure lane",
-                    secondGoalId,
-                    environment,
-                    int.MaxValue,
-                    stdoutPath,
-                    stderrPath);
-            }
+            (_, orphanMirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
+                "infrastructure lane",
+                secondGoalId,
+                environment,
+                int.MaxValue,
+                stdoutPath,
+                stderrPath,
+                attemptResultsPrefix: Path.Combine(root, "attempt-owner-orphan"));
 
             Assert.NotNull(orphanMirrorPath);
             Assert.True(File.Exists(orphanMirrorPath));

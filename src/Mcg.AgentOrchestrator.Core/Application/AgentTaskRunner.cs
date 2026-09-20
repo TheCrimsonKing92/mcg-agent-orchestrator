@@ -144,7 +144,8 @@ public sealed class AgentTaskRunner
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
-                questionFingerprint: humanInputDirective.Directive!.QuestionFingerprint,
+                kind: humanInputDirective.Directive!.Kind,
+                questionFingerprint: humanInputDirective.Directive.QuestionFingerprint,
                 blockerFingerprint: humanInputDirective.Directive.BlockerFingerprint ??
                     HumanInputRequest.BuildWorkerResultBlockerFingerprint(
                         task.Id,
@@ -237,6 +238,37 @@ public sealed class AgentTaskRunner
                 task.Id,
                 WorkTaskStatus.Failed,
                 $"{agent.Name} output may be truncated at {execution.MaxOutputTokens} token(s); retry with narrower scope or stronger model before accepting.");
+            return new AgentTaskRunResult(goal, task, execution);
+        }
+
+        if (hasCompleteWorkerResult &&
+            task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.TryGetAssignedScopeComplete(output, out var assignedScopeComplete, out _))
+        {
+            _kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord(
+                    $"api-run {resolvedModel.ProviderName}/{resolvedModel.ModelName}",
+                    string.Empty,
+                    0,
+                    output,
+                    string.Empty,
+                    execution.CompletedAt,
+                    WorkerResultPresent: true,
+                    FullStandardOutput: output,
+                    FullStandardError: string.Empty,
+                    AssignedScopeComplete: assignedScopeComplete));
+
+            if (!assignedScopeComplete)
+            {
+                _kernel.ReportTaskProgress(
+                    goal.Id,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    "Developer declared the assigned implementation scope incomplete; bounded revision or clarification is required before completion.");
+            }
+
             return new AgentTaskRunResult(goal, task, execution);
         }
 

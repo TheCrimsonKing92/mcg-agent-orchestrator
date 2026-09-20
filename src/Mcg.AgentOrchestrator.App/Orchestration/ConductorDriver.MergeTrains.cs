@@ -57,7 +57,8 @@ internal sealed partial class ConductorDriver
                 workspace = GoalWorktrees.CreateMergeTrainWorkspace(
                     _cohortWorkspace.ExecutionDirectory,
                     selection.Members[0].MainRevision,
-                    composition);
+                    composition,
+                    _cohortCleanupHooks);
             }
             catch (InvalidOperationException ex)
             {
@@ -116,13 +117,20 @@ internal sealed partial class ConductorDriver
                         admitted = true;
                         onGateAdmitted?.Invoke();
                     }
-                    var verification = _cohortAcceptanceVerifier.RunAsync(
+                    var executionOwner = AcceptanceExecutionOwners.CreateAttempt(
                         workspace.Path,
-                        goalId: members[0].GoalId,
-                        changedFiles,
+                        members[0].GoalId,
                         stableSlotLease.Environment.BuildPermitIndex,
-                        stableSlotLease,
-                        cancellationToken).GetAwaiter().GetResult();
+                        cancellationToken);
+                    var verification = AcceptanceExecutionOwnerLifetime.Run(
+                        executionOwner,
+                        () => _cohortAcceptanceVerifier.RunOwnedAsync(
+                            workspace.Path,
+                            goalId: members[0].GoalId,
+                            changedFiles,
+                            stableSlotLease.Environment.BuildPermitIndex,
+                            stableSlotLease,
+                            executionOwner).GetAwaiter().GetResult());
                     clock.Stop();
                     var cohortOutcome = ClassifyCohortVerification(verification);
                     var outcome = cohortOutcome switch

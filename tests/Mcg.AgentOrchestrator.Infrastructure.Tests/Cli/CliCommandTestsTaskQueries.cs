@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+[Xunit.Collection(CliTestCollections.ConsoleSerialized)]
 public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
 {
     [Xunit.Fact]

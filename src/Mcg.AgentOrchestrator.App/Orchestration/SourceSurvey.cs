@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record SourceSurveyReport(
+public sealed record SourceSurveyReport(
     string Root,
     int MaxFiles,
     int ReturnedFiles,
@@ -15,9 +15,9 @@ internal sealed record SourceSurveyReport(
     bool TraversalComplete = true,
     IReadOnlyList<string>? IncompleteReasons = null);
 
-internal sealed record SourceSurveyGroup(string Directory, int Count);
+public sealed record SourceSurveyGroup(string Directory, int Count);
 
-internal static class SourceSurvey
+public static class SourceSurvey
 {
     public const int DefaultMaxFiles = 200;
 

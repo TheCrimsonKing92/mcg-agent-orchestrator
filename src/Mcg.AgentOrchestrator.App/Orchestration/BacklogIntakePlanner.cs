@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record BacklogIntakeItem(
+public sealed record BacklogIntakeItem(
     string Id,
     string Heading,
     string Body,
@@ -19,13 +19,13 @@ internal sealed record BacklogIntakeItem(
     RepositoryScopeConfidence ScopeConfidence,
     IReadOnlyList<string> ExcludedTargetFiles);
 
-internal sealed record BacklogIntakePlan(
+public sealed record BacklogIntakePlan(
     string BacklogPath,
     IReadOnlyList<BacklogIntakeItem> Items,
     int TotalItemCount,
     string? SelectionCriterion);
 
-internal static class BacklogIntakePlanner
+public static class BacklogIntakePlanner
 {
     internal const string TargetScopeHeadingLine = "Target files/scopes:";
     internal const string PreciseScopeMarkerLine = "Scope confidence: precise";

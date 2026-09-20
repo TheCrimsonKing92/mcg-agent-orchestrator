@@ -101,6 +101,15 @@ the matrix. If no worker can produce the evidence, say so in the brief and route
 Do not turn an off-worker obligation into a worker blocker after dispatch. The brief should state both the
 worker's reachable contribution and the destination responsible for the remaining proof.
 
+### Refiner `evidence_owner`
+
+Brief authors route each refined acceptance criterion with its structured `evidence_owner` field. Omit the
+field or use `worker` when an assigned worker can produce the evidence. Use `acceptance-gate` when the proof
+is a test execution or gate receipt that no worker may run, and use `operator` when it requires a real host,
+a human, or post-landing observation. Ownership comes only from this field (or a later attributed operator
+mapping), never from keywords in criterion prose. If both operator and acceptance-gate ownership are present,
+operator ownership wins and exactly one obligation is recorded.
+
 ## Worked corrections
 
 ### Goal `5bd314c1`: extracted test module

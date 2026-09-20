@@ -9,9 +9,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     {
         var goalId = new GoalId("12345678123456781234567812345678");
         var taskId = new TaskId("abcdef01abcdef01abcdef01abcdef01");
+        var storageRoot = new DotnetBuildStorageRoot(CreateTempDirectory());
         try
         {
-            var prepared = LocalProcessVerifier.PrepareCommand(" dotnet test Example.sln --verbosity minimal ", goalId, taskId);
+            var prepared = LocalProcessVerifier.PrepareCommand(
+                " dotnet test Example.sln --verbosity minimal ", goalId, taskId, storageRoot);
 
             Assert.True(prepared.Command.StartsWith("dotnet test Example.sln --verbosity minimal", StringComparison.Ordinal));
             Assert.False(prepared.Command.Contains('\'', StringComparison.Ordinal));
@@ -34,7 +36,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storageRoot);
         }
     }
 
@@ -42,21 +44,25 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     public void LocalProcessVerifierReusesGoalBuildLeaseAcrossTasks()
     {
         var goalId = new GoalId("b16b00b5b16b00b5b16b00b5b16b00b5");
+        var storageRoot = new DotnetBuildStorageRoot(CreateTempDirectory());
         try
         {
             var developer = LocalProcessVerifier.PrepareCommand(
                 "dotnet test Example.sln --verbosity minimal",
                 goalId,
-                new TaskId("11111111111111111111111111111111"));
+                new TaskId("11111111111111111111111111111111"),
+                storageRoot);
             var tester = LocalProcessVerifier.PrepareCommand(
                 "dotnet test Example.sln --verbosity minimal",
                 goalId,
-                new TaskId("22222222222222222222222222222222"));
+                new TaskId("22222222222222222222222222222222"),
+                storageRoot);
             var reviewer = LocalProcessVerifier.PrepareCommand(
                 "dotnet test Example.sln --verbosity minimal",
                 goalId,
-                new TaskId("33333333333333333333333333333333"));
-            var expectedArtifacts = DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId);
+                new TaskId("33333333333333333333333333333333"),
+                storageRoot);
+            var expectedArtifacts = DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId, storageRoot);
 
             Assert.True(developer.Command.Contains(expectedArtifacts, StringComparison.OrdinalIgnoreCase));
             Assert.True(tester.Command.Contains(expectedArtifacts, StringComparison.OrdinalIgnoreCase));
@@ -69,7 +75,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storageRoot);
         }
     }
 
@@ -103,7 +109,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_leaves_non_dotnet_verification_commands_unchanged")]
     public void LocalProcessVerifierLeavesNonDotnetVerificationCommandsUnchanged()
     {
-        var prepared = LocalProcessVerifier.PrepareCommand("Write-Output ok", new GoalId("12345678123456781234567812345678"), TaskId.New());
+        var prepared = LocalProcessVerifier.PrepareCommand(
+            "Write-Output ok",
+            new GoalId("12345678123456781234567812345678"),
+            TaskId.New(),
+            new DotnetBuildStorageRoot(CreateTempDirectory()));
 
         Assert.Equal("Write-Output ok", prepared.Command);
         Assert.Equal("Write-Output", prepared.FileName);
@@ -114,7 +124,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_leaves_dotnet_commands_without_goal_context_unchanged")]
     public void LocalProcessVerifierLeavesDotnetCommandsWithoutGoalContextUnchanged()
     {
-        var prepared = LocalProcessVerifier.PrepareCommand("dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'");
+        var prepared = LocalProcessVerifier.PrepareCommand(
+            "dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'",
+            null,
+            null,
+            new DotnetBuildStorageRoot(CreateTempDirectory()));
 
         Assert.Equal("dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'", prepared.Command);
         Assert.Equal("dotnet", prepared.FileName);

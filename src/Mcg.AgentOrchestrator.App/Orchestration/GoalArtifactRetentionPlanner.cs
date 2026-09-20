@@ -51,18 +51,22 @@ internal sealed record GoalArtifactRetentionItem(
 
 internal static class GoalArtifactRetentionPlanner
 {
+    internal static EvidenceRetentionEligibility PreviewTestEvidence(EvidenceRetentionFacts facts) =>
+        EvidenceRetentionPolicy.EvaluatePath(facts);
+
     public static GoalArtifactRetentionPlan Build(
         AgentOrchestratorKernel kernel,
         Goal goal,
         OrchestratorWorkspace workspace,
-        bool dryRun = true)
+        bool dryRun = true,
+        DotnetBuildStorageRoot? buildStorageRoot = null)
     {
         var goalPrefix = goal.Id.Value[..8];
         var worktreePath = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id);
         var branchExists = BranchExists(workspace.ExecutionDirectory, GoalWorktrees.BranchName(goal.Id));
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
         var state = ClassifyState(goal, acceptance, worktreePath is not null, branchExists);
-        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
+        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, buildStorageRoot);
         var contextPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator-context", goal.Id.Value);
         var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id);
         var transcriptPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "transcripts", $"{goalPrefix}.md");
@@ -212,12 +216,29 @@ internal static class GoalArtifactRetentionPlanner
         string path,
         string evidenceKind)
     {
-        var decision = state is RetentionGoalState.AcceptedCleaned or
+        var terminal = state is RetentionGoalState.AcceptedCleaned or
             RetentionGoalState.Failed or
             RetentionGoalState.Abandoned or
-            RetentionGoalState.Superseded
-                ? RetentionDecision.Archive
-                : RetentionDecision.Keep;
+            RetentionGoalState.Superseded;
+        var factRevision = EvidenceRetentionPolicy.ComputeFactRevision([], [path], state.ToString());
+        var eligibility = PreviewTestEvidence(new EvidenceRetentionFacts(
+            terminal,
+            Owner: null,
+            EvidenceOwnershipSource.Unresolved,
+            ProtectedAttempt: false,
+            ReferencedArtifact: false,
+            CountBound: false,
+            Aged: false,
+            ByteBoundEligible: false,
+            factRevision,
+            RequireOwner: false));
+        var decision = eligibility.Disposition switch
+        {
+            EvidenceEligibility.Keep => RetentionDecision.Keep,
+            EvidenceEligibility.Archive => RetentionDecision.Archive,
+            EvidenceEligibility.DeleteWhenSafe => RetentionDecision.DeleteWhenSafe,
+            _ => throw new InvalidOperationException($"Unsupported evidence eligibility '{eligibility.Disposition}'.")
+        };
         return new GoalArtifactRetentionItem(
             RetentionArtifactKind.TestEvidence,
             decision,

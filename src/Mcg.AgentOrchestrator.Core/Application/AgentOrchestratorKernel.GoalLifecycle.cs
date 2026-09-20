@@ -504,6 +504,16 @@ public sealed partial class AgentOrchestratorKernel
         RetryRoundKind? retryRoundKind = null) =>
         RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: true);
 
+    public TaskSpec RetryTaskAutomatically(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        RetryCause retryCause,
+        bool invalidateDownstream = true,
+        RetryRoundKind? retryRoundKind = null) =>
+        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind,
+            authoritativeRetryFeedback: false, preserveEquivalentPendingRetry: true);
+
     private TaskSpec RetryTaskCore(
         GoalId goalId,
         TaskId taskId,
@@ -511,7 +521,8 @@ public sealed partial class AgentOrchestratorKernel
         RetryCause retryCause,
         bool invalidateDownstream,
         RetryRoundKind? retryRoundKind,
-        bool authoritativeRetryFeedback)
+        bool authoritativeRetryFeedback,
+        bool preserveEquivalentPendingRetry = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -527,7 +538,11 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request => request.GoalId == goalId && request.TaskId == taskId && !request.IsCompleted))
+            _humanInputRequests.Values.Any(request =>
+                request.GoalId == goalId &&
+                request.TaskId == taskId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
@@ -539,14 +554,32 @@ public sealed partial class AgentOrchestratorKernel
 
         var retryAt = _clock.UtcNow;
         var priorCandidate = task.LastDispatch?.ResultCommit;
-        ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
-        if (authoritativeRetryFeedback)
+        var reusePendingRetry = preserveEquivalentPendingRetry && !authoritativeRetryFeedback && retryCause != RetryCause.Unknown &&
+            task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned && task.LatestRetryAt is not null &&
+            task.LastDispatch is null && task.LastProcess is null && task.LastVerification is null &&
+            task.LastExecution is null && task.PendingRetryCause == retryCause && task.PendingRetryRoundKind == retryRoundKind;
+        if (reusePendingRetry)
         {
-            task.RecordCriterionRetryFeedback([retryMessage]);
-            task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+            // Accrue feedback without replacing an untouched retry's identity. Downstream
+            // results may have arrived since admission, so invalidation below still runs.
+            if (!goal.Timeline.Any(evt => evt.TaskId == taskId && evt.OccurredAt >= task.LatestRetryAt!.Value &&
+                evt.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRetryFeedbackUpdated && evt.Message == retryMessage))
+            {
+                RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetryFeedbackUpdated, retryMessage);
+                Append(goal, taskId, ProgressKind.TaskRetryFeedbackUpdated, retryMessage);
+            }
         }
-        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
-        Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+        else
+        {
+            ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
+            if (authoritativeRetryFeedback)
+            {
+                task.RecordCriterionRetryFeedback([retryMessage]);
+                task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+            }
+            RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+            Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+        }
         if (invalidateDownstream)
         {
             InvalidateDownstreamTasks(goal, task, retryAt, priorCandidate, retryCause);
@@ -614,7 +647,10 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (_humanInputRequests.Values.Any(candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted))
+        if (_humanInputRequests.Values.Any(candidate =>
+                candidate.GoalId == goal.Id &&
+                !candidate.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
         {
             return false;
         }
@@ -704,7 +740,8 @@ public sealed partial class AgentOrchestratorKernel
         TaskId taskId,
         string message,
         RetryCause retryCause,
-        string? interruptedDispatchId = null)
+        string? interruptedDispatchId = null,
+        InterruptedWorkCheckpoint? checkpoint = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -715,24 +752,79 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request => request.GoalId == goalId && request.TaskId == taskId && !request.IsCompleted))
+            _humanInputRequests.Values.Any(request =>
+                request.GoalId == goalId &&
+                request.TaskId == taskId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
+
+        ValidateInterruptedWorkCheckpoint(goalId, task, retryCause, interruptedDispatchId, checkpoint);
 
         task.ClearLatestVerification();
         task.ClearLastExecution();
         task.ClearLastDispatch();
         task.ClearLastProcess();
-        task.ClearSubscriptionRetryAfter();
+        if (retryCause != RetryCause.ProviderInterruption)
+        {
+            task.ClearSubscriptionRetryAfter();
+        }
+        else if (checkpoint is not null && task.SubscriptionRetryAfter is null)
+        {
+            var connectivityFailures = Math.Max(
+                1,
+                DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+            task.SetSubscriptionRetryAfter(
+                _clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
+        }
         task.RecordRetry(_clock.UtcNow, retryCause);
         task.SetInterruptedDispatchRecovery(interruptedDispatchId);
+        task.SetInterruptedWorkCheckpoint(checkpoint);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Interrupted dispatch recovery reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
         return task;
     }
+
+    private static void ValidateInterruptedWorkCheckpoint(
+        GoalId goalId,
+        TaskSpec task,
+        RetryCause retryCause,
+        string? interruptedDispatchId,
+        InterruptedWorkCheckpoint? checkpoint)
+    {
+        if (checkpoint is null)
+        {
+            return;
+        }
+
+        var violation = retryCause != RetryCause.ProviderInterruption ? "checkpoint-retry-cause-mismatch" :
+            !string.Equals(checkpoint.GoalId, goalId.Value, StringComparison.Ordinal) ? "checkpoint-goal-mismatch" :
+            !string.Equals(checkpoint.TaskId, task.Id.Value, StringComparison.Ordinal) ? "checkpoint-task-mismatch" :
+            checkpoint.Role != task.RequiredRole ? "checkpoint-role-mismatch" :
+            string.IsNullOrWhiteSpace(interruptedDispatchId) ||
+                !string.Equals(checkpoint.DispatchId, interruptedDispatchId, StringComparison.Ordinal) ? "checkpoint-dispatch-mismatch" :
+            task.LastDispatch is null ? "checkpoint-dispatch-missing" :
+            !string.Equals(checkpoint.ParentCommit, task.LastDispatch.BaseCommit, StringComparison.Ordinal) ? "checkpoint-parent-mismatch" :
+            !PathsEqual(checkpoint.WorktreePath, task.LastDispatch.WorkingDirectory) ? "checkpoint-worktree-mismatch" :
+            string.IsNullOrWhiteSpace(checkpoint.CheckpointSha) ? "checkpoint-sha-missing" :
+            checkpoint.Cause != ProviderFailureKind.Connectivity ? "checkpoint-cause-mismatch" :
+            null;
+        if (violation is not null)
+        {
+            throw new InvalidOperationException(
+                $"Interrupted-work checkpoint cannot be applied: {violation}; task={task.Id.Value}; dispatch={interruptedDispatchId ?? "none"}.");
+        }
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     public int RecordCriterionRetryFeedback(GoalId goalId, TaskId taskId, IReadOnlyList<string> feedback)
     {
@@ -923,7 +1015,12 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var previousAgentId = task.AssignedAgentId?.Value ?? "none";
+        var assignmentChanged = task.AssignedAgentId != agent.Id;
         task.AssignTo(agent.Id);
+        if (assignmentChanged)
+        {
+            task.AdvanceConductorRoutingRevision();
+        }
         Append(
             goal,
             task.Id,
@@ -944,14 +1041,37 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var previousAgentId = task.AssignedAgentId?.Value ?? "none";
+        var preparedDispatchRequiresRebuild = task.Status == WorkTaskStatus.Running &&
+            task.LastDispatch is not null &&
+            task.LastProcess is null;
+        var authorizedAttemptUnaffected = task.Status == WorkTaskStatus.Running &&
+            task.LastDispatch is not null &&
+            task.LastProcess is not null;
+        var authorizedHarness = task.LastDispatch?.WorkerName;
+        var assignmentChanged = task.AssignedAgentId != agent.Id;
         task.AssignTo(agent.Id);
+        if (assignmentChanged)
+        {
+            task.AdvanceConductorRoutingRevision();
+        }
+        if (preparedDispatchRequiresRebuild || authorizedAttemptUnaffected)
+        {
+            task.SetStatus(WorkTaskStatus.Running);
+        }
+
+        var routingEffect = authorizedAttemptUnaffected
+            ? $" Authorized attempt on harness '{authorizedHarness}' remains unchanged; the acknowledged assignment applies to the next attempt."
+            : preparedDispatchRequiresRebuild
+                ? " The prepared command is invalidated and will be rebuilt from the acknowledged assignment at the final pre-start boundary."
+                : " The acknowledged assignment applies to the next dispatch.";
+        var operatorReason = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" Reason: {reason.Trim()}";
         Append(
             goal,
             task.Id,
             ProgressKind.TaskRedelegated,
-            string.IsNullOrWhiteSpace(reason)
-                ? $"Reassigned {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name})."
-                : reason.Trim());
+            $"Reassigned {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name})." +
+            routingEffect +
+            operatorReason);
         RefreshGoalStatus(goal);
         return task;
     }
@@ -1046,7 +1166,10 @@ public sealed partial class AgentOrchestratorKernel
         var promoted = 0;
         foreach (var goal in _goals.Values.Where(goal => goal.Status == GoalStatus.Parked).ToArray())
         {
-            if (_humanInputRequests.Values.Any(request => request.GoalId == goal.Id && !request.IsCompleted) ||
+            if (_humanInputRequests.Values.Any(request =>
+                    request.GoalId == goal.Id &&
+                    !request.IsCompleted &&
+                    HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)) ||
                 !HasHumanInputResolvedAfterLatestParkDecision(goal))
             {
                 continue;
@@ -1081,6 +1204,15 @@ public sealed partial class AgentOrchestratorKernel
         if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
         {
             throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verifying or Verified goals can be completed.");
+        }
+
+        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
+        if (outstandingObligations.Count > 0)
+        {
+            var detail = string.Join(", ", outstandingObligations.Select(item =>
+                $"{item.Id}:{item.Owner}:{item.State}"));
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' cannot complete while criterion evidence obligations remain outstanding: {detail}.");
         }
 
         if (goal.Status == GoalStatus.Verifying &&
@@ -1122,6 +1254,15 @@ public sealed partial class AgentOrchestratorKernel
         {
             throw new InvalidOperationException(
                 $"Goal '{goalId}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.");
+        }
+
+        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
+        if (outstandingObligations.Count > 0)
+        {
+            var detail = string.Join(", ", outstandingObligations.Select(item =>
+                $"{item.Id}:{item.Owner}:{item.State}"));
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' cannot complete from merge evidence while criterion evidence obligations remain outstanding: {detail}.");
         }
 
         if (goal.Tasks.Any(task =>
@@ -1481,7 +1622,8 @@ public sealed partial class AgentOrchestratorKernel
         string? blockerFingerprint = null,
         int? completedRound = null,
         string? workerResultLogReference = null,
-        bool recordDuplicateSuppression = true)
+        bool recordDuplicateSuppression = true,
+        string? evidenceOwner = null)
     {
         var goal = GetGoal(goalId);
         if (taskId is not null)
@@ -1499,6 +1641,7 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(candidate =>
                     candidate.GoalId == goalId &&
                     candidate.TaskId == taskId &&
+                    candidate.Kind == kind &&
                     string.Equals(candidate.QuestionFingerprint, effectiveQuestionFingerprint, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
@@ -1511,7 +1654,7 @@ public sealed partial class AgentOrchestratorKernel
                     ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
                 }
 
-                HoldTaskForExistingHumanInput(goal, taskId);
+                HoldTaskForExistingHumanInput(goal, taskId, open.Kind);
                 if (recordDuplicateSuppression)
                 {
                     open.IncrementSuppressionCount();
@@ -1583,10 +1726,11 @@ public sealed partial class AgentOrchestratorKernel
                 suggestedDefaultAnswer,
                 resumeCommand ?? HumanInputRequest.BuildDefaultResumeCommand(id),
                 effectiveQuestionFingerprint,
-                blockerFingerprint);
+                blockerFingerprint,
+                evidenceOwner: evidenceOwner);
             _humanInputRequests.Add(request.Id, request);
 
-            HoldTaskForExistingHumanInput(goal, taskId);
+            HoldTaskForExistingHumanInput(goal, taskId, request.Kind);
             Append(goal, taskId, ProgressKind.HumanInputRequested, question);
             AppendContradictoryRecordAdvisoryIfNeeded(goal, request);
             return new HumanInputRequestCreationResult(request, WasReused: false, WasSuppressedByAnswer: false);
@@ -1644,8 +1788,13 @@ public sealed partial class AgentOrchestratorKernel
             $"alreadyAnsweredRequest={answeredRequest?.Id.Value ?? "none"}");
     }
 
-    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId)
+    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId, HumanWaitKind kind)
     {
+        if (!HumanWaitPolicyDefaults.BlocksActiveWork(kind))
+        {
+            return;
+        }
+
         if (taskId is not null)
         {
             goal.FindTask(taskId).SetStatus(WorkTaskStatus.WaitingForHuman);
@@ -1773,6 +1922,7 @@ public sealed partial class AgentOrchestratorKernel
                     candidate.Id != request.Id &&
                     candidate.GoalId == request.GoalId &&
                     candidate.TaskId == request.TaskId &&
+                    candidate.Kind == request.Kind &&
                     !candidate.IsCompleted &&
                     string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.RequestedAt)
@@ -1786,13 +1936,14 @@ public sealed partial class AgentOrchestratorKernel
                     goal.AuthoritativeBrief.Version);
             }
 
-            if (request.TaskId is not null)
+            if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             {
                 var task = goal.FindTask(request.TaskId);
                 if (!_humanInputRequests.Values.Any(candidate =>
                         candidate.GoalId == goal.Id &&
                         candidate.TaskId == task.Id &&
-                        !candidate.IsCompleted))
+                        !candidate.IsCompleted &&
+                        HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
                     RestoreTaskAfterHumanInput(goal, task);
                 }
@@ -1830,6 +1981,7 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(candidate =>
                     candidate.GoalId == goal.Id &&
                     candidate.Id != request.Id &&
+                    candidate.Kind == request.Kind &&
                     string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
@@ -1887,7 +2039,8 @@ public sealed partial class AgentOrchestratorKernel
                 if (!_humanInputRequests.Values.Any(candidate =>
                         candidate.GoalId == goal.Id &&
                         candidate.TaskId == task.Id &&
-                        !candidate.IsCompleted))
+                        !candidate.IsCompleted &&
+                        HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
                     RestoreTaskAfterHumanInput(goal, task);
                 }
@@ -2075,7 +2228,7 @@ public sealed partial class AgentOrchestratorKernel
             .ToList())
         {
             var age = _clock.UtcNow - request.CreatedAt;
-            if (request.Kind != HumanWaitKind.SpecClarification || age < specClarificationStaleAfter)
+            if (!HumanWaitPolicyDefaults.IsSpecClarificationClass(request.Kind) || age < specClarificationStaleAfter)
             {
                 continue;
             }
@@ -2102,7 +2255,10 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(goalId);
         var completed = 0;
         foreach (var request in _humanInputRequests.Values
-            .Where(request => request.GoalId == goalId && !request.IsCompleted)
+            .Where(request =>
+                request.GoalId == goalId &&
+                !request.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             .OrderBy(request => request.RequestedAt)
             .ToList())
         {
@@ -2122,7 +2278,8 @@ public sealed partial class AgentOrchestratorKernel
                      !_humanInputRequests.Values.Any(request =>
                          request.GoalId == goal.Id &&
                          request.TaskId == task.Id &&
-                         !request.IsCompleted)))
+                         !request.IsCompleted &&
+                         HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))))
         {
             RestoreTaskAfterHumanInput(goal, task);
         }
@@ -2231,6 +2388,52 @@ public sealed partial class AgentOrchestratorKernel
         GetGoal(goalId).SetRefinedSpec(spec, _clock.UtcNow);
     }
 
+    public CriterionEvidenceObligation MapCriterionEvidenceOwner(
+        GoalId goalId,
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null) =>
+        GetGoal(goalId).MapCriterionEvidenceOwner(
+            criterionIndex,
+            criterionVersion,
+            owner,
+            actor,
+            _clock.UtcNow,
+            requiredScope,
+            findingStableId,
+            expectedCandidateSha);
+
+    public CriterionEvidenceObligation RecordCriterionEvidence(
+        GoalId goalId,
+        string obligationId,
+        CriterionEvidenceOwner owner,
+        string candidateSha,
+        string receiptId,
+        string scope,
+        bool passed,
+        string detail) =>
+        GetGoal(goalId).RecordCriterionEvidence(
+            obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow);
+
+    public CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
+        GoalId goalId,
+        string malformedObligationId,
+        int criterionIndex,
+        int criterionVersion,
+        CriterionEvidenceOwner owner,
+        string actor,
+        string reason,
+        string? requiredScope = null,
+        string? findingStableId = null,
+        string? expectedCandidateSha = null) =>
+        GetGoal(goalId).RepairMalformedCriterionEvidenceObligation(
+            malformedObligationId, criterionIndex, criterionVersion, owner, actor, reason, _clock.UtcNow,
+            requiredScope, findingStableId, expectedCandidateSha);
+
     public RefinedSpecVersion RecordGoalRefinement(GoalId goalId, RefinedSpec spec)
     {
         return GetGoal(goalId).RecordRefinedSpec(spec, _clock.UtcNow);
@@ -2302,6 +2505,13 @@ public sealed partial class AgentOrchestratorKernel
         return _humanInputRequests.Values
             .Where(request => request.GoalId == goalId && !request.IsCompleted)
             .OrderBy(request => request.RequestedAt)
+            .ToList();
+    }
+
+    public IReadOnlyList<HumanInputRequest> GetPendingBlockingHumanInput(GoalId goalId)
+    {
+        return GetPendingHumanInput(goalId)
+            .Where(request => HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             .ToList();
     }
 

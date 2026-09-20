@@ -3,7 +3,6 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTestBase
 {
     [Xunit.Fact]
@@ -162,15 +161,27 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
             var goalId = GoalId.New();
             var fixture = PrepareRawDefect(repo, goalId);
             var statusReads = 0;
+            var gitReceipts = new List<object>();
             GitCli.GitResult Runner(string workingDirectory, string[] arguments)
             {
                 if (arguments.SequenceEqual(["status", "--porcelain=v1", "-z", "--untracked-files=all"]) &&
                     Interlocked.Increment(ref statusReads) <= 2)
                 {
+                    gitReceipts.Add($"Injected cache-blind status read {statusReads}.");
                     return new GitCli.GitResult(0, string.Empty, string.Empty);
                 }
 
-                return GitCli.Run(workingDirectory, arguments);
+                var receipt = GitCli.Run(workingDirectory, arguments);
+                gitReceipts.Add(new
+                {
+                    arguments,
+                    receipt.ExitCode,
+                    receipt.Output,
+                    receipt.Error,
+                    receipt.DrainTimedOut,
+                    receipt.ProcessStarted
+                });
+                return receipt;
             }
 
             var result = GoalWorktrees.ValidatePostRebaseMaterialization(
@@ -180,7 +191,10 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
                 goalId,
                 Runner);
 
-            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, result.Status);
+            Assert.True(result.Status == GoalWorktreeRebaseStatus.Rebased,
+                result.Status == GoalWorktreeRebaseStatus.Rebased ? null :
+                    $"Actual status: {result.Status}; status reads: {statusReads}; {result.Message}" +
+                    Environment.NewLine + System.Text.Json.JsonSerializer.Serialize(gitReceipts));
             Assert.Equal(3, statusReads);
             Assert.Equal(["fixture.txt"], result.RematerializedFiles);
             Assert.Equal(

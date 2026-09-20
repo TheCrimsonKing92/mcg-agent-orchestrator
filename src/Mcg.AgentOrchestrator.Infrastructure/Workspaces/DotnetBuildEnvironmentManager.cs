@@ -139,18 +139,20 @@ public static class DotnetBuildEnvironmentManager
     public static DotnetBuildEnvironment CreateAttempt(
         GoalId? goalId,
         string attemptName,
-        int slotCount = StableSlotCount)
+        int slotCount = StableSlotCount,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
+        storageRoot ??= CaptureStorageRoot();
         ValidateRequestedSlotCount(slotCount);
         if (goalId is not null)
         {
-            return CreateGoalLease(goalId, attemptName, slotCount);
+            return CreateGoalLease(goalId, attemptName, slotCount, storageRoot);
         }
 
         var owner = $"{Environment.ProcessId}-{Sanitize(attemptName)}-{Guid.NewGuid():N}";
-        var root = Path.Combine(IsolatedRootBase(), "runs", owner);
+        var root = Path.Combine(storageRoot.RootPath, "runs", owner);
         var artifactsPath = Path.Combine(root, "artifacts");
-        var executionLockPath = BuildSlotExecutionLockPath(BuildSlotIndex(owner));
+        var executionLockPath = BuildSlotExecutionLockPath(BuildSlotIndex(owner), storageRoot);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
 
@@ -163,16 +165,17 @@ public static class DotnetBuildEnvironmentManager
             owner);
     }
 
-    internal static DotnetBuildEnvironment ResolveGoalEnvironment(GoalId goalId)
+    internal static DotnetBuildEnvironment ResolveGoalEnvironment(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
     {
+        storageRoot ??= CaptureStorageRoot();
         ArgumentNullException.ThrowIfNull(goalId);
-        var root = GoalRoot(goalId);
+        var root = GoalRoot(goalId, storageRoot);
         var leaseId = $"goal-{Prefix(goalId)}";
-        var leaseDirectory = LeaseDirectory(goalId);
+        var leaseDirectory = LeaseDirectory(goalId, storageRoot);
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var artifactsPath = Path.Combine(root, "artifacts");
         var buildPermitIndex = BuildSlotIndex(Prefix(goalId));
-        var executionLockPath = BuildSlotExecutionLockPath(buildPermitIndex);
+        var executionLockPath = BuildSlotExecutionLockPath(buildPermitIndex, storageRoot);
         Directory.CreateDirectory(leaseDirectory);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
@@ -189,26 +192,27 @@ public static class DotnetBuildEnvironmentManager
             BuildPermitIndex: buildPermitIndex);
     }
 
-    public static string GoalRoot(GoalId goalId)
+    public static string GoalRoot(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
     {
-        return Path.Combine(IsolatedRootBase(), "goals", Prefix(goalId));
+        return Path.Combine((storageRoot ?? CaptureStorageRoot()).RootPath, "goals", Prefix(goalId));
     }
 
-    public static string GoalArtifactsPath(GoalId goalId)
+    public static string GoalArtifactsPath(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
     {
-        return TryReadArtifactsPath(Path.Combine(LeaseDirectory(goalId), LeaseMetadataFileName)) ??
-            Path.Combine(GoalRoot(goalId), "artifacts");
+        storageRoot ??= CaptureStorageRoot();
+        return TryReadArtifactsPath(Path.Combine(LeaseDirectory(goalId, storageRoot), LeaseMetadataFileName)) ??
+            Path.Combine(GoalRoot(goalId, storageRoot), "artifacts");
     }
 
-    public static string BaseBuildCacheRoot()
+    public static string BaseBuildCacheRoot(DotnetBuildStorageRoot? storageRoot = null)
     {
-        return DotnetBaseBuildCache.DefaultRootPath(IsolatedRootBase());
+        return DotnetBaseBuildCache.DefaultRootPath((storageRoot ?? CaptureStorageRoot()).RootPath);
     }
 
-    public static bool TryCleanupSuccessfulRun(DotnetBuildEnvironment environment)
+    public static bool TryCleanupSuccessfulRun(DotnetBuildEnvironment environment, DotnetBuildStorageRoot? storageRoot = null)
     {
         ArgumentNullException.ThrowIfNull(environment);
-        var runsRoot = Path.GetFullPath(Path.Combine(IsolatedRootBase(), "runs"))
+        var runsRoot = Path.GetFullPath(Path.Combine((storageRoot ?? CaptureStorageRoot()).RootPath, "runs"))
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
             Path.DirectorySeparatorChar;
         var root = Path.GetFullPath(environment.RootPath)
@@ -230,15 +234,16 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    public static string BuildSlotHeartbeatPath(int slotIndex)
+    public static string BuildSlotHeartbeatPath(int slotIndex, DotnetBuildStorageRoot? storageRoot = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(slotIndex);
-        return Path.Combine(IsolatedRootBase(), "build-slots", $"activity-{slotIndex}.heartbeat.json");
+        return Path.Combine((storageRoot ?? CaptureStorageRoot()).RootPath, "build-slots", $"activity-{slotIndex}.heartbeat.json");
     }
 
     public static DotnetBuildEnvironment CreateStableSlotAttempt(
         int slotIndex,
-        int slotCount = StableSlotCount)
+        int slotCount = StableSlotCount,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
         ValidateRequestedSlotCount(slotCount);
         if (slotIndex >= slotCount)
@@ -249,7 +254,7 @@ public static class DotnetBuildEnvironmentManager
                 $"Stable slot index must be 0 through {slotCount - 1} for the requested slot count.");
         }
 
-        return CreateStableSlotEnvironment(slotIndex);
+        return CreateStableSlotEnvironment(slotIndex, storageRoot ?? CaptureStorageRoot());
     }
 
     public static DotnetBuildLeaseAcquisition TryAcquireStableSlotExecutionLock(
@@ -257,15 +262,16 @@ public static class DotnetBuildEnvironmentManager
         TimeSpan? timeout,
         CancellationToken cancellationToken = default,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null)
+        Action<TimeSpan>? sleep = null,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
-        var environment = CreateStableSlotEnvironment(slotIndex, createArtifactsDirectory: false);
+        var environment = CreateStableSlotEnvironment(slotIndex, storageRoot ?? CaptureStorageRoot(), createArtifactsDirectory: false);
         return TryAcquireLeaseExecutionLock(environment, timeout, cancellationToken, timeProvider, sleep);
     }
 
-    public static bool IsStableSlotExecutionLeaseAvailable(int slotIndex)
+    public static bool IsStableSlotExecutionLeaseAvailable(int slotIndex, DotnetBuildStorageRoot? storageRoot = null)
     {
-        var environment = CreateStableSlotEnvironment(slotIndex);
+        var environment = CreateStableSlotEnvironment(slotIndex, storageRoot ?? CaptureStorageRoot());
         var executionLockPath = environment.ExecutionLockPath;
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
         var createdByProbe = !File.Exists(executionLockPath);
@@ -290,19 +296,21 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    public static int? GetStableSlotExecutionLeaseOwner(int slotIndex)
+    public static int? GetStableSlotExecutionLeaseOwner(int slotIndex, DotnetBuildStorageRoot? storageRoot = null)
     {
         ValidateStableSlotIndex(slotIndex);
-        return TryReadStableSlotExecutionWait(slotIndex).OwnerProcessId;
+        return TryReadStableSlotExecutionWait(slotIndex,
+            CreateStableSlotEnvironment(slotIndex, storageRoot ?? CaptureStorageRoot(), createArtifactsDirectory: false)).OwnerProcessId;
     }
 
     public static DotnetBuildEnvironmentLease AcquireFirstAvailableStableSlotExecutionLock(
         TimeSpan? timeout = null,
         Action<DotnetBuildStableSlotWait>? onWait = null,
         CancellationToken cancellationToken = default,
-        int slotCount = StableSlotCount)
+        int slotCount = StableSlotCount,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
-        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken, slotCount) switch
+        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken, slotCount, storageRoot: storageRoot) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
@@ -317,8 +325,10 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default,
         int slotCount = StableSlotCount,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null)
+        Action<TimeSpan>? sleep = null,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
+        storageRoot ??= CaptureStorageRoot();
         ValidateRequestedSlotCount(slotCount);
         var clock = timeProvider ?? DefaultLeaseTimeProvider;
         var delay = sleep ?? DefaultLeaseSleep;
@@ -334,7 +344,7 @@ public static class DotnetBuildEnvironmentManager
             for (var offset = 0; offset < slotCount; offset++)
             {
                 var slot = (scanStart + offset) % slotCount;
-                var environment = CreateStableSlotEnvironment(slot);
+                var environment = CreateStableSlotEnvironment(slot, storageRoot);
                 if (IsSlotArtifactsBusy(environment, processSnapshot))
                 {
                     continue;
@@ -351,7 +361,7 @@ public static class DotnetBuildEnvironmentManager
                 }
             }
 
-            var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot(slotCount);
+            var leastRecentlyLeased = FindLeastRecentlyLeasedStableSlot(storageRoot, slotCount);
             if (!waitingReported)
             {
                 waitStartedAt = clock.GetUtcNow();
@@ -362,13 +372,15 @@ public static class DotnetBuildEnvironmentManager
             var now = clock.GetUtcNow();
             if (now >= timeoutAt)
             {
-                return EmitSlotsBusy("first-available-stable-slot", slotCount, processSnapshot);
+                return EmitSlotsBusy("first-available-stable-slot",
+                    slot => CreateStableSlotEnvironment(slot, storageRoot, createArtifactsDirectory: false),
+                    slotCount, processSnapshot);
             }
 
             var remaining = timeoutAt - now;
             var pollDelay = remaining < SlotBusyPollDelay ? remaining : SlotBusyPollDelay;
 
-            var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex);
+            var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex, storageRoot);
             if (IsSlotArtifactsBusy(target, processSnapshot))
             {
                 delay(pollDelay);
@@ -389,15 +401,19 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    public static bool TryRotateGoalLease(GoalId goalId, string reason)
+    public static bool TryRotateGoalLease(GoalId goalId, string reason, DotnetBuildStorageRoot? storageRoot = null)
     {
-        var leaseDirectory = LeaseDirectory(goalId);
+        storageRoot ??= CaptureStorageRoot();
+        var leaseDirectory = LeaseDirectory(goalId, storageRoot);
         if (!Directory.Exists(leaseDirectory))
         {
             return true;
         }
 
-        var rotatedRoot = Path.Combine(GoalRoot(goalId), "rotated-leases");
+        // The rotated lease stays inside the goal root of the same storage root the lease came from:
+        // resolving it ambiently would write another root's lease into the current-directory namespace
+        // (and can fail outright across volumes).
+        var rotatedRoot = Path.Combine(GoalRoot(goalId, storageRoot), "rotated-leases");
         Directory.CreateDirectory(rotatedRoot);
         var target = Path.Combine(rotatedRoot, $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Sanitize(reason)}");
         try
@@ -415,9 +431,9 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    public static bool TryDeleteGoalArtifacts(GoalId goalId)
+    public static bool TryDeleteGoalArtifacts(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
     {
-        var root = GoalRoot(goalId);
+        var root = GoalRoot(goalId, storageRoot ?? CaptureStorageRoot());
         if (!Directory.Exists(root))
         {
             return true;
@@ -438,15 +454,18 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    public static DotnetBuildLeaseStatus InspectGoalLease(GoalId goalId)
+    public static DotnetBuildLeaseStatus InspectGoalLease(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
     {
-        var root = GoalRoot(goalId);
+        storageRoot ??= CaptureStorageRoot();
+        var root = GoalRoot(goalId, storageRoot);
         var leaseId = $"goal-{Prefix(goalId)}";
-        var leaseDirectory = LeaseDirectory(goalId);
+        var leaseDirectory = LeaseDirectory(goalId, storageRoot);
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var rootExists = Directory.Exists(root);
         var metadataExists = File.Exists(metadataPath);
-        var artifactsPath = TryReadArtifactsPath(metadataPath) ?? GoalArtifactsPath(goalId);
+        // The no-metadata fallback stays inside the inspected storage root: resolving it ambiently would
+        // report another root's artifacts for a lease this call already located under storageRoot.
+        var artifactsPath = TryReadArtifactsPath(metadataPath) ?? GoalArtifactsPath(goalId, storageRoot);
         var artifactsExist = Directory.Exists(artifactsPath);
         var ownerProcessId = metadataExists ? TryReadOwnerProcessId(metadataPath) : null;
         var ownerAlive = ownerProcessId is not null && IsProcessRunning(ownerProcessId.Value);
@@ -473,9 +492,11 @@ public static class DotnetBuildEnvironmentManager
             detail);
     }
 
-    public static bool TryCleanupOrphanedGoalLease(GoalId goalId, out DotnetBuildLeaseStatus status, out string detail)
+    public static bool TryCleanupOrphanedGoalLease(GoalId goalId, out DotnetBuildLeaseStatus status, out string detail,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
-        status = InspectGoalLease(goalId);
+        storageRoot ??= CaptureStorageRoot();
+        status = InspectGoalLease(goalId, storageRoot);
         if (!status.CanCleanup)
         {
             detail = status.OwnerProcessAlive
@@ -484,7 +505,7 @@ public static class DotnetBuildEnvironmentManager
             return false;
         }
 
-        var deleted = TryDeleteGoalArtifacts(goalId);
+        var deleted = TryDeleteGoalArtifacts(goalId, storageRoot);
         detail = deleted
             ? $"Deleted orphaned build lease {status.LeaseId} at {status.RootPath}."
             : $"Could not delete orphaned build lease {status.LeaseId}; inspect file locks under {status.RootPath}.";
@@ -546,14 +567,18 @@ public static class DotnetBuildEnvironmentManager
         DotnetBuildEnvironment environment,
         CancellationToken cancellationToken = default,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null)
+        Action<TimeSpan>? sleep = null,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody = null)
     {
-        return TryAcquireLeaseExecutionLock(
+        return TryAcquireLeaseExecutionLockCore(
             environment,
             timeout: null,
             cancellationToken,
             timeProvider,
-            sleep) switch
+            sleep,
+            acceptancePriorityHeldByCaller: false,
+            emitSlotsBusyReceipt: true,
+            artifactCustody: artifactCustody) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
@@ -575,7 +600,8 @@ public static class DotnetBuildEnvironmentManager
             timeProvider,
             sleep,
             acceptancePriorityHeldByCaller: false,
-            emitSlotsBusyReceipt: true);
+            emitSlotsBusyReceipt: true,
+            artifactCustody: null);
 
     private static DotnetBuildLeaseAcquisition TryAcquireLeaseExecutionLockCore(
         DotnetBuildEnvironment environment,
@@ -584,7 +610,8 @@ public static class DotnetBuildEnvironmentManager
         TimeProvider? timeProvider,
         Action<TimeSpan>? sleep,
         bool acceptancePriorityHeldByCaller,
-        bool emitSlotsBusyReceipt)
+        bool emitSlotsBusyReceipt,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
         var clock = timeProvider ?? DefaultLeaseTimeProvider;
@@ -699,7 +726,8 @@ public static class DotnetBuildEnvironmentManager
                         forceClean: forceCleanArtifacts,
                         currentProcessOwnsExecutionLease: true,
                         ownerMarkerValidated: reclaim.Reclaimed,
-                        staleExecutionLeaseReclaim: pendingStaleExecutionLeaseReclaim);
+                        staleExecutionLeaseReclaim: pendingStaleExecutionLeaseReclaim,
+                        artifactCustody: artifactCustody);
                     EmitLeaseReceipt("LEASE_ACQUIRE", environment);
                 }
                 catch
@@ -767,7 +795,41 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default,
         Action? onWait = null,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null)
+        Action<TimeSpan>? sleep = null) =>
+        TryAcquireFirstAvailableBuildPermitCore(
+            environment,
+            timeout,
+            cancellationToken,
+            onWait,
+            timeProvider,
+            sleep,
+            artifactCustody: null);
+
+    internal static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermitOwned(
+        DotnetBuildEnvironment environment,
+        AcceptanceAttemptArtifactCustodyContext artifactCustody,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken = default,
+        Action? onWait = null,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null) =>
+        TryAcquireFirstAvailableBuildPermitCore(
+            environment,
+            timeout,
+            cancellationToken,
+            onWait,
+            timeProvider,
+            sleep,
+            artifactCustody);
+
+    private static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermitCore(
+        DotnetBuildEnvironment environment,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken,
+        Action? onWait,
+        TimeProvider? timeProvider,
+        Action<TimeSpan>? sleep,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody)
     {
         ArgumentNullException.ThrowIfNull(environment);
         var preferredPermit = environment.BuildPermitIndex ?? BuildSlotIndex(environment.SlotOwnerToken);
@@ -785,7 +847,8 @@ public static class DotnetBuildEnvironmentManager
                 for (var offset = 0; offset < BuildConcurrencySlotCount; offset++)
                 {
                     var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
-                    var priorityPath = BuildSlotExecutionLockPath(permit) + ".acceptance-priority.lock";
+                    var candidate = WithBuildPermit(environment, permit);
+                    var priorityPath = candidate.ExecutionLockPath + ".acceptance-priority.lock";
                     if (priorityReservations[permit] is null)
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(priorityPath)!);
@@ -806,11 +869,6 @@ public static class DotnetBuildEnvironmentManager
                             continue;
                         }
                     }
-                    var candidate = environment with
-                    {
-                        ExecutionLockPath = BuildSlotExecutionLockPath(permit),
-                        BuildPermitIndex = permit
-                    };
                     var acquisition = TryAcquireLeaseExecutionLockCore(
                         candidate,
                         TimeSpan.Zero,
@@ -818,7 +876,8 @@ public static class DotnetBuildEnvironmentManager
                         clock,
                         delay,
                         acceptancePriorityHeldByCaller: true,
-                        emitSlotsBusyReceipt: false);
+                        emitSlotsBusyReceipt: false,
+                        artifactCustody: artifactCustody);
                     if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
                     {
                         return acquisition;
@@ -833,7 +892,8 @@ public static class DotnetBuildEnvironmentManager
 
                 if (clock.GetUtcNow() >= timeoutAt)
                 {
-                    return EmitSlotsBusy(environment.LeaseId, BuildConcurrencySlotCount);
+                    return EmitSlotsBusy(environment.LeaseId,
+                        permit => CreatePermitDiagnosticEnvironment(environment, permit), BuildConcurrencySlotCount);
                 }
 
                 delay(SlotBusyPollDelay);
@@ -846,12 +906,13 @@ public static class DotnetBuildEnvironmentManager
     }
 
     private static (int SlotIndex, int? OwnerProcessId, DateTimeOffset LastAcquiredAt) FindLeastRecentlyLeasedStableSlot(
+        DotnetBuildStorageRoot storageRoot,
         int slotCount = StableSlotCount)
     {
         var oldest = (SlotIndex: 0, OwnerProcessId: (int?)null, LastAcquiredAt: DateTimeOffset.MaxValue);
         for (var slot = 0; slot < slotCount; slot++)
         {
-            var environment = CreateStableSlotEnvironment(slot, createArtifactsDirectory: false);
+            var environment = CreateStableSlotEnvironment(slot, storageRoot, createArtifactsDirectory: false);
             var marker = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
             var acquiredAt = marker?.AcquiredAt ?? DateTimeOffset.MinValue;
             if (acquiredAt < oldest.LastAcquiredAt)
@@ -871,17 +932,18 @@ public static class DotnetBuildEnvironmentManager
     private static DotnetBuildEnvironment CreateGoalLease(
         GoalId goalId,
         string attemptName,
-        int slotCount)
+        int slotCount,
+        DotnetBuildStorageRoot storageRoot)
     {
-        var root = GoalRoot(goalId);
+        var root = GoalRoot(goalId, storageRoot);
         var leaseId = $"goal-{Prefix(goalId)}";
-        var leaseDirectory = LeaseDirectory(goalId);
+        var leaseDirectory = LeaseDirectory(goalId, storageRoot);
         var metadataPath = Path.Combine(leaseDirectory, LeaseMetadataFileName);
         var lockPath = Path.Combine(leaseDirectory, LeaseLockFileName);
         var reused = Directory.Exists(leaseDirectory);
         var artifactsPath = Path.Combine(root, "artifacts");
         var buildPermitIndex = BuildSlotIndex(Prefix(goalId));
-        var executionLockPath = BuildSlotExecutionLockPath(buildPermitIndex);
+        var executionLockPath = BuildSlotExecutionLockPath(buildPermitIndex, storageRoot);
         Directory.CreateDirectory(leaseDirectory);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
@@ -945,9 +1007,9 @@ public static class DotnetBuildEnvironmentManager
         return Math.Max(2, Environment.ProcessorCount / BuildConcurrencySlotCount);
     }
 
-    private static string LeaseDirectory(GoalId goalId)
+    private static string LeaseDirectory(GoalId goalId, DotnetBuildStorageRoot storageRoot)
     {
-        return Path.Combine(GoalRoot(goalId), LeaseDirectoryName);
+        return Path.Combine(GoalRoot(goalId, storageRoot), LeaseDirectoryName);
     }
 
     private static bool IsEmptyFile(string path)
@@ -964,13 +1026,14 @@ public static class DotnetBuildEnvironmentManager
 
     private static DotnetBuildEnvironment CreateStableSlotEnvironment(
         int slotIndex,
+        DotnetBuildStorageRoot storageRoot,
         bool createArtifactsDirectory = true)
     {
         ValidateStableSlotIndex(slotIndex);
         var owner = $"p{Environment.ProcessId}-build-{slotIndex}";
-        var root = Path.Combine(IsolatedRootBase(), "runs", owner);
+        var root = Path.Combine(storageRoot.RootPath, "runs", owner);
         var artifactsPath = Path.Combine(root, "artifacts");
-        var executionLockPath = BuildSlotExecutionLockPath(slotIndex % BuildConcurrencySlotCount);
+        var executionLockPath = BuildSlotExecutionLockPath(slotIndex % BuildConcurrencySlotCount, storageRoot);
         if (createArtifactsDirectory)
         {
             Directory.CreateDirectory(artifactsPath);
@@ -1006,14 +1069,14 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static string IsolatedRootBase()
+    public static DotnetBuildStorageRoot CaptureStorageRoot()
     {
-        return ResolveIsolatedRootBase(
+        return new DotnetBuildStorageRoot(Path.GetFullPath(ResolveIsolatedRootBase(
             Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable),
             Environment.GetEnvironmentVariable("LOCALAPPDATA"),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             Path.GetTempPath(),
-            OperatingSystem.IsWindows());
+            OperatingSystem.IsWindows())));
     }
 
     internal static string ResolveIsolatedRootBase(
@@ -1046,9 +1109,19 @@ public static class DotnetBuildEnvironmentManager
         return Path.Combine(tempPath, RootDirectoryName);
     }
 
-    private static string BuildSlotExecutionLockPath(int slotIndex)
+    private static string BuildSlotExecutionLockPath(int slotIndex, DotnetBuildStorageRoot storageRoot)
     {
-        return Path.Combine(IsolatedRootBase(), "build-slots", $"build-{slotIndex}.lock");
+        return Path.Combine(storageRoot.RootPath, "build-slots", $"build-{slotIndex}.lock");
+    }
+
+    private static DotnetBuildEnvironment WithBuildPermit(DotnetBuildEnvironment environment, int permitIndex)
+    {
+        var permitDirectory = Path.GetDirectoryName(Path.GetFullPath(environment.ExecutionLockPath))!;
+        return environment with
+        {
+            ExecutionLockPath = Path.Combine(permitDirectory, $"build-{permitIndex}.lock"),
+            BuildPermitIndex = permitIndex
+        };
     }
 
     private static int BuildSlotIndex(string owner)
@@ -1061,10 +1134,11 @@ public static class DotnetBuildEnvironmentManager
 
     private static DotnetBuildLeaseAcquisition.SlotsBusy EmitSlotsBusy(
         string wantedBy,
+        Func<int, DotnetBuildEnvironment> environmentForSlot,
         int slotCount = StableSlotCount,
         ProcessCommandLineSnapshot? processSnapshot = null)
     {
-        var busySlots = BuildBusySlotSnapshot(slotCount, processSnapshot);
+        var busySlots = BuildBusySlotSnapshot(environmentForSlot, slotCount, processSnapshot);
         Console.WriteLine(
             $"SLOTS_BUSY wantedBy={wantedBy} busySlots={FormatBusySlots(busySlots)} pid={Environment.ProcessId}");
         return new DotnetBuildLeaseAcquisition.SlotsBusy(wantedBy, busySlots);
@@ -1076,13 +1150,25 @@ public static class DotnetBuildEnvironmentManager
     {
         if (emitReceipt)
         {
-            return EmitSlotsBusy(environment.LeaseId);
+            return EmitSlotsBusy(environment.LeaseId,
+                permit => CreatePermitDiagnosticEnvironment(environment, permit), BuildConcurrencySlotCount);
         }
 
         var busySlots = environment.BuildPermitIndex is { } permitIndex
             ? [new DotnetBuildStableSlotWait(permitIndex, null)]
             : Array.Empty<DotnetBuildStableSlotWait>();
         return new DotnetBuildLeaseAcquisition.SlotsBusy(environment.LeaseId, busySlots);
+    }
+
+    private static DotnetBuildEnvironment CreatePermitDiagnosticEnvironment(
+        DotnetBuildEnvironment requestingEnvironment,
+        int permitIndex)
+    {
+        // A permit belongs to the shared build-slots namespace. Its diagnostic
+        // must not attribute every permit to a consumer of the requesting goal's artifacts.
+        var permitDirectory = Path.GetDirectoryName(Path.GetFullPath(requestingEnvironment.ExecutionLockPath))!;
+        var storageRoot = new DotnetBuildStorageRoot(Path.GetDirectoryName(permitDirectory)!);
+        return CreateStableSlotEnvironment(permitIndex, storageRoot, createArtifactsDirectory: false);
     }
 
     private static void ReleaseAcceptancePriorityReservations(FileStream?[] reservations)
@@ -1116,6 +1202,7 @@ public static class DotnetBuildEnvironmentManager
     }
 
     private static IReadOnlyList<DotnetBuildStableSlotWait> BuildBusySlotSnapshot(
+        Func<int, DotnetBuildEnvironment> environmentForSlot,
         int slotCount = StableSlotCount,
         ProcessCommandLineSnapshot? processSnapshot = null)
     {
@@ -1123,22 +1210,17 @@ public static class DotnetBuildEnvironmentManager
         var waits = new DotnetBuildStableSlotWait[slotCount];
         for (var slot = 0; slot < slotCount; slot++)
         {
-            waits[slot] = TryReadStableSlotExecutionWait(slot, processSnapshot);
+            waits[slot] = TryReadStableSlotExecutionWait(slot, environmentForSlot(slot), processSnapshot);
         }
 
         return waits;
     }
 
-    private static int? TryReadStableSlotExecutionOwner(
-        int slotIndex,
-        ProcessCommandLineSnapshot? processSnapshot = null) =>
-        TryReadStableSlotExecutionWait(slotIndex, processSnapshot).OwnerProcessId;
-
     private static DotnetBuildStableSlotWait TryReadStableSlotExecutionWait(
         int slotIndex,
+        DotnetBuildEnvironment environment,
         ProcessCommandLineSnapshot? processSnapshot = null)
     {
-        var environment = CreateStableSlotEnvironment(slotIndex, createArtifactsDirectory: false);
         var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         var ownerProcessId = TryFindActiveSlotArtifactConsumer(environment, snapshot)?.ProcessId ??
@@ -1519,7 +1601,8 @@ public static class DotnetBuildEnvironmentManager
         bool forceClean = false,
         bool currentProcessOwnsExecutionLease = false,
         bool ownerMarkerValidated = false,
-        StaleExecutionLeaseReclaim? staleExecutionLeaseReclaim = null)
+        StaleExecutionLeaseReclaim? staleExecutionLeaseReclaim = null,
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody = null)
     {
         PrepareArtifactsDirectoryForTests?.Invoke(environment);
         var clean = forceClean;
@@ -1538,7 +1621,7 @@ public static class DotnetBuildEnvironmentManager
         {
             AcceptanceAttemptArtifactCustody.ThrowIfLiveCustodianBlocksTakeover(
                 environment.ArtifactsPath,
-                Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
+                artifactCustody?.AttemptId);
         }
 
         var decision = "preserved";
@@ -1590,16 +1673,13 @@ public static class DotnetBuildEnvironmentManager
             WriteOwnerMarker(ownerPath, environment.SlotOwnerToken);
         }
 
-        var attemptId = Environment.GetEnvironmentVariable(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
-        var livenessCheckHint = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
-        if (!string.IsNullOrWhiteSpace(attemptId) && !string.IsNullOrWhiteSpace(livenessCheckHint))
+        if (artifactCustody is not null)
         {
             AcceptanceAttemptArtifactCustody.Write(
                 environment.ArtifactsPath,
-                attemptId,
-                livenessCheckHint,
-                Environment.ProcessId);
+                artifactCustody.AttemptId,
+                artifactCustody.LivenessCheckHint,
+                artifactCustody.OwnerProcessId);
         }
 
         var outcomeIntegrity = outcomeOverride ??

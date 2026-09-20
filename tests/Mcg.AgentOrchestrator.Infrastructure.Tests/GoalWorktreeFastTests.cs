@@ -397,13 +397,13 @@ public sealed class GoalWorktreeTests
     {
         public int RunCount { get; private set; }
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             RunCount++;
             if (exception is not null)
@@ -413,14 +413,14 @@ public sealed class GoalWorktreeTests
             return Task.FromResult(AddPolicyRequiredChecks(configuredResult, changedFiles ?? []));
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default)
+            bool runBaselineArm = false)
         {
             if (exception is not null)
                 throw exception;

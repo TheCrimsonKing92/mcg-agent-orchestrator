@@ -56,4 +56,145 @@ public sealed class EvidenceRetentionPolicyTests
         Assert.DoesNotContain("attempt-01", expired);
         Assert.DoesNotContain("attempt-22", expired);
     }
+
+    [Xunit.Fact]
+    public void ResolveOwner_DeclaredIdentityPrecedesFilenameInference()
+    {
+        var path = Path.GetFullPath(Path.Combine("retention-policy", "final.out.log"));
+        var attempts = new[]
+        {
+            new RetentionAttemptIdentity("old", 1, DateTimeOffset.Parse("2026-08-20T12:00:00Z"), false, true, [path]),
+            new RetentionAttemptIdentity("final", 2, DateTimeOffset.Parse("2026-08-21T12:00:00Z"), false, true, [Path.ChangeExtension(path, ".metadata.json")])
+        };
+
+        var owner = EvidenceRetentionPolicy.ResolveOwner(attempts, path);
+
+        Assert.Equal("old", owner.Attempt?.AttemptId);
+        Assert.Equal(EvidenceOwnershipSource.Declared, owner.Source);
+        Assert.False(owner.Ambiguous);
+    }
+
+    [Xunit.Fact]
+    public void ResolveOwner_LegacyMetadataUsesConservativeNameInference()
+    {
+        var attempt = new RetentionAttemptIdentity(
+            "legacy",
+            1,
+            DateTimeOffset.Parse("2026-08-20T12:00:00Z"),
+            false,
+            true);
+
+        var owner = EvidenceRetentionPolicy.ResolveOwner([attempt], Path.GetFullPath("legacy.out.log"));
+
+        Assert.Equal(attempt, owner.Attempt);
+        Assert.Equal(EvidenceOwnershipSource.InferredFromName, owner.Source);
+    }
+
+    [Xunit.Fact]
+    public void DeclaredPathsAndNameInferenceAgreeOnLegacyFixtures()
+    {
+        var root = Path.GetFullPath("retention-shadow-fixtures");
+        var paths = new[]
+        {
+            Path.Combine(root, "legacy.out.log"),
+            Path.Combine(root, "legacy.err.log"),
+            Path.Combine(root, "legacy.exit.txt"),
+            Path.Combine(root, "legacy.heartbeat.json"),
+            Path.Combine(root, "legacy.result.json"),
+            Path.Combine(root, "legacy.attempt.json"),
+            Path.Combine(root, "legacy.trx"),
+            Path.Combine(root, "legacy.receipts", "receipt.json")
+        };
+        var legacy = new RetentionAttemptIdentity(
+            "legacy",
+            1,
+            DateTimeOffset.Parse("2026-08-20T12:00:00Z"),
+            false,
+            true);
+
+        foreach (var path in paths)
+        {
+            var declared = legacy with { DeclaredPaths = [path] };
+
+            Assert.True(EvidenceRetentionPolicy.OwnsPath(legacy, path, out var inferredSource));
+            Assert.True(EvidenceRetentionPolicy.OwnsPath(declared, path, out var declaredSource));
+            Assert.Equal(EvidenceOwnershipSource.InferredFromName, inferredSource);
+            Assert.Equal(EvidenceOwnershipSource.Declared, declaredSource);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Eligibility_SameFactsShareRevisionAndOwnerChangeRevisesIt()
+    {
+        var path = Path.GetFullPath("attempt.out.log");
+        var first = new RetentionAttemptIdentity(
+            "attempt",
+            1,
+            DateTimeOffset.Parse("2026-08-20T12:00:00Z"),
+            false,
+            true,
+            [path]);
+        var firstRevision = EvidenceRetentionPolicy.ComputeFactRevision([first], [path]);
+        var secondRevision = EvidenceRetentionPolicy.ComputeFactRevision([first with { Ordinal = 2 }], [path]);
+
+        var facts = new EvidenceRetentionFacts(
+            TerminalGoal: true,
+            first,
+            EvidenceOwnershipSource.Declared,
+            ProtectedAttempt: false,
+            ReferencedArtifact: false,
+            CountBound: false,
+            Aged: true,
+            ByteBoundEligible: false,
+            firstRevision);
+        var eligibility = EvidenceRetentionPolicy.EvaluatePath(facts);
+
+        Assert.Equal(EvidenceEligibility.DeleteWhenSafe, eligibility.Disposition);
+        Assert.Equal(firstRevision, eligibility.FactRevision);
+        Assert.NotEqual(firstRevision, secondRevision);
+    }
+
+    [Xunit.Fact]
+    public void Eligibility_ExpiredLegacyUnattributedArtifactCanBeDeletedWhenOwnerIsOptional()
+    {
+        var eligibility = EvidenceRetentionPolicy.EvaluatePath(new EvidenceRetentionFacts(
+            TerminalGoal: true,
+            Owner: null,
+            EvidenceOwnershipSource.Unresolved,
+            ProtectedAttempt: false,
+            ReferencedArtifact: false,
+            CountBound: false,
+            Aged: true,
+            ByteBoundEligible: false,
+            FactRevision: "legacy-revision",
+            RequireOwner: false));
+
+        Assert.Equal(EvidenceEligibility.DeleteWhenSafe, eligibility.Disposition);
+        Assert.Equal("past-age-bound", eligibility.Reason);
+        Assert.Equal(EvidenceOwnershipSource.Unresolved, eligibility.OwnershipSource);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true, false, "protected-attempt")]
+    [Xunit.InlineData(false, true, "retained-test-artifact-owner-metadata")]
+    public void Eligibility_ProtectionFactsDoNotDependOnOwnerResolution(
+        bool protectedAttempt,
+        bool referencedArtifact,
+        string expectedReason)
+    {
+        var eligibility = EvidenceRetentionPolicy.EvaluatePath(new EvidenceRetentionFacts(
+            TerminalGoal: true,
+            Owner: null,
+            EvidenceOwnershipSource.Unresolved,
+            protectedAttempt,
+            referencedArtifact,
+            CountBound: false,
+            Aged: true,
+            ByteBoundEligible: false,
+            FactRevision: "unresolved-protected-revision",
+            RequireOwner: false));
+
+        Assert.Equal(EvidenceEligibility.Keep, eligibility.Disposition);
+        Assert.Equal(expectedReason, eligibility.Reason);
+    }
 }

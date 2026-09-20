@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.App.CostControl;
 
-internal static class CostRecommendationText
+public static class CostRecommendationText
 {
     public static string LocalModelSwitchAction =>
         $"try local Ollama/{ProviderModelDefaults.Ollama} via agent configuration";

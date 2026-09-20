@@ -16,10 +16,10 @@ internal static class GoalMonitoringStream
         WorkerProfileCatalog workerProfiles,
         OrchestratorWorkspace workspace)
     {
-        var inbox = OperatorInbox.Build(kernel, agents, workerProfiles, workspace, goal.Id.Value[..8], includeAcknowledged: false);
+        var inbox = DashboardApplicationServices.BuildOperatorInbox(kernel, agents, workerProfiles, workspace, goal.Id.Value[..8], includeAcknowledged: false);
         var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles);
         var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(workspace.RunEventStorePath, goal);
-        var lifecycleState = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, goal));
+        var lifecycleState = GoalLifecycle.ResolveState(goal, DashboardApplicationServices.ReadLifecycleFacts(workspace, goal));
         var batch = DashboardMonitoringEvents.BuildBatch(
             kernel,
             goal,
@@ -32,7 +32,7 @@ internal static class GoalMonitoringStream
         {
             Snapshot = batch.Snapshot with
             {
-                GoalLabel = CliCommandHandlers.ResolveGoalFriendlyLabel(goal, workspace.BacklogStorePath)
+                GoalLabel = DashboardApplicationServices.ResolveGoalFriendlyLabel(goal, workspace.BacklogStorePath)
             }
         };
     }

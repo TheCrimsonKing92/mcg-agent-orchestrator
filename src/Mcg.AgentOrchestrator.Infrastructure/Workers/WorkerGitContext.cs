@@ -69,7 +69,7 @@ internal sealed class WorkerGitContext
                 "Reviewer changed-file scope unavailable because the working directory is not a git workspace.");
         }
 
-        var mainResult = GitCli.Run(workingDirectory, 5_000, "rev-parse", "--verify", "main^{commit}");
+        var mainResult = GitCli.Run(workingDirectory, "rev-parse", "--verify", "main^{commit}");
         if (!mainResult.Succeeded || string.IsNullOrWhiteSpace(mainResult.Output))
         {
             throw new ReviewerChangedFileScopeException(
@@ -78,7 +78,7 @@ internal sealed class WorkerGitContext
                 mainResult.Error);
         }
 
-        var mergeBaseResult = GitCli.Run(workingDirectory, 5_000, "merge-base", "main", "HEAD");
+        var mergeBaseResult = GitCli.Run(workingDirectory, "merge-base", "main", "HEAD");
         if (!mergeBaseResult.Succeeded || string.IsNullOrWhiteSpace(mergeBaseResult.Output))
         {
             throw new ReviewerChangedFileScopeException(
@@ -87,7 +87,7 @@ internal sealed class WorkerGitContext
                 mergeBaseResult.Error);
         }
 
-        var diffResult = GitCli.Run(workingDirectory, 5_000, "diff", "--name-only", "main...HEAD", "--");
+        var diffResult = GitCli.Run(workingDirectory, "diff", "--name-only", "main...HEAD", "--");
         if (!diffResult.Succeeded)
         {
             throw new ReviewerChangedFileScopeException(
@@ -168,7 +168,6 @@ internal sealed class WorkerGitContext
             var path = fileGroup.Key.Replace('\\', '/');
             var diff = GitCli.Run(
                 workingDirectory,
-                5_000,
                 "diff",
                 "--unified=0",
                 previousReviewedCommit,
@@ -225,7 +224,7 @@ internal sealed class WorkerGitContext
 
         var mergeTreeResult = _reviewerMergeTreeGitRunner(
             workingDirectory,
-            5_000,
+            GitCli.DefaultTimeoutMilliseconds,
             [
                 "merge-tree",
                 "--write-tree",
@@ -315,7 +314,7 @@ internal sealed class WorkerGitContext
             return string.Empty;
         }
 
-        var result = GitCli.Run(workingDirectory, 5_000, "show", $"{commit}:{path}");
+        var result = GitCli.Run(workingDirectory, "show", $"{commit}:{path}");
         if (result.Succeeded)
         {
             return result.Output;
@@ -599,7 +598,7 @@ internal sealed class WorkerGitContext
 
     private static bool TryRunGit(string workingDirectory, string[] arguments, out string output)
     {
-        var result = GitCli.Run(workingDirectory, 5_000, arguments);
+        var result = GitCli.Run(workingDirectory, arguments);
         output = result.Output;
         return result.Succeeded;
     }

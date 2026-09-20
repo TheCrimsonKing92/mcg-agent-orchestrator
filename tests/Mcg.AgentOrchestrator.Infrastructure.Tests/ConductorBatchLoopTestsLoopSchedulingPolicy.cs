@@ -293,7 +293,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var started = coordinator.Evaluate(
                 candidate,
                 explicitPreset.Policy,
-                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+                (_, _, _, _, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
             var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(started.Attempt.MetadataPath),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -351,7 +351,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var started = coordinator.Evaluate(
                 candidate,
                 configured,
-                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+                (_, _, _, _, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
             var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(started.Attempt.MetadataPath),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -898,8 +898,6 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
     public void TerminalGoalSweepPendingCleanupBlockerIsNotCacheSkipped()
     {
         var root = CreateTempDirectory("mcg-terminal-sweep-cleanup-blocker");
-        var originalDeleteDirectoryForCleanup = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
         try
         {
             Directory.CreateDirectory(Path.Combine(root, ".git"));
@@ -915,22 +913,25 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var attempts = 0;
             var cache = new TerminalGoalSweepCache();
 
-            GoalWorktrees.DeleteDirectoryForCleanup = path =>
+            var hooks = new GoalWorktreeCleanupHooks
             {
-                if (path.Equals(contextPath, StringComparison.OrdinalIgnoreCase))
+                DeleteDirectoryForCleanup = path =>
                 {
-                    attempts++;
-                    return GoalWorktreeDeleteResult.Failed(
-                        GoalWorktreeDeleteFailureKind.Unknown,
-                        "Directory deletion failed.");
-                }
+                    if (path.Equals(contextPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        attempts++;
+                        return GoalWorktreeDeleteResult.Failed(
+                            GoalWorktreeDeleteFailureKind.Unknown,
+                            "Directory deletion failed.");
+                    }
 
-                return originalDeleteDirectoryForCleanup(path);
+                    return GoalWorktrees.DeleteDirectoryWithReason(path);
+                },
+                CleanupWarningSink = _ => { }
             };
-            GoalWorktrees.CleanupWarningSink = _ => { };
 
-            var first = TerminalGoalSweep.Run(kernel, root, cache: cache);
-            var second = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            var first = TerminalGoalSweep.Run(kernel, root, cache: cache, cleanupHooks: hooks);
+            var second = TerminalGoalSweep.Run(kernel, root, cache: cache, cleanupHooks: hooks);
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(0, second.CacheHitCount);
@@ -945,8 +946,6 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDeleteDirectoryForCleanup;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
             TryDeleteDirectory(root);
         }
     }

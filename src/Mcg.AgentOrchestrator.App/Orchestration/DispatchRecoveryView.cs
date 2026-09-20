@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal static class DispatchRecoveryView
+public static class DispatchRecoveryView
 {
     public static DispatchRecoveryDecision? Evaluate(Goal goal, TaskSpec task)
     {

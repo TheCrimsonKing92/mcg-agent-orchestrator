@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum FailureTriageCause
+public enum FailureTriageCause
 {
     SubscriptionRetryAfter,
     SubscriptionLimitReview,
@@ -22,7 +22,7 @@ internal enum FailureTriageCause
     None
 }
 
-internal enum FailureTriageAction
+public enum FailureTriageAction
 {
     Wait,
     ReRoute,
@@ -35,13 +35,13 @@ internal enum FailureTriageAction
     Monitor
 }
 
-internal sealed record FailureTriageReport(
+public sealed record FailureTriageReport(
     GoalId GoalId,
     string GoalPrefix,
     string PolicyName,
     IReadOnlyList<FailureTriageItem> Items);
 
-internal sealed record FailureTriageItem(
+public sealed record FailureTriageItem(
     int? TaskNumber,
     TaskId? TaskId,
     FailureTriageCause Cause,
@@ -53,7 +53,7 @@ internal sealed record FailureTriageItem(
     string Explanation,
     string SuggestedCommand);
 
-internal static class FailureTriagePlanner
+public static class FailureTriagePlanner
 {
     public static FailureTriageReport Build(
         AgentOrchestratorKernel kernel,
@@ -133,6 +133,16 @@ internal static class FailureTriagePlanner
         AutonomyPolicy policy,
         DateTimeOffset now)
     {
+        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task) &&
+            agents.Any(agent =>
+                agent.Role == task.RequiredRole &&
+                agent.Status == AgentStatus.Available &&
+                agent.Id != task.AssignedAgentId))
+        {
+            AddFailoverItem(items, task, taskNumber, agents, policy, FailureTriageCause.ProviderConnectivity);
+            return;
+        }
+
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
         {
             items.Add(Item(

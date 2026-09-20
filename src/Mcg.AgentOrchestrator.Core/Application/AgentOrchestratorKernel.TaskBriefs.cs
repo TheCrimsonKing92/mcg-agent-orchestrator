@@ -157,7 +157,7 @@ public sealed partial class AgentOrchestratorKernel
             : string.Join(Environment.NewLine, lines).Length;
     }
 
-    public TaskBrief BuildTaskBrief(
+    public TaskBriefSource BuildTaskBriefSource(
         GoalId goalId,
         TaskId taskId,
         string? modelFitTarget = null,
@@ -174,7 +174,7 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null,
         string? reviewerRoundTouchProofDiagnostic = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
-        bool emitTypedSourceBoundaries = false)
+        bool measureWithTypedSourceBoundaries = false)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -194,6 +194,33 @@ public sealed partial class AgentOrchestratorKernel
             .Take(8)
             .OrderBy(request => request.AnsweredAt)
             .ToList();
+        // Answered prerequisite evidence reaches later same-goal roles. This is a sibling query, not
+        // a widening of resolvedInput: widening would also change the originating task's own brief
+        // and the dedup/retraction surfaces. Goal isolation is the first clause and is not optional;
+        // requests the Planner raised for itself stay task-private unless typed as evidence, so
+        // historical records that predate the classification decode to SpecClarification and do not
+        // propagate.
+        var prerequisiteEvidence = HumanInputRequests
+            .Where(request =>
+                request.GoalId == goalId &&
+                request.Kind == HumanWaitKind.PlannerPrerequisiteEvidence &&
+                request.TaskId is not null &&
+                request.TaskId != taskId &&
+                request.IsCompleted &&
+                !request.WasDismissed &&
+                !request.IsSyntheticParkedHumanWaitCompletion &&
+                request.SupersededByRequestId is null &&
+                !string.IsNullOrWhiteSpace(request.Answer))
+            .OrderBy(request => request.AnsweredAt)
+            .Select(request => new PrerequisiteEvidenceEntry(
+                request.Id.Value,
+                request.Question,
+                request.AuthoritativeAnswer!.Text,
+                request.AuthoritativeAnswer.BriefVersion))
+            .ToList();
+        var prerequisiteEvidenceSection = PrerequisiteEvidenceDigest.RenderSection(
+            prerequisiteEvidence,
+            goal.AuthoritativeBrief.Version);
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
         var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
             goal.Timeline.Where(evt => (evt.TaskId == taskId || evt.TaskId is null) && !IsRedundantBriefTimelineEvent(task, evt)),
@@ -323,6 +350,18 @@ public sealed partial class AgentOrchestratorKernel
                 specLines.Add(string.Empty);
                 specLines.Add("OPERATOR-OWNED / post-landing criteria (not part of worker acceptance):");
                 foreach (var criterion in refinedSpec.OperatorOwnedAcceptanceCriteria)
+                    specLines.Add($"- {criterion}");
+            }
+            var acceptanceGateOwnedCriteria = refinedSpec.AcceptanceGateOwnedAcceptanceCriteria
+                .Where(criterion => !refinedSpec.OperatorOwnedAcceptanceCriteria.Contains(
+                    criterion,
+                    StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (acceptanceGateOwnedCriteria.Length > 0)
+            {
+                specLines.Add(string.Empty);
+                specLines.Add("ACCEPTANCE-GATE-OWNED criteria (the acceptance gate, not the worker, produces this evidence):");
+                foreach (var criterion in acceptanceGateOwnedCriteria)
                     specLines.Add($"- {criterion}");
             }
             if (refinedSpec.Decisions.Count > 0)
@@ -475,6 +514,15 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(resolvedInputLines));
         }
 
+        if (prerequisiteEvidenceSection.Lines.Count > 0)
+        {
+            // Fixed, never Projected: a collapsed pointer would drop below the required floor of
+            // request id, summary, and evidence paths. Fixed segments are also never collapsed by
+            // ApplyTaskBriefBudget, so this section can neither displace nor be displaced by a
+            // required section.
+            segments.Add(TaskBriefSegment.Fixed(prerequisiteEvidenceSection.Lines));
+        }
+
         if (task.LastExecution is not null)
         {
             segments.Add(TaskBriefSegment.Projected(
@@ -612,23 +660,27 @@ public sealed partial class AgentOrchestratorKernel
             .Where(request => request.GoalId == goalId)
             .ToArray();
         var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
+        var roleVisibleSegments = segments
+            .Select(segment => segment with { RoleVisibility = [task.RequiredRole] })
+            .ToArray();
         var retractedSegments = ApplyHumanInputRetractions(
-            segments,
+            roleVisibleSegments,
             humanInputRequests,
             clarificationAnswerHistory);
-        var lines = ApplyTaskBriefBudget(
+        var selection = ApplyTaskBriefBudget(
             retractedSegments,
             task.RequiredRole,
             usesFileAccessContext,
-            emitTypedSourceBoundaries);
-        var content = string.Join(Environment.NewLine, lines);
+            measureWithTypedSourceBoundaries);
 
-        return new TaskBrief(
+        return new TaskBriefSource(
             goal.Id,
             task.Id,
             task.RequiredRole,
             $"{task.RequiredRole}: {PromptContextFormatter.TrimPromptTitle(task.Description)}",
-            content);
+            selection.Segments,
+            selection.Decisions,
+            prerequisiteEvidenceSection.TrimmedRequestIds);
     }
 
     private static IReadOnlyList<ReviewFinding> ApplyHumanInputSupersedeFindingResolutions(
@@ -665,43 +717,6 @@ public sealed partial class AgentOrchestratorKernel
             : findings.Where(finding => !resolvedIds.Contains(finding.StableId)).ToArray();
     }
 
-    private static List<string> ApplyTaskBriefBudget(
-        IReadOnlyList<TaskBriefSegment> segments,
-        AgentRole role,
-        bool usesFileAccessContext,
-        bool emitTypedSourceBoundaries)
-    {
-        var budget = TaskBriefCharacterBudget(role, usesFileAccessContext);
-        var rendered = RenderTaskBriefSegments(segments, emitTypedSourceBoundaries);
-        if (!usesFileAccessContext || CountTaskBriefCharacters(rendered) <= budget)
-        {
-            return rendered;
-        }
-
-        var collapsedSegments = segments.ToList();
-        foreach (var index in collapsedSegments
-            .Select((segment, index) => new { segment, index })
-            .Where(item => item.segment.CollapsedLines is not null)
-            .OrderBy(item => item.segment.CollapsePriority)
-            .Select(item => item.index))
-        {
-            var segment = collapsedSegments[index];
-            collapsedSegments[index] = segment with
-            {
-                Lines = segment.CollapsedLines!,
-                CollapsedLines = null
-            };
-
-            rendered = RenderTaskBriefSegments(collapsedSegments, emitTypedSourceBoundaries);
-            if (CountTaskBriefCharacters(rendered) <= budget)
-            {
-                break;
-            }
-        }
-
-        return rendered;
-    }
-
     private static IReadOnlyList<TaskBriefSegment> ApplyHumanInputRetractions(
         IReadOnlyList<TaskBriefSegment> segments,
         IReadOnlyList<HumanInputRequest> requests,
@@ -730,35 +745,6 @@ public sealed partial class AgentOrchestratorKernel
 
     public static int TaskBriefCharacterBudget(AgentRole role, bool usesFileAccessContext) =>
         PromptContextFormatter.TaskBriefCharacterBudget(role, usesFileAccessContext);
-
-    private static List<string> RenderTaskBriefSegments(
-        IEnumerable<TaskBriefSegment> segments,
-        bool emitTypedSourceBoundaries)
-    {
-        var lines = new List<string>();
-        foreach (var segment in segments)
-        {
-            if (emitTypedSourceBoundaries && segment.TypedProjectionIdentity is { } identity)
-            {
-                lines.Add(WorkerContextProjectionBoundary.Start(identity));
-            }
-
-            lines.AddRange(emitTypedSourceBoundaries
-                ? segment.Lines.Select(WorkerContextProjectionBoundary.EscapeReservedLiteral)
-                : segment.Lines);
-            if (emitTypedSourceBoundaries && segment.TypedProjectionIdentity is { } closingIdentity)
-            {
-                lines.Add(WorkerContextProjectionBoundary.End(closingIdentity));
-            }
-        }
-
-        return lines;
-    }
-
-    private static int CountTaskBriefCharacters(IReadOnlyList<string> lines)
-    {
-        return string.Join(Environment.NewLine, lines).Length;
-    }
 
     private static int TimelineEventBudget(TaskComplexity complexity)
     {
@@ -892,12 +878,21 @@ public sealed partial class AgentOrchestratorKernel
                 ? $"- {check}"
                 : $"- {check} [{FormatAcceptanceFailureOrigin(attribution.Origin)}: {attribution.Evidence}]";
         }));
-        if (failure.CheckAttributions is { Count: > 0 } attributions &&
+        var attributions = failure.CheckAttributions;
+        if (attributions is { Count: > 0 } &&
             failure.FailedChecks.All(check => attributions.Any(item =>
                 item.CheckName.Equals(check, StringComparison.Ordinal) &&
-                item.Origin == AcceptanceFailureOrigin.Inherited)))
+                item.Origin == AcceptanceFailureOrigin.Inherited &&
+                item.Cause == AcceptanceFailureCause.EnvironmentalApparatus)))
         {
             lines.Add("Do NOT attempt to fix these; they are not attributable to your diff. Report them and address only the introduced/unattributed checks.");
+        }
+        else if (attributions is { Count: > 0 } && failure.FailedChecks.Any(check => attributions.Any(item =>
+                     item.CheckName.Equals(check, StringComparison.Ordinal) &&
+                     item.Origin == AcceptanceFailureOrigin.Unattributed &&
+                     item.Cause == AcceptanceFailureCause.NotClassified)))
+        {
+            lines.Add("One or more failure origins remain unproven. Report them and request exact baseline/run evidence; do not assume they are introduced or inherited or make a blind fix.");
         }
 
         lines.AddRange(BuildStructuredFailureReceiptLines(
@@ -1011,6 +1006,7 @@ public sealed partial class AgentOrchestratorKernel
                 (verification.MergedReviewFindings ?? []).Select(finding => new
                 {
                     candidate.RequiredRole,
+                    OwningTask = candidate,
                     verification.CompletedAt,
                     Finding = finding
                 })))
@@ -1046,9 +1042,19 @@ public sealed partial class AgentOrchestratorKernel
                         : outcome?.ResultReason is { } resultReason
                             ? $"; reason={FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(resultReason)}"
                             : string.Empty;
+                    // state= and candidate_sha= are the point-of-decision distinction: verdict=
+                    // alone cannot separate "no run has happened yet" from "this candidate was
+                    // measured". A missing or old-candidate run reads pending-execution, never a pass.
+                    var briefCandidateSha = string.IsNullOrWhiteSpace(targetHeadCommit)
+                        ? null
+                        : targetHeadCommit.Trim();
+                    var executionState = FindingEvidenceExecutionClassifier.Classify(
+                        item.OwningTask, item.Finding, briefCandidateSha);
                     lines.Add(
                         $"  evidence_index: selection={selection}; verdict={disposition}; " +
-                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}");
+                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}; " +
+                        $"state={FindingEvidenceExecutionClassifier.ToWireValue(executionState)}; " +
+                        $"candidate_sha={briefCandidateSha ?? FindingEvidenceExecutionClassifier.UnavailableCandidateSha}");
 
                     if (task.RequiredRole == item.RequiredRole && outcome?.ReceiptId is { } receiptId)
                     {
@@ -1525,8 +1531,9 @@ public sealed partial class AgentOrchestratorKernel
                    ProgressKind.ReviewerEvidenceRequestReceived or
                    ProgressKind.ReviewerEvidenceRunRecorded or
                    ProgressKind.FindingEvidenceRequestRecorded or
-                   ProgressKind.FindingEvidenceRunRecorded or
-                   ProgressKind.FindingEvidenceSuppressed) ||
+                    ProgressKind.FindingEvidenceRunRecorded or
+                    ProgressKind.TaskRetryFeedbackUpdated or
+                    ProgressKind.FindingEvidenceSuppressed) ||
                (evt.Kind is ProgressKind.TaskNote or ProgressKind.OperatorTaskNote &&
                    IsAccumulatedRetryFeedbackTaskNote(evt.Message));
     }
@@ -1880,19 +1887,4 @@ public sealed partial class AgentOrchestratorKernel
         };
     }
 
-    private sealed record TaskBriefSegment(
-        IReadOnlyList<string> Lines,
-        IReadOnlyList<string>? CollapsedLines = null,
-        int CollapsePriority = int.MaxValue,
-        LogicalArtifactIdentity? TypedProjectionIdentity = null)
-    {
-        public static TaskBriefSegment Fixed(IReadOnlyList<string> lines) => new(lines);
-
-        public static TaskBriefSegment Projected(
-            string identity,
-            IReadOnlyList<string> lines,
-            IReadOnlyList<string>? collapsedLines = null,
-            int collapsePriority = int.MaxValue) =>
-            new(lines, collapsedLines, collapsePriority, new LogicalArtifactIdentity(identity));
-    }
 }

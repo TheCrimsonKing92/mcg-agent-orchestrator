@@ -81,7 +81,9 @@ internal static class SdlcRolePromptRequirements
                 TesterReceiptFirstContract,
                 TesterInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
+                "- A Developer-owned finding (`correctness`, `spec-compliance`, `code-quality`, `test-coverage`) that is still waiting on execution MUST carry `evidence_request`; the conductor runs that selection once per candidate before it re-dispatches Developer. Read the brief's `evidence_index` line to tell the two apart: `state=pending-execution` means no run exists for this `candidate_sha` yet and is NOT a pass, `state=executed-on-candidate` means the receipt for that exact candidate is already in hand. A finding with no `evidence_request` has no `evidence_index` line at all: it is writable source work now, never a pass. Never call the source correct, and never resolve a finding, from narrative or from a run that did not happen; keep it open and either cite the receipt or request one.",
                 "- Derive a focused verification matrix from the requested behavior, changed files, and known risks.",
+                "- ACCEPTANCE-GATE-OWNED: report not-verifiable naming the gate; this does not fail the round.",
                 "- Run or attempt the exact verification commands relevant to this task.",
                 "- Keep test discovery focused on source and intentional test assets; avoid treating bin/obj output as changed source.",
                 "- Report command, exit code, and concise output summary for every check.",
@@ -94,13 +96,14 @@ internal static class SdlcRolePromptRequirements
                 "- Keep each verification command bounded in wall time: build once as its own step, then run tests with a narrow filter and no rebuild; do not bundle a build and a broad or full-suite test run into a single command.",
                 "- Do not ask for shell restoration unless an attempted command actually failed because of execution access.",
                 "- You may build and run tests but must not modify source files.",
-                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or DisplayName~Method syntax and reject a bare class name."
+                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or Name~Method-symbol syntax and reject DisplayName text and a bare class name."
             ],
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
                 "### 1. Spec compliance (do this first)",
-                "- Walk the RefinedSpec acceptance criteria in order, one at a time. For each criterion report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
+                "- Walk criteria in order: report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
+                "- ACCEPTANCE-GATE-OWNED: report not-verifiable naming the gate; this does not fail the round.",
                 "- A not-met criterion is a blocking finding with `category: spec-compliance`. If a criterion contradicts the pre-change contract observable on main, report `category: spec-defect` so it escalates to the operator instead of enforcing it against the implementation.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
                 "### 2. Code quality (only after section 1)",
@@ -108,7 +111,7 @@ internal static class SdlcRolePromptRequirements
                 "- For independent scope checks use git diff main...HEAD; do not use two-dot, HEAD-only, status, or working-tree-only comparisons. Branch-behind-main alone is NOT a blocker; require concrete merge conflict, semantic overlap, or non-applying diff evidence, otherwise record staleness as advisory.",
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
-                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use only `Core.Tests`, `Infrastructure.Tests`, or `Dashboard.Tests`; never infer or encode a request in description prose.",
+                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use a test project from `config/acceptance-manifest.json` by label, file name, or path; never infer or encode a request in prose.",
                 "- Classify findings with `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, `operator-owned`, or `acceptance-owned`; mixed source/test findings are correctness work for Developer.",
                 "- Review Convergence Scope is authoritative. Emit exactly one `findings` entry per OPEN_ACTIVE_RECHECK stable_id: `resolved` with concrete closure evidence if fixed, otherwise `open`. Narrative does not update the ledger; omission leaves it open. Re-check new diff code; carry RESOLVED findings unless the exact anchor was touched.",
                 "- Each finding requires stable_id, state, severity, category, location, and description. Move a carried ID only if the diff touched its prior anchor. Emit exact `touched_anchors`; new-code defects get new IDs.",
@@ -224,7 +227,9 @@ internal static class SdlcRolePromptRequirements
                 TesterCompactReceiptFirstContract,
                 TesterCompactInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer Conductor-side runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming requested work. The Conductor returns receipts. Execute directly only if selection cannot settle it.",
+                "- A Developer-owned finding still waiting on execution MUST carry `evidence_request`; the conductor runs it once per candidate before re-dispatching Developer. In `evidence_index`, `state=pending-execution` means no run exists for that `candidate_sha` and is NOT a pass; `state=executed-on-candidate` means the receipt for that exact candidate exists. Never call the source correct, or resolve a finding, from narrative or a run that did not happen.",
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
+                "- ACCEPTANCE-GATE-OWNED: report not-verifiable naming the gate; this does not fail the round.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
                 "- Put actionable failures in structured `findings` JSON with stable IDs and locations; carry distinct prior findings until resolved. A finding may include `evidence_request:{selections:[{test_project,test_class}]}` when a focused Conductor-side run would settle it.",
@@ -232,17 +237,18 @@ internal static class SdlcRolePromptRequirements
                 "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and do not reuse a prior round's conclusion as evidence.",
                 "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
                 "- You may build and run tests but must not modify source files.",
-                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or DisplayName~Method syntax and reject a bare class name."
+                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or Name~Method-symbol syntax and reject DisplayName text and a bare class name."
             ],
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
                 "### 1. Spec compliance (do this first)",
-                "- Walk RefinedSpec acceptance criteria in order. Record each as met, not-met, or not-verifiable with file+line evidence in `criteria_verdicts`; use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; a criterion contradicting main uses `category: spec-defect`.",
+                "- Walk criteria: record met/not-met/not-verifiable with file+line evidence. Use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; main conflicts use `category: spec-defect`.",
+                "- ACCEPTANCE-GATE-OWNED: report not-verifiable naming the gate; this does not fail the round.",
                 "### 2. Code quality (only after section 1)",
                 "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",
                 "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",
-                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use only `Core.Tests`, `Infrastructure.Tests`, or `Dashboard.Tests`; never infer or encode a request in description prose.",
+                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use a test project from `config/acceptance-manifest.json` by label, file name, or path; never infer or encode a request in prose.",
                 "- Categories: `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, `operator-owned`, or `acceptance-owned`.",
                 "- Emit exactly one `findings` entry per OPEN_ACTIVE_RECHECK stable_id: `resolved` with closure evidence if fixed, otherwise `open`. Narrative does not update the ledger; omission leaves it open.",
                 "- Move a carried ID only when its prior anchor was touched; emit `touched_anchors`; new-code defects get new IDs.",

@@ -91,6 +91,12 @@ catch (ArgumentException ex)
     return 1;
 }
 
+var commandCapability = CliCommandCapabilities.Classify(startupArgs);
+if (commandCapability == CliCommandCapability.DashboardHost)
+{
+    return OptionalDashboardHostLauncher.Run(args);
+}
+
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
 // that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
 // a Git repository root so .orchestrator is rooted with the target repo regardless of launch CWD.
@@ -211,9 +217,10 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
     }
 }
 
+WorktreeCleanupContext cleanupContext;
 try
 {
-    GoalWorktreeOrphanSweepScheduler.Configure(
+    cleanupContext = new WorktreeCleanupContext(
         WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
         workspace.OrchestratorDirectory);
 }
@@ -241,14 +248,18 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-var providers = ProviderRegistryFactory.CreateDefaultProviders();
-var agentFallback = ProviderRegistryFactory.IsLlamaCppReachable() ? AgentCatalog.LlamaCppDefault() : null;
+var providers = commandCapability == CliCommandCapability.Execution
+    ? ProviderRegistryFactory.CreateDefaultProviders()
+    : new InMemoryModelProviderRegistry([]);
+var agentFallback = commandCapability == CliCommandCapability.Execution && ProviderRegistryFactory.IsLlamaCppReachable()
+    ? AgentCatalog.LlamaCppDefault()
+    : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
 var operatorBotToken = OperatorChannelFactory.ResolveBotToken();
 IOperatorChannel operatorChannel;
-if (SkipsStartupOperatorChannel(startupArgs))
+if (commandCapability != CliCommandCapability.Execution || SkipsStartupOperatorChannel(startupArgs))
 {
     operatorChannel = NullOperatorChannel.Instance;
 }
@@ -262,11 +273,6 @@ else
     {
         operatorChannel = NullOperatorChannel.Instance;
     }
-}
-
-if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))
-{
-    return DashboardHost.RunPrototypeUi(startupArgs, providers, agentFallback, tenantSelection.TenantName);
 }
 
 if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison.OrdinalIgnoreCase))
@@ -329,7 +335,7 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     Goal? commandCurrentGoal = null;
     try
     {
-        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel);
+        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel, cleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -365,11 +371,15 @@ try
 
     ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
-    ProgramStartupLifecycle.InitializeWorkerProcessTracking(
-        RunsStartupCleanup(startupArgs),
-        authorityTransferRequested,
-        workspace.SqliteStatePath,
-        workspace.ExecutionDirectory);
+    if (commandCapability == CliCommandCapability.Execution)
+    {
+        ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+            RunsStartupCleanup(startupArgs),
+            authorityTransferRequested,
+            workspace.SqliteStatePath,
+            workspace.ExecutionDirectory,
+            cleanupContext);
+    }
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
@@ -384,7 +394,7 @@ if (startupArgs.Count > 0)
 {
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
+        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -511,7 +521,7 @@ while (true)
             continue;
         }
 
-        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
+        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
     }
     catch (Exception ex)
     {
@@ -606,7 +616,8 @@ internal static class ProgramStartupLifecycle
         bool runsStartupCleanup,
         bool authorityTransferRequested,
         string stateStorePath,
-        string executionDirectory)
+        string executionDirectory,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         WorkerProcessJobs.ConfigureRegistry(stateStorePath);
         if (authorityTransferRequested)
@@ -617,7 +628,8 @@ internal static class ProgramStartupLifecycle
         WorkerProcessJobs.SweepStartupOrphans();
         if (runsStartupCleanup)
         {
-            GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+            (cleanupContext ?? new WorktreeCleanupContext(GoalWorktreeCleanupOptions.Default))
+                .Scheduler.SweepNow(executionDirectory);
         }
     }
 }

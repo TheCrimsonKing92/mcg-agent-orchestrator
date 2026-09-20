@@ -15,7 +15,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         var root = CreateTempDirectory();
         using var holderAcquired = new ManualResetEventSlim();
         using var holderRelease = new ManualResetEventSlim();
-        var holder = Task.Run(() =>
+        var holder = Task.Factory.StartNew(() =>
         {
             using var mutex = new Mutex(false, StorageRetentionMaintenance.AttemptLeaseNameFor(root));
             mutex.WaitOne();
@@ -28,13 +28,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             {
                 mutex.ReleaseMutex();
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
         string? receipt = null;
-        var started = Stopwatch.StartNew();
         try
         {
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+            var started = Stopwatch.StartNew();
             var exception = Assert.Throws<TimeoutException>(() =>
                 StorageRetentionMaintenance.AcquireAttemptWriterLease(
                     root,
@@ -319,7 +319,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -374,7 +374,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -431,7 +431,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -490,7 +490,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -531,7 +531,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (_, _) => throw new IOException("failure before result publication"));
+                (_, _, _, _, _) => throw new IOException("failure before result publication"));
 
             Assert.False(File.Exists(attempt.ResultPath));
             Assert.Equal("1", File.ReadAllText(attempt.ExitCodePath));
@@ -578,7 +578,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     attempt,
                     candidate,
                     ConductorAutonomyPolicy.Permissive,
-                    (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                         attemptCandidate,
                         AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)),
                 CancellationToken.None,
@@ -625,7 +625,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -706,7 +706,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     attemptCandidate,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
 
@@ -903,7 +903,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 first.Attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
                     attemptCandidate,
                     PassingEvidence(attemptCandidate.Goal, batchedRequest, null, CancellationToken.None)));
 
@@ -1002,7 +1002,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     decision.Attempt,
                     candidate,
                     ConductorAutonomyPolicy.Permissive,
-                    (_, _, _, _) => RunResultForOutcome(expectedOutcome, candidate));
+                    (_, _, _, _, _) => RunResultForOutcome(expectedOutcome, candidate));
             }
 
             var end = Assert.Single(ReadEvents(logPath).Where(item =>
@@ -1044,7 +1044,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 first.Attempt,
                 firstCandidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
                     attemptCandidate,
                     PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
 
@@ -1100,7 +1100,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 first.Attempt,
                 firstCandidate,
                 ConductorAutonomyPolicy.Permissive,
-                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                (attemptCandidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
                     attemptCandidate,
                     PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
 
@@ -1109,7 +1109,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var sequenceBefore = File.ReadAllText(sequencePath);
             using var holderAcquired = new ManualResetEventSlim();
             using var holderRelease = new ManualResetEventSlim();
-            var holder = Task.Run(() =>
+            var holder = Task.Factory.StartNew(() =>
             {
                 using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
                 holderAcquired.Set();
@@ -1117,7 +1117,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 {
                     throw new TimeoutException("Acceptance writer lease release signal was not observed.");
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(30)), "Acceptance writer lease was not acquired.");
 
             using var replacementAtLeaseBoundary = new ManualResetEventSlim();
@@ -1128,11 +1128,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 acquireStableSlotLease: (_, _) => null,
                 attemptWriterLeaseAcquiringForTests: replacementAtLeaseBoundary.Set);
             var replacementCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-2", "main-1");
-            var replacementTask = Task.Run(() => replacementCoordinator.EvaluateFocusedEvidence(
+            var replacementTask = Task.Factory.StartNew(() => replacementCoordinator.EvaluateFocusedEvidence(
                 replacementCandidate,
                 ConductorAutonomyPolicy.Permissive,
                 "run focused tests",
-                PassingEvidence));
+                PassingEvidence), CancellationToken.None, TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
             string sequenceWhileLeaseHeld;
             AcceptanceArtifactWriterLeaseBusyException leaseBusy;

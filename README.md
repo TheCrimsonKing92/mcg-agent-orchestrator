@@ -7,7 +7,7 @@ This repository contains the orchestration kernel: create a goal, decompose it i
 ## Projects
 
 The current project inventory is derived from `src/**/*.csproj` (five production projects) and
-`tests/**/*.csproj` (eight test/support projects). See the
+`tests/**/*.csproj` (nine test/support projects). See the
 [architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
 and the separately labelled modular-monolith target.
 
@@ -18,21 +18,27 @@ and the separately labelled modular-monolith target.
 | `src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | Concrete model-provider adapters, provider defaults, smoke checks, and agent-catalog persistence. | Host composition or orchestration lifecycle. |
 | `src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | Operator-channel implementations and message transport behavior. | Goal state, conductor policy, or host composition. |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | SQLite stores, process and worker execution, worktrees, and acceptance verification. | CLI, dashboard, or executable composition. |
-| `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | Executable composition root containing the current conductor, CLI, dashboard, and adapter wiring. | Reusable domain contracts or the persistence implementations. |
+| `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | Headless executable composition root containing the conductor, CLI, maintenance, and application contracts. | ASP.NET hosting and dashboard HTTP endpoints. |
+| `src/Mcg.AgentOrchestrator.Dashboard/Mcg.AgentOrchestrator.Dashboard.csproj` | Optional ASP.NET dashboard host that consumes the headless application contracts. | Workflow or maintenance ownership. |
 | `tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj` | Core policy and repository-documentation contract tests. | Infrastructure or hosted-dashboard integration coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | Broad infrastructure, orchestration, worker, workspace, and acceptance tests. | The separately scoped CLI, dashboard, and provider-environment suites. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj` | Focused acceptance execution-owner and invocation-pipeline tests. | Broad infrastructure, CLI, dashboard, or provider-environment coverage. |
 | `tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj` | Dashboard API and UI behavior tests. | A production Dashboard assembly or general infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj` | CLI parsing, command, and console-contract tests. | Executable hosting or non-CLI infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj` | Process-isolated provider environment and configuration tests. | General provider implementation ownership. |
 | `tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj` | Shared test fixtures and helpers. | A runnable test suite or production behavior. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj` | Executable fixture for real-process shard tests. | Product hosting or general test execution. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/IsolatedDotnetProbe/Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj` | Minimal executable fixture for isolated `dotnet` invocation tests. | Product tooling or a standalone test suite. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/ConsoleIoProbe/Mcg.AgentOrchestrator.ConsoleIoProbe.csproj` | Executable fixture for redirected Console I/O preservation tests. | Product tooling or a standalone test suite. |
 <!-- current-project-inventory:end -->
 
 `scripts/OrchestratorSqliteTools/OrchestratorSqliteTools.csproj` and
 `tools/Mcg.HiddenLauncher/Mcg.HiddenLauncher.csproj` are outside that `src`/`tests` inventory boundary.
 The checkout-local launcher remains `mcg-orchestrator.cmd`; Windows publishing is handled by
-`scripts/publish-windows.ps1`.
+`scripts/publish-headless.ps1`. Publish the optional web component separately with
+`scripts/publish-dashboard.ps1`; place both outputs in one directory when headless CLI dashboard
+commands should launch the component. A headless-only deployment returns an actionable error for
+dashboard commands without changing workflow state.
 
 ## Verify
 
@@ -177,9 +183,9 @@ The same verbs run as one-shot CLI commands:
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- goal "Build feature X"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- doctor
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- provider-smoke openai --confirm-paid-smoke 4
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- dashboard
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- serve-dashboard http://localhost:5087/ --refresh 5
-dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- open-dashboard
+dotnet run --project src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj -- dashboard
+dotnet run --project src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj -- serve-dashboard http://localhost:5087/ --refresh 5
+dotnet run --project src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj -- open-dashboard
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agents
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agent Reviewer OpenAI gpt-5.2 "OpenAI reviewer"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- status

@@ -123,7 +123,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -145,7 +145,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -171,7 +171,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -198,7 +198,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -228,7 +228,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -258,7 +258,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -281,7 +281,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -318,7 +318,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
@@ -424,7 +424,7 @@ public sealed class GoalFileScopeInferenceTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 

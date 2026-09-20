@@ -26,10 +26,10 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 time.Advance(TimeSpan.FromSeconds(1));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty));
             }, time);
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
-
-            var result = await verifier.RunAsync(
+            var result = await RunWithProgressAsync(
+                verifier,
                 root,
+                progress.Add,
                 new GoalId("12345678123456781234567812345678"));
 
             Assert.True(result.Passed);
@@ -84,9 +84,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                     call++ == 0 ? 0 : 7,
                     "deterministic failure"));
             }, time);
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
-
-            var result = await verifier.RunAsync(root);
+            var result = await RunWithProgressAsync(verifier, root, progress.Add);
 
             Assert.False(result.Passed);
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
@@ -110,13 +108,14 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             var verifier = new GoalAcceptanceVerifier((_, _, _) =>
                 Task.FromException<GoalAcceptanceVerifier.CommandResult>(
                     new InvalidOperationException("deterministic runner fault")));
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(item =>
+            Action<AcceptanceGateProgress> progressSink = item =>
             {
                 progress.Add(item);
                 throw new InvalidOperationException("observer fault must be swallowed");
-            });
+            };
 
-            var exception = await Assert.ThrowsAsync<AcceptanceGateEngineException>(() => verifier.RunAsync(root));
+            var exception = await Assert.ThrowsAsync<AcceptanceGateEngineException>(() =>
+                RunWithProgressAsync(verifier, root, progressSink));
 
             var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
             Assert.Equal("deterministic runner fault", innerException.Message);
@@ -147,10 +146,8 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 cancellation.Cancel();
                 return Task.FromCanceled<GoalAcceptanceVerifier.CommandResult>(token);
             });
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
-
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                verifier.RunAsync(root, cancellationToken: cancellation.Token));
+                RunWithProgressAsync(verifier, root, progress.Add, cancellationToken: cancellation.Token));
 
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
                 Assert.Single(progress, item => item.Phase == "gate-phase-breakdown").PhaseBreakdown);
@@ -163,4 +160,19 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             DeleteDirectoryWithRetry(root);
         }
     }
+
+    private static Task<AcceptanceVerificationResult> RunWithProgressAsync(
+        GoalAcceptanceVerifier verifier,
+        string root,
+        Action<AcceptanceGateProgress> progressSink,
+        GoalId? goalId = null,
+        CancellationToken cancellationToken = default) =>
+        verifier.RunOwnedAsync(
+            root,
+            goalId,
+            changedFiles: null,
+            stableSlotIndex: null,
+            stableSlotLease: null,
+            cancellationToken,
+            new AcceptanceRunExecutionOptions(ProgressSink: progressSink));
 }

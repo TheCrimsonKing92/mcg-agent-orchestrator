@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Net.Http.Json;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -11,7 +10,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class GoalMonitoringSubscriptionCommand
 {
-    private static readonly JsonSerializerOptions NdjsonOptions = new(DashboardJson.Options()) { WriteIndented = false };
+    private static readonly JsonSerializerOptions NdjsonOptions = new(ApplicationQueryJson.Options()) { WriteIndented = false };
     public const string GoalsSubscribeUsage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--from-cursor <cursor>|--since <event-id>] [--task <id>] [--event-kind <kind,...>] [--once] [--wait-terminal] [--format ndjson|human] [--timeout <duration>]";
     private const string OnceFlag = "--once";
     private const string SinceFlag = "--since";
@@ -228,9 +227,9 @@ internal static class GoalMonitoringSubscriptionCommand
 
         if (options.Once)
         {
-            var batch = await client.GetFromJsonAsync<GoalMonitoringBatchDto>(
+            var batch = await client.GetFromJsonAsync<GoalMonitoringBatch>(
                 BuildSnapshotUri(options),
-                DashboardJson.Options(),
+                ApplicationQueryJson.Options(),
                 cancellationToken).ConfigureAwait(false);
             if (batch is null)
             {
@@ -266,23 +265,7 @@ internal static class GoalMonitoringSubscriptionCommand
         }
 
         var runEvents = new SqliteRunEventStore(workspace.RunEventStorePath);
-        if (options.Format == GoalMonitoringOutputFormat.Sse && !options.WaitTerminal)
-        {
-            await using var stream = new TextWriterStream(output);
-            await GoalMonitoringStream.StreamAsync(
-                stream,
-                options.GoalId,
-                _ => Task.FromResult(reloadKernel?.Invoke() ?? kernel),
-                (current, goal, since) => GoalMonitoringStream.BuildBatch(current, goal, since, agents, workerProfiles, workspace),
-                runEvents,
-                options.SinceEventId,
-                options.Once,
-                TimeSpan.FromSeconds(1),
-                cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        var terminal = await RunHeadlessLocalAsync(
+        var outcome = await RunHeadlessLocalAsync(
             options,
             output,
             kernel,
@@ -292,19 +275,24 @@ internal static class GoalMonitoringSubscriptionCommand
             reloadKernel,
             runEvents,
             cancellationToken).ConfigureAwait(false);
-        if (terminal is null)
+        if (outcome.IsHandledError)
+        {
+            return;
+        }
+
+        if (outcome.TerminalState is null)
         {
             throw new CliExitException(124);
         }
 
         if (options.WaitTerminal &&
-            terminal is GoalLifecycleState.Failed or GoalLifecycleState.Blocked or GoalLifecycleState.AwaitingClarification or GoalLifecycleState.AwaitingHumanInput)
+            outcome.TerminalState is GoalLifecycleState.Failed or GoalLifecycleState.Blocked or GoalLifecycleState.AwaitingClarification or GoalLifecycleState.AwaitingHumanInput)
         {
             throw new CliExitException(1);
         }
     }
 
-    public static void PrintBatch(GoalMonitoringBatchDto batch, TextWriter output, string? friendlyLabel = null)
+    public static void PrintBatch(GoalMonitoringBatch batch, TextWriter output, string? friendlyLabel = null)
     {
         PrintSnapshot(batch.Snapshot, output, friendlyLabel);
         foreach (var evt in batch.Events)
@@ -315,14 +303,14 @@ internal static class GoalMonitoringSubscriptionCommand
 
     public static void PrintServerSentEvent(ServerSentEvent serverEvent, TextWriter output)
     {
-        if (serverEvent.Event.Equals(DashboardMonitoringEvents.KeepAliveEventName, StringComparison.OrdinalIgnoreCase))
+        if (serverEvent.Event.Equals(ApplicationMonitoringContract.KeepAliveEventName, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
         if (serverEvent.Event.Equals("goal.snapshot", StringComparison.OrdinalIgnoreCase))
         {
-            var snapshot = JsonSerializer.Deserialize<GoalMonitoringSnapshotDto>(serverEvent.Data, DashboardJson.Options());
+            var snapshot = JsonSerializer.Deserialize<GoalMonitoringSnapshot>(serverEvent.Data, ApplicationQueryJson.Options());
             if (snapshot is not null)
             {
                 PrintSnapshot(snapshot, output);
@@ -333,7 +321,7 @@ internal static class GoalMonitoringSubscriptionCommand
 
         if (serverEvent.Event.Equals("timeline", StringComparison.OrdinalIgnoreCase))
         {
-            var evt = JsonSerializer.Deserialize<GoalMonitoringEventDto>(serverEvent.Data, DashboardJson.Options());
+            var evt = JsonSerializer.Deserialize<GoalMonitoringEvent>(serverEvent.Data, ApplicationQueryJson.Options());
             if (evt is not null)
             {
                 PrintTimelineEvent(evt, output);
@@ -404,7 +392,7 @@ internal static class GoalMonitoringSubscriptionCommand
         }
     }
 
-    private static void PrintSnapshot(GoalMonitoringSnapshotDto snapshot, TextWriter output, string? friendlyLabel = null)
+    private static void PrintSnapshot(GoalMonitoringSnapshot snapshot, TextWriter output, string? friendlyLabel = null)
     {
         var running = snapshot.Tasks.Count(task => task.Status == WorkTaskStatus.Running);
         var failed = snapshot.Tasks.Count(task => task.Status == WorkTaskStatus.Failed);
@@ -427,7 +415,7 @@ internal static class GoalMonitoringSubscriptionCommand
         }
     }
 
-    private static void PrintTimelineEvent(GoalMonitoringEventDto evt, TextWriter output)
+    private static void PrintTimelineEvent(GoalMonitoringEvent evt, TextWriter output)
     {
         var scope = evt.TaskNumber is null ? "goal" : $"task {evt.TaskNumber}";
         output.WriteLine($"event {evt.Id} {evt.OccurredAt:u} {evt.Kind} {scope}: {evt.Message}");
@@ -474,7 +462,7 @@ internal static class GoalMonitoringSubscriptionCommand
         "message"
     ];
 
-    private static async Task<GoalLifecycleState?> RunHeadlessLocalAsync(
+    private static async Task<LocalMonitoringOutcome> RunHeadlessLocalAsync(
         GoalMonitoringSubscriptionOptions options,
         TextWriter output,
         AgentOrchestratorKernel kernel,
@@ -496,10 +484,27 @@ internal static class GoalMonitoringSubscriptionCommand
         while (true)
         {
             var current = reloadKernel?.Invoke() ?? kernel;
-            var goal = OrchestratorEntityResolver.ResolveGoal(current, OrchestratorEntityResolver.GetLatestGoal(current), options.GoalId);
+            Goal goal;
+            try
+            {
+                goal = OrchestratorEntityResolver.ResolveGoal(current, OrchestratorEntityResolver.GetLatestGoal(current), options.GoalId);
+            }
+            catch (Exception ex) when (
+                ex is KeyNotFoundException or ArgumentException or InvalidOperationException &&
+                options.Format == GoalMonitoringOutputFormat.Sse &&
+                !options.WaitTerminal)
+            {
+                PrintServerSentEvent(
+                    "monitor.error",
+                    new MonitorErrorEvent(options.GoalId, "goal_not_found", ex.Message),
+                    id: null,
+                    output);
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                return LocalMonitoringOutcome.HandledError;
+            }
             var facts = ReadLifecycleFacts(workspace, goal);
             var state = GoalLifecycle.ResolveState(goal, facts);
-            var batch = GoalMonitoringStream.BuildBatch(current, goal, timelineCursor, agents, workerProfiles, workspace);
+            var batch = GoalMonitoringQuery.BuildBatch(current, goal, timelineCursor, agents, workerProfiles, workspace);
             var runRecords = await runEvents.ReadSinceAsync(runEventCursor, maxCount: 500, cancellationToken: cancellationToken).ConfigureAwait(false);
             var envelopes = BuildSubscriptionEvents(batch, goal, state, workspace, runRecords);
             if (!snapshotWritten && !resumeCursor.IsEmpty && envelopes.Count == 0)
@@ -542,7 +547,7 @@ internal static class GoalMonitoringSubscriptionCommand
 
                 if (!options.Once || eligibleEvents.Count > 0 || fallbackWritten)
                 {
-                    return state;
+                    return new LocalMonitoringOutcome(state, IsHandledError: false);
                 }
             }
 
@@ -564,7 +569,7 @@ internal static class GoalMonitoringSubscriptionCommand
                     CursorToken = new GoalStateSubscriptionCursor(timelineCursor, runEventCursor, processCursor).ToString()
                 }, options.Format, output);
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-                return null;
+                return LocalMonitoringOutcome.Timeout;
             }
 
             var delay = TimeSpan.FromSeconds(1);
@@ -582,7 +587,7 @@ internal static class GoalMonitoringSubscriptionCommand
 
     private static bool PrintCurrentSnapshotWhenNoEligibleEvent(
         int eligibleEventCount,
-        GoalMonitoringBatchDto batch,
+        GoalMonitoringBatch batch,
         GoalLifecycleState state,
         OrchestratorWorkspace workspace,
         long timelineCursor,
@@ -610,7 +615,7 @@ internal static class GoalMonitoringSubscriptionCommand
     }
 
     internal static IReadOnlyList<GoalStateSubscriptionEvent> BuildSubscriptionEvents(
-        GoalMonitoringBatchDto batch,
+        GoalMonitoringBatch batch,
         Goal goal,
         GoalLifecycleState state,
         OrchestratorWorkspace workspace,
@@ -618,6 +623,9 @@ internal static class GoalMonitoringSubscriptionCommand
     {
         var events = new List<GoalStateSubscriptionEvent> { BuildSnapshotEvent(batch.Snapshot, state, workspace.RunEventStorePath, batch.LastEventId) };
         events.AddRange(batch.Events.Select(evt => BuildTimelineEnvelope(evt, goal, state, workspace)));
+        events.AddRange(batch.Events
+            .Where(evt => evt.TaskId is not null && evt.TaskNumber is not null && evt.Role is not null && evt.TaskStatus is not null)
+            .Select(evt => BuildTaskStatusEnvelope(evt, goal, state, workspace)));
         events.AddRange(BuildProcessEnvelopes(batch, state));
         events.AddRange(runRecords
             .Where(record => record.GoalId is null || string.Equals(record.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
@@ -635,11 +643,15 @@ internal static class GoalMonitoringSubscriptionCommand
                 {
                     CursorDomain = GoalStateCursorDomain.RunEvent
                 }));
-        return events.OrderBy(evt => evt.CursorSequence).ThenBy(evt => evt.Timestamp).ToList();
+        return
+        [
+            events[0],
+            .. events.Skip(1).OrderBy(evt => evt.CursorSequence).ThenBy(evt => evt.Timestamp)
+        ];
     }
 
     private static IEnumerable<GoalStateSubscriptionEvent> BuildProcessEnvelopes(
-        GoalMonitoringBatchDto batch,
+        GoalMonitoringBatch batch,
         GoalLifecycleState state)
     {
         foreach (var task in batch.Snapshot.Tasks)
@@ -690,8 +702,8 @@ internal static class GoalMonitoringSubscriptionCommand
     }
 
     private static long ProcessCursorSequence(
-        TaskMonitoringSnapshotDto task,
-        ProcessDto process,
+        TaskMonitoringSnapshot task,
+        QueryProcessSnapshot process,
         DateTimeOffset timestamp,
         string eventKind)
     {
@@ -699,7 +711,7 @@ internal static class GoalMonitoringSubscriptionCommand
         return timestamp.UtcTicks + (task.TaskNumber * 10) + Math.Abs(process.ProcessId % 10) + kindOffset;
     }
 
-    private static GoalStateSubscriptionEvent BuildSnapshotEvent(GoalMonitoringSnapshotDto snapshot, GoalLifecycleState state, string artifactPath, long cursor) =>
+    private static GoalStateSubscriptionEvent BuildSnapshotEvent(GoalMonitoringSnapshot snapshot, GoalLifecycleState state, string artifactPath, long cursor) =>
         new(
             1,
             cursor,
@@ -716,7 +728,7 @@ internal static class GoalMonitoringSubscriptionCommand
         };
 
     private static GoalStateSubscriptionEvent BuildTimelineEnvelope(
-        GoalMonitoringEventDto evt,
+        GoalMonitoringEvent evt,
         Goal goal,
         GoalLifecycleState state,
         OrchestratorWorkspace workspace)
@@ -727,13 +739,37 @@ internal static class GoalMonitoringSubscriptionCommand
             1,
             evt.Id,
             evt.OccurredAt,
-            evt.Kind.ToString(),
+            evt.Event,
             evt.GoalId,
             evt.TaskId,
             evt.TaskStatus?.ToString() ?? state.ToString(),
             artifactPath,
             task?.LastProcess?.ProcessId,
             evt.Message)
+        {
+            CursorDomain = GoalStateCursorDomain.Timeline
+        };
+    }
+
+    private static GoalStateSubscriptionEvent BuildTaskStatusEnvelope(
+        GoalMonitoringEvent evt,
+        Goal goal,
+        GoalLifecycleState state,
+        OrchestratorWorkspace workspace)
+    {
+        var task = goal.Tasks.First(candidate => candidate.Id.Value == evt.TaskId);
+        var artifactPath = task.LastVerification?.StandardOutputPath ?? task.LastProcess?.StandardOutputPath ?? workspace.RunEventStorePath;
+        return new GoalStateSubscriptionEvent(
+            1,
+            evt.Id,
+            evt.OccurredAt,
+            "task.status",
+            evt.GoalId,
+            evt.TaskId,
+            evt.TaskStatus?.ToString() ?? state.ToString(),
+            artifactPath,
+            task.LastProcess?.ProcessId,
+            $"task={evt.TaskNumber} role={evt.Role} status={evt.TaskStatus}")
         {
             CursorDomain = GoalStateCursorDomain.Timeline
         };
@@ -914,7 +950,38 @@ internal static class GoalMonitoringSubscriptionCommand
             return;
         }
 
+        if (format == GoalMonitoringOutputFormat.Sse)
+        {
+            PrintServerSentEvent(evt.EventKind, evt, evt.CursorToken, output);
+            return;
+        }
+
         output.WriteLine(JsonSerializer.Serialize(evt, NdjsonOptions));
+    }
+
+    private static void PrintServerSentEvent(string eventName, object payload, string? id, TextWriter output)
+    {
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            output.Write("id: ");
+            output.WriteLine(id);
+        }
+
+        output.Write("event: ");
+        output.WriteLine(eventName);
+        foreach (var line in JsonSerializer.Serialize(payload, ApplicationQueryJson.Options()).Split('\n'))
+        {
+            output.Write("data: ");
+            output.WriteLine(line.TrimEnd('\r'));
+        }
+
+        output.WriteLine();
+    }
+
+    private readonly record struct LocalMonitoringOutcome(GoalLifecycleState? TerminalState, bool IsHandledError)
+    {
+        public static LocalMonitoringOutcome Timeout => new(null, IsHandledError: false);
+        public static LocalMonitoringOutcome HandledError => new(null, IsHandledError: true);
     }
 
     private static bool TryParseOutputFormat(string value, out GoalMonitoringOutputFormat format)

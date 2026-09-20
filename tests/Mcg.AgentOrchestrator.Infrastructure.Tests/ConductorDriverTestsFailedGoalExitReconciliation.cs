@@ -70,6 +70,64 @@ public sealed class ConductorDriverTestsFailedGoalExitReconciliation
     }
 
     [Xunit.Fact]
+    public void ReconciliationThatLeavesFailedLifecycleHoldsBeforeReevaluatingPolicy()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Re-observe lifecycle authority after exited dispatch reconciliation",
+            [
+                new TaskSpec(TaskId.New(), "First exited task", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Second exited task", AgentRole.Developer)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var first = goal.Tasks[0];
+        var second = goal.Tasks[1];
+        DispatchTask(kernel, goal, first);
+        DispatchTask(kernel, goal, second);
+        var firstProcess = CompletedProcess(DateTimeOffset.UtcNow);
+        var secondProcess = CompletedProcess(DateTimeOffset.UtcNow.AddSeconds(1)) with { ProcessId = 12346 };
+        kernel.RecordTaskProcessStarted(goal.Id, first.Id, firstProcess);
+        kernel.RecordTaskProcessStarted(goal.Id, second.Id, secondProcess);
+
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = snapshot.Goals.Single();
+        var tasks = goalSnapshot.Tasks
+            .Select(task => task.Id == first.Id.Value
+                ? task with { Status = WorkTaskStatus.Failed }
+                : task with { Status = WorkTaskStatus.Assigned })
+            .ToArray();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [goalSnapshot with { Tasks = tasks }]
+        });
+        goal = kernel.GetGoal(goal.Id);
+        first = goal.Tasks[0];
+        second = goal.Tasks[1];
+        var reconcileCount = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            reconcileExitedDispatch: (_, taskId) =>
+            {
+                reconcileCount++;
+                Assert.Equal(first.Id, taskId);
+                kernel.RecordTaskProcessRefreshed(
+                    goal.Id,
+                    first.Id,
+                    firstProcess,
+                    SuccessfulDeveloperVerification(firstProcess.CompletedAt!.Value));
+                return true;
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("stale-recovery-facts", held.Reason, StringComparison.Ordinal);
+        Assert.Equal(1, reconcileCount);
+        Assert.Equal(WorkTaskStatus.Completed, first.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, second.Status);
+    }
+
+    [Xunit.Fact]
     public void DispatchStartRefusesExitedUnappliedLatestProcess()
     {
         var (kernel, goal) = SimpleGoal();

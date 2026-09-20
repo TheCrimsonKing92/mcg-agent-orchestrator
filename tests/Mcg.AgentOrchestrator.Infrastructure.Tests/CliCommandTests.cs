@@ -9,8 +9,18 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-public abstract class CliCommandTestBase
+public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 {
+    private protected static WorktreeCleanupContext CreateIsolatedCleanupContext(
+        OrchestratorWorkspace workspace,
+        GoalWorktreeCleanupHooks? hooks = null)
+    {
+        var root = new DotnetBuildStorageRoot(Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "test-dotnet"));
+        return hooks is null
+            ? WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory, buildStorageRoot: root)
+            : new WorktreeCleanupContext(hooks with { BuildStorageRoot = root });
+    }
+
     private protected static OrchestratorWorkspace CreateRefinedWorkspace(string root)
     {
         SeedLocalSkillCatalog(root);
@@ -70,6 +80,29 @@ public abstract class CliCommandTestBase
             ref currentGoal,
             standardInput: standardInput,
             isStandardInputRedirected: isStandardInputRedirected));
+    }
+
+    private protected static (string Output, bool Changed, Goal? CurrentGoal) ExecuteCliAndCaptureResult(
+        IReadOnlyList<string> parts,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var changed = false;
+
+        var output = CaptureConsole(() => changed = CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        return (output, changed, currentGoal);
     }
 
     private protected static void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)
@@ -424,7 +457,7 @@ public abstract class CliCommandTestBase
         {
             if (Directory.Exists(root))
             {
-                _ = GoalWorktrees.DeleteDirectory(root);
+                _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
             }
         }
         catch
@@ -1064,13 +1097,13 @@ public abstract class CliCommandTestBase
 
         public int? LastStableSlotIndex { get; private set; }
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             RunCount++;
             LastStableSlotIndex = stableSlotIndex;
@@ -1090,14 +1123,14 @@ public abstract class CliCommandTestBase
                 Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.", DurationMilliseconds: 7)]));
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             Task.FromResult(new FocusedEvidenceRunResult(
                 request,
                 Accepted: true,

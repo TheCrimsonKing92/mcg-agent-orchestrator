@@ -34,6 +34,7 @@ internal static partial class LandingExecutor
 {
     public const string IntegrationBranchName = "integration";
     private const string TempWorktreeDirName = ".orchestrator-integration-tmp";
+    private const string LandingAnchorRefPrefix = "refs/orchestrator/landing/";
     private const string OwnershipHoldReasonPrefix = "ownership-denylist hold";
     private const string MutationHoldReasonPrefix = "landing mutation blocked:";
     private const string PostLandingConfirmationReasonPrefix =
@@ -71,6 +72,17 @@ internal static partial class LandingExecutor
             return completedLanding;
         }
 
+        if (TryRecoverInterruptedLanding(
+                kernel,
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter) is { } interruptedLanding)
+        {
+            return interruptedLanding;
+        }
+
         var changedFilesResult = GoalWorktrees.ResolveChangedFilesAgainstHead(
             executionDirectory,
             goal.Id,
@@ -101,54 +113,6 @@ internal static partial class LandingExecutor
         }
 
         var changedFiles = changedFilesResult.Files;
-        EnsureIntegrationBranch(executionDirectory);
-
-        var tempPath = Path.Combine(executionDirectory, TempWorktreeDirName);
-
-        // Remove any leftover temp worktree from a prior interrupted run.
-        if (IsRegisteredWorktree(executionDirectory, tempPath))
-        {
-            RunGit(executionDirectory, "worktree", "remove", "--force", tempPath);
-        }
-
-        bool mergeSucceeded;
-        try
-        {
-            var blockReason = mutationBlocker?.Invoke();
-            if (!string.IsNullOrWhiteSpace(blockReason))
-            {
-                return BuildMutationBlockedResult(goal, goalPrefix, blockReason);
-            }
-
-            mergeSucceeded = MergeGoalIntoIntegration(
-                executionDirectory,
-                tempPath,
-                goalBranch,
-                mutationBlocker,
-                out var integrationBlockReason);
-            if (!string.IsNullOrWhiteSpace(integrationBlockReason))
-            {
-                return BuildMutationBlockedResult(goal, goalPrefix, integrationBlockReason);
-            }
-        }
-        finally
-        {
-            if (IsRegisteredWorktree(executionDirectory, tempPath))
-            {
-                RunGit(executionDirectory, "worktree", "remove", "--force", tempPath);
-            }
-        }
-
-        if (!mergeSucceeded)
-        {
-            var conflictReason = $"merge conflict integrating {goalBranch} into {IntegrationBranchName}";
-            OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName, channel);
-            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, conflictReason, IntegrationBranchName);
-            var conflictDecision = new LandingDecision.Escalate(conflictReason);
-            return new LandingResult(goal.Id.Value, goalPrefix, conflictDecision, IntegrationBranchName,
-                false, $"Parked on {IntegrationBranchName}: {conflictReason}");
-        }
-
         var acceptancePassed = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory).IsAccepted;
         if (!acceptancePassed)
         {
@@ -195,61 +159,153 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {unknownReason}");
         }
 
-        var cleanFastForward = IsIntegrationFastForwardableIntoMain(executionDirectory);
-        LandingDecision decision = cleanFastForward
-            ? new LandingDecision.Promote()
-            : new LandingDecision.Escalate("integration->main conflict");
-
-        if (decision is LandingDecision.Promote)
+        var boundMainRevision = ResolveRef(executionDirectory, "main");
+        var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
+        if (previousIntegrationRevision is not null &&
+            RunGit(executionDirectory, "merge-base", "--is-ancestor", previousIntegrationRevision, boundMainRevision).ExitCode != 0)
         {
-            var mergeCommitSha = ResolveRef(executionDirectory, IntegrationBranchName);
+            const string reason = "integration branch contains state not present on bound main";
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName, channel);
+            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, IntegrationBranchName);
+            return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason), IntegrationBranchName,
+                false, $"Parked on {IntegrationBranchName}: {reason}");
+        }
+
+        var tempPath = Path.Combine(executionDirectory, TempWorktreeDirName);
+        if (IsRegisteredWorktree(executionDirectory, tempPath))
+        {
+            RunGit(executionDirectory, "worktree", "remove", "--force", tempPath);
+        }
+
+        string? candidateRevision = null;
+        try
+        {
+            var blockReason = mutationBlocker?.Invoke();
+            if (!string.IsNullOrWhiteSpace(blockReason))
+            {
+                return BuildMutationBlockedResult(goal, goalPrefix, blockReason);
+            }
+
+            if (!TryPrepareCandidateFromBoundMain(
+                    executionDirectory,
+                    tempPath,
+                    boundMainRevision,
+                    goalBranch,
+                    out candidateRevision,
+                    out var preparationFailure))
+            {
+                var conflictReason = $"landing candidate preparation failed for {goalBranch} from bound main {boundMainRevision}: {preparationFailure}";
+                OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName, channel);
+                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, conflictReason, IntegrationBranchName);
+                return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(conflictReason), IntegrationBranchName,
+                    false, $"Parked on {IntegrationBranchName}: {conflictReason}");
+            }
+
+            var anchor = CreateLandingAnchor(executionDirectory, goal, candidateRevision!);
+            if (anchor.ExitCode != 0)
+            {
+                var anchorReason = $"landing candidate anchor update failed: {FormatGitFailure(anchor)}";
+                OperatorInbox.RecordLandingEscalation(workspace, goal, anchorReason, IntegrationBranchName, channel);
+                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, anchorReason, IntegrationBranchName);
+                return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(anchorReason), IntegrationBranchName,
+                    false, $"Parked on {IntegrationBranchName}: {anchorReason}");
+            }
+        }
+        finally
+        {
+            if (IsRegisteredWorktree(executionDirectory, tempPath))
+            {
+                RunGit(executionDirectory, "worktree", "remove", "--force", tempPath);
+            }
+        }
+
+        try
+        {
             GoalOperationJournal.RecordLandingIntent(
                 executionDirectory,
                 goal,
                 goalBranch,
                 IntegrationBranchName,
-                mergeCommitSha,
-                "LandingExecutor");
-
-            var blockReason = mutationBlocker?.Invoke();
-            if (!string.IsNullOrWhiteSpace(blockReason))
-            {
-                GoalOperationJournal.TombstoneLandingIntent(
-                    executionDirectory,
-                    goal,
-                    $"landing mutation blocked after intent write: {blockReason}");
-                return BuildMutationBlockedResult(goal, goalPrefix, blockReason);
-            }
-
-            var merge = RunGit(executionDirectory, "merge", "--ff-only", IntegrationBranchName);
-            if (merge.ExitCode != 0)
-            {
-                GoalOperationJournal.TombstoneLandingIntent(
-                    executionDirectory,
-                    goal,
-                    $"integration->main fast-forward failed after landing intent write: {merge.Error}");
-                var unexpectedReason = $"integration->main fast-forward failed: {merge.Error}";
-                OperatorInbox.RecordLandingEscalation(workspace, goal, unexpectedReason, IntegrationBranchName, channel);
-                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, unexpectedReason, IntegrationBranchName);
-                var fallback = new LandingDecision.Escalate(unexpectedReason);
-                return new LandingResult(goal.Id.Value, goalPrefix, fallback, IntegrationBranchName,
-                    false, $"Parked on {IntegrationBranchName}: {unexpectedReason}");
-            }
-
-            eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch);
-            OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
-            StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
-            return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
-                true, $"Promoted: {goalBranch} integrated via {IntegrationBranchName} into main.",
-                mergeCommitSha,
-                changedFiles);
+                candidateRevision!,
+                "LandingExecutor",
+                boundMainRevision: boundMainRevision,
+                previousIntegrationRevision: previousIntegrationRevision);
+        }
+        catch
+        {
+            DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+            throw;
         }
 
-        var escalate = (LandingDecision.Escalate)decision;
-        OperatorInbox.RecordLandingEscalation(workspace, goal, escalate.Reason, IntegrationBranchName, channel);
-        eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, escalate.Reason, IntegrationBranchName);
-        return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
-            false, $"Parked on {IntegrationBranchName}: {escalate.Reason}");
+        var publicationBlockReason = mutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(publicationBlockReason))
+        {
+            GoalOperationJournal.TombstoneLandingIntent(
+                executionDirectory,
+                goal,
+                $"landing publication blocked after intent write: {publicationBlockReason}");
+            DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+            return BuildMutationBlockedResult(goal, goalPrefix, publicationBlockReason);
+        }
+
+        var integrationWrite = UpdateRef(executionDirectory, IntegrationBranchName, candidateRevision!, previousIntegrationRevision);
+        if (integrationWrite.ExitCode != 0)
+        {
+            GoalOperationJournal.TombstoneLandingIntent(
+                executionDirectory,
+                goal,
+                $"integration ref update failed after landing intent write: {FormatGitFailure(integrationWrite)}");
+            DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+            var reason = $"integration ref update failed: {FormatGitFailure(integrationWrite)}";
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName, channel);
+            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, IntegrationBranchName);
+            return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason), IntegrationBranchName,
+                false, $"Parked on {IntegrationBranchName}: {reason}");
+        }
+
+        var mainWrite = UpdateRef(executionDirectory, "main", candidateRevision!, boundMainRevision);
+        if (mainWrite.ExitCode != 0)
+        {
+            var rollback = UpdateRef(executionDirectory, IntegrationBranchName, previousIntegrationRevision, candidateRevision!);
+            var rollbackDetail = rollback.ExitCode == 0
+                ? "integration ref restored"
+                : $"integration ref rollback failed: {FormatGitFailure(rollback)}";
+            GoalOperationJournal.TombstoneLandingIntent(
+                executionDirectory,
+                goal,
+                $"main ref update failed after landing intent write: {FormatGitFailure(mainWrite)}; {rollbackDetail}");
+            if (rollback.ExitCode == 0)
+            {
+                DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+            }
+            var reason = $"main ref update failed: {FormatGitFailure(mainWrite)}; {rollbackDetail}";
+            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName, channel);
+            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, IntegrationBranchName);
+            return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason), IntegrationBranchName,
+                false, $"Parked on {IntegrationBranchName}: {reason}");
+        }
+
+        DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+
+        var synchronizeWorktree = RunGit(
+            executionDirectory,
+            "read-tree",
+            "-m",
+            "-u",
+            boundMainRevision,
+            candidateRevision!);
+        if (synchronizeWorktree.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"main advanced to {candidateRevision}, but the execution worktree could not synchronize: {FormatGitFailure(synchronizeWorktree)}");
+        }
+
+        eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch);
+        OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
+        StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
+        return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Promote(), IntegrationBranchName,
+            true, $"Promoted: {goalBranch} prepared from bound main via {IntegrationBranchName} into main.",
+            candidateRevision,
+            changedFiles);
     }
 
     private static LandingResult? TryResolveCompletedLanding(
@@ -350,6 +406,162 @@ internal static partial class LandingExecutor
             IntegrationBranchName,
             MainAdvanced: false,
             Message: reason);
+    }
+
+    private static LandingResult? TryRecoverInterruptedLanding(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        string goalPrefix,
+        IOperatorChannel? channel,
+        IGoalLifecycleEventWriter? eventWriter)
+    {
+        var intent = GoalOperationJournal.TryGetLatestLandingIntent(
+            GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id));
+        if (intent is null)
+        {
+            return null;
+        }
+
+        var currentMain = ResolveRef(workspace.ExecutionDirectory, "main");
+        var reachability = RunGit(
+            workspace.ExecutionDirectory,
+            "merge-base",
+            "--is-ancestor",
+            intent.MergeCommitSha,
+            currentMain);
+        if (reachability.DrainTimedOut)
+        {
+            return BuildPostLandingConfirmationFailure(
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter,
+                $"reachability check for recovered publication {intent.MergeCommitSha} timed out while draining git output");
+        }
+
+        if (reachability.Succeeded)
+        {
+            if (currentMain.Equals(intent.MergeCommitSha, StringComparison.OrdinalIgnoreCase))
+            {
+                var recoveryBaseline = string.IsNullOrWhiteSpace(intent.BoundMainRevision)
+                    ? $"{intent.MergeCommitSha}^1"
+                    : intent.BoundMainRevision;
+                var synchronizeWorktree = RunGit(
+                    workspace.ExecutionDirectory,
+                    "read-tree",
+                    "-m",
+                    "-u",
+                    recoveryBaseline,
+                    intent.MergeCommitSha);
+                if (synchronizeWorktree.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"main already contains recovered publication {intent.MergeCommitSha}, but the execution worktree could not synchronize: {FormatGitFailure(synchronizeWorktree)}");
+                }
+            }
+            var changedFiles = ResolveRecoveredChangedFiles(
+                workspace.ExecutionDirectory,
+                intent.BoundMainRevision,
+                intent.MergeCommitSha);
+            GoalOperationJournal.Completed(
+                workspace.ExecutionDirectory,
+                goal,
+                "conductor:landing-recovery",
+                $"Recovered completed publication of {intent.MergeCommitSha} from durable landing intent.");
+            StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
+            GoalOperationJournal.Completed(
+                workspace.ExecutionDirectory,
+                goal,
+                "conductor:land",
+                $"Recovered completed publication of {intent.MergeCommitSha} and reconciled its post-landing effects.");
+            GoalOperationJournal.TombstoneLandingIntent(
+                workspace.ExecutionDirectory,
+                goal,
+                "recovered completed publication was reconciled and its post-landing effects were applied");
+            DeleteLandingAnchor(workspace.ExecutionDirectory, goal, intent.MergeCommitSha);
+            return new LandingResult(
+                goal.Id.Value,
+                goalPrefix,
+                new LandingDecision.Promote(),
+                intent.IntegrationBranch,
+                MainAdvanced: true,
+                Message: $"Goal {goalPrefix} publication was recovered as already landed.",
+                MergeCommitSha: intent.MergeCommitSha,
+                ChangedFiles: changedFiles);
+        }
+
+        if (string.IsNullOrWhiteSpace(intent.BoundMainRevision))
+        {
+            return BuildPostLandingConfirmationFailure(
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter,
+                "incomplete landing intent lacks a bound main predecessor and was left unchanged for operator recovery");
+        }
+
+        if (!currentMain.Equals(intent.BoundMainRevision, StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildPostLandingConfirmationFailure(
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter,
+                $"incomplete landing intent bound main {intent.BoundMainRevision}, but main is now {currentMain}; refs were left unchanged");
+        }
+
+        var currentIntegration = TryResolveBranch(workspace.ExecutionDirectory, intent.IntegrationBranch);
+        var predecessorRestored = string.Equals(
+            currentIntegration,
+            intent.PreviousIntegrationRevision,
+            StringComparison.OrdinalIgnoreCase);
+        if (predecessorRestored)
+        {
+            GoalOperationJournal.TombstoneLandingIntent(
+                workspace.ExecutionDirectory,
+                goal,
+                "interrupted landing intent found before integration publication; no ref recovery was required");
+            DeleteLandingAnchor(workspace.ExecutionDirectory, goal, intent.MergeCommitSha);
+            return null;
+        }
+
+        if (!string.Equals(currentIntegration, intent.MergeCommitSha, StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildPostLandingConfirmationFailure(
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter,
+                $"incomplete landing intent expected integration {intent.MergeCommitSha}, but found {currentIntegration ?? "<absent>"}; refs were left unchanged");
+        }
+
+        var rollback = UpdateRef(
+            workspace.ExecutionDirectory,
+            intent.IntegrationBranch,
+            intent.PreviousIntegrationRevision,
+            intent.MergeCommitSha);
+        if (rollback.ExitCode != 0)
+        {
+            return BuildPostLandingConfirmationFailure(
+                goal,
+                workspace,
+                goalPrefix,
+                channel,
+                eventWriter,
+                $"incomplete landing integration rollback failed: {FormatGitFailure(rollback)}");
+        }
+
+        GoalOperationJournal.TombstoneLandingIntent(
+            workspace.ExecutionDirectory,
+            goal,
+            "interrupted landing recovery restored the recorded integration predecessor");
+        DeleteLandingAnchor(workspace.ExecutionDirectory, goal, intent.MergeCommitSha);
+        return null;
     }
 
     private static string FormatGitFailure(GitCli.GitResult result) =>
@@ -464,7 +676,9 @@ internal static partial class LandingExecutor
                 GoalWorktrees.BranchName(goal.Id),
                 $"cohort/{receipt.Identity.Value}",
                 commit,
-                "LandingExecutor.ExecuteCohort");
+                "LandingExecutor.ExecuteCohort",
+                boundMainRevision: liveMain,
+                previousIntegrationRevision: priorIntegrationRevision);
         }
 
         blockReason = mutationBlocker?.Invoke();
@@ -492,6 +706,13 @@ internal static partial class LandingExecutor
                 priorIntegrationRevision);
             if (advanceIntegration.ExitCode != 0)
             {
+                foreach (var goal in goals)
+                {
+                    GoalOperationJournal.TombstoneLandingIntent(
+                        executionDirectory,
+                        goal,
+                        $"cohort integration ref update failed: {advanceIntegration.Error}");
+                }
                 return new AcceptanceCohortLandingResult(
                     AcceptanceCohortLandingOutcome.RetryableHold,
                     $"Cohort integration ref update failed: {advanceIntegration.Error}");
@@ -506,6 +727,13 @@ internal static partial class LandingExecutor
                 commit);
             if (createIntegration.ExitCode != 0)
             {
+                foreach (var goal in goals)
+                {
+                    GoalOperationJournal.TombstoneLandingIntent(
+                        executionDirectory,
+                        goal,
+                        $"cohort integration ref creation failed: {createIntegration.Error}");
+                }
                 return new AcceptanceCohortLandingResult(
                     AcceptanceCohortLandingOutcome.RetryableHold,
                     $"Cohort integration ref creation failed: {createIntegration.Error}");
@@ -576,44 +804,32 @@ internal static partial class LandingExecutor
             coverage);
     }
 
-    private static void EnsureIntegrationBranch(string executionDirectory)
-    {
-        if (BranchExists(executionDirectory, IntegrationBranchName))
-        {
-            return;
-        }
-
-        var result = RunGit(executionDirectory, "branch", IntegrationBranchName, "main");
-        if (result.ExitCode != 0)
-        {
-            throw new InvalidOperationException(
-                $"Failed to create '{IntegrationBranchName}' branch from main: {result.Error}");
-        }
-    }
-
-    private static bool MergeGoalIntoIntegration(
+    private static bool TryPrepareCandidateFromBoundMain(
         string executionDirectory,
         string tempPath,
+        string boundMainRevision,
         string goalBranch,
-        Func<string?>? mutationBlocker,
-        out string? blockReason)
+        out string? candidateRevision,
+        out string? failure)
     {
-        blockReason = null;
-        var add = RunGit(executionDirectory, "worktree", "add", tempPath, IntegrationBranchName);
+        candidateRevision = null;
+        failure = null;
+        var add = RunGit(executionDirectory, "worktree", "add", "--detach", tempPath, boundMainRevision);
         if (add.ExitCode != 0)
         {
-            throw new InvalidOperationException(
-                $"Failed to create integration worktree at '{tempPath}': {add.Error}");
-        }
-
-        blockReason = mutationBlocker?.Invoke();
-        if (!string.IsNullOrWhiteSpace(blockReason))
-        {
+            failure = $"could not create landing preparation worktree at '{tempPath}': {FormatGitFailure(add)}";
             return false;
         }
 
         var merge = RunGit(tempPath, "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}");
-        return merge.ExitCode == 0;
+        if (merge.ExitCode != 0)
+        {
+            failure = FormatGitFailure(merge);
+            return false;
+        }
+
+        candidateRevision = ResolveRef(tempPath, "HEAD");
+        return true;
     }
 
     private static LandingResult BuildMutationBlockedResult(
@@ -631,10 +847,80 @@ internal static partial class LandingExecutor
             $"Landing held before merge: {blockReason}");
     }
 
-    private static bool IsIntegrationFastForwardableIntoMain(string executionDirectory)
+    private static string? TryResolveBranch(string executionDirectory, string branch)
     {
-        // Exits 0 if main is an ancestor of integration — fast-forward from main to integration tip is possible.
-        return RunGit(executionDirectory, "merge-base", "--is-ancestor", "main", IntegrationBranchName).ExitCode == 0;
+        var result = RunGit(executionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
+        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output)
+            ? result.Output.Trim()
+            : null;
+    }
+
+    private static GitCli.GitResult UpdateRef(
+        string executionDirectory,
+        string branch,
+        string? newRevision,
+        string? expectedRevision)
+    {
+        var reference = $"refs/heads/{branch}";
+        if (newRevision is null)
+        {
+            return RunGit(executionDirectory, "update-ref", "-d", reference, expectedRevision!);
+        }
+
+        return RunGit(
+            executionDirectory,
+            "update-ref",
+            reference,
+            newRevision,
+            expectedRevision ?? string.Empty);
+    }
+
+    private static GitCli.GitResult CreateLandingAnchor(
+        string executionDirectory,
+        Goal goal,
+        string candidateRevision) =>
+        RunGit(
+            executionDirectory,
+            "update-ref",
+            LandingAnchorReference(goal),
+            candidateRevision,
+            string.Empty);
+
+    private static void DeleteLandingAnchor(
+        string executionDirectory,
+        Goal goal,
+        string candidateRevision)
+    {
+        _ = RunGit(
+            executionDirectory,
+            "update-ref",
+            "-d",
+            LandingAnchorReference(goal),
+            candidateRevision);
+    }
+
+    private static string LandingAnchorReference(Goal goal) =>
+        $"{LandingAnchorRefPrefix}{goal.Id.Value}";
+
+    private static IReadOnlyList<string> ResolveRecoveredChangedFiles(
+        string executionDirectory,
+        string? boundMainRevision,
+        string candidateRevision)
+    {
+        var baseline = string.IsNullOrWhiteSpace(boundMainRevision)
+            ? $"{candidateRevision}^1"
+            : boundMainRevision;
+        var diff = RunGit(executionDirectory, "diff", "--name-only", baseline, candidateRevision);
+        if (!diff.Succeeded)
+        {
+            return [];
+        }
+
+        return diff.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string ResolveRef(string executionDirectory, string reference)

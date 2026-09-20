@@ -58,16 +58,24 @@ public static partial class DashboardRenderer
             $"/api/monitor?goal={goalPrefix}",
             "Open monitor JSON");
 
+        var workSummaryDetails = new List<string>
+        {
+            $"Verified: {goal.Tasks.Count(task => task.LastVerification?.Succeeded is true)}",
+            $"Processes: {goal.Tasks.Count(task => task.LastProcess is not null)}",
+            $"Dispatches: {goal.Tasks.Count(task => task.LastDispatch is not null)}",
+            $"Test impact: {Encode(testImpact?.Summary ?? "not available")}"
+        };
+        if (testImpact is not null)
+        {
+            workSummaryDetails.AddRange(testImpact.Checks.Select(check =>
+                $"Test reason ({Encode(check.Name)}): {Encode(check.Reason)}"));
+        }
+
         RenderReportPreview(
             html,
             "Work summary",
             $"{goal.Tasks.Count} task(s) &middot; {monitor.PendingHumanInputCount} pending input",
-            [
-                $"Verified: {goal.Tasks.Count(task => task.LastVerification?.Succeeded is true)}",
-                $"Processes: {goal.Tasks.Count(task => task.LastProcess is not null)}",
-                $"Dispatches: {goal.Tasks.Count(task => task.LastDispatch is not null)}",
-                $"Test impact: {Encode(testImpact?.Summary ?? "not available")}"
-            ],
+            workSummaryDetails,
             $"/api/goals/{goalPrefix}/work-summary",
             "Open compact JSON");
 

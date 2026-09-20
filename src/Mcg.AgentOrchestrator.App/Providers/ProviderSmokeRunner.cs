@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Providers;
 
-internal static class ProviderSmokeRunner
+public static class ProviderSmokeRunner
 {
 public const string DefaultTarget = "default";
 
@@ -38,16 +38,16 @@ public static string RunProviderSmoke(string target)
     return string.Join(Environment.NewLine + Environment.NewLine, evidence);
 }
 
-public static async Task<ProviderSmokeReportDto> RunProviderSmokeReportAsync(string target)
+public static async Task<ProviderSmokeReport> RunProviderSmokeReportAsync(string target)
 {
     var tester = new ProviderSmokeTester();
-    var results = new List<ProviderSmokeResultDto>();
+    var results = new List<ProviderSmokeReportEntry>();
 
     foreach (var providerName in ResolveProviderSmokeTargets(target))
     {
         if (!TryCreateLiveProvider(providerName, out var provider, out var modelName, out var detail))
         {
-            results.Add(new ProviderSmokeResultDto(
+            results.Add(new ProviderSmokeReportEntry(
                 providerName,
                 "skipped",
                 null,
@@ -62,7 +62,7 @@ public static async Task<ProviderSmokeReportDto> RunProviderSmokeReportAsync(str
         try
         {
             var result = await tester.RunAsync(provider);
-            results.Add(new ProviderSmokeResultDto(
+            results.Add(new ProviderSmokeReportEntry(
                 result.ProviderName,
                 "ok",
                 modelName,
@@ -74,7 +74,7 @@ public static async Task<ProviderSmokeReportDto> RunProviderSmokeReportAsync(str
         }
         catch (Exception ex)
         {
-            results.Add(new ProviderSmokeResultDto(
+            results.Add(new ProviderSmokeReportEntry(
                 providerName,
                 "failed",
                 modelName,
@@ -86,7 +86,7 @@ public static async Task<ProviderSmokeReportDto> RunProviderSmokeReportAsync(str
         }
     }
 
-    return new ProviderSmokeReportDto(
+    return new ProviderSmokeReport(
         target,
         results,
         results.Any(result => result.Status.Equals("ok", StringComparison.OrdinalIgnoreCase)),

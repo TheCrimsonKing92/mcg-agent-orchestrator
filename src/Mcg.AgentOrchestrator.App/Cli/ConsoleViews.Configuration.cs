@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -105,7 +104,7 @@ internal static partial class ConsoleViews
         }
     }
 
-    public static void PrintArchitecture(DistributedArchitectureDto report)
+    public static void PrintArchitecture(DistributedArchitectureReport report)
     {
         Console.WriteLine("Architecture:");
         Console.WriteLine($"  tenant: {report.TenantName} scoped={report.TenantScoped}");

@@ -9,8 +9,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
     [Xunit.Fact(Timeout = 60_000)]
     public async Task CorrelatedLoss_CancelsInFlightShardAndStopsPendingShards()
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         SetPartitionVerdictKeyHooks("shared-loss-tree", "shared-loss-main", "shared-loss-candidate");
         var root = CreateCheckedInManifestShapeWorkspace();
         var attemptPrefix = Path.Combine(root, "attempt", "shared-loss-attempt");
@@ -27,7 +27,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
         DotnetBuildEnvironment? environment = null;
         try
         {
-            using var attemptScope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(attemptPrefix);
             async Task<GoalAcceptanceVerifier.CommandResult> RunAsync(
                 string[] args,
                 string _,
@@ -96,19 +95,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
                 throw new InvalidOperationException("The in-flight retry was not cancelled.");
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunAsync);
             lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             environment = lease.Environment;
             var slot = StableSlotIndex(environment.ArtifactsPath);
 
-            var result = await verifier.RunAsync(
+            var result = await verifier.RunOwnedAsync(
                 root,
                 new GoalId("6f9ddf547adb404187dc00863bb749c1"),
                 changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"],
                 stableSlotIndex: slot,
                 stableSlotLease: lease,
-                cancellationToken: TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken,
+                executionOptions: new AcceptanceRunExecutionOptions(
+                    RunId: Path.GetFileName(attemptPrefix),
+                    ResultsPrefix: attemptPrefix));
 
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.Equal(3, shardCalls.Count);
@@ -134,8 +136,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
             {
                 DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(environment);
             }
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -144,8 +146,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
     [Xunit.Fact(Timeout = 60_000)]
     public async Task CorrelatedLoss_SequentialBatchStopsPendingShards()
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 1;
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 1;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         SetPartitionVerdictKeyHooks("sequential-tree", "sequential-main", "sequential-candidate");
         var root = CreateCheckedInManifestShapeWorkspace();
         var attemptPrefix = Path.Combine(root, "attempt", "sequential-loss-attempt");
@@ -158,7 +160,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
         DotnetBuildEnvironment? environment = null;
         try
         {
-            using var attemptScope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(attemptPrefix);
             Task<GoalAcceptanceVerifier.CommandResult> RunAsync(
                 string[] args,
                 string _,
@@ -206,18 +207,21 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
                 return FailedShard(6102, secondStartedAt, "second owner lost");
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunAsync);
             lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             environment = lease.Environment;
 
-            var result = await verifier.RunAsync(
+            var result = await verifier.RunOwnedAsync(
                 root,
                 new GoalId("6f9ddf547adb404187dc00863bb749c1"),
                 changedFiles: ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"],
                 stableSlotIndex: StableSlotIndex(environment.ArtifactsPath),
                 stableSlotLease: lease,
-                cancellationToken: TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken,
+                executionOptions: new AcceptanceRunExecutionOptions(
+                    RunId: Path.GetFileName(attemptPrefix),
+                    ResultsPrefix: attemptPrefix));
 
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.Equal(2, shardCalls.Count);
@@ -242,8 +246,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
             {
                 DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(environment);
             }
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }

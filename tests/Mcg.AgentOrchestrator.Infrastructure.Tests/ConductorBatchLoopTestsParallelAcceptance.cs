@@ -429,7 +429,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var summary = new ConductorBatchLoop().Run(
                 kernel,
                 driver,
-                ConductorAutonomyPolicy.Conservative,
+                ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = acceptanceWidth },
                 NoStopPath(),
                 maxIterations: 1,
                 onTick: current => tick = current);
@@ -1536,7 +1536,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var started = coordinator.Evaluate(
                 preRebase,
                 ConductorAutonomyPolicy.Conservative,
-                (candidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                (candidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     postRebase,
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
             launches[started.Attempt.AttemptId].ExecuteInCurrentProcess(started.Attempt.OwnerProcessId);
@@ -1707,7 +1707,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var completed = coordinator.Evaluate(
                 candidate,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, attemptPolicy, _, _) =>
+                (attemptCandidate, attemptPolicy, _, _, _) =>
                 {
                     Assert.True(secondRunningHeartbeat.Wait(TimeSpan.FromSeconds(5)));
                     return PassingRun(attemptCandidate, attemptPolicy);
@@ -1838,6 +1838,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
 
             var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
                 attempt,
+                null,
                 "dotnet",
                 ["Mcg.AgentOrchestrator.App.dll"]);
 
@@ -1917,9 +1918,9 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 var completed = coordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
-                    (runCandidate, _) =>
+                    (runCandidate, _, _, _, executionOptions) =>
                     {
-                        var prefix = GoalAcceptanceVerifier.AcceptanceAttemptResultsPrefixForTests;
+                        var prefix = executionOptions.ResultsPrefix;
                         Assert.False(string.IsNullOrWhiteSpace(prefix));
                         var trxPath = $"{prefix}.dotnet-test.trx";
                         File.WriteAllText(trxPath, "trx");
@@ -2771,7 +2772,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var started = coordinator.Evaluate(
                 candidate,
                 ConductorAutonomyPolicy.Conservative,
-                (_, _) => throw new OperationCanceledException("operator cancelled"));
+                (_, _, _, _, _) => throw new OperationCanceledException("operator cancelled"));
             var persisted = ReadAttempt(started.Attempt.MetadataPath);
 
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
@@ -2789,17 +2790,17 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
     {
         AssertBackgroundOutcome(
             "Cancel.cs",
-            (_, _) => throw new OperationCanceledException("operator cancelled"),
+            (_, _, _, _, _) => throw new OperationCanceledException("operator cancelled"),
             ConductorParallelAcceptanceAttemptOutcome.Cancelled);
         AssertBackgroundOutcome(
             "SlotsBusyTyped.cs",
-            (_, _) => throw new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
+            (_, _, _, _, _) => throw new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
                 "typed-test",
                 [new DotnetBuildStableSlotWait(0, 7100)])),
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot);
         AssertBackgroundOutcome(
             "BuildLockTyped.cs",
-            (_, _) => throw new BuildLockBlockedException(new BuildLockAttribution(
+            (_, _, _, _, _) => throw new BuildLockBlockedException(new BuildLockAttribution(
                 @"C:\mcg-dotnet-isolated\goals\deadbeef\artifacts\bin\Mcg.AgentOrchestrator.Core.dll",
                 [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
                 "handle64-timeout",
@@ -2808,7 +2809,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock);
         AssertBackgroundOutcome(
             "InfrastructureDeferredTyped.cs",
-            (_, _) => throw new AcceptanceInfrastructureDeferredException(
+            (_, _, _, _, _) => throw new AcceptanceInfrastructureDeferredException(
                 "trusted-main-build-failed",
                 1,
                 "baseline assembly unavailable"),
@@ -3205,7 +3206,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 var decision = coordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
-                    (_, _, stableSlotLease, _) =>
+                    (_, _, stableSlotLease, _, _) =>
                     {
                         leasedEnvironment = stableSlotLease?.Environment;
                         throw new InvalidOperationException(registrationFailure);
@@ -3251,7 +3252,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             return;
         }
 
-        using var isolatedDotnetRoot = IsolatedDotnetRootScope();
+        var isolatedDotnetRoot = new DotnetBuildStorageRoot(
+            Path.Combine(Path.GetTempPath(), $"mcg-owned-start-build-{Guid.NewGuid():N}"));
         var root = CreateSeededGitRepository();
         var attemptRoot = CreateTempDirectory("mcg-conductor-owned-start");
         var kernel = new AgentOrchestratorKernel();
@@ -3298,10 +3300,11 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 executionDirectory: root,
+                buildStorageRoot: isolatedDotnetRoot,
                 launchOwnedProcess: launch => LaunchExternalAcceptanceProcess(
                     launch,
                     useLegacyStartThenAttach,
-                    isolatedDotnetRoot.Value,
+                    isolatedDotnetRoot.RootPath,
                     externalProcesses));
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -3311,7 +3314,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 ConductorParallelAcceptanceCandidate candidateIgnored,
                 ConductorAutonomyPolicy policyIgnored,
                 DotnetBuildEnvironmentLease? leaseIgnored,
-                CancellationToken cancellationTokenIgnored) =>
+                CancellationToken cancellationTokenIgnored, AcceptanceRunExecutionOptions executionOptionsIgnored) =>
                 throw new InvalidOperationException("External acceptance unexpectedly ran inline.");
 
             var decision = coordinator.Evaluate(
@@ -3391,6 +3394,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             }
             TryDeleteDirectory(attemptRoot);
             TryDeleteDirectory(root);
+            TryDeleteDirectory(isolatedDotnetRoot.RootPath);
         }
     }
 
@@ -3404,12 +3408,10 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         Assert.True(File.Exists(appAssembly), $"App assembly was not available at {appAssembly}");
         var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
             launch.Attempt,
+            launch.BuildStorageRoot,
             "dotnet",
             [appAssembly]);
-        // The production child is intentionally hermetic and scrubs MCG_* variables. This real-process
-        // fixture must reapply its test-only lease root so unrelated stable-slot users cannot preempt the
-        // owned-start seam that the test is meant to exercise.
-        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedDotnetRoot;
+        // Exercise production transport of the explicit setting after the hermetic scrub.
         Assert.Equal(
             isolatedDotnetRoot,
             startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable]);
@@ -3447,7 +3449,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 var decision = coordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
-                    (attemptCandidate, _, stableSlotLease, _) =>
+                    (attemptCandidate, _, stableSlotLease, _, _) =>
                     {
                         Assert.NotNull(stableSlotLease);
                         reacquireWhileRunning = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
@@ -3514,7 +3516,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             ConductorParallelAcceptanceCandidate candidate,
             ConductorAutonomyPolicy policy,
             DotnetBuildEnvironmentLease? stableSlotLease,
-            CancellationToken _)
+            CancellationToken _, AcceptanceRunExecutionOptions executionOptions)
         {
             Assert.NotNull(stableSlotLease);
             environments[candidate.Goal.Id.Value] = stableSlotLease.Environment;
@@ -3617,7 +3619,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             ConductorParallelAcceptanceCandidate candidate,
             ConductorAutonomyPolicy _,
             DotnetBuildEnvironmentLease? stableSlotLease,
-            CancellationToken __)
+            CancellationToken __, AcceptanceRunExecutionOptions executionOptions)
         {
             Assert.NotNull(stableSlotLease);
             environments[candidate.Goal.Id.Value] = stableSlotLease.Environment;
@@ -3745,7 +3747,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var first = coordinator.Evaluate(
                 candidateA,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, _, stableSlotLease, _) =>
+                (attemptCandidate, _, stableSlotLease, _, _) =>
                 {
                     Assert.NotNull(stableSlotLease);
                     firstLeaseEnvironment = stableSlotLease.Environment;
@@ -3763,7 +3765,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var second = coordinator.Evaluate(
                 candidateB,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, attemptPolicy, stableSlotLease, _) =>
+                (attemptCandidate, attemptPolicy, stableSlotLease, _, _) =>
                 {
                     Assert.NotNull(stableSlotLease);
                     secondLeaseEnvironment = stableSlotLease.Environment;
@@ -3823,7 +3825,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 var decision = coordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
-                    (attemptCandidate, attemptPolicy, _, _) =>
+                    (attemptCandidate, attemptPolicy, _, _, _) =>
                     {
                         ran = true;
                         return PassingRun(attemptCandidate, attemptPolicy);
@@ -3900,7 +3902,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 var liveBlocked = liveCoordinator.Evaluate(
                     liveCandidate,
                     ConductorAutonomyPolicy.Conservative,
-                    (attemptCandidate, attemptPolicy, _, _) =>
+                    (attemptCandidate, attemptPolicy, _, _, _) =>
                     {
                         liveRan = true;
                         return PassingRun(attemptCandidate, attemptPolicy);
@@ -3922,7 +3924,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var reclaimed = deadCoordinator.Evaluate(
                 deadCandidate,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, attemptPolicy, stableSlotLease, _) =>
+                (attemptCandidate, attemptPolicy, stableSlotLease, _, _) =>
                 {
                     Assert.NotNull(stableSlotLease);
                     reclaimedEnvironment = stableSlotLease.Environment;
@@ -3958,7 +3960,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 var decision = coordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
-                    (_, _, stableSlotLease, _) =>
+                    (_, _, stableSlotLease, _, _) =>
                     {
                         leasedEnvironment = stableSlotLease?.Environment;
                         throw new OperationCanceledException("goal parked");
@@ -4106,7 +4108,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 started.Attempt,
                 candidate,
                 policy,
-                (attemptCandidate, attemptPolicy) => ConductorParallelAcceptanceRunResult.Early(
+                (attemptCandidate, attemptPolicy, _, _, _) => ConductorParallelAcceptanceRunResult.Early(
                     attemptCandidate,
                     new ConductorAdvanceResult(
                         attemptCandidate.Goal.Id.Value,
@@ -4185,7 +4187,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 started.Attempt,
                 candidate,
                 policy,
-                (attemptCandidate, attemptPolicy) => ConductorParallelAcceptanceRunResult.Early(
+                (attemptCandidate, attemptPolicy, _, _, _) => ConductorParallelAcceptanceRunResult.Early(
                     attemptCandidate,
                     new ConductorAdvanceResult(
                         attemptCandidate.Goal.Id.Value,
@@ -4231,12 +4233,12 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    private static EnvVarScope IsolatedDotnetRootScope() =>
+    internal static EnvVarScope IsolatedDotnetRootScope() =>
         new EnvVarScope(
             DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
             Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-batch-loop-{Guid.NewGuid():N}"));
 
-    private sealed class EnvVarScope : IDisposable
+    internal sealed class EnvVarScope : IDisposable
     {
         private readonly string _name;
         private readonly string? _previousValue;
@@ -4263,7 +4265,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    private static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(
+    internal static ConductorParallelAcceptanceAttemptCoordinator ThreadedAcceptanceAttemptCoordinator(
         string attemptRoot,
         out Action waitForAttempts,
         ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null,
@@ -5004,7 +5006,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var terminal = coordinator.Evaluate(
                 candidate,
                 ConductorAutonomyPolicy.Conservative,
-                (acceptedCandidate, _) =>
+                (acceptedCandidate, _, _, _, _) =>
                 {
                     verifierRuns++;
                     return ConductorParallelAcceptanceRunResult.Accepted(
@@ -5196,7 +5198,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
 
     private static void AssertBackgroundOutcome(
         string fileName,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> run,
+        ConductorParallelAcceptanceRunAcceptance run,
         ConductorParallelAcceptanceAttemptOutcome expected)
     {
         var (_, goal) = SimpleGoal($"Update src/Mcg.AgentOrchestrator.App/Orchestration/{fileName}");

@@ -77,6 +77,19 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
                     obj["detail"] = skipped.Detail;
                 }
             }
+
+            if (progressEvent.OperatorIntentApplied is { } applied)
+            {
+                obj["operatorIntentApplied"] = new JsonObject
+                {
+                    ["intentId"] = applied.IntentId,
+                    ["verb"] = applied.Verb,
+                    ["taskId"] = applied.TaskId,
+                    ["actor"] = applied.Actor,
+                    ["channel"] = applied.Channel,
+                    ["authenticationAssurance"] = applied.AuthenticationAssurance
+                };
+            }
         });
 
     public void AppendGoalCreated(GoalId goalId, string objective) =>

@@ -18,8 +18,14 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
 
         try
         {
-            using var progress = GoalAcceptanceVerifier.PushGateProgressSink(item => phases.Add(item.Phase));
-            var result = await verifier.RunAsync(root);
+            var result = await verifier.RunOwnedAsync(
+                root,
+                goalId: null,
+                changedFiles: null,
+                stableSlotIndex: null,
+                stableSlotLease: null,
+                CancellationToken.None,
+                new AcceptanceRunExecutionOptions(ProgressSink: item => phases.Add(item.Phase)));
 
             Assert.False(result.Passed);
             Assert.Empty(calls);

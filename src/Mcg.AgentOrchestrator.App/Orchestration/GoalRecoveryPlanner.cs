@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record GoalRecoveryReport(
+public sealed record GoalRecoveryReport(
     GoalId GoalId,
     string Objective,
     GoalStatus Status,
@@ -22,7 +22,7 @@ internal sealed record GoalRecoveryReport(
     IReadOnlyList<GoalRecoveryTaskFinding> TaskFindings,
     IReadOnlyList<string> RecommendedActions);
 
-internal sealed record GoalRecoveryTaskFinding(
+public sealed record GoalRecoveryTaskFinding(
     int TaskNumber,
     TaskId TaskId,
     AgentRole Role,
@@ -31,14 +31,15 @@ internal sealed record GoalRecoveryTaskFinding(
     string SuggestedCommand,
     DispatchRecoveryDecision? RecoveryDecision = null);
 
-internal static class GoalRecoveryPlanner
+public static class GoalRecoveryPlanner
 {
     public static GoalRecoveryReport Build(
         AgentOrchestratorKernel kernel,
         Goal goal,
         string executionDirectory,
         bool includeCleanupBackoff = true,
-        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
+        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         GitCli.WorktreeStatusInspection? worktreeInspection = worktree is null
@@ -59,9 +60,9 @@ internal static class GoalRecoveryPlanner
             ? RepositoryTestImpactPlanner.Plan(changeSummary)
             : RepositoryTestImpactPlanner.Plan(changeSummary, worktree);
         var operationJournal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id);
+        var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, cleanupHooks?.BuildStorageRoot);
         var cleanupBackoff = includeCleanupBackoff
-            ? GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id)
+            ? GoalWorktrees.TryGetCleanupBackoff(executionDirectory, goal.Id, cleanupHooks)
             : null;
         var pendingInput = kernel.BuildHumanInputWorklist(goal.Id).OpenCount;
         var findings = new List<GoalRecoveryTaskFinding>();
