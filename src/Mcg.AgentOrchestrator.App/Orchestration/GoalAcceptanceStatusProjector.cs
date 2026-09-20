@@ -39,6 +39,20 @@ public static class GoalAcceptanceStatusProjector
             journal,
             candidate.BranchHeadSha,
             candidate.MainHeadSha);
+        if (currentOutcomes.Count == 0 &&
+            goal.Status == GoalStatus.Completed &&
+            GoalGitFactIndex.Build(executionDirectory).BuildGoalBranchFacts(goal).BranchAlreadyLanded)
+        {
+            currentOutcomes = journal.Entries
+                .Select((entry, index) => (Entry: entry, Index: index))
+                .Where(item =>
+                    !string.IsNullOrWhiteSpace(item.Entry.AcceptanceOutcome) &&
+                    string.Equals(item.Entry.BranchHeadSha?.Trim(), candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.Entry.At)
+                .ThenByDescending(item => item.Index)
+                .Select(item => item.Entry)
+                .ToArray();
+        }
 
         var blockers = summary.Blockers
             .Where(blocker => blocker.Kind != GoalAcceptanceBlockerKind.AcceptanceFailed)
