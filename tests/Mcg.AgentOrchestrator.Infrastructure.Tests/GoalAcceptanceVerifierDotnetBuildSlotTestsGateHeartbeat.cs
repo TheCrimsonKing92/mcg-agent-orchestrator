@@ -30,7 +30,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             """);
         var previousHeartbeat = TestOverrides.HeartbeatInterval;
         var previousProgress = TestOverrides.ProgressInterval;
-        var progress = new List<AcceptanceGateProgress>();
+        var progress = new ConcurrentQueue<AcceptanceGateProgress>();
+        var targetObserved = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             TryDeleteStableSlotHeartbeat(0);
@@ -39,16 +41,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             var verifier = new GoalAcceptanceVerifier(TestOverrides);
             var goalId = new GoalId("feedfacefeedfacefeedfacefeedface");
             using var cts = new CancellationTokenSource();
+            Action<AcceptanceGateProgress> progressSink = item =>
+            {
+                progress.Enqueue(item);
+                if (item.CurrentTarget == "hung gate receipt")
+                    targetObserved.TrySetResult(item);
+            };
             var run = verifier.RunOwnedAsync(
                 root, goalId, null, 0, null, cts.Token,
-                new AcceptanceRunExecutionOptions(ProgressSink: progress.Add));
+                new AcceptanceRunExecutionOptions(ProgressSink: progressSink));
 
-            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
-            while (!progress.Any(item => item.CurrentTarget == "hung gate receipt") &&
-                   DateTimeOffset.UtcNow < deadline)
-            {
-                await Task.Delay(100);
-            }
+            _ = await GateHeartbeatProgressFailsafe.WaitForTargetAsync(
+                targetObserved.Task,
+                "hung gate receipt",
+                cts,
+                run,
+                Task.Delay(TimeSpan.FromMinutes(2)));
 
             var heartbeatPath = Assert.Single(
                 progress
@@ -72,6 +80,81 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
         }
         finally
         {
+            TestOverrides.HeartbeatInterval = previousHeartbeat;
+            TestOverrides.ProgressInterval = previousProgress;
+            try { DeleteDirectoryWithRetry(root); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_failsafe_cancels_and_awaits_child_when_heartbeat_write_is_suppressed", Timeout = 150_000)]
+    public async Task GateHeartbeatFailsafeCancelsAndAwaitsChildWhenHeartbeatWriteIsSuppressed()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        const string missingTarget = "suppressed heartbeat receipt";
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "suppressed heartbeat receipt", "type": "command", "command": "powershell", "arguments": ["-NoProfile", "-Command", "Start-Sleep -Seconds 30"], "timeoutMinutes": 1 }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var previousHeartbeat = TestOverrides.HeartbeatInterval;
+        var previousProgress = TestOverrides.ProgressInterval;
+        var targetSignal = new TaskCompletionSource<AcceptanceGateProgress>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var triggerFailsafe = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        Task<AcceptanceVerificationResult>? run = null;
+        try
+        {
+            TryDeleteStableSlotHeartbeat(0);
+            TestOverrides.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
+            TestOverrides.ProgressInterval = TimeSpan.FromMilliseconds(200);
+            Action<AcceptanceGateProgress> suppressHeartbeatWrite = item =>
+            {
+                if (item.CurrentTarget == missingTarget && item.ChildProcessId.HasValue)
+                {
+                    // Negative control: the target heartbeat occurred, but its completion signal is
+                    // deliberately suppressed so the failsafe branch must own cancellation and drain.
+                    triggerFailsafe.TrySetResult();
+                }
+            };
+            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            run = verifier.RunOwnedAsync(
+                root,
+                new GoalId("dad1fadedad1fadedad1fadedad1fade"),
+                changedFiles: null,
+                stableSlotIndex: 0,
+                stableSlotLease: null,
+                cancellationToken: cancellation.Token,
+                executionOptions: new AcceptanceRunExecutionOptions(ProgressSink: suppressHeartbeatWrite));
+
+            var error = await Assert.ThrowsAsync<Xunit.Sdk.XunitException>(() =>
+                GateHeartbeatProgressFailsafe.WaitForTargetAsync(
+                    targetSignal.Task,
+                    missingTarget,
+                    cancellation,
+                    run,
+                    triggerFailsafe.Task));
+
+            Assert.Contains(missingTarget, error.Message, StringComparison.Ordinal);
+            Assert.True(cancellation.IsCancellationRequested);
+            Assert.True(run.IsCompleted, "The verifier run returned before its child exit was awaited.");
+            DeleteDirectoryWithRetry(root);
+            Assert.False(Directory.Exists(root), $"Failsafe retained temp root '{root}'.");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            if (run is not null)
+            {
+                try { await run; } catch (OperationCanceledException) { }
+            }
             TestOverrides.HeartbeatInterval = previousHeartbeat;
             TestOverrides.ProgressInterval = previousProgress;
             try { DeleteDirectoryWithRetry(root); } catch { }

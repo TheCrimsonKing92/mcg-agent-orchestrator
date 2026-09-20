@@ -22,7 +22,8 @@ public sealed record LandingInputs(
     bool AcceptancePassed,
     bool IntegrationToMainIsCleanFastForward,
     int GoalFailureRetryCount,
-    ConductorAutonomyPolicy? Policy = null);
+    ConductorAutonomyPolicy? Policy = null,
+    string? AcceptanceHoldDescription = null);
 
 public static class LandingDecisionEngine
 {
@@ -40,7 +41,10 @@ public static class LandingDecisionEngine
     public static LandingDecision Decide(LandingInputs inputs)
     {
         if (!inputs.AcceptancePassed)
-            return new LandingDecision.Escalate("acceptance verification not passed");
+            return new LandingDecision.Escalate(
+                string.IsNullOrWhiteSpace(inputs.AcceptanceHoldDescription)
+                    ? "acceptance verification not passed"
+                    : inputs.AcceptanceHoldDescription.Trim());
 
         var riskClass = ClassifyRisk(inputs.ChangeSummary);
 

@@ -113,8 +113,8 @@ internal static partial class LandingExecutor
         }
 
         var changedFiles = changedFilesResult.Files;
-        var acceptancePassed = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory).IsAccepted;
-        if (!acceptancePassed)
+        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
+        if (!acceptance.IsAccepted)
         {
             // A sibling landing path can complete after this attempt's initial journal read.
             // Re-read at the decision point so an irreversible landing is not reported as
@@ -130,7 +130,18 @@ internal static partial class LandingExecutor
                 return concurrentlyCompletedLanding;
             }
 
-            var acceptanceDecision = new LandingDecision.Escalate("acceptance verification not passed");
+            var decision = LandingDecisionEngine.Decide(new LandingInputs(
+                RepositoryChangeClassifier.Classify(changedFiles),
+                AcceptancePassed: false,
+                IntegrationToMainIsCleanFastForward: true,
+                GoalFailureRetryCount: 0,
+                Policy: policy,
+                AcceptanceHoldDescription: acceptance.AcceptanceHoldDescription));
+            if (decision is not LandingDecision.Escalate acceptanceDecision)
+            {
+                throw new InvalidOperationException(
+                    "Landing decision engine promoted a candidate whose acceptance status was not accepted.");
+            }
             OperatorInbox.RecordLandingEscalation(workspace, goal, acceptanceDecision.Reason, IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, acceptanceDecision.Reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, acceptanceDecision, IntegrationBranchName,

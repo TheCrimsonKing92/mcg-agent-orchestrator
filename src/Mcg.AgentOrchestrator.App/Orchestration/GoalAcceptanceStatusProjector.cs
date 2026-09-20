@@ -5,13 +5,15 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 public static class GoalAcceptanceStatusProjector
 {
+    private const int ListedItemLimit = 5;
+
     public static GoalAcceptanceSummary Build(
         AgentOrchestratorKernel kernel,
         Goal goal,
         string? executionDirectory)
     {
         var summary = kernel.BuildGoalAcceptanceSummary(goal.Id);
-        if (summary.Status != GoalStatus.Verified)
+        if (summary.Status is not (GoalStatus.Verified or GoalStatus.Completed))
         {
             return summary;
         }
@@ -19,7 +21,17 @@ public static class GoalAcceptanceStatusProjector
         if (string.IsNullOrWhiteSpace(executionDirectory) ||
             TryResolveCurrentCandidate(executionDirectory, goal.Id) is not { } candidate)
         {
-            return summary;
+            return summary.IsAccepted
+                ? summary with { AcceptanceHoldDescription = null }
+                : summary with
+                {
+                    AcceptanceHoldDescription = BuildHoldDescription(
+                        summary,
+                        candidateSha: null,
+                        hasCurrentPassedOutcome: false,
+                        summary.Blockers,
+                        GetOrderedPendingWaits(kernel, goal.Id))
+                };
         }
 
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
@@ -27,6 +39,20 @@ public static class GoalAcceptanceStatusProjector
             journal,
             candidate.BranchHeadSha,
             candidate.MainHeadSha);
+        if (currentOutcomes.Count == 0 &&
+            goal.Status == GoalStatus.Completed &&
+            GoalGitFactIndex.Build(executionDirectory).BuildGoalBranchFacts(goal).BranchAlreadyLanded)
+        {
+            currentOutcomes = journal.Entries
+                .Select((entry, index) => (Entry: entry, Index: index))
+                .Where(item =>
+                    !string.IsNullOrWhiteSpace(item.Entry.AcceptanceOutcome) &&
+                    string.Equals(item.Entry.BranchHeadSha?.Trim(), candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.Entry.At)
+                .ThenByDescending(item => item.Index)
+                .Select(item => item.Entry)
+                .ToArray();
+        }
 
         var blockers = summary.Blockers
             .Where(blocker => blocker.Kind != GoalAcceptanceBlockerKind.AcceptanceFailed)
@@ -64,15 +90,35 @@ public static class GoalAcceptanceStatusProjector
             outcomes.Add(UnverifiedOutcome());
         }
 
+        var isAccepted = summary.OpenVerificationCount == 0 &&
+            summary.PendingHumanInputCount == 0 &&
+            blockers.Count == 0 &&
+            hasCurrentPassedOutcome;
         return summary with
         {
-            IsAccepted = summary.OpenVerificationCount == 0 &&
-                summary.PendingHumanInputCount == 0 &&
-                blockers.Count == 0 &&
-                hasCurrentPassedOutcome,
+            IsAccepted = isAccepted,
             Blockers = blockers,
-            Outcomes = outcomes
+            Outcomes = outcomes,
+            AcceptanceHoldDescription = isAccepted
+                ? null
+                : BuildHoldDescription(
+                    summary,
+                    candidate.BranchHeadSha,
+                    hasCurrentPassedOutcome,
+                    blockers,
+                    GetOrderedPendingWaits(kernel, goal.Id))
         };
+    }
+
+    internal static string? BuildPendingHumanWaitAttentionCommand(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        string goalPrefix)
+    {
+        var waits = GetOrderedPendingWaits(kernel, goalId);
+        return waits.Count == 0
+            ? null
+            : $"attention show {goalPrefix}; pending human waits {FormatWaitReferences(waits)}";
     }
 
     internal static bool HasCurrentBlockingAcceptanceState(
@@ -121,6 +167,79 @@ public static class GoalAcceptanceStatusProjector
             $"Acceptance {entry.AcceptanceOutcome ?? "unknown"} for {label} {candidate} at {entry.At:u}: {detail}");
     }
 
+    private static string BuildHoldDescription(
+        GoalAcceptanceSummary summary,
+        string? candidateSha,
+        bool hasCurrentPassedOutcome,
+        IReadOnlyList<GoalAcceptanceBlocker> blockers,
+        IReadOnlyList<HumanInputRequest> pendingWaits)
+    {
+        var terms = new List<string>
+        {
+            string.IsNullOrWhiteSpace(candidateSha)
+                ? "no current candidate"
+                : hasCurrentPassedOutcome
+                    ? $"acceptance passed at {FormatShortSha8(candidateSha)}"
+                    : $"no passed acceptance outcome for candidate {FormatShortSha8(candidateSha)}"
+        };
+
+        if (summary.OpenVerificationCount > 0)
+        {
+            terms.Add($"landing held by {summary.OpenVerificationCount} open verification(s)");
+        }
+
+        if (pendingWaits.Count > 0)
+        {
+            terms.Add($"{pendingWaits.Count} pending human wait(s) ({FormatWaitReferences(pendingWaits)})");
+        }
+
+        var distinctBlockers = blockers
+            .Where(blocker => blocker.Kind is not (
+                GoalAcceptanceBlockerKind.PendingHumanInput or
+                GoalAcceptanceBlockerKind.VerificationNotReady or
+                GoalAcceptanceBlockerKind.VerificationMissing or
+                GoalAcceptanceBlockerKind.VerificationFailed))
+            .OrderBy(blocker => blocker.Kind.ToString(), StringComparer.Ordinal)
+            .ToList();
+        if (distinctBlockers.Count > 0)
+        {
+            terms.Add($"{distinctBlockers.Count} blocker(s) ({FormatBlockerKinds(distinctBlockers)})");
+        }
+
+        return string.Join("; ", terms);
+    }
+
+    private static IReadOnlyList<HumanInputRequest> GetOrderedPendingWaits(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId) =>
+        kernel.GetPendingHumanInput(goalId)
+            .OrderBy(request => request.RequestedAt)
+            .ThenBy(request => request.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+
+    private static string FormatWaitReferences(IReadOnlyList<HumanInputRequest> waits)
+    {
+        var selected = waits.Take(ListedItemLimit).ToArray();
+        var groups = selected
+            .GroupBy(wait => wait.Kind)
+            .OrderBy(group => group.Key.ToString(), StringComparer.Ordinal)
+            .Select(group =>
+                $"{group.Key} {string.Join(", ", group.Select(wait => FormatShortSha8(wait.Id.Value)))}");
+        var suffix = waits.Count > selected.Length
+            ? $" and {waits.Count - selected.Length} more"
+            : string.Empty;
+        return string.Join("; ", groups) + suffix;
+    }
+
+    private static string FormatBlockerKinds(IReadOnlyList<GoalAcceptanceBlocker> blockers)
+    {
+        var selected = blockers.Take(ListedItemLimit).Select(blocker => blocker.Kind.ToString()).ToArray();
+        var suffix = blockers.Count > selected.Length
+            ? $", +{blockers.Count - selected.Length} more"
+            : string.Empty;
+        return string.Join(", ", selected) + suffix;
+    }
+
     private static AcceptanceCandidate? TryResolveCurrentCandidate(string executionDirectory, GoalId goalId)
     {
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goalId);
@@ -156,6 +275,9 @@ public static class GoalAcceptanceStatusProjector
         string.IsNullOrWhiteSpace(sha)
             ? "unknown"
             : sha.Trim()[..Math.Min(12, sha.Trim().Length)];
+
+    private static string FormatShortSha8(string sha) =>
+        sha.Trim()[..Math.Min(8, sha.Trim().Length)].ToLowerInvariant();
 
     private sealed record AcceptanceCandidate(string BranchHeadSha, string MainHeadSha);
 }

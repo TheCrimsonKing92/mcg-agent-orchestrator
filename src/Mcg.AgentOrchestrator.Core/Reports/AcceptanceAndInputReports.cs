@@ -10,7 +10,8 @@ public sealed record GoalAcceptanceSummary(
     int OpenVerificationCount,
     int PendingHumanInputCount,
     IReadOnlyList<GoalAcceptanceBlocker> Blockers,
-    IReadOnlyList<GoalAcceptanceOutcome> Outcomes);
+    IReadOnlyList<GoalAcceptanceOutcome> Outcomes,
+    string? AcceptanceHoldDescription = null);
 
 public sealed record GoalAcceptanceOutcome(
     string Outcome,
