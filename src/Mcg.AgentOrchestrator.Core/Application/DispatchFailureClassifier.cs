@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -26,7 +27,8 @@ public enum DispatchOutcomeKind
     ProviderModelRejection,
     DirtyWorktreeRecoverable,
     VerificationInconclusive,
-    UnknownFailure
+    UnknownFailure,
+    ProviderInterruption
 }
 
 public sealed record DispatchOutcome(
@@ -189,6 +191,23 @@ public static class DispatchRejectionDiagnosticMarker
 public static class DispatchFailureClassifier
 {
     private static readonly TimeSpan BareClockRetryStalenessTolerance = TimeSpan.FromHours(1);
+
+    private enum ProviderTurnRecordKind
+    {
+        Other,
+        Completed,
+        Failed
+    }
+
+    // Codex emits these records under `codex exec --json`. The configured claude-cli and grok-cli
+    // profiles emit plain text, so their failure vocabularies remain named gaps rather than guesses.
+    private static readonly IReadOnlyDictionary<string, ProviderTurnRecordKind> ProviderTurnRecordVocabulary =
+        new Dictionary<string, ProviderTurnRecordKind>(StringComparer.Ordinal)
+        {
+            ["turn.completed"] = ProviderTurnRecordKind.Completed,
+            ["turn.failed"] = ProviderTurnRecordKind.Failed,
+            ["error"] = ProviderTurnRecordKind.Failed
+        };
 
     private sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description);
 
@@ -959,6 +978,24 @@ public static class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
+                BuildEvidenceSummary(verification)));
+        }
+
+        if (IsProviderInterruptionFailure(verification))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.ProviderInterruption,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.ProviderInterruption,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
                 BuildEvidenceSummary(verification)));
         }
 
@@ -1988,6 +2025,90 @@ public static class DispatchFailureClassifier
         return task.VerificationHistory.Count(verification =>
             !verification.Succeeded &&
             IsRecoverableProviderConnectivityFailure(verification));
+    }
+
+    public static int CountConsecutiveProviderInterruptionFailures(TaskSpec task)
+    {
+        var count = 0;
+        for (var index = task.VerificationHistory.Count - 1; index >= 0; index--)
+        {
+            if (!IsProviderInterruptionFailure(task.VerificationHistory[index]))
+            {
+                break;
+            }
+
+            count++;
+        }
+
+        return count;
+    }
+
+    public static bool IsProviderInterruptionFailure(TaskVerificationRecord verification)
+    {
+        var hasCompletedTurn = false;
+        var hasFailedTurn = false;
+        var inWorkerResultBlock = false;
+
+        foreach (var rawLine in EnumerateEvidenceLines(
+                     verification,
+                     includeStandardOutput: true,
+                     includeStandardError: false))
+        {
+            var line = rawLine.Trim();
+            if (IsWorkerResultOpener(line))
+            {
+                inWorkerResultBlock = true;
+                continue;
+            }
+
+            if (IsWorkerResultEndMarker(line))
+            {
+                inWorkerResultBlock = false;
+                continue;
+            }
+
+            if (inWorkerResultBlock || !line.StartsWith('{'))
+            {
+                continue;
+            }
+
+            var recordKind = ClassifyProviderTurnRecord(line);
+            hasCompletedTurn |= recordKind == ProviderTurnRecordKind.Completed;
+            hasFailedTurn |= recordKind == ProviderTurnRecordKind.Failed;
+        }
+
+        // A fast exit with low CPU and memory is a useful operator diagnostic, but recorded event
+        // structure is the authority. Resource timing and provider message text are not inputs.
+        return !hasCompletedTurn && hasFailedTurn;
+    }
+
+    private static ProviderTurnRecordKind ClassifyProviderTurnRecord(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return ProviderTurnRecordKind.Other;
+            }
+
+            var root = document.RootElement;
+            if ((!root.TryGetProperty("type", out var discriminator) &&
+                 !root.TryGetProperty("kind", out discriminator)) ||
+                discriminator.ValueKind != JsonValueKind.String)
+            {
+                return ProviderTurnRecordKind.Other;
+            }
+
+            var value = discriminator.GetString();
+            return value is not null && ProviderTurnRecordVocabulary.TryGetValue(value, out var recordKind)
+                ? recordKind
+                : ProviderTurnRecordKind.Other;
+        }
+        catch (JsonException)
+        {
+            return ProviderTurnRecordKind.Other;
+        }
     }
 
     public static bool IsRecoverableProviderAuthenticationFailure(TaskVerificationRecord verification)

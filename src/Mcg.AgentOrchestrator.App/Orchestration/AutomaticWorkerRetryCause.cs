@@ -31,6 +31,9 @@ internal static class AutomaticWorkerRetryCause
             return RetryCause.ContractClarification;
         }
 
+        if (outcome.Kind == DispatchOutcomeKind.ProviderInterruption)
+            return RetryCause.ProviderInterruption;
+
         if (verification.ProviderFailureKind is ProviderFailureKind.RateLimit or ProviderFailureKind.Connectivity)
             return RetryCause.ProviderInterruption;
         if (verification.ProviderFailureKind == ProviderFailureKind.Sandbox1312)

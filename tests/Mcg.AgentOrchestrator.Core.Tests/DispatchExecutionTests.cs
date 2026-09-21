@@ -955,6 +955,101 @@ public sealed class DispatchExecutionTests
     Assert.Single(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult retries provider interruption three times then escalates")]
+    public void RecordDispatchExecutionResultRetriesProviderInterruptionThenEscalates()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Bound consecutive provider interruptions");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    for (var attempt = 1; attempt <= 4; attempt++)
+    {
+        var command = $"codex exec interruption {attempt}";
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            command,
+            "C:\\repo",
+            clock.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            ProviderInterruptionVerification(command, clock.UtcNow));
+
+        if (attempt <= 3)
+        {
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.Equal(GoalStatus.Active, goal.Status);
+            Assert.Null(task.LastVerification);
+            Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
+            Assert.Equal(attempt, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(attempt));
+    }
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(4, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+    Assert.Equal(3, goal.Timeline.Count(evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("ProviderInterruption", StringComparison.Ordinal)));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("ProviderInterruption", StringComparison.Ordinal) &&
+        evt.Message.Contains("4 consecutive", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("required-file-change-evidence-missing", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "Provider interruption count resets after any completed turn")]
+    public void ProviderInterruptionCountResetsAfterCompletedTurn()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reset consecutive provider interruptions");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec interruption",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        ProviderInterruptionVerification("codex exec interruption", clock.UtcNow));
+    Assert.Equal(1, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+
+    clock.Advance(TimeSpan.FromMinutes(1));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec completed turn",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec completed turn",
+            "C:\\repo",
+            1,
+            "{\"type\":\"turn.failed\"}\n{\"type\":\"turn.completed\"}",
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            clock.UtcNow));
+
+    Assert.Equal(0, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_reopen_task_on_provider_authentication_failure")]
     public void RecordDispatchExecutionResultDoesNotReopenTaskOnProviderAuthenticationFailure()
 {
@@ -3155,6 +3250,17 @@ private static TaskVerificationRecord ProviderConnectivityVerification(string co
         "ERROR: Falling back from WebSockets to HTTPS transport. stream disconnected",
         completedAt,
         ProviderFailureKind: ProviderFailureKind.Connectivity);
+}
+
+private static TaskVerificationRecord ProviderInterruptionVerification(string command, DateTimeOffset completedAt)
+{
+    return new TaskVerificationRecord(
+        command,
+        "C:\\repo",
+        1,
+        "{\"type\":\"thread.started\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"provider wording\"}\n{\"type\":\"turn.failed\"}",
+        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+        completedAt);
 }
 
 private static string WorkerResultStdout(string files, string tests, string blockers)
