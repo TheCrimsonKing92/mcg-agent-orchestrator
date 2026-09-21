@@ -32,8 +32,8 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_enables_shared_compilation_only_for_isolated_artifacts")]
-    public void DotnetBuildEnvironmentManagerEnablesSharedCompilationOnlyForIsolatedArtifacts()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_keeps_shared_compilation_disabled_for_all_repository_builds")]
+    public void DotnetBuildEnvironmentManagerKeepsSharedCompilationDisabledForAllRepositoryBuilds()
     {
         var repositoryRoot = ResolveRepositoryRoot();
         var project = Path.Combine(
@@ -62,7 +62,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
             $"-p:McgIsolatedArtifactsPath={isolatedArtifacts}");
 
         Assert.Equal("false", repoTreeValue.Trim());
-        Assert.Equal("true", isolatedValue.Trim());
+        Assert.Equal("false", isolatedValue.Trim());
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_gate_cpu_limit_precedes_worker_limit_without_changing_worker_default")]

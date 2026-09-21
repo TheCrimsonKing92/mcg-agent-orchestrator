@@ -31,67 +31,6 @@ public sealed class AssemblyTempRedirectTests
     }
 
     [Fact]
-    public void AssemblyFixtureCleanupRetainsOnlySharedCompilerResidueWithReceipt()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"assembly-cleanup-{Guid.NewGuid():N}");
-        var analyzerPath = Path.Combine(
-            root,
-            AssemblyTempRootCleanupFixture.SharedCompilerTempDirectoryName,
-            "AnalyzerAssemblyLoader",
-            "retained.dll");
-        Directory.CreateDirectory(Path.GetDirectoryName(analyzerPath)!);
-        File.WriteAllText(analyzerPath, "retained");
-        var receipts = new List<string>();
-
-        try
-        {
-            AssemblyTempRootCleanupFixture.EnsureSuccessful(
-                TempRootDeleteOutcome.Failure(root, "IOException", analyzerPath, readOnlyAttributesCleared: 0),
-                receipts.Add);
-
-            var receipt = Assert.Single(receipts);
-            Assert.Contains("VBCSCompiler", receipt, StringComparison.Ordinal);
-            Assert.Contains("shared-vbcscompiler-analyzer-shadow-copies", receipt, StringComparison.Ordinal);
-        }
-        finally
-        {
-            DeleteDirectory(root);
-        }
-    }
-
-    [Fact]
-    public void AssemblyFixtureCleanupRejectsSiblingResidueOutsideSharedCompilerDirectory()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"assembly-cleanup-{Guid.NewGuid():N}");
-        var compilerPath = Path.Combine(
-            root,
-            AssemblyTempRootCleanupFixture.SharedCompilerTempDirectoryName,
-            "AnalyzerAssemblyLoader",
-            "retained.dll");
-        var siblingPath = Path.Combine(root, "lane-owned", "retained.txt");
-        Directory.CreateDirectory(Path.GetDirectoryName(compilerPath)!);
-        Directory.CreateDirectory(Path.GetDirectoryName(siblingPath)!);
-        File.WriteAllText(compilerPath, "retained");
-        File.WriteAllText(siblingPath, "retained");
-        var receipts = new List<string>();
-
-        try
-        {
-            var exception = Assert.Throws<InvalidOperationException>(() =>
-                AssemblyTempRootCleanupFixture.EnsureSuccessful(
-                    TempRootDeleteOutcome.Failure(root, "IOException", compilerPath, readOnlyAttributesCleared: 0),
-                    receipts.Add));
-
-            Assert.Contains("cleanup failed", exception.Message, StringComparison.Ordinal);
-            Assert.Empty(receipts);
-        }
-        finally
-        {
-            DeleteDirectory(root);
-        }
-    }
-
-    [Fact]
     public void RevalidateExitedRootsRetainsReplacementAndAmbiguousProcessInstances()
     {
         var exitedPid = 0x2a;

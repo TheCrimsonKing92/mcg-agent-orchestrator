@@ -548,19 +548,6 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    internal static void ConfigureSharedCompilerTemp(
-        IDictionary<string, string?> environment,
-        string? localAppData = null)
-    {
-        var parent = OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(localAppData)
-            ? Path.Combine(localAppData, "Temp", "Low")
-            : Path.GetTempPath();
-        var buildServerTemp = Path.Combine(parent, "mcg-build-server");
-        Directory.CreateDirectory(buildServerTemp);
-        environment["TEMP"] = buildServerTemp;
-        environment["TMP"] = buildServerTemp;
-    }
-
     private static bool ShutdownBuildServersForCompilerLockRecovery(bool requestRecovery = true)
     {
         lock (s_buildServerRecoverySync)

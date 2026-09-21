@@ -6,7 +6,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
 {
-    internal const string SharedCompilerTempDirectoryName = "VBCSCompiler";
     private readonly StateDbOpenConnectionTracker connectionTracker = new();
 
     public ValueTask DisposeAsync()
@@ -30,7 +29,7 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
                 }
             }
 
-            EnsureSuccessful(outcome, Console.Error.WriteLine);
+            EnsureSuccessful(outcome);
             return ValueTask.CompletedTask;
         }
         finally
@@ -149,18 +148,10 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
             value.Length <= maximumLength ? value : value[..maximumLength];
     }
 
-    internal static void EnsureSuccessful(TempRootDeleteOutcome? outcome, Action<string>? writeReceipt = null)
+    internal static void EnsureSuccessful(TempRootDeleteOutcome? outcome)
     {
         if (outcome?.Status != TempRootDeleteStatus.Failed)
         {
-            return;
-        }
-
-        if (ContainsOnlySharedCompilerResidue(outcome.Path))
-        {
-            writeReceipt?.Invoke(
-                $"assembly-temp-cleanup retained={Quote(Path.Combine(outcome.Path, SharedCompilerTempDirectoryName))} " +
-                "reason=shared-vbcscompiler-analyzer-shadow-copies");
             return;
         }
 
@@ -171,24 +162,6 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
             $"attempts={outcome.DeleteAttempts}, " +
             $"at '{outcome.FailurePath ?? "unknown"}'): " +
             $"{outcome.ExceptionMessage ?? "message unavailable"}");
-    }
-
-    private static bool ContainsOnlySharedCompilerResidue(string rootPath)
-    {
-        try
-        {
-            var remaining = Directory.GetFileSystemEntries(rootPath, "*", SearchOption.TopDirectoryOnly);
-            return remaining.Length == 1 &&
-                Directory.Exists(remaining[0]) &&
-                string.Equals(
-                    Path.GetFileName(remaining[0]),
-                    SharedCompilerTempDirectoryName,
-                    StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
     }
 
     private static string FormatHResult(int? hresult) =>
