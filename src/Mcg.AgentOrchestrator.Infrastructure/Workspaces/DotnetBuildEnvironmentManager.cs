@@ -64,6 +64,13 @@ public sealed record DotnetBuildStableSlotWait(
     int? NativeError = null,
     string? FailureOperation = null);
 
+internal sealed record DotnetBuildServerShutdownOutcome(
+    bool Exited,
+    int? ExitCode,
+    string StandardOutput,
+    string StandardError,
+    string? Failure = null);
+
 public abstract record DotnetBuildLeaseAcquisition
 {
     public sealed record Acquired(DotnetBuildEnvironmentLease Lease) : DotnetBuildLeaseAcquisition;
@@ -124,9 +131,12 @@ public static class DotnetBuildEnvironmentManager
     private static int s_heldExecutionLeaseCount;
     private static int s_compilerLockRecoveryRequested;
     private static readonly object s_buildServerRecoverySync = new();
+    private static DotnetBuildServerShutdownOutcome? s_lastBuildServerShutdownOutcome;
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
     internal static Action<int>? BeforeStaleLeaseIntegrityProbeForTests { get; set; }
     internal static Action? ShutdownBuildServersForTests { get; set; }
+    internal static DotnetBuildServerShutdownOutcome? LastBuildServerShutdownOutcome =>
+        Volatile.Read(ref s_lastBuildServerShutdownOutcome);
     internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
     internal static TimeProvider DefaultLeaseTimeProviderForTests => DefaultLeaseTimeProvider;
     internal static Action<TimeSpan> DefaultLeaseSleepForTests => DefaultLeaseSleep;
@@ -526,7 +536,7 @@ public static class DotnetBuildEnvironmentManager
 
         try
         {
-            using var process = Process.Start(new ProcessStartInfo
+            RunBuildServerShutdownProcess(new ProcessStartInfo
             {
                 FileName = "dotnet",
                 UseShellExecute = false,
@@ -535,13 +545,53 @@ public static class DotnetBuildEnvironmentManager
                 RedirectStandardError = true,
                 ArgumentList = { "build-server", "shutdown" }
             });
-
-            process?.WaitForExit(10_000);
         }
-        catch
+        catch (Exception exception)
         {
             // Best effort cleanup only; build/test result handling owns the real verdict.
+            Volatile.Write(
+                ref s_lastBuildServerShutdownOutcome,
+                new DotnetBuildServerShutdownOutcome(false, null, string.Empty, string.Empty, exception.Message));
         }
+    }
+
+    internal static DotnetBuildServerShutdownOutcome RunBuildServerShutdownProcess(
+        ProcessStartInfo startInfo,
+        int timeoutMilliseconds = 10_000)
+    {
+        using var process = Process.Start(startInfo);
+        if (process is null)
+        {
+            var notStarted = new DotnetBuildServerShutdownOutcome(
+                false, null, string.Empty, string.Empty, "Process.Start returned null.");
+            Volatile.Write(ref s_lastBuildServerShutdownOutcome, notStarted);
+            return notStarted;
+        }
+
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        var exited = process.WaitForExit(timeoutMilliseconds);
+        if (!exited)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(2_000);
+            }
+            catch
+            {
+                // Best effort cleanup only; the retained outcome reports that the shutdown did not exit.
+            }
+        }
+
+        Task.WaitAll([standardOutput, standardError], 2_000);
+        var outcome = new DotnetBuildServerShutdownOutcome(
+            exited,
+            exited ? process.ExitCode : null,
+            standardOutput.IsCompletedSuccessfully ? standardOutput.Result : string.Empty,
+            standardError.IsCompletedSuccessfully ? standardError.Result : string.Empty);
+        Volatile.Write(ref s_lastBuildServerShutdownOutcome, outcome);
+        return outcome;
     }
 
     private static bool ShutdownBuildServersForCompilerLockRecovery(bool requestRecovery = true)

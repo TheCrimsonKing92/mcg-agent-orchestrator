@@ -2,6 +2,39 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class DotnetBuildEnvironmentManagerTests
 {
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_drains_and_retains_build_server_shutdown_outcome")]
+    public void DotnetBuildEnvironmentManagerDrainsAndRetainsBuildServerShutdownOutcome()
+    {
+        Assert.True(OperatingSystem.IsWindows());
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe"),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList =
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::Out.Write('o' * 131072); [Console]::Error.Write('e' * 131072); exit 7"
+            }
+        };
+
+        var outcome = DotnetBuildEnvironmentManager.RunBuildServerShutdownProcess(startInfo);
+
+        Assert.True(outcome.Exited);
+        Assert.Equal(7, outcome.ExitCode);
+        Assert.True(outcome.StandardOutput.Length > 65_536);
+        Assert.True(outcome.StandardError.Length > 65_536);
+        Assert.Same(outcome, DotnetBuildEnvironmentManager.LastBuildServerShutdownOutcome);
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_defers_compiler_lock_recovery_until_the_last_lease_is_released")]
     public void DotnetBuildEnvironmentManagerDefersCompilerLockRecoveryUntilTheLastLeaseIsReleased()
     {
