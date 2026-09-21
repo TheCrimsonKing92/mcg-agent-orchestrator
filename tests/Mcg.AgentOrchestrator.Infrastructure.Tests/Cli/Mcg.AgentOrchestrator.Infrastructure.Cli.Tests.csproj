@@ -9,6 +9,7 @@
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\ConsoleCapture.cs" Link="ConsoleCapture.cs" />
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj" />
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />

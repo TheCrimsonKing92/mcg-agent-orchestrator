@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed partial class AgentOrchestratorKernel
 {
     private const int ProviderConnectivityRetryLimit = 3;
+    private const int ProviderInterruptionRetryLimit = 3;
 
     public void RecordTaskVerification(GoalId goalId, TaskId taskId, TaskVerificationRecord verification)
     {
@@ -295,6 +296,32 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
+        if (outcome.Kind == DispatchOutcomeKind.ProviderInterruption)
+        {
+            var interruptionFailures = DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task);
+            if (interruptionFailures <= ProviderInterruptionRetryLimit)
+            {
+                task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderInterruptionBackoff(interruptionFailures));
+                task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
+                task.ClearLatestVerification();
+                task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+                Append(
+                    goal,
+                    taskId,
+                    ProgressKind.TaskRetried,
+                    $"Dispatch hit ProviderInterruption; task is ready to retry after bounded backoff (attempt {interruptionFailures}/{ProviderInterruptionRetryLimit}): {task.LastDispatch.Command}");
+                RefreshGoalStatus(goal);
+                return;
+            }
+
+            ReportTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Dispatch ProviderInterruption repeated {interruptionFailures} consecutive time(s); automatic retry budget {ProviderInterruptionRetryLimit} exhausted: {task.LastDispatch.Command}");
+            return;
+        }
+
         if (outcome.Kind == DispatchOutcomeKind.EmptyOutputFlake &&
             verification.ExitCode == 0 &&
             string.IsNullOrWhiteSpace(verification.StandardOutput) &&
@@ -439,6 +466,11 @@ public sealed partial class AgentOrchestratorKernel
     private static TimeSpan BuildProviderConnectivityBackoff(int attempt)
     {
         return TimeSpan.FromMinutes(Math.Clamp(attempt, 1, ProviderConnectivityRetryLimit));
+    }
+
+    private static TimeSpan BuildProviderInterruptionBackoff(int attempt)
+    {
+        return TimeSpan.FromMinutes(Math.Clamp(attempt, 1, ProviderInterruptionRetryLimit));
     }
 
     private static bool IsDuplicateDispatchExecutionResult(

@@ -29,6 +29,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule PreflightFailure = new("preflight-failure", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderAuthentication = new("provider-authentication", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderConnectivity = new("provider-connectivity", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderInterruption = new("provider-interruption", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderNeutralProgressStall = new("provider-neutral-progress-stall", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderModelRejection = new("provider-model-rejection", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderRateLimit = new("provider-rate-limit", TaskOutcomeClass.Environmental);
@@ -72,6 +73,7 @@ internal static class TaskOutcomeRules
         PreflightFailure,
         ProviderAuthentication,
         ProviderConnectivity,
+        ProviderInterruption,
         ProviderNeutralProgressStall,
         ProviderModelRejection,
         ProviderRateLimit,

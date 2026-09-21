@@ -3,8 +3,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public abstract class CliTaskQueryTestSupport
 {
-    private static readonly object ConsoleGate = new();
-
     protected static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "mcg-cli-task-query-tests", Guid.NewGuid().ToString("n"));
@@ -12,24 +10,7 @@ public abstract class CliTaskQueryTestSupport
         return path;
     }
 
-    protected static string CaptureConsole(Action action)
-    {
-        lock (ConsoleGate)
-        {
-            var original = Console.Out;
-            using var writer = new StringWriter();
-            Console.SetOut(writer);
-            try
-            {
-                action();
-                return writer.ToString();
-            }
-            finally
-            {
-                Console.SetOut(original);
-            }
-        }
-    }
+    protected static string CaptureConsole(Action action) => AsyncLocalConsoleRouter.Capture(action);
 
     protected sealed class QueryOnlyStateRepository(AgentOrchestratorKernel kernel) : IOrchestratorStateQueries
     {

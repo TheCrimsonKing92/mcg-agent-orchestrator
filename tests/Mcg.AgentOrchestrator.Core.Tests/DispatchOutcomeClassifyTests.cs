@@ -1647,6 +1647,182 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact(DisplayName = "Classify returns provider interruption for a failed turn with no completed turn")]
+    public void ClassifyProviderInterruptionFromFailedTurnWithoutCompletion()
+    {
+        const string stdout = """
+            {"type":"thread.started","thread_id":"test-thread"}
+            {"type":"turn.started"}
+            {"type":"error","message":"provider-specific text must not drive classification"}
+            {"type":"turn.failed","error":{"message":"different provider-specific text"}}
+            """;
+        var stderr =
+            DispatchRejectionDiagnosticMarker.Format(
+                verificationRecognized: false,
+                postDispatchCommits: 0,
+                changedPaths: "none") + "\n" +
+            DispatchFailureDiagnosticMarker.Format(
+                DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Contains("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(TaskOutcomeClass.Environmental, outcome.OutcomeClass);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing,
+            outcome.ClassifierReceipt,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify provider interruption outranks contradictory derived success evidence")]
+    public void ClassifyProviderInterruptionOutranksDerivedSuccessEvidence()
+    {
+        const string stdout = """
+            {"type":"thread.started","thread_id":"test-thread"}
+            {"type":"turn.started"}
+            {"type":"error","message":"provider-specific text must not drive classification"}
+            {"type":"turn.failed","error":{"message":"different provider-specific text"}}
+            WORKER_RESULT:
+            files: src/Changed.cs
+            tests: pass - contradictory derived evidence
+            blockers: none
+            END_WORKER_RESULT
+            """;
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout),
+            workerResultPresent: true,
+            hasCommittedChanges: true);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, outcome.Kind);
+        Xunit.Assert.Contains("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves missing-change failure when any turn completed")]
+    public void ClassifyCompletedTurnPreservesMissingChangeFailure()
+    {
+        const string stdout = """
+            {"type":"thread.started","thread_id":"test-thread"}
+            {"type":"turn.started"}
+            {"type":"error","message":"provider error after completed work"}
+            {"type":"turn.failed","error":{"message":"provider error after completed work"}}
+            {"type":"turn.completed"}
+            """;
+        var stderr = DispatchFailureDiagnosticMarker.Format(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains(
+            "rule=required-file-change-evidence-missing",
+            outcome.ClassifierReceipt,
+            StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "Classify requires positive structured failure evidence for provider interruption")]
+    [Xunit.InlineData("", DispatchOutcomeKind.EmptyOutputFlake, "empty-output-flake")]
+    [Xunit.InlineData("provider unavailable without a structured record", DispatchOutcomeKind.UnknownFailure, "required-file-change-evidence-missing")]
+    [Xunit.InlineData("{\"type\":\"status\",\"message\":\"Selected model is at capacity\"}", DispatchOutcomeKind.UnknownFailure, "required-file-change-evidence-missing")]
+    public void ClassifyRequiresStructuredFailureEvidenceForProviderInterruption(
+        string stdout,
+        DispatchOutcomeKind expectedKind,
+        string expectedRule)
+    {
+        var stderr = DispatchFailureDiagnosticMarker.Format(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Equal(expectedKind, outcome.Kind);
+        Xunit.Assert.Contains($"rule={expectedRule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify ignores structured failure records inside WORKER_RESULT")]
+    public void ClassifyIgnoresProviderFailureRecordInsideWorkerResult()
+    {
+        const string stdout = """
+            WORKER_RESULT:
+            files: none
+            {"type":"error","message":"fixture data only"}
+            {"type":"turn.failed"}
+            END_WORKER_RESULT
+            """;
+        var stderr = DispatchFailureDiagnosticMarker.Format(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains(
+            "rule=required-file-change-evidence-missing",
+            outcome.ClassifierReceipt,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify provider interruption is independent of human-readable message text")]
+    public void ClassifyProviderInterruptionIgnoresMessageText()
+    {
+        var first = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "{\"type\":\"error\",\"message\":\"first provider wording\"}"));
+        var second = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "{\"type\":\"error\",\"message\":\"unrelated localized wording\"}"));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, first.Kind);
+        Xunit.Assert.Equal(first.Kind, second.Kind);
+        Xunit.Assert.Contains("rule=provider-interruption", first.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=provider-interruption", second.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify reads provider interruption from the recorded stdout log path")]
+    public void ClassifyProviderInterruptionFromStandardOutputPath()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-provider-interruption-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var stdoutPath = Path.Combine(root, "dispatch.out.log");
+            File.WriteAllText(
+                stdoutPath,
+                "{\"type\":\"thread.started\"}\n" +
+                "{\"type\":\"turn.started\"}\n" +
+                "{\"type\":\"error\",\"message\":\"provider wording\"}\n" +
+                "{\"type\":\"turn.failed\"}");
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                root,
+                1,
+                string.Empty,
+                DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath);
+
+            var outcome = DispatchFailureClassifier.Classify(SimpleTask(), verification);
+
+            Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, outcome.Kind);
+            Xunit.Assert.Contains("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact]
     public void ProviderModelRejectionHistoryUsesIndependentProviderLine()
     {
