@@ -497,7 +497,6 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
         Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);
         Assert.DoesNotContain(@"Join-Path $leaseRoot ""lease.lock""", source, StringComparison.Ordinal);
         Assert.Contains("Assert-CustodyAllowsTakeover -ArtifactsPath $Path", source, StringComparison.Ordinal);
-        Assert.Contains("-p:McgIsolatedArtifactsPath=$artifactsPath", source, StringComparison.Ordinal);
         Assert.DoesNotContain("dotnet build-server shutdown", source, StringComparison.Ordinal);
     }
 

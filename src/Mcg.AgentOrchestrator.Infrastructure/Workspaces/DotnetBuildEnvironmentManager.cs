@@ -34,10 +34,6 @@ public sealed record DotnetBuildEnvironment(
         }
 
         arguments[artifactSwitches[0] + 1] = artifactsPath;
-        var isolatedArtifactsProperty = arguments
-            .Select((argument, index) => (argument, index))
-            .Single(item => item.argument.StartsWith("-p:McgIsolatedArtifactsPath=", StringComparison.OrdinalIgnoreCase));
-        arguments[isolatedArtifactsProperty.index] = $"-p:McgIsolatedArtifactsPath={artifactsPath}";
         return this with
         {
             ArtifactsPath = artifactsPath,
@@ -1043,7 +1039,6 @@ public static class DotnetBuildEnvironmentManager
     [
         "--artifacts-path",
         artifactsPath,
-        $"-p:McgIsolatedArtifactsPath={artifactsPath}",
         $"-maxcpucount:{ResolveMaxCpuCount()}",
         "-p:BuildInParallel=false"
     ];

@@ -792,8 +792,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
             .ToArray();
         var artifactSwitch = Assert.Single(switches);
         Assert.Equal(derivedPath, derived.Arguments[artifactSwitch.index + 1]);
-        Assert.Contains($"-p:McgIsolatedArtifactsPath={derivedPath}", derived.Arguments);
-        Assert.Contains($"-p:McgIsolatedArtifactsPath={original.ArtifactsPath}", original.Arguments);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_caps_msbuild_parallelism_per_slot")]

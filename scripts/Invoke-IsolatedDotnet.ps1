@@ -1575,7 +1575,6 @@ function Invoke-FocusedTestMode {
             $receipt.buildPerformed = $true
             $buildArguments = @($request.BuildArguments) + @(
                 "--artifacts-path", $artifactsPath,
-                "-p:McgIsolatedArtifactsPath=$artifactsPath",
                 "-maxcpucount:$(Get-BuildMaxCpuCount)",
                 "-p:BuildInParallel=false"
             )
@@ -1822,7 +1821,6 @@ else {
 $isolatedArguments = @(
     "--artifacts-path",
     $artifactsPath,
-    "-p:McgIsolatedArtifactsPath=$artifactsPath",
     "-maxcpucount:$(Get-BuildMaxCpuCount)",
     "-p:BuildInParallel=false"
 )

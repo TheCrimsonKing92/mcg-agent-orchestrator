@@ -194,7 +194,7 @@ exit $LASTEXITCODE
             Assert-Contract ($helperCharacters -lt 2048) "helper output was $helperCharacters characters; expected below 2048"
             Assert-Contract ($rawErrors -eq $helperErrors -and $rawErrors -eq 0) "raw/helper error counts differ"
             Assert-Contract (@($vectors | Where-Object { $_ -match '^build ' -and $_ -notmatch '--nologo' }).Count -eq 1) "raw argument vector was not recorded"
-            Assert-Contract (@($vectors | Where-Object { $_ -match '^build ' -and $_ -match '--nologo' -and $_ -match '-p:McgIsolatedArtifactsPath=' -and $_ -match '-tl(?::|\s+)off' -and $_ -match '-fl(?:\s|$)' -and $_ -match '-flp(?::|\s+)LogFile=' }).Count -eq 1) "helper argument vector omitted the isolated-property or detailed-file-logger contract: $([string]::Join(' || ', $vectors))"
+            Assert-Contract (@($vectors | Where-Object { $_ -match '^build ' -and $_ -match '--nologo' -and $_ -match '-tl(?::|\s+)off' -and $_ -match '-fl(?:\s|$)' -and $_ -match '-flp(?::|\s+)LogFile=' }).Count -eq 1) "helper argument vector omitted the detailed file logger: $([string]::Join(' || ', $vectors))"
             $logs = @(Get-ChildItem -LiteralPath $isolatedRoot -Filter "*.log" -File -Recurse)
             Assert-Contract ($logs.Count -eq 1) "expected one durable project log; found $($logs.Count)"
             $detailedLogText = Get-Content -LiteralPath $logs[0].FullName -Raw

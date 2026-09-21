@@ -423,7 +423,6 @@ try {
     $isolatedArguments = @(
         "--artifacts-path",
         $artifactsPath,
-        "-p:McgIsolatedArtifactsPath=$artifactsPath",
         "-maxcpucount:$(Get-BuildMaxCpuCount)",
         "-p:BuildInParallel=false",
         "-clp:ErrorsOnly",

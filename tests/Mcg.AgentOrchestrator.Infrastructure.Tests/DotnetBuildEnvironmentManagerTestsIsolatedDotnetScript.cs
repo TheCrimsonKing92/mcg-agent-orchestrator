@@ -101,7 +101,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
             Assert.True(log.Contains("args=build Fake.Tests.csproj --no-restore --artifacts-path ", StringComparison.Ordinal));
-            Assert.True(log.Contains("-p:McgIsolatedArtifactsPath=", StringComparison.Ordinal));
             Assert.True(log.Contains("-maxcpucount:7 -p:BuildInParallel=false", StringComparison.Ordinal));
             Assert.Contains("args=", log, StringComparison.Ordinal);
             Assert.Contains("Fake.Tests.dll --filter-class *FocusedTests* --no-ansi --progress off", log, StringComparison.OrdinalIgnoreCase);
