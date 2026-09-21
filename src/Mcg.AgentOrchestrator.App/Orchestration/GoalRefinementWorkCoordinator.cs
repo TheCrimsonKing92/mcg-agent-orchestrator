@@ -295,7 +295,7 @@ internal static class GoalRefinementWorkCoordinator
         }
 
         var launch = TryLaunch(workspace, goalId);
-        if (launch.Started || !launch.Detail.Equals("executor-launch-deferred-outside-app-host", StringComparison.Ordinal))
+        if (launch.Started)
         {
             store.Save(
                 goalId,
