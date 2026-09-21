@@ -816,6 +816,83 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Assert.Contains("sweep_git_index_ms=0 sweep_evidence_ms=0 sweep_ephemeral_ms=0 sweep_attention_ms=0 sweep_merge_evidence_ms=0 sweep_goals_ms=0 sweep_git_spawns=0 sweep_goals_swept=0", sweepLine, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Sweep_phase_timing_reports_every_attributed_operation")]
+    public void SweepPhaseTimingReportsEveryAttributedOperation()
+    {
+        var (kernel, goal) = SimpleGoal("sweep phase attribution goal");
+        var timingLines = new List<string>();
+        var fakeTimestamp = 0L;
+        var phaseSeconds = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            ["sweep"] = 9,
+            ["persist-sweep-terminalizations"] = 8,
+            ["recover-interrupted-dispatches"] = 7,
+            ["self-relaunch-drain"] = 1,
+            ["count-running-dispatches"] = 5,
+            ["await-canary-tasks"] = 4,
+            ["readmit-resolved-set-aside-goals"] = 3,
+            ["mark-completed-dependency-goals"] = 2,
+            ["reconcile-unscoped-dispatchable-goals"] = 1
+        };
+        var driver = MakeDriver();
+        var landingReceiptSent = false;
+
+        new ConductorBatchLoop(
+            measuredSweep: _ =>
+            {
+                if (!landingReceiptSent)
+                {
+                    driver.SuccessfulLandingSink!(new ConductorLandingReceipt(
+                        goal.Id.Value,
+                        ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"]));
+                    landingReceiptSent = true;
+                }
+                return null;
+            },
+            selfRelaunch: _ => new ConductorSelfRelaunchResult(false, "build", "planned rollback"),
+            selfRelaunchEnabled: true,
+            janitorialPhaseProbe: phase => fakeTimestamp += phaseSeconds.GetValueOrDefault(phase) * Stopwatch.Frequency,
+            janitorialTimestamp: () => fakeTimestamp).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: tick => timingLines.AddRange(tick.ProgressLines ?? []));
+
+        var sweepLine = Assert.Single(timingLines, line =>
+            line.StartsWith("PHASE_TIMING ", StringComparison.Ordinal) &&
+            line.Contains("phase=sweep ", StringComparison.Ordinal) &&
+            line.Contains("self_relaunch_drain_ms=10000", StringComparison.Ordinal));
+        var keys = new[]
+        {
+            "terminal_sweep_ms",
+            "persist_terminalizations_ms",
+            "recover_dispatches_ms",
+            "count_dispatches_ms",
+            "self_relaunch_drain_ms",
+            "canary_await_ms",
+            "readmit_setaside_ms",
+            "mark_dependencies_ms",
+            "reconcile_unscoped_ms"
+        };
+        var values = keys.ToDictionary(key => key, key => ReadTimingValue(sweepLine, key), StringComparer.Ordinal);
+
+        Assert.Equal(
+            [10_000L, 9_000L, 8_000L, 7_000L, 5_000L, 4_000L, 3_000L, 2_000L, 1_000L],
+            [values["self_relaunch_drain_ms"], values["terminal_sweep_ms"], values["persist_terminalizations_ms"],
+                values["recover_dispatches_ms"], values["count_dispatches_ms"], values["canary_await_ms"],
+                values["readmit_setaside_ms"], values["mark_dependencies_ms"], values["reconcile_unscoped_ms"]]);
+        Assert.True(keys.Select(key => sweepLine.IndexOf(key, StringComparison.Ordinal)).SequenceEqual(
+            keys.Select(key => sweepLine.IndexOf(key, StringComparison.Ordinal)).Order()));
+
+        static long ReadTimingValue(string line, string key)
+        {
+            var token = Assert.Single(line.Split(' '), part => part.StartsWith($"{key}=", StringComparison.Ordinal));
+            return long.Parse(token[(key.Length + 1)..]);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_goal_write_invalidates_terminal_cache_entry")]
     public void TerminalGoalSweepGoalWriteInvalidatesTerminalCacheEntry()
     {

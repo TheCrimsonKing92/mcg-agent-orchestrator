@@ -85,6 +85,9 @@ internal sealed partial class ConductorBatchLoop
     private readonly OrchestratorWorkspace? _workspace;
     // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
     private readonly Dictionary<string, int> _consecutiveJanitorialFailures = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _tickPhaseElapsedMs = new(StringComparer.Ordinal);
+    private readonly Action<string>? _janitorialPhaseProbe;
+    private readonly Func<long> _janitorialTimestamp;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly AsyncLocal<RetryDiagnosticCoalescer?> CurrentRetryDiagnostics = new();
     private static readonly object ParallelAcceptanceFairnessGate = new();
@@ -116,7 +119,9 @@ internal sealed partial class ConductorBatchLoop
         Func<double>? writeJitter = null,
         TimeSpan? blockedRecheckHeartbeatInterval = null,
         Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?>? measuredSweepWithCheckpointHolds = null,
-        OrchestratorWorkspace? workspace = null)
+        OrchestratorWorkspace? workspace = null,
+        Action<string>? janitorialPhaseProbe = null,
+        Func<long>? janitorialTimestamp = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -148,6 +153,8 @@ internal sealed partial class ConductorBatchLoop
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
+        _janitorialPhaseProbe = janitorialPhaseProbe;
+        _janitorialTimestamp = janitorialTimestamp ?? Stopwatch.GetTimestamp;
         if (_blockedRecheckHeartbeatInterval <= TimeSpan.Zero || _blockedRecheckHeartbeatInterval > TimeSpan.FromMinutes(10))
         {
             throw new ArgumentOutOfRangeException(nameof(blockedRecheckHeartbeatInterval));
@@ -359,9 +366,140 @@ internal sealed partial class ConductorBatchLoop
             $"acceptanceWidth={policy.AcceptanceWidth}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
+        SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)
+        {
+            var activeDispatches = RunJanitorialPhase<int?>(
+                "count-running-dispatches",
+                tick,
+                () => CountRunningDispatches(kernel, onlyGoalId));
+            if (!activeDispatches.HasValue)
+            {
+                return new(SelfRelaunchDrainDisposition.ContinueTick);
+            }
+
+            if (activeDispatches.Value > 0)
+            {
+                var drainElapsed = _utcNow() - (selfRelaunchDrainStartedAt ?? _utcNow());
+                if (drainElapsed >= DispatchRecoveryPolicy.DefaultLiveIdleTimeout)
+                {
+                    EmitSelfRelaunchRollback(
+                        totalTicks,
+                        pendingSelfRelaunch!.GoalId,
+                        "drain",
+                        $"active dispatches did not reach terminal receipts within {(int)DispatchRecoveryPolicy.DefaultLiveIdleTimeout.TotalMinutes} minutes");
+                    deferredSelfRelaunch = pendingSelfRelaunch;
+                    selfRelaunchRetryAfterTick = totalTicks + 1;
+                    pendingSelfRelaunch = null;
+                    selfRelaunchDrainStartedAt = null;
+                }
+
+                if (pendingSelfRelaunch is not null)
+                {
+                    EmitProgress(
+                        $"LOOP_RELAUNCH_DRAIN tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active={activeDispatches.Value} admitting=false");
+                    TryPersistCheckpoint(
+                        persistTick,
+                        persistGoalTick,
+                        kernel,
+                        totalTicks,
+                        onlyGoalId,
+                        "self-relaunch-drain",
+                        null,
+                        busyWriteDelay,
+                        checkpointGoalTick: checkpointGoalTick,
+                        checkpointHeldGoalIds: checkpointHeldGoals);
+                    var drainWait = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
+                    if (sleepFunc is not null)
+                    {
+                        sleepFunc(drainWait);
+                    }
+                    else
+                    {
+                        SleepUntilNextTick(
+                            drainWait,
+                            stopFilePath,
+                            wakeSignal,
+                            GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
+                    }
+                    return new(SelfRelaunchDrainDisposition.ContinueTick);
+                }
+            }
+
+            if (pendingSelfRelaunch is null)
+            {
+                return new(SelfRelaunchDrainDisposition.Proceed);
+            }
+
+            var canaryAwaited = RunJanitorialPhase<bool?>("await-canary-tasks", tick, () =>
+            {
+                AwaitCanaryTasks(canaryTasks, canaryTasksGate);
+                return true;
+            });
+            if (canaryAwaited != true)
+            {
+                return new(SelfRelaunchDrainDisposition.ContinueTick);
+            }
+
+            EmitProgress(
+                $"LOOP_RELAUNCH_REBUILD tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active=0 admitting=false");
+            ConductorSelfRelaunchResult relaunchResult;
+            try
+            {
+                relaunchResult = _selfRelaunch!(pendingSelfRelaunch);
+            }
+            catch (Exception ex)
+            {
+                EmitProgress(
+                    $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
+                    $"rolledBack=false continuing=false reason={SanitizeHandoffDetail($"{ex.GetType().Name}: {ex.Message}")}");
+                return new(
+                    SelfRelaunchDrainDisposition.Proceed,
+                    new InvalidOperationException(
+                        "Self-relaunch failed without confirming incumbent authority; refusing to continue the conductor loop.",
+                        ex));
+            }
+            if (relaunchResult.HandedOff)
+            {
+                selfRelaunchHandoff = relaunchResult.Handoff;
+                EmitHandoffProgress(totalTicks, relaunchResult.Handoff!, pendingSelfRelaunch.GoalId);
+                return new(SelfRelaunchDrainDisposition.BreakLoop);
+            }
+
+            if (!relaunchResult.IncumbentCanContinue)
+            {
+                EmitProgress(
+                    $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
+                    $"rolledBack=false continuing=false reason={SanitizeHandoffDetail(relaunchResult.Reason ?? "rollback authority was not confirmed")}");
+                return new(
+                    SelfRelaunchDrainDisposition.Proceed,
+                    new InvalidOperationException(
+                        "Self-relaunch rollback did not confirm incumbent authority; refusing to continue the conductor loop."));
+            }
+
+            if (string.Equals(relaunchResult.FailedPhase, "handoff", StringComparison.Ordinal))
+            {
+                EmitProgress(
+                    $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
+                    $"rolledBack=true continuing=true reason={SanitizeHandoffDetail(relaunchResult.Reason ?? "unknown")}");
+            }
+            else
+            {
+                EmitSelfRelaunchRollback(
+                    totalTicks,
+                    pendingSelfRelaunch.GoalId,
+                    relaunchResult.FailedPhase ?? "build",
+                    relaunchResult.Reason ?? "unknown");
+            }
+
+            pendingSelfRelaunch = null;
+            selfRelaunchDrainStartedAt = null;
+            return new(SelfRelaunchDrainDisposition.Proceed);
+        }
+
         while (true)
         {
             using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick");
+            _tickPhaseElapsedMs.Clear();
             if (pendingSelfRelaunch is null &&
                 deferredSelfRelaunch is not null &&
                 totalTicks >= selfRelaunchRetryAfterTick)
@@ -469,8 +607,11 @@ internal sealed partial class ConductorBatchLoop
             {
                 EmitProgress(sweepEvent);
             }
-            var sweepTerminalizedGoalIds = PersistSweepTerminalizations(
-                sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay);
+            var sweepTerminalizedGoalIds = RunJanitorialPhase(
+                "persist-sweep-terminalizations",
+                nextTick,
+                () => PersistSweepTerminalizations(
+                    sweepResult, kernel, checkpointGoalTick, persistGoalTick, checkpointHeldGoals, nextTick, preTickTimingLines, busyWriteDelay)) ?? [];
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
             {
                 _recoverInterruptedDispatches(kernel);
@@ -478,140 +619,46 @@ internal sealed partial class ConductorBatchLoop
             });
             if (pendingSelfRelaunch is not null)
             {
-                var activeDispatches = CountRunningDispatches(kernel, onlyGoalId);
-                if (activeDispatches > 0)
+                var drainOutcome = RunJanitorialPhase(
+                    "self-relaunch-drain",
+                    nextTick,
+                    () => DrainSelfRelaunch(nextTick));
+                if (drainOutcome?.Fault is not null)
                 {
-                    var drainElapsed = _utcNow() - (selfRelaunchDrainStartedAt ?? _utcNow());
-                    if (drainElapsed >= DispatchRecoveryPolicy.DefaultLiveIdleTimeout)
-                    {
-                        EmitSelfRelaunchRollback(
-                            totalTicks,
-                            pendingSelfRelaunch.GoalId,
-                            "drain",
-                            $"active dispatches did not reach terminal receipts within {(int)DispatchRecoveryPolicy.DefaultLiveIdleTimeout.TotalMinutes} minutes");
-                        deferredSelfRelaunch = pendingSelfRelaunch;
-                        selfRelaunchRetryAfterTick = totalTicks + 1;
-                        pendingSelfRelaunch = null;
-                        selfRelaunchDrainStartedAt = null;
-                    }
-
-                    if (pendingSelfRelaunch is not null)
-                    {
-                        EmitProgress(
-                            $"LOOP_RELAUNCH_DRAIN tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active={activeDispatches} admitting=false");
-                        TryPersistCheckpoint(
-                            persistTick,
-                            persistGoalTick,
-                            kernel,
-                            totalTicks,
-                            onlyGoalId,
-                            "self-relaunch-drain",
-                            null,
-                            busyWriteDelay,
-                            checkpointGoalTick: checkpointGoalTick,
-                            checkpointHeldGoalIds: checkpointHeldGoals);
-                        var drainWait = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
-                        if (sleepFunc is not null)
-                        {
-                            sleepFunc(drainWait);
-                        }
-                        else
-                        {
-                            SleepUntilNextTick(
-                                drainWait,
-                                stopFilePath,
-                                wakeSignal,
-                                GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
-                        }
-                        continue;
-                    }
+                    throw drainOutcome.Fault;
                 }
-
-                if (pendingSelfRelaunch is not null)
+                if (drainOutcome is null || drainOutcome.Disposition == SelfRelaunchDrainDisposition.ContinueTick)
                 {
-                    AwaitCanaryTasks(canaryTasks, canaryTasksGate);
-                    EmitProgress(
-                        $"LOOP_RELAUNCH_REBUILD tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active=0 admitting=false");
-                    ConductorSelfRelaunchResult relaunchResult;
-                    try
-                    {
-                        relaunchResult = _selfRelaunch!(pendingSelfRelaunch);
-                    }
-                    catch (Exception ex)
-                    {
-                        EmitProgress(
-                            $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
-                            $"rolledBack=false continuing=false reason={SanitizeHandoffDetail($"{ex.GetType().Name}: {ex.Message}")}");
-                        throw new InvalidOperationException(
-                            "Self-relaunch failed without confirming incumbent authority; refusing to continue the conductor loop.",
-                            ex);
-                    }
-                    if (relaunchResult.HandedOff)
-                    {
-                        selfRelaunchHandoff = relaunchResult.Handoff;
-                        EmitHandoffProgress(totalTicks, relaunchResult.Handoff!, pendingSelfRelaunch.GoalId);
-                        break;
-                    }
-
-                    if (!relaunchResult.IncumbentCanContinue)
-                    {
-                        EmitProgress(
-                            $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
-                            $"rolledBack=false continuing=false reason={SanitizeHandoffDetail(relaunchResult.Reason ?? "rollback authority was not confirmed")}");
-                        throw new InvalidOperationException(
-                            "Self-relaunch rollback did not confirm incumbent authority; refusing to continue the conductor loop.");
-                    }
-
-                    if (string.Equals(relaunchResult.FailedPhase, "handoff", StringComparison.Ordinal))
-                    {
-                        EmitProgress(
-                            $"LOOP_HANDOFF_FAILED tick={totalTicks} goal={pendingSelfRelaunch.GoalId} phase=handoff " +
-                            $"rolledBack=true continuing=true reason={SanitizeHandoffDetail(relaunchResult.Reason ?? "unknown")}");
-                    }
-                    else
-                    {
-                        EmitSelfRelaunchRollback(
-                            totalTicks,
-                            pendingSelfRelaunch.GoalId,
-                            relaunchResult.FailedPhase ?? "build",
-                            relaunchResult.Reason ?? "unknown");
-                    }
-
-                    pendingSelfRelaunch = null;
-                    selfRelaunchDrainStartedAt = null;
+                    continue;
+                }
+                if (drainOutcome.Disposition == SelfRelaunchDrainDisposition.BreakLoop)
+                {
+                    break;
                 }
             }
-            ReadmitResolvedSetAsideGoals(
-                kernel,
-                driver,
-                sweepResult,
-                onlyGoalId,
-                setAsideGoals,
-                selfClearedSetAsideEntries,
-                excludedGoals,
-                escalatedGoals,
-                reapedGoals,
-                goalProjectionCache,
-                _utcNow(),
-                readmittedRetryReservations);
-            MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
-            ReconcileUnscopedDispatchableGoals(
-                kernel,
-                driver,
-                onlyGoalId,
-                setAsideGoals,
-                excludedGoals,
-                escalatedGoals,
-                reapedGoals,
-                completedGoals,
-                unscopedDispatchableTicks,
-                goalProjectionCache,
-                unscopedStallTickThreshold,
-                nextTick);
+            RunJanitorialPhase("readmit-resolved-set-aside-goals", nextTick, () =>
+            {
+                ReadmitResolvedSetAsideGoals(
+                    kernel, driver, sweepResult, onlyGoalId, setAsideGoals, selfClearedSetAsideEntries,
+                    excludedGoals, escalatedGoals, reapedGoals, goalProjectionCache, _utcNow(), readmittedRetryReservations);
+                return true;
+            });
+            RunJanitorialPhase("mark-completed-dependency-goals", nextTick, () =>
+            {
+                MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
+                return true;
+            });
+            RunJanitorialPhase("reconcile-unscoped-dispatchable-goals", nextTick, () =>
+            {
+                ReconcileUnscopedDispatchableGoals(
+                    kernel, driver, onlyGoalId, setAsideGoals, excludedGoals, escalatedGoals, reapedGoals,
+                    completedGoals, unscopedDispatchableTicks, goalProjectionCache, unscopedStallTickThreshold, nextTick);
+                return true;
+            });
             sweepClock.Stop();
             var dependencyMetadataTiming = TerminalGoalJournalMetadataCache.CompleteMeasurement();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "sweep", sweepClock.Elapsed,
-                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}"));
+                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}{FormatSweepPhaseAttribution(_tickPhaseElapsedMs)}"));
 
             var preWalkClock = Stopwatch.StartNew();
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
@@ -1780,13 +1827,26 @@ internal sealed partial class ConductorBatchLoop
             $"LOOP_RELAUNCH_ROLLBACK tick={tick} goal={goalId} phase={SanitizeHandoffDetail(phase)} " +
             $"rolledBack=true continuing=true reason={SanitizeHandoffDetail(reason)}");
 
+    private enum SelfRelaunchDrainDisposition
+    {
+        Proceed,
+        ContinueTick,
+        BreakLoop
+    }
+
+    private sealed record SelfRelaunchDrainOutcome(
+        SelfRelaunchDrainDisposition Disposition,
+        Exception? Fault = null);
+
     private T? RunJanitorialPhase<T>(
         string phase,
         int tick,
         Func<T> action)
     {
+        var startTimestamp = _janitorialTimestamp();
         try
         {
+            _janitorialPhaseProbe?.Invoke(phase);
             var result = action();
 
             if (_consecutiveJanitorialFailures.Remove(phase, out var skippedTicks))
@@ -1806,6 +1866,11 @@ internal sealed partial class ConductorBatchLoop
         {
             RecordFailure(ex, transient: false);
             return default;
+        }
+        finally
+        {
+            var elapsedMilliseconds = (long)Stopwatch.GetElapsedTime(startTimestamp, _janitorialTimestamp()).TotalMilliseconds;
+            _tickPhaseElapsedMs[phase] = _tickPhaseElapsedMs.GetValueOrDefault(phase) + elapsedMilliseconds;
         }
 
         void RecordFailure(Exception exception, bool transient)
@@ -2040,6 +2105,17 @@ internal sealed partial class ConductorBatchLoop
         result is null
             ? " sweep_git_index_ms=0 sweep_evidence_ms=0 sweep_ephemeral_ms=0 sweep_attention_ms=0 sweep_merge_evidence_ms=0 sweep_goals_ms=0 sweep_git_spawns=0 sweep_goals_swept=0"
             : $" sweep_cache_hits={result.CacheHitCount} sweep_cache_misses={result.CacheMissCount} sweep_git_index_ms={result.GitIndexDurationMs} sweep_evidence_ms={result.EvidenceDurationMs} sweep_ephemeral_ms={result.EphemeralDurationMs} sweep_attention_ms={result.AttentionDurationMs} sweep_merge_evidence_ms={result.MergeEvidenceDurationMs} sweep_goals_ms={result.GoalsDurationMs} sweep_git_spawns={result.GitSpawnCount} sweep_goals_swept={result.GoalsSweptCount}";
+
+    private static string FormatSweepPhaseAttribution(IReadOnlyDictionary<string, long> elapsedByPhase) =>
+        $" terminal_sweep_ms={elapsedByPhase.GetValueOrDefault("sweep")}" +
+        $" persist_terminalizations_ms={elapsedByPhase.GetValueOrDefault("persist-sweep-terminalizations")}" +
+        $" recover_dispatches_ms={elapsedByPhase.GetValueOrDefault("recover-interrupted-dispatches")}" +
+        $" count_dispatches_ms={elapsedByPhase.GetValueOrDefault("count-running-dispatches")}" +
+        $" self_relaunch_drain_ms={elapsedByPhase.GetValueOrDefault("self-relaunch-drain")}" +
+        $" canary_await_ms={elapsedByPhase.GetValueOrDefault("await-canary-tasks")}" +
+        $" readmit_setaside_ms={elapsedByPhase.GetValueOrDefault("readmit-resolved-set-aside-goals")}" +
+        $" mark_dependencies_ms={elapsedByPhase.GetValueOrDefault("mark-completed-dependency-goals")}" +
+        $" reconcile_unscoped_ms={elapsedByPhase.GetValueOrDefault("reconcile-unscoped-dispatchable-goals")}";
 
     private static HashSet<string> GetCompletedGoalIds(AgentOrchestratorKernel kernel) =>
         kernel.Goals
