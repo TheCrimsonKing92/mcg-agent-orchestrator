@@ -4949,8 +4949,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (compilerLockRemediationRequired)
         {
             recoveryLease?.MarkCompilerLockRemediationRequired();
+            stableSlotLease?.ReleaseExecutionLock();
         }
-
         if (IsTransientNoHolderBuildArtifactLock(attribution, currentEnvironment))
         {
             return await RetryTransientNoHolderBuildLockAsync(

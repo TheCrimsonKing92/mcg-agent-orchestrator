@@ -1165,6 +1165,52 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         Assert.True(check.ResultSummary?.Contains("Failed: 0", StringComparison.Ordinal) == true);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_stable_slot_shuts_down_compiler_server_before_CS2012_retry")]
+    public async Task GoalAcceptanceVerifierStableSlotShutsDownCompilerServerBeforeCs2012Retry()
+    {
+        var events = new List<string>();
+        var buildAttempts = 0;
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => events.Add("shutdown");
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            {
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    events.Add(buildAttempts++ == 0 ? "initial-build" : "retry-build");
+                    return Task.FromResult(buildAttempts == 1
+                        ? new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            "error CS2012: Cannot open 'Core.dll' for writing because it is being used by another process.")
+                        : new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            });
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+
+            var result = await verifier.RunAsync(
+                "C:\\fake\\worktree",
+                new GoalId("abcd1234abcd1234abcd1234abcd1234"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+            lease.Dispose();
+
+            Assert.True(result.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(["initial-build", "shutdown", "retry-build"], events);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_dotnet_test_adds_attempt_trx_logger_and_records_advisory_missing_trx")]
     public void GoalAcceptanceVerifierDotnetTestAddsAttemptTrxLoggerAndRecordsAdvisoryMissingTrx()
     {
