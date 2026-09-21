@@ -1163,12 +1163,45 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add(correction.IsWaiver
                 ? $"  Status: WAIVED — {PromptContextFormatter.TrimPromptBlock(correction.WaiverReason!)}"
                 : $"  Effective criterion: {PromptContextFormatter.TrimPromptBlock(correction.Correction)}");
+            if (correction.IsWaiver && correction.Dispositions is { Count: > 0 })
+            {
+                var criteria = goal.RefinedSpec?.AcceptanceCriteria ?? [];
+                foreach (var item in correction.Dispositions
+                    .Select((disposition, supplyIndex) => (disposition, supplyIndex))
+                    .Where(item => !string.IsNullOrWhiteSpace(item.disposition.Disposition))
+                    .OrderBy(item => FindCriterionIndex(criteria, item.disposition.Criterion))
+                    .ThenBy(item => item.supplyIndex))
+                {
+                    var criterion = TrimDispositionField(item.disposition.Criterion);
+                    var disposition = TrimDispositionField(item.disposition.Disposition);
+                    lines.Add($"  Disposition: {criterion} -> {disposition}");
+                }
+            }
             lines.Add($"  Provenance: {correction.Actor}; {correction.RecordedAt:u}; {correction.SourceKind}; {taskReference}.");
         }
 
         lines.Add("<!-- EFFECTIVE_ACCEPTANCE_CRITERIA_CORRECTIONS_END -->");
         lines.Add(string.Empty);
         return lines;
+
+        static int FindCriterionIndex(IReadOnlyList<string> criteria, string criterion)
+        {
+            for (var index = 0; index < criteria.Count; index++)
+            {
+                if (string.Equals(
+                    criteria[index].Trim(),
+                    criterion.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return index;
+                }
+            }
+
+            return int.MaxValue;
+        }
+
+        static string TrimDispositionField(string value) =>
+            PromptContextFormatter.TrimPromptBlock(value.ReplaceLineEndings(" ")).ReplaceLineEndings(" ");
     }
 
     private static string BuildModelFitInstruction(string? modelFitTarget)
