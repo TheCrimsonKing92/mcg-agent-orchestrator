@@ -2202,9 +2202,6 @@ file static class MtpTestRunnerScriptTestSupport
             Directory.CreateDirectory(nugetHttpCache);
             buildStartInfo.Environment["NUGET_HTTP_CACHE_PATH"] = nugetHttpCache;
             buildStartInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
-            DotnetBuildEnvironmentManager.ConfigureSharedCompilerTemp(
-                buildStartInfo.Environment,
-                Environment.GetEnvironmentVariable("LOCALAPPDATA"));
             foreach (var argument in new[]
             {
                 "build",
