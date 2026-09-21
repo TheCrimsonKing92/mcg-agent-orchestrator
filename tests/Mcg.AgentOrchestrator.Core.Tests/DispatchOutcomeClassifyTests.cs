@@ -1677,6 +1677,32 @@ public sealed class DispatchOutcomeClassifyTests
             StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify provider interruption outranks contradictory derived success evidence")]
+    public void ClassifyProviderInterruptionOutranksDerivedSuccessEvidence()
+    {
+        const string stdout = """
+            {"type":"thread.started","thread_id":"test-thread"}
+            {"type":"turn.started"}
+            {"type":"error","message":"provider-specific text must not drive classification"}
+            {"type":"turn.failed","error":{"message":"different provider-specific text"}}
+            WORKER_RESULT:
+            files: src/Changed.cs
+            tests: pass - contradictory derived evidence
+            blockers: none
+            END_WORKER_RESULT
+            """;
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout),
+            workerResultPresent: true,
+            hasCommittedChanges: true);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, outcome.Kind);
+        Xunit.Assert.Contains("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify preserves missing-change failure when any turn completed")]
     public void ClassifyCompletedTurnPreservesMissingChangeFailure()
     {

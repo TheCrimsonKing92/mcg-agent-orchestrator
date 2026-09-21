@@ -549,6 +549,24 @@ public static class DispatchFailureClassifier
         bool workerResultPresent = false,
         bool hasCommittedChanges = false)
     {
+        if (IsProviderInterruptionFailure(verification))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.ProviderInterruption,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.ProviderInterruption,
+                verification.ExitCode,
+                HasZeroByteStandardOutput(verification),
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildEvidenceSummary(verification)));
+        }
+
         providerFailureKind = providerFailureKind == ProviderFailureKind.Unknown
             ? verification.ProviderFailureKind
             : providerFailureKind;
@@ -978,24 +996,6 @@ public static class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildEvidenceSummary(verification)));
-        }
-
-        if (IsProviderInterruptionFailure(verification))
-        {
-            return BuildOutcome(
-                TaskOutcomeRules.ProviderInterruption,
-                task,
-                verification,
-                workerResultPresent,
-                hasCommittedChanges,
-                new DispatchOutcome(
-                DispatchOutcomeKind.ProviderInterruption,
-                exitCode,
-                hasZeroByteOutput,
-                null,
-                null,
-                RecoveryRecommendation.AutoRetry,
                 BuildEvidenceSummary(verification)));
         }
 
