@@ -8,7 +8,8 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         string criterionReference,
         string reason,
-        string actor = CriteriaCorrectionActor)
+        string actor = CriteriaCorrectionActor,
+        IReadOnlyList<CriterionDispositionRequest>? dispositions = null)
     {
         var goal = GetGoal(goalId);
         if (goal.Status == GoalStatus.Draft || goal.IsTerminal)
@@ -22,11 +23,17 @@ public sealed partial class AgentOrchestratorKernel
         var criterion = ResolveAcceptanceCriterion(spec.AcceptanceCriteria, criterionReference).Trim();
         var normalizedReason = NormalizeWaiverLine(reason, nameof(reason));
         var normalizedActor = NormalizeWaiverLine(actor, nameof(actor));
+        var affectedCriteria = SelectAffectedCriteria(goal, criterion);
+        var resolvedDispositions = ResolveCriterionDispositions(
+            spec.AcceptanceCriteria,
+            affectedCriteria,
+            dispositions);
         var pendingWaiver = EffectiveAcceptanceCriteriaCorrection.Waiver(
             criterion,
             normalizedReason,
             normalizedActor,
-            _clock.UtcNow);
+            _clock.UtcNow,
+            resolvedDispositions);
         var capturedHash = EffectiveAcceptanceCriteriaVersion.ComputeHash(
             spec,
             goal.EffectiveAcceptanceCriteriaCorrections.Append(pendingWaiver));
@@ -50,6 +57,66 @@ public sealed partial class AgentOrchestratorKernel
             normalizedReason,
             capturedHash);
         return waiver;
+    }
+
+    private static IReadOnlyList<string> SelectAffectedCriteria(Goal goal, string waivedCriterion)
+    {
+        var waivedCriteria = goal.EffectiveAcceptanceCriteriaCorrections
+            .Where(correction => correction.IsWaiver)
+            .Select(correction => correction.SupersededCriterion)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return goal.OutstandingCriterionEvidenceObligations
+            .Where(obligation => !string.Equals(
+                obligation.Criterion.Trim(),
+                waivedCriterion,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(obligation => !waivedCriteria.Contains(obligation.Criterion.Trim()))
+            .OrderBy(obligation => obligation.CriterionIndex)
+            .Select(obligation => obligation.Criterion.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CriterionDisposition>? ResolveCriterionDispositions(
+        IReadOnlyList<string> criteria,
+        IReadOnlyList<string> affectedCriteria,
+        IReadOnlyList<CriterionDispositionRequest>? requests)
+    {
+        var supplied = requests ?? [];
+        var affected = affectedCriteria.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resolved = new List<CriterionDisposition>(supplied.Count);
+        foreach (var request in supplied)
+        {
+            var criterion = ResolveAcceptanceCriterion(criteria, request.CriterionReference).Trim();
+            if (!affected.Contains(criterion))
+            {
+                throw new InvalidOperationException(
+                    $"Acceptance criterion '{criterion}' is not an affected outstanding criterion for this waiver.");
+            }
+
+            if (resolved.Any(item => string.Equals(item.Criterion, criterion, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"Provide exactly one disposition for affected acceptance criterion '{criterion}'.");
+            }
+
+            resolved.Add(new CriterionDisposition(
+                criterion,
+                NormalizeWaiverLine(request.Disposition, nameof(request.Disposition))));
+        }
+
+        var suppliedCriteria = resolved.Select(item => item.Criterion).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missing = affectedCriteria.Where(criterion => !suppliedCriteria.Contains(criterion)).ToArray();
+        if (missing.Length > 0)
+        {
+            throw new InvalidOperationException(
+                "Waiving this criterion requires a disposition for each affected outstanding criterion: " +
+                string.Join("; ", missing.Select(criterion => $"'{criterion}'")) +
+                ". Supply --disposition or --disposition-file for each criterion.");
+        }
+
+        return resolved.Count == 0 ? null : resolved;
     }
 
     private void RecordEffectiveAcceptanceCriteriaCorrections(

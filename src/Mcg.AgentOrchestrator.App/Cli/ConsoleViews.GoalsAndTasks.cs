@@ -83,6 +83,22 @@ public static void PrintGoal(
             Console.WriteLine(correction.IsWaiver
                 ? $"    waiver reason: {OutputTextPreview.CreateSummary(correction.WaiverReason!).Text}"
                 : $"    correction: {OutputTextPreview.CreateSummary(correction.Correction).Text}");
+            if (correction.IsWaiver)
+            {
+                if (correction.Dispositions is not { Count: > 0 })
+                {
+                    Console.WriteLine("    disposition: no disposition recorded");
+                }
+                else
+                {
+                    foreach (var disposition in correction.Dispositions)
+                    {
+                        Console.WriteLine(
+                            $"    disposition for {OutputTextPreview.CreateSummary(disposition.Criterion).Text}: " +
+                            OutputTextPreview.CreateSummary(disposition.Disposition).Text);
+                    }
+                }
+            }
             Console.WriteLine($"    provenance: {correction.Actor} {correction.RecordedAt:u} {correction.SourceKind} {source}");
         }
     }
@@ -122,7 +138,21 @@ public static void PrintGoal(
                 Console.WriteLine($"Refined acceptance criteria ({refinedSpec.AcceptanceCriteria.Count}):");
                 for (var index = 0; index < refinedSpec.AcceptanceCriteria.Count; index++)
                 {
-                    Console.WriteLine($"  {index + 1}. {refinedSpec.AcceptanceCriteria[index].Trim().ReplaceLineEndings(" ")}");
+                    var criterion = refinedSpec.AcceptanceCriteria[index].Trim();
+                    Console.WriteLine($"  {index + 1}. {criterion.ReplaceLineEndings(" ")}");
+                    foreach (var correction in goal.EffectiveAcceptanceCriteriaCorrections
+                                 .Where(item => item.IsWaiver && item.Dispositions is { Count: > 0 })
+                                 .OrderBy(item => item.RecordedAt))
+                    {
+                        foreach (var disposition in correction.Dispositions!
+                                     .Where(item => string.Equals(item.Criterion.Trim(), criterion, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            Console.WriteLine(
+                                $"     disposition (waiver of {OutputTextPreview.CreateSummary(correction.SupersededCriterion).Text}): " +
+                                $"{OutputTextPreview.CreateSummary(disposition.Disposition).Text} " +
+                                $"[{correction.Actor} {correction.RecordedAt:u}]");
+                        }
+                    }
                 }
 
                 if (declaredCriteria.Count > 0 && declaredCriteria.Count != refinedSpec.AcceptanceCriteria.Count)

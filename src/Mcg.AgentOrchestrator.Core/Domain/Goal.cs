@@ -863,12 +863,16 @@ public sealed class Goal
         var normalizedSuperseded = RequireText(correction.SupersededCriterion, nameof(correction.SupersededCriterion));
         var normalizedCorrection = RequireText(correction.Correction, nameof(correction.Correction));
         var normalizedActor = NormalizeSingleLine(correction.Actor, nameof(correction.Actor));
+        var normalizedDispositions = correction.Dispositions?.Select(disposition => new CriterionDisposition(
+            RequireText(disposition.Criterion, nameof(disposition.Criterion)),
+            NormalizeSingleLine(disposition.Disposition, nameof(disposition.Disposition)))).ToArray();
         var normalized = correction with
         {
             SupersededCriterion = normalizedSuperseded,
             Correction = normalizedCorrection,
             Actor = normalizedActor,
-            CapturedAcceptanceCriteriaHash = NormalizeOptionalText(correction.CapturedAcceptanceCriteriaHash)
+            CapturedAcceptanceCriteriaHash = NormalizeOptionalText(correction.CapturedAcceptanceCriteriaHash),
+            Dispositions = normalizedDispositions
         };
 
         var duplicate = normalized.IsWaiver
@@ -945,7 +949,8 @@ public sealed class Goal
                     correction.SourceTaskId?.Value,
                     correction.SourceKind,
                     correction.IsWaiver,
-                    correction.CapturedAcceptanceCriteriaHash)).ToList(),
+                    correction.CapturedAcceptanceCriteriaHash,
+                    correction.Dispositions)).ToList(),
             AutomaticAcceptanceRetryCount: AutomaticAcceptanceRetryCount,
             OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount,
             CurrentHold: CurrentHold is null
@@ -1069,7 +1074,8 @@ public sealed class Goal
                 correction.SourceTaskId is null ? null : new TaskId(correction.SourceTaskId),
                 correction.SourceKind,
                 correction.IsWaiver,
-                correction.CapturedAcceptanceCriteriaHash));
+                correction.CapturedAcceptanceCriteriaHash,
+                correction.Dispositions));
         }
 
         goal.RestoreAcceptanceRetryCounts(
