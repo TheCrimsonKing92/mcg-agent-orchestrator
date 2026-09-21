@@ -11,6 +11,64 @@ public sealed class GoalRefinementTests
     // --- Binding selection and configuration failures ---
 
     [Xunit.Fact]
+    public async Task DeclaredOperatorOwnershipMarkerSeedsRefinedSpecOwnership()
+    {
+        const string criterion =
+            "The operator records the deployed measurement. REAL-WORLD-DEPENDENT, operator-owned.";
+        var objective = $"""
+            Record the deployed measurement.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Record the deployed measurement.",
+              "acceptanceCriteria": [{{System.Text.Json.JsonSerializer.Serialize(criterion)}}],
+              "verificationClass": "RealWorldDependent",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(
+            [criterion],
+            kernel.GetGoal(goalId).RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+    }
+
+    [Xunit.Fact]
+    public async Task IncidentalOperatorMentionDoesNotSeedOperatorOwnership()
+    {
+        const string criterion =
+            "The operator-visible hold reason reports the pending entry age. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+        var objective = $"""
+            Report the pending entry age.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Report the pending entry age.",
+              "acceptanceCriteria": [{{System.Text.Json.JsonSerializer.Serialize(criterion)}}],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Empty(kernel.GetGoal(goalId).RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+    }
+
+    [Xunit.Fact]
     public void SpecRefinerPromptRequiresOneToOneDeclaredCriterionMapping()
     {
         var prompt = SpecRefinerPlanner.BuildPrompt("Refine these criteria.");
