@@ -333,6 +333,36 @@ public sealed class GoalTimingReportTests
         Xunit.Assert.Single(rollup.TopWasteSources, source => source.Source == DispatchOutcomeKind.ProviderConnectivity.ToString() && source.Count == 1);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchValueReport classifies provider interruption as environmental waste")]
+    public void DispatchValueReportClassifiesProviderInterruptionAsEnvironmentalWaste()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement provider interruption reporting", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Provider interruption timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        RecordRound(
+            kernel,
+            clock,
+            goal.Id,
+            task.Id,
+            Verification(
+                1,
+                clock.UtcNow,
+                "{\"type\":\"thread.started\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"provider wording\"}\n{\"type\":\"turn.failed\"}",
+                DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+                "provider-interruption"));
+
+        var report = kernel.BuildDispatchValueReport();
+        var goalReport = Xunit.Assert.Single(report.Goals);
+        var round = Xunit.Assert.Single(goalReport.Rounds);
+
+        Xunit.Assert.Equal(DispatchRoundValueClass.WastedEnvironmental, round.ValueClass);
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, round.OutcomeVerdict);
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption.ToString(), round.WasteSource);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchValueReport_classifies_known_round_types_and_rolls_up_per_goal")]
     public void DispatchValueReportClassifiesKnownRoundTypesAndRollsUpPerGoal()
     {

@@ -296,8 +296,7 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (!verification.Succeeded &&
-            outcome.Kind == DispatchOutcomeKind.ProviderInterruption)
+        if (outcome.Kind == DispatchOutcomeKind.ProviderInterruption)
         {
             var interruptionFailures = DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task);
             if (interruptionFailures <= ProviderInterruptionRetryLimit)

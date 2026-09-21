@@ -1007,6 +1007,40 @@ public sealed class DispatchExecutionTests
         evt.Message.Contains("required-file-change-evidence-missing", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult retries exit-zero provider interruption")]
+    public void RecordDispatchExecutionResultRetriesExitZeroProviderInterruption()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry exit-zero provider interruption");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    const string command = "codex exec exit-zero interruption";
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        command,
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        ProviderInterruptionVerification(command, clock.UtcNow) with { ExitCode = 0 });
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Null(task.LastVerification);
+    Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("ProviderInterruption", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed);
+}
+
     [Xunit.Fact(DisplayName = "Provider interruption count resets after any completed turn")]
     public void ProviderInterruptionCountResetsAfterCompletedTurn()
 {
