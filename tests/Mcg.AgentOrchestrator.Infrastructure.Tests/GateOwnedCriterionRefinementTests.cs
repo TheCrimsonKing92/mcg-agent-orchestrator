@@ -139,6 +139,132 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
+    public async Task TextOperatorMarkerWinsGateConflictAndRecordsDiagnostic()
+    {
+        const string criterion =
+            "The operator records the live deployment. REAL-WORLD-DEPENDENT, operator-owned.";
+        var objective = $"""
+            Record the live deployment.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Record the live deployment.",
+              "acceptanceCriteria": [
+                {"text": {{System.Text.Json.JsonSerializer.Serialize(criterion)}}, "declared_index": 1, "evidence_owner": "acceptance-gate"}
+              ],
+              "verificationClass": "RealWorldDependent",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Contains(recorded.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains(
+                "text marker claims operator for declared criterion 1, refiner claims acceptance-gate",
+                StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task DuplicateOperatorMarkedTextAppendsOnceAndDiagnosesBothIndexes()
+    {
+        const string criterion = "The operator records the live result. REAL-WORLD-DEPENDENT, operator-owned.";
+        var objective = $"""
+            Record the live result.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            2. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Record the live result.",
+              "acceptanceCriteria": [
+                {{System.Text.Json.JsonSerializer.Serialize(criterion)}},
+                {{System.Text.Json.JsonSerializer.Serialize(criterion)}}
+              ],
+              "verificationClass": "RealWorldDependent",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Contains(recorded.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("declared criteria 1 and 2 share text", StringComparison.Ordinal));
+        Xunit.Assert.All(recorded.CriterionEvidenceObligations, obligation =>
+            Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner));
+    }
+
+    [Xunit.Fact]
+    public async Task UnownedRealWorldCriterionDefaultsToOperatorWithDiagnostic()
+    {
+        const string criterion = "The live deployment is observed. REAL-WORLD-DEPENDENT.";
+        var objective = $"""
+            Observe the live deployment.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {"behavioralContract":"Observe the live deployment.","acceptanceCriteria":[{{System.Text.Json.JsonSerializer.Serialize(criterion)}}],"verificationClass":"RealWorldDependent","decisions":[],"forks":[]}
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Contains(recorded.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains(
+                "declared criterion 1 is real-world-dependent with no declared owner, classified operator-owned",
+                StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task TextOperatorMarkerAgreesWithRefinerWithoutConflictDiagnostic()
+    {
+        const string criterion = "The operator records the live result. REAL-WORLD-DEPENDENT, operator-owned.";
+        var objective = $"""
+            Record the live result.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {"behavioralContract":"Record the live result.","acceptanceCriteria":[{"text":{{System.Text.Json.JsonSerializer.Serialize(criterion)}},"declared_index":1,"evidence_owner":"operator"}],"verificationClass":"RealWorldDependent","decisions":[],"forks":[]}
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.DoesNotContain(recorded.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Spec refiner owner conflict", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public async Task UnmatchedParaphrasedOwnerRecordsOneDroppedDecision()
     {
         const string entryText = "Observe the rewritten deployment behavior.";

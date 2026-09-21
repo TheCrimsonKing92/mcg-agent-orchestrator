@@ -16,6 +16,42 @@ public sealed class WaiveDeferredCriterionDispositionTests
     }
 
     [Xunit.Fact]
+    public void OperatorOwnedCriterionSeedsObligationAndRequiresWaiverDisposition()
+    {
+        const string implementationCriterion = "Implement the mechanism.";
+        const string operatorCriterion =
+            "Measure the mechanism after landing. REAL-WORLD-DEPENDENT, operator-owned.";
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect the operator observation");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Require the live observation.",
+            [implementationCriterion, operatorCriterion],
+            VerificationClass.TestVerifiable,
+            [],
+            [])
+        {
+            OperatorOwnedAcceptanceCriteria = [operatorCriterion]
+        });
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        var obligation = Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+        Xunit.Assert.Equal(operatorCriterion, obligation.Criterion);
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            kernel.WaiveAcceptanceCriterion(goal.Id, "1", "Mechanism moved to separate work."));
+
+        Xunit.Assert.Contains(operatorCriterion, error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Empty(goal.EffectiveAcceptanceCriteriaCorrections);
+
+        var waiver = kernel.WaiveAcceptanceCriterion(
+            goal.Id,
+            "1",
+            "Mechanism moved to separate work.",
+            dispositions: [new CriterionDispositionRequest("2", "Observation remains required.")]);
+        Xunit.Assert.Equal("Observation remains required.", Xunit.Assert.Single(waiver.Dispositions!).Disposition);
+    }
+
+    [Xunit.Fact]
     public void PartialDispositionSupplyNamesOnlyMissingAffectedCriterion()
     {
         var (kernel, goal) = CreateGoalWithOutstandingCriteria(1, 2);

@@ -158,13 +158,17 @@ internal sealed class GoalRefinementService
                     : $"Answered by operator; topic already resolved (topic: {resolved.TopicKey}).");
         }
 
-        var declaredCriteria = ParseDeclaredAcceptanceCriteria(goal.Objective);
+        var rawDeclaredCriteria = AcceptanceCriteriaParser.ParseDeclared(goal.Objective);
+        var declaredCriteria = rawDeclaredCriteria
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var acceptanceCriteria = ResolveAcceptanceCriteria(goal.Objective, output.AcceptanceCriteria);
         var operatorOwnedCriteria = goal.RefinedSpec?.OperatorOwnedAcceptanceCriteria.ToList() ?? [];
         var parseDiagnostics = output.ParseDiagnostics
             .Where(diagnostic => declaredCriteria.Count > 0 ||
                 !diagnostic.Contains("declared_index", StringComparison.Ordinal))
             .ToList();
+        AddDuplicateDeclaredCriterionDiagnostics(rawDeclaredCriteria, parseDiagnostics);
         List<string> acceptanceGateOwnedCriteria;
         if (declaredCriteria.Count > 0)
         {
@@ -1525,6 +1529,41 @@ internal sealed class GoalRefinementService
             persistedOperatorIndexes.Add(criterionIndex);
         }
 
+        var textMarkerIndexes = new HashSet<int>();
+        for (var criterionIndex = 0; criterionIndex < acceptanceCriteria.Count; criterionIndex++)
+        {
+            var criterion = acceptanceCriteria[criterionIndex];
+            var marker = AcceptanceCriterionOwnershipMarker.Classify(criterion);
+            if (marker.Classification is not (
+                    AcceptanceCriterionOwnershipClassification.OperatorOwned or
+                    AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal))
+            {
+                if (marker.TrailingRegion.Length == 0 &&
+                    AcceptanceCriterionOwnershipMarker.HasOperatorOwnershipPhrase(criterion))
+                {
+                    diagnostics.Add(
+                        $"Spec refiner owner dropped: operator text marker for declared criterion {criterionIndex + 1} is outside the trailing ownership region");
+                }
+                continue;
+            }
+
+            textMarkerIndexes.Add(criterionIndex);
+            claimedOwners[criterionIndex] = "operator";
+            if (!operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase))
+                operatorOwnedCriteria.Add(criterion);
+
+            if (marker.Classification == AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal)
+            {
+                diagnostics.Add(
+                    $"Spec refiner owner defaulted: declared criterion {criterionIndex + 1} is real-world-dependent with no declared owner, classified operator-owned");
+            }
+            else if (marker.ConflictingDeclaredOwner is { } conflictingOwner)
+            {
+                diagnostics.Add(
+                    $"Spec refiner owner conflict: text marker claims operator for declared criterion {criterionIndex + 1}, declared text claims {conflictingOwner}");
+            }
+        }
+
         foreach (var requested in requestedOwners.Where(item =>
                      item.Owner is "acceptance-gate" or "operator"))
         {
@@ -1540,6 +1579,16 @@ internal sealed class GoalRefinementService
 
             if (claimedOwners.TryGetValue(criterionIndex, out var existingOwner))
             {
+                if (textMarkerIndexes.Contains(criterionIndex))
+                {
+                    if (requested.Owner == "operator")
+                        continue;
+
+                    diagnostics.Add(
+                        $"Spec refiner owner conflict: text marker claims operator for declared criterion {criterionIndex + 1}, refiner claims {requested.Owner}");
+                    continue;
+                }
+
                 if (persistedOperatorIndexes.Contains(criterionIndex) &&
                     requested.Owner == "operator" &&
                     existingOwner == "operator")
@@ -1566,6 +1615,25 @@ internal sealed class GoalRefinementService
         }
 
         return acceptanceGateOwnedCriteria;
+    }
+
+    private static void AddDuplicateDeclaredCriterionDiagnostics(
+        IReadOnlyList<string> declaredCriteria,
+        List<string> diagnostics)
+    {
+        var firstDeclaredIndexByText = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var criterionIndex = 0; criterionIndex < declaredCriteria.Count; criterionIndex++)
+        {
+            var criterion = declaredCriteria[criterionIndex];
+            if (firstDeclaredIndexByText.TryGetValue(criterion, out var firstDeclaredIndex))
+            {
+                diagnostics.Add(
+                    $"Spec refiner owner conflict: declared criteria {firstDeclaredIndex + 1} and {criterionIndex + 1} share text '{PreviewCriterion(criterion)}'");
+                continue;
+            }
+
+            firstDeclaredIndexByText[criterion] = criterionIndex;
+        }
     }
 
     private static int FindCriterionIndex(IReadOnlyList<string> acceptanceCriteria, string requested) =>
