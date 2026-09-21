@@ -11,6 +11,7 @@ public sealed class CliPersistentStateRunnerAcceptanceFailureRecoveryTests : Cli
     public void AcceptanceFailed_StalePairWithCancelledTask_PersistsRecovery()
     {
         var root = CreateShortAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
         var goal = kernel.CreateGoal("Persist stale acceptance recovery", [task]);
@@ -46,18 +47,25 @@ public sealed class CliPersistentStateRunnerAcceptanceFailureRecoveryTests : Cli
         RunGitOutput(root, "commit", "-m", "Move main");
         var repository = new InMemoryTransactionalStateRepository(kernel);
         var verifier = new ProbeAcceptanceVerifier(() => { });
+        var stableSlotSelections = 0;
 
         var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
             ["acceptance", "--keep-workspace", "--no-record"],
             repository,
-            CreateRefinedWorkspace(root),
+            workspace,
             ref agents,
             providers,
             ref profiles,
             ref currentGoal,
-            acceptanceVerifier: verifier));
+            acceptanceVerifier: verifier,
+            stableSlotSelector: (_, _) =>
+            {
+                Interlocked.Increment(ref stableSlotSelections);
+                return CreateFakeStableSlotLease(root);
+            }));
 
         Xunit.Assert.Contains("superseded failure is historical", output);
+        Xunit.Assert.Equal(1, stableSlotSelections);
         Xunit.Assert.Equal(1, verifier.RunCount);
         var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
         Xunit.Assert.Equal(GoalStatus.Completed, storedGoal.Status);
@@ -66,5 +74,22 @@ public sealed class CliPersistentStateRunnerAcceptanceFailureRecoveryTests : Cli
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("recorded branch=", StringComparison.Ordinal) &&
             evt.Message.Contains("current branch=", StringComparison.Ordinal));
+    }
+
+    private static DotnetBuildEnvironmentLease CreateFakeStableSlotLease(string root)
+    {
+        var leaseRoot = Path.Combine(root, ".fake-build-slot");
+        Directory.CreateDirectory(leaseRoot);
+        var lockPath = Path.Combine(leaseRoot, $"{Guid.NewGuid():N}.lock");
+        var stream = new FileStream(lockPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        var environment = new DotnetBuildEnvironment(
+            "fake-acceptance-recovery-slot",
+            leaseRoot,
+            Path.Combine(leaseRoot, "artifacts"),
+            lockPath,
+            [],
+            "build-0",
+            BuildPermitIndex: 0);
+        return new DotnetBuildEnvironmentLease(environment, stream);
     }
 }

@@ -2118,18 +2118,26 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
                 Assert.True(releaseFirstDrainer.Wait(TimeSpan.FromSeconds(10)));
             };
 
-            var firstDrainer = Task.Run(() => RunPersistentCommand(repository, workspace, ["goals"]));
+            var firstDrainer = Task.Factory.StartNew(
+                () => RunPersistentCommand(repository, workspace, ["goals"]),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default);
             Assert.True(firstDrainerEnteredJournal.Wait(TimeSpan.FromSeconds(10)));
             var secondDrainerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var secondDrainer = Task.Run(() =>
-            {
-                secondDrainerStarted.SetResult();
-                return RunPersistentCommand(
-                    // The primary helper already migrated this store; a competing drainer must not run DDL.
-                    new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
-                    workspace,
-                    ["goals"]);
-            });
+            var secondDrainer = Task.Factory.StartNew(
+                () =>
+                {
+                    secondDrainerStarted.SetResult();
+                    return RunPersistentCommand(
+                        // The primary helper already migrated this store; a competing drainer must not run DDL.
+                        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
+                        workspace,
+                        ["goals"]);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default);
             await secondDrainerStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             releaseFirstDrainer.Set();
 
