@@ -3676,9 +3676,7 @@ internal static partial class CliPersistentStateRunner
             .GetResult();
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = kernel.Goals.FirstOrDefault(goal => goal.Id.Value.Equals(args[1], StringComparison.Ordinal));
-        Console.WriteLine(
-            $"SPEC_REFINEMENT_WORK_COMPLETE goal={result.GoalId} " +
-            $"claimed={result.Claimed.ToString().ToLowerInvariant()} attached={result.Attached.ToString().ToLowerInvariant()}");
+        GoalRefinementWorkOutcomeReporter.Report(result, workspace);
         return false;
     }
 

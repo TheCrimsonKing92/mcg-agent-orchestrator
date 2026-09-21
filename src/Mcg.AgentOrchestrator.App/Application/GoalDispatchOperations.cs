@@ -525,7 +525,13 @@ internal sealed partial class GoalDispatchOperations
                 throw new InvalidOperationException(readiness.Detail);
 
             case GoalRefinementReadiness.Pending:
-                ThrowPending(workspace, goal.Id, readiness.Detail, repaired: false);
+                ThrowPending(
+                    workspace,
+                    goal.Id,
+                    readiness.Detail,
+                    outboxState.Status,
+                    outboxState.Message.CreatedAt,
+                    repaired: false);
                 return;
 
             case GoalRefinementReadiness.RepairRequired:
@@ -542,6 +548,8 @@ internal sealed partial class GoalDispatchOperations
                     workspace,
                     goal.Id,
                     $"repair={ensured.Disposition.ToString().ToLowerInvariant()}",
+                    ensured.State.Status,
+                    ensured.State.Message.CreatedAt,
                     repaired: true);
                 return;
 
@@ -562,29 +570,38 @@ internal sealed partial class GoalDispatchOperations
             OrchestratorWorkspace workspace,
             GoalId goalId,
             string stateDetail,
+            OrchestratorStateOutboxStatus outboxStatus,
+            DateTimeOffset createdAt,
             bool repaired)
         {
             if (StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath))
             {
                 throw new StateDbCommitBeforeRethrowException(
-                    () => BuildPendingException(workspace, goalId, stateDetail, repaired));
+                    () => BuildPendingException(workspace, goalId, stateDetail, outboxStatus, createdAt, repaired));
             }
 
-            throw BuildPendingException(workspace, goalId, stateDetail, repaired);
+            throw BuildPendingException(workspace, goalId, stateDetail, outboxStatus, createdAt, repaired);
         }
 
         static InvalidOperationException BuildPendingException(
             OrchestratorWorkspace workspace,
             GoalId goalId,
             string stateDetail,
+            OrchestratorStateOutboxStatus outboxStatus,
+            DateTimeOffset createdAt,
             bool repaired)
         {
-            var launch = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+            var launch = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId, outboxStatus);
+            var failedClaims = GoalRefinementWorkCoordinator.GetConsecutiveFailedClaims(workspace, goalId);
+            var failedClaimsDetail = failedClaims > 0
+                ? $" consecutive_failed_claims={failedClaims}"
+                : string.Empty;
             return new InvalidOperationException(
                 $"SPEC_REFINEMENT_PENDING goal={goalId.Value} owner=durable-outbox " +
                 $"executor_started={launch.Started.ToString().ToLowerInvariant()} " +
                 $"state={stateDetail} repaired={repaired.ToString().ToLowerInvariant()} " +
-                $"detail={launch.Detail}");
+                $"pending_age={GoalRefinementWorkCoordinator.FormatPendingAge(createdAt)}" +
+                $"{failedClaimsDetail} detail={launch.Detail}");
         }
 
         static void ThrowFailed(GoalId goalId, string? detail)

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -1392,5 +1393,190 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Assert.False(summary.StopRequested);
         Assert.Equal(1, summary.Ticks);
         Assert.Equal(0, summary.Advanced);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_launch_policy_uses_injected_instants_for_cadence")]
+    public void SpecRefinementLaunchPolicyUsesInjectedInstantsForCadence()
+    {
+        var launchedAt = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+        var attempt = new SpecRefinementLaunchAttempt(
+            launchedAt,
+            ConsecutiveFailedClaims: 0,
+            EscalatedAt: null,
+            "goal-spec-refinement:goal",
+            "C:\\state.db");
+
+        var deferred = SpecRefinementLaunchPolicy.Decide(
+            attempt,
+            launchedAt.AddMinutes(14).AddSeconds(59),
+            GoalRefinementWorkCoordinator.RecoveryLaunchCadence,
+            GoalRefinementWorkCoordinator.ConsecutiveFailedClaimLimit);
+        var due = SpecRefinementLaunchPolicy.Decide(
+            attempt,
+            launchedAt.AddMinutes(15).AddSeconds(1),
+            GoalRefinementWorkCoordinator.RecoveryLaunchCadence,
+            GoalRefinementWorkCoordinator.ConsecutiveFailedClaimLimit);
+
+        Assert.Equal(SpecRefinementLaunchDecisionKind.DeferCadence, deferred.Kind);
+        Assert.Equal(SpecRefinementLaunchDecisionKind.Launch, due.Kind);
+        Assert.Equal(1, due.ConsecutiveFailedClaims);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_failed_claim_count_survives_store_reconstruction")]
+    public void SpecRefinementFailedClaimCountSurvivesStoreReconstruction()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-attempt-store"));
+        var goalId = GoalId.New();
+        var saved = new SpecRefinementLaunchAttempt(
+            new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero),
+            ConsecutiveFailedClaims: 2,
+            EscalatedAt: null,
+            GoalRefinementWorkCoordinator.MessageId(goalId),
+            workspace.SqliteStatePath);
+
+        SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Save(goalId, saved);
+        var reloaded = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Get(goalId);
+
+        Assert.Equal(saved, reloaded);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_processing_claim_resets_failures_without_relaunch")]
+    public void SpecRefinementProcessingClaimResetsFailuresWithoutRelaunch()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-processing"));
+        var goalId = GoalId.New();
+        SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Save(
+            goalId,
+            new SpecRefinementLaunchAttempt(
+                new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero),
+                ConsecutiveFailedClaims: 2,
+                EscalatedAt: null,
+                GoalRefinementWorkCoordinator.MessageId(goalId),
+                workspace.SqliteStatePath));
+        var launches = 0;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+        };
+        try
+        {
+            var result = GoalRefinementWorkCoordinator.TryLaunchIfDue(
+                workspace,
+                goalId,
+                OrchestratorStateOutboxStatus.Processing);
+
+            Assert.False(result.Started);
+            Assert.Equal(GoalRefinementWorkCoordinator.ClaimInProgressDetail, result.Detail);
+            Assert.Equal(0, launches);
+            Assert.Null(SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Get(goalId));
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_third_failed_claim_escalates_and_stops_launching")]
+    public void SpecRefinementThirdFailedClaimEscalatesAndStopsLaunching()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-escalation"));
+        var goalId = GoalId.New();
+        var now = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+        var launches = 0;
+        GoalRefinementWorkCoordinator.UtcNowOverride = () => now;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+        };
+        try
+        {
+            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+
+            var escalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+            var stillEscalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+
+            Assert.False(escalated.Started);
+            Assert.False(stillEscalated.Started);
+            Assert.Equal(3, launches);
+            Assert.Contains("SPEC_REFINEMENT_OPERATOR_RECOVERY", escalated.Detail, StringComparison.Ordinal);
+            Assert.Contains($"message_id={GoalRefinementWorkCoordinator.MessageId(goalId)}", escalated.Detail, StringComparison.Ordinal);
+            Assert.Contains($"store_path={Path.GetFullPath(workspace.SqliteStatePath)}", escalated.Detail, StringComparison.Ordinal);
+            Assert.Contains("consecutive_failed_claims=3", escalated.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_claim_miss_is_stderr_failure_and_nonzero_exit")]
+    public void SpecRefinementClaimMissIsStderrFailureAndNonzeroExit()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-claim-miss"));
+        var goalId = GoalId.New();
+        string stdout = string.Empty;
+        CliExitException? failure = null;
+
+        var stderr = AsyncLocalConsoleRouter.CaptureError(() =>
+            stdout = AsyncLocalConsoleRouter.Capture(() =>
+                failure = Assert.Throws<CliExitException>(() =>
+                    GoalRefinementWorkOutcomeReporter.Report(
+                        new GoalRefinementWorkProcessResult(goalId.Value, Claimed: false, Attached: false),
+                        workspace))));
+
+        Assert.NotNull(failure);
+        Assert.NotEqual(0, failure.ExitCode);
+        Assert.DoesNotContain("SPEC_REFINEMENT_WORK_COMPLETE", stdout, StringComparison.Ordinal);
+        Assert.Contains("SPEC_REFINEMENT_WORK_FAILED", stderr, StringComparison.Ordinal);
+        Assert.Contains($"message_id={GoalRefinementWorkCoordinator.MessageId(goalId)}", stderr, StringComparison.Ordinal);
+        Assert.Contains($"store_path={Path.GetFullPath(workspace.SqliteStatePath)}", stderr, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_pending_hold_reports_pending_age")]
+    public async Task SpecRefinementPendingHoldReportsPendingAge()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-pending-age"));
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            DefaultAgents(),
+            "Research and plan a focused implementation with tests.");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        await repository.SaveAsync(kernel);
+        var message = GoalRefinementWorkCoordinator.CreateMessage(goal.Id) with
+        {
+            CreatedAt = new DateTimeOffset(2026, 9, 21, 1, 0, 0, TimeSpan.Zero)
+        };
+        await repository.EnsureOutboxMessageAsync(message);
+        GoalRefinementWorkCoordinator.UtcNowOverride = () =>
+            new DateTimeOffset(2026, 9, 21, 15, 2, 0, TimeSpan.Zero);
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+            new GoalRefinementWorkLaunchResult(true, 7, "test-launch");
+        try
+        {
+            var pending = Assert.Throws<InvalidOperationException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
+                    kernel,
+                    workspace,
+                    providers: null,
+                    kernel.GetGoal(goal.Id)));
+
+            Assert.Contains("pending_age=14h02m", pending.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+        }
     }
 }
