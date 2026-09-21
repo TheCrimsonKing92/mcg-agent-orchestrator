@@ -65,6 +65,35 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_counts_legacy_stream_until_it_releases_its_lock")]
+    public void DotnetBuildEnvironmentManagerCountsLegacyStreamUntilItReleasesItsLock()
+    {
+        var shutdownCount = 0;
+        Assert.NotNull(DotnetBuildEnvironmentManager.ShutdownBuildServersForTests);
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => shutdownCount++;
+        try
+        {
+            var legacyEnvironment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
+            using var legacyLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(legacyEnvironment);
+            using var recoveryLease = RootedDotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                StorageRoot,
+                TimeSpan.Zero);
+
+            recoveryLease.MarkCompilerLockRemediationRequired();
+            recoveryLease.Dispose();
+            Assert.Equal(0, shutdownCount);
+
+            legacyLock.Dispose();
+            legacyLock.Dispose();
+            Assert.Equal(1, shutdownCount);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_keeps_shared_compilation_disabled_for_all_repository_builds")]
     public void DotnetBuildEnvironmentManagerKeepsSharedCompilationDisabledForAllRepositoryBuilds()
     {

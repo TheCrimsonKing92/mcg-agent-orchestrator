@@ -637,6 +637,16 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
+    internal static void TransferExecutionLeaseToLegacyStream(FileStream stream)
+    {
+        if (stream is not LeaseFileStream leaseStream)
+        {
+            throw new InvalidOperationException("Only a managed execution lease stream can assume lease accounting custody.");
+        }
+
+        leaseStream.RegisterDisposeObserver(() => ReleaseExecutionLease(attemptPendingRecovery: true));
+    }
+
     public static FileStream AcquireLeaseExecutionLock(
         DotnetBuildEnvironment environment,
         CancellationToken cancellationToken = default,
@@ -2724,6 +2734,7 @@ public static class DotnetBuildEnvironmentManager
     private sealed class LeaseFileStream : FileStream
     {
         private readonly DotnetBuildEnvironment _environment;
+        private Action? _disposeObserver;
         private bool _rangeLocked;
         private int _released;
 
@@ -2740,6 +2751,15 @@ public static class DotnetBuildEnvironmentManager
             {
                 base.Dispose(true);
                 throw;
+            }
+        }
+
+        internal void RegisterDisposeObserver(Action observer)
+        {
+            ArgumentNullException.ThrowIfNull(observer);
+            if (Interlocked.CompareExchange(ref _disposeObserver, observer, null) is not null)
+            {
+                throw new InvalidOperationException("An execution lease stream dispose observer is already registered.");
             }
         }
 
@@ -2761,7 +2781,17 @@ public static class DotnetBuildEnvironmentManager
             }
             finally
             {
-                base.Dispose(disposing);
+                try
+                {
+                    base.Dispose(disposing);
+                }
+                finally
+                {
+                    if (disposing)
+                    {
+                        Interlocked.Exchange(ref _disposeObserver, null)?.Invoke();
+                    }
+                }
             }
         }
     }
@@ -2794,7 +2824,16 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
             throw new InvalidOperationException("The execution lock has already left lease custody.");
         }
 
-        DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: false);
+        try
+        {
+            DotnetBuildEnvironmentManager.TransferExecutionLeaseToLegacyStream(_stream);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _state, 0);
+            throw;
+        }
+
         return _stream;
     }
 
