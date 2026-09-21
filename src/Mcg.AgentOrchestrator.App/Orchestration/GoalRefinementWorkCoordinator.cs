@@ -247,16 +247,19 @@ internal static class GoalRefinementWorkCoordinator
     public static GoalRefinementWorkLaunchResult TryLaunchIfDue(
         OrchestratorWorkspace workspace,
         GoalId goalId,
-        OrchestratorStateOutboxStatus outboxStatus = OrchestratorStateOutboxStatus.Pending)
+        OrchestratorStateOutboxStatus outboxStatus = OrchestratorStateOutboxStatus.Pending,
+        DateTimeOffset? processingStartedAt = null)
     {
+        var now = UtcNow();
         var store = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace);
-        if (outboxStatus == OrchestratorStateOutboxStatus.Processing)
+        if (outboxStatus == OrchestratorStateOutboxStatus.Processing &&
+            processingStartedAt is { } startedAt &&
+            now - startedAt < SqliteOrchestratorStateRepository.OutboxProcessingLease)
         {
             store.Reset(goalId);
             return new GoalRefinementWorkLaunchResult(false, null, ClaimInProgressDetail);
         }
 
-        var now = UtcNow();
         var attempt = store.Get(goalId);
         var decision = SpecRefinementLaunchPolicy.Decide(
             attempt,
@@ -401,7 +404,8 @@ internal static class GoalRefinementWorkCoordinator
             _ = TryLaunchIfDue(
                 workspace,
                 new GoalId(receipt.GoalId),
-                state?.Status ?? OrchestratorStateOutboxStatus.Pending);
+                state?.Status ?? OrchestratorStateOutboxStatus.Pending,
+                state?.ProcessingStartedAt);
         }
         catch (JsonException)
         {

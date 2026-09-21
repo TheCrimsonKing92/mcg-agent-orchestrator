@@ -530,6 +530,7 @@ internal sealed partial class GoalDispatchOperations
                     goal.Id,
                     readiness.Detail,
                     outboxState.Status,
+                    outboxState.ProcessingStartedAt,
                     outboxState.Message.CreatedAt,
                     repaired: false);
                 return;
@@ -549,6 +550,7 @@ internal sealed partial class GoalDispatchOperations
                     goal.Id,
                     $"repair={ensured.Disposition.ToString().ToLowerInvariant()}",
                     ensured.State.Status,
+                    ensured.State.ProcessingStartedAt,
                     ensured.State.Message.CreatedAt,
                     repaired: true);
                 return;
@@ -571,16 +573,31 @@ internal sealed partial class GoalDispatchOperations
             GoalId goalId,
             string stateDetail,
             OrchestratorStateOutboxStatus outboxStatus,
+            DateTimeOffset? processingStartedAt,
             DateTimeOffset createdAt,
             bool repaired)
         {
             if (StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath))
             {
                 throw new StateDbCommitBeforeRethrowException(
-                    () => BuildPendingException(workspace, goalId, stateDetail, outboxStatus, createdAt, repaired));
+                    () => BuildPendingException(
+                        workspace,
+                        goalId,
+                        stateDetail,
+                        outboxStatus,
+                        processingStartedAt,
+                        createdAt,
+                        repaired));
             }
 
-            throw BuildPendingException(workspace, goalId, stateDetail, outboxStatus, createdAt, repaired);
+            throw BuildPendingException(
+                workspace,
+                goalId,
+                stateDetail,
+                outboxStatus,
+                processingStartedAt,
+                createdAt,
+                repaired);
         }
 
         static InvalidOperationException BuildPendingException(
@@ -588,10 +605,15 @@ internal sealed partial class GoalDispatchOperations
             GoalId goalId,
             string stateDetail,
             OrchestratorStateOutboxStatus outboxStatus,
+            DateTimeOffset? processingStartedAt,
             DateTimeOffset createdAt,
             bool repaired)
         {
-            var launch = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId, outboxStatus);
+            var launch = GoalRefinementWorkCoordinator.TryLaunchIfDue(
+                workspace,
+                goalId,
+                outboxStatus,
+                processingStartedAt);
             var failedClaims = GoalRefinementWorkCoordinator.GetConsecutiveFailedClaims(workspace, goalId);
             var failedClaimsDetail = failedClaims > 0
                 ? $" consecutive_failed_claims={failedClaims}"
