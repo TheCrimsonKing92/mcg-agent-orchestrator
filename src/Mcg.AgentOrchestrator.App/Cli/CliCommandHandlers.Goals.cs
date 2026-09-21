@@ -558,7 +558,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             var dispositions = ParseCriterionDispositions(parts);
-            var waiver = context.Kernel.WaiveAcceptanceCriterion(goal.Id, criterion, reason, actor, dispositions);
+            var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
+            var currentCandidateSha = TryResolveGitHead(
+                context,
+                worktreePath ?? context.Workspace.ExecutionDirectory);
+            var waiver = context.Kernel.WaiveAcceptanceCriterion(
+                goal.Id,
+                criterion,
+                reason,
+                actor,
+                dispositions,
+                currentCandidateSha);
             context.CurrentGoal = goal;
             var criterionNumber = Array.FindIndex(
                 goal.RefinedSpec!.AcceptanceCriteria.ToArray(),

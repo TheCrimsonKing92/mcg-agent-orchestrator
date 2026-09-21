@@ -9,7 +9,8 @@ public sealed partial class AgentOrchestratorKernel
         string criterionReference,
         string reason,
         string actor = CriteriaCorrectionActor,
-        IReadOnlyList<CriterionDispositionRequest>? dispositions = null)
+        IReadOnlyList<CriterionDispositionRequest>? dispositions = null,
+        string? currentCandidateSha = null)
     {
         var goal = GetGoal(goalId);
         if (goal.Status == GoalStatus.Draft || goal.IsTerminal)
@@ -23,7 +24,7 @@ public sealed partial class AgentOrchestratorKernel
         var criterion = ResolveAcceptanceCriterion(spec.AcceptanceCriteria, criterionReference).Trim();
         var normalizedReason = NormalizeWaiverLine(reason, nameof(reason));
         var normalizedActor = NormalizeWaiverLine(actor, nameof(actor));
-        var affectedCriteria = SelectAffectedCriteria(goal, criterion);
+        var affectedCriteria = SelectAffectedCriteria(goal, criterion, currentCandidateSha);
         var resolvedDispositions = ResolveCriterionDispositions(
             spec.AcceptanceCriteria,
             affectedCriteria,
@@ -59,14 +60,17 @@ public sealed partial class AgentOrchestratorKernel
         return waiver;
     }
 
-    private static IReadOnlyList<string> SelectAffectedCriteria(Goal goal, string waivedCriterion)
+    private static IReadOnlyList<string> SelectAffectedCriteria(
+        Goal goal,
+        string waivedCriterion,
+        string? currentCandidateSha)
     {
         var waivedCriteria = goal.EffectiveAcceptanceCriteriaCorrections
             .Where(correction => correction.IsWaiver)
             .Select(correction => correction.SupersededCriterion)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        return goal.OutstandingCriterionEvidenceObligations
+        return goal.GetOutstandingCriterionEvidenceObligations(currentCandidateSha)
             .Where(obligation => !string.Equals(
                 obligation.Criterion.Trim(),
                 waivedCriterion,

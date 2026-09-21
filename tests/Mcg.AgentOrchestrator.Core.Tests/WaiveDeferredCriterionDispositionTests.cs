@@ -51,7 +51,7 @@ public sealed class WaiveDeferredCriterionDispositionTests
     }
 
     [Xunit.Fact]
-    public void SatisfiedObligationDoesNotRequireDisposition()
+    public void SatisfiedObligationForCurrentCandidateDoesNotRequireDisposition()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateGoal(kernel, ["Implement the mechanism.", "Measure the mechanism after landing."]);
@@ -67,9 +67,41 @@ public sealed class WaiveDeferredCriterionDispositionTests
             "Measured successfully.");
         kernel.ActivateGoal(goal.Id, DefaultAgents());
 
-        var waiver = kernel.WaiveAcceptanceCriterion(goal.Id, "1", "Requirement moved.");
+        var waiver = kernel.WaiveAcceptanceCriterion(
+            goal.Id,
+            "1",
+            "Requirement moved.",
+            currentCandidateSha: "candidate-a");
 
         Xunit.Assert.Null(waiver.Dispositions);
+    }
+
+    [Xunit.Fact]
+    public void SatisfiedObligationForStaleCandidateRequiresDisposition()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateGoal(kernel, ["Implement the mechanism.", "Measure the mechanism after landing."]);
+        var obligation = MapOutstanding(kernel, goal, 1);
+        kernel.RecordCriterionEvidence(
+            goal.Id,
+            obligation.Id,
+            obligation.Owner,
+            "candidate-a",
+            "receipt-a",
+            obligation.RequiredScope,
+            passed: true,
+            "Measured successfully.");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            kernel.WaiveAcceptanceCriterion(
+                goal.Id,
+                "1",
+                "Requirement moved.",
+                currentCandidateSha: "candidate-b"));
+
+        Xunit.Assert.Contains("Measure the mechanism after landing.", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Empty(goal.EffectiveAcceptanceCriteriaCorrections);
     }
 
     [Xunit.Fact]
