@@ -523,7 +523,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "goal-amend":
         {
-            const string usage = "goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
+            const string usage = "goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>]";
             CliArgumentParser.RequirePartCount(parts, 5, usage);
             var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
             var criterion = GetFlagValue(parts, "--waive")
@@ -557,7 +557,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new ArgumentException($"--actor requires a name. Usage: {usage}");
             }
 
-            var waiver = context.Kernel.WaiveAcceptanceCriterion(goal.Id, criterion, reason, actor);
+            var dispositions = ParseCriterionDispositions(parts);
+            var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
+            var currentCandidateSha = TryResolveGitHead(
+                context,
+                worktreePath ?? context.Workspace.ExecutionDirectory);
+            var waiver = context.Kernel.WaiveAcceptanceCriterion(
+                goal.Id,
+                criterion,
+                reason,
+                actor,
+                dispositions,
+                currentCandidateSha);
             context.CurrentGoal = goal;
             var criterionNumber = Array.FindIndex(
                 goal.RefinedSpec!.AcceptanceCriteria.ToArray(),

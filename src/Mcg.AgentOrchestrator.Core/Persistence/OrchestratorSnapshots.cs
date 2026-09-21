@@ -53,7 +53,10 @@ public sealed record EffectiveAcceptanceCriteriaCorrectionSnapshot(
     string? SourceTaskId,
     ProgressKind SourceKind,
     bool IsWaiver = false,
-    string? CapturedAcceptanceCriteriaHash = null);
+    string? CapturedAcceptanceCriteriaHash = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<CriterionDisposition>? Dispositions = null);
 
 public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,

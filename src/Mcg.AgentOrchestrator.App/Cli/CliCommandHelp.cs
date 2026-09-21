@@ -20,7 +20,7 @@ internal static class CliCommandHelp
     public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
-    public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
+    public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>]";
     public const string ReviseUsage = "Usage: revise <goal-prefix> <new-brief> [--reason <reason>] [--supersede-answer <clarification-id>=<replacement>...] | revise <goal-prefix> --brief-file <path|-> [--reason <reason>|--reason-file <path|->] [--supersede-answer <clarification-id>=<replacement>...] | revise <goal-prefix> --history (- reads stdin for revise file flags)";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
@@ -239,7 +239,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry GoalAmend = new(
         GoalAmendUsage,
         "Waive one acceptance criterion on an in-flight goal with durable audit provenance.",
-        ["--waive", "--reason", "--reason-file", "--text-file", "--actor", "--help", "-h"]);
+        ["--waive", "--reason", "--reason-file", "--text-file", "--disposition", "--disposition-file", "--actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Revise = new(
         ReviseUsage,
