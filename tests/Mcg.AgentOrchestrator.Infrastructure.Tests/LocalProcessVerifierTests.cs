@@ -176,6 +176,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         }
     }
 
+}
+
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+public sealed class LocalProcessVerifierStaticHookTests : DotnetBuildEnvironmentManagerRootedTestBase
+{
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_retries_once_on_CS2012_and_returns_passed")]
     public async Task LocalProcessVerifierRetriesOnceOnCs2012AndReturnsPassed()
     {
@@ -192,7 +197,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         {
             calls.Add((fileName, args));
             return Task.FromResult(responses.Dequeue());
-        });
+        }, StorageRoot);
 
         try
         {
@@ -217,7 +222,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         {
             DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 }
