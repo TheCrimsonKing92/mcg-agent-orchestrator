@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 
 [Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
-public sealed class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvironmentManagerRootedTestBase
+public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvironmentManagerRootedTestBase
 {
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_lease_defaults_use_system_time_and_thread_sleep")]
     public void DotnetBuildEnvironmentManagerLeaseDefaultsUseSystemTimeAndThreadSleep()
@@ -497,6 +497,7 @@ public sealed class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvironmentM
         Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);
         Assert.DoesNotContain(@"Join-Path $leaseRoot ""lease.lock""", source, StringComparison.Ordinal);
         Assert.Contains("Assert-CustodyAllowsTakeover -ArtifactsPath $Path", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("dotnet build-server shutdown", source, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "MtpTestRunner_preserves_absolute_targets_and_selects_manifest_projects_from_solution")]

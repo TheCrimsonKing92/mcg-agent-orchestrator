@@ -69,61 +69,56 @@ public sealed class LocalProcessVerifier
             throw new ArgumentException("Value cannot be empty.", nameof(workingDirectory));
         }
 
-        // Shut down build servers to release file locks before running verification.
-        await _runner(
-            "dotnet",
-            ["build-server", "shutdown"],
-            workingDirectory,
-            AcceptanceCheckTimeouts.DefaultTimeout,
-            cancellationToken).ConfigureAwait(false);
-
         var completedAt = DateTimeOffset.UtcNow;
         var preparedCommand = PrepareCommand(command, goalId, taskId, _storageRoot);
         var elapsed = Stopwatch.StartNew();
         var commandTimeout = AcceptanceCheckTimeouts.DefaultTimeout;
 
-        using var leaseLock = preparedCommand.BuildEnvironment is null
+        DotnetBuildEnvironmentLease? executionLease = preparedCommand.BuildEnvironment is null
             ? null
-            : DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(preparedCommand.BuildEnvironment, cancellationToken);
-
-        var result = await RunPreparedCommandAsync(
-            preparedCommand,
-            workingDirectory,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-
-        if (result.ExitCode != 0 && (result.Stdout + result.Stderr).Contains("CS2012", StringComparison.Ordinal))
+            : DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(preparedCommand.BuildEnvironment, cancellationToken);
+        try
         {
-            // CS2012 is a transient file-lock on obj dlls; a second build-server shutdown
-            // clears residual compiler processes before the single allowed retry.
-            await _runner(
-                "dotnet",
-                ["build-server", "shutdown"],
-                workingDirectory,
-                AcceptanceCheckTimeouts.DefaultTimeout,
-                cancellationToken).ConfigureAwait(false);
-            result = await RunPreparedCommandAsync(
+            var result = await RunPreparedCommandAsync(
                 preparedCommand,
                 workingDirectory,
                 commandTimeout,
                 cancellationToken).ConfigureAwait(false);
+
+            if (executionLease is not null && result.ExitCode != 0 &&
+                (result.Stdout + result.Stderr).Contains("CS2012", StringComparison.Ordinal))
+            {
+                executionLease.MarkCompilerLockRemediationRequired();
+                executionLease.Dispose();
+                executionLease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
+                    preparedCommand.BuildEnvironment!, cancellationToken);
+                result = await RunPreparedCommandAsync(
+                    preparedCommand,
+                    workingDirectory,
+                    commandTimeout,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            elapsed.Stop();
+            completedAt = DateTimeOffset.UtcNow;
+
+            var standardOutput = BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) +
+                (result.TimedOut ? BuildTimeoutEvidence(result) : string.Empty) +
+                result.Stdout;
+            return new TaskVerificationRecord(
+                preparedCommand.Command,
+                workingDirectory,
+                result.ExitCode,
+                standardOutput,
+                result.Stderr,
+                completedAt,
+                FullStandardOutput: standardOutput,
+                FullStandardError: result.Stderr);
         }
-
-        elapsed.Stop();
-        completedAt = DateTimeOffset.UtcNow;
-
-        var standardOutput = BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) +
-            (result.TimedOut ? BuildTimeoutEvidence(result) : string.Empty) +
-            result.Stdout;
-        return new TaskVerificationRecord(
-            preparedCommand.Command,
-            workingDirectory,
-            result.ExitCode,
-            standardOutput,
-            result.Stderr,
-            completedAt,
-            FullStandardOutput: standardOutput,
-            FullStandardError: result.Stderr);
+        finally
+        {
+            executionLease?.Dispose();
+        }
     }
 
     private async Task<CommandResult> RunPreparedCommandAsync(

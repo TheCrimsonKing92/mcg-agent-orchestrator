@@ -85,28 +85,42 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable));
     }
 
-    [Xunit.Fact(DisplayName = "Hermetic_verification_scopes_the_NuGet_HTTP_cache_to_the_build_environment")]
-    public void HermeticVerificationScopesTheNuGetHttpCacheToTheBuildEnvironment()
+    [Xunit.Fact(DisplayName = "Hermetic_verification_scopes_dotnet_home_and_HTTP_cache_per_lane_while_sharing_packages")]
+    public void HermeticVerificationScopesDotnetHomeAndHttpCachePerLaneWhileSharingPackages()
     {
         var buildEnvironmentRoot = Path.Combine(
             Path.GetTempPath(),
             "mcg-hermetic-nuget-cache-tests",
             Guid.NewGuid().ToString("N"));
+        var firstRoot = Path.Combine(buildEnvironmentRoot, "first");
+        var secondRoot = Path.Combine(buildEnvironmentRoot, "second");
+        var sharedPackages = Path.Combine(buildEnvironmentRoot, "packages");
         try
         {
-            var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            var first = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
-                ["NUGET_HTTP_CACHE_PATH"] = Path.Combine(Path.GetTempPath(), "shared-nuget-http-cache")
+                ["NUGET_PACKAGES"] = sharedPackages
             };
+            var second = new Dictionary<string, string?>(first, StringComparer.OrdinalIgnoreCase);
 
             GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
-                environment,
+                first,
                 Path.GetTempPath(),
-                buildEnvironmentRoot);
+                firstRoot);
+            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+                second,
+                Path.GetTempPath(),
+                secondRoot);
 
-            var expected = Path.Combine(buildEnvironmentRoot, "nuget-http-cache");
-            Assert.Equal(expected, environment["NUGET_HTTP_CACHE_PATH"]);
-            Assert.True(Directory.Exists(expected));
+            Assert.Equal(Path.Combine(firstRoot, "dotnet-cli-home"), first["DOTNET_CLI_HOME"]);
+            Assert.Equal(Path.Combine(secondRoot, "dotnet-cli-home"), second["DOTNET_CLI_HOME"]);
+            Assert.NotEqual(first["DOTNET_CLI_HOME"], second["DOTNET_CLI_HOME"]);
+            Assert.Equal(sharedPackages, first["NUGET_PACKAGES"]);
+            Assert.Equal(first["NUGET_PACKAGES"], second["NUGET_PACKAGES"]);
+            Assert.Equal(Path.Combine(firstRoot, "nuget-http-cache"), first["NUGET_HTTP_CACHE_PATH"]);
+            Assert.Equal(Path.Combine(secondRoot, "nuget-http-cache"), second["NUGET_HTTP_CACHE_PATH"]);
+            Assert.True(Directory.Exists(first["DOTNET_CLI_HOME"]));
+            Assert.True(Directory.Exists(second["DOTNET_CLI_HOME"]));
         }
         finally
         {
@@ -142,7 +156,6 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
             var calls = new List<string[]>();
             var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
                 new(0, ""),
-                new(0, ""),
                 new(0, "Full tests passed.")
             ]);
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -154,7 +167,7 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
             var result = await verifier.RunAsync(root, changedFiles: ["Directory.Build.props"]);
 
             Assert.True(result.Passed);
-            Assert.Contains("Mcg.AgentOrchestrator.sln", calls[2], StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("Mcg.AgentOrchestrator.sln", calls[1], StringComparer.OrdinalIgnoreCase);
             Assert.Contains(result.Checks!, check => check.Name == "full dotnet tests");
         }
         finally

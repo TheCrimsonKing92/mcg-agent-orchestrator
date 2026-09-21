@@ -93,10 +93,10 @@ try {
     Set-Content -LiteralPath $projectTwo -Value "<Project />"
 
 $shimScript = @'
-param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
-Add-Content -LiteralPath $env:DOTNET_SHIM_LOG -Value ([string]::Join(" ", $Arguments))
-if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "build-server") { exit 0 }
-$project = if ($Arguments.Count -gt 1) { $Arguments[1] } else { "unknown.csproj" }
+$rawArguments = $env:DOTNET_SHIM_RAW_ARGUMENTS
+Add-Content -LiteralPath $env:DOTNET_SHIM_LOG -Value $rawArguments
+$projectMatch = [regex]::Match($rawArguments, '(?i)^build\s+(?:"(?<project>[^"]+)"|(?<project>\S+))')
+$project = if ($projectMatch.Success) { $projectMatch.Groups["project"].Value } else { "unknown.csproj" }
 $warningPayload = "w" * 190
 $detailedLines = [System.Collections.Generic.List[string]]::new()
 $exitCode = 0
@@ -116,36 +116,21 @@ switch ($env:MCG_BUILD_FIXTURE_SCENARIO) {
     }
 }
 
-$fileLoggerArgument = @($Arguments | Where-Object { $_ -match '^-flp:' }) | Select-Object -First 1
-if ([string]::IsNullOrWhiteSpace($fileLoggerArgument)) {
-    for ($argumentIndex = 0; $argumentIndex -lt ($Arguments.Count - 1); $argumentIndex++) {
-        if ($Arguments[$argumentIndex] -eq '-flp') {
-            $fileLoggerArgument = '-flp:' + $Arguments[$argumentIndex + 1]
-            break
-        }
-    }
+$fileLoggerMatch = [regex]::Match(
+    $rawArguments,
+    '(?i)(?:^|\s)"?-flp:LogFile=(?<path>.+?);Verbosity=normal;Encoding=UTF-8;Append=false"?(?:\s|$)')
+$isHelperInvocation = $rawArguments -match '(?i)(?:^|\s)"?--nologo"?(?:\s|$)'
+if ($isHelperInvocation -and -not $fileLoggerMatch.Success) {
+    throw "helper invocation omitted file logger argument after cmd transport: $rawArguments"
 }
-$isHelperInvocation = @($Arguments | Where-Object { $_ -eq '--nologo' }).Count -gt 0
-if ($isHelperInvocation -and [string]::IsNullOrWhiteSpace($fileLoggerArgument)) {
-    throw "helper invocation omitted file logger argument after cmd transport: $([string]::Join(' || ', $Arguments))"
-}
-if (-not [string]::IsNullOrWhiteSpace($fileLoggerArgument)) {
-    $logPathMatch = [regex]::Match($fileLoggerArgument, '(?i)(?:^|[:;])LogFile=(?<path>[^;]+)')
-    if (-not $logPathMatch.Success) { throw "file logger argument omitted LogFile=: $fileLoggerArgument" }
+if ($fileLoggerMatch.Success) {
+    $logPathMatch = $fileLoggerMatch
     $detailedLogPath = $logPathMatch.Groups["path"].Value
     $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
     [System.IO.File]::WriteAllLines($detailedLogPath, $detailedLines, $utf8WithoutBom)
 }
 
-$errorsOnly = @($Arguments | Where-Object { $_ -eq '-clp:ErrorsOnly' }).Count -gt 0
-if (-not $errorsOnly) {
-    for ($argumentIndex = 0; $argumentIndex -lt ($Arguments.Count - 1); $argumentIndex++) {
-        if ($Arguments[$argumentIndex] -eq '-clp' -and $Arguments[$argumentIndex + 1] -eq 'ErrorsOnly') {
-            $errorsOnly = $true
-            break
-        }
-    }
-}
+$errorsOnly = $rawArguments -match '(?i)(?:^|\s)"?-clp:ErrorsOnly"?(?:\s|$)'
 $consoleLines = if ($errorsOnly -and $env:MCG_BUILD_FIXTURE_SCENARIO -ne "NonDiagnosticFailure") {
     @($detailedLines | Where-Object { $_.IndexOf(': error ', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 })
 }
@@ -158,7 +143,8 @@ exit $exitCode
     Set-Content -LiteralPath (Join-Path $shimDirectory "dotnet-shim.ps1") -Value $shimScript
     $shimCommand = @'
 @echo off
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1" %*
+set "DOTNET_SHIM_RAW_ARGUMENTS=%*"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1"
 exit /b %ERRORLEVEL%
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory "dotnet.cmd") -Value $shimCommand

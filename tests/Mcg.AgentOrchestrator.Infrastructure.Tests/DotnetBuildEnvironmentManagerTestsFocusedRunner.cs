@@ -192,7 +192,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
         Assert.Contains("-HeartbeatPath $slotLease.HeartbeatPath", mode, StringComparison.Ordinal);
         Assert.Contains("$path.acceptance-priority.lock", source, StringComparison.Ordinal);
         Assert.Contains("$acceptancePriorityStream.Lock(0, 1)", source, StringComparison.Ordinal);
-        Assert.Contains("& dotnet build-server shutdown", mode, StringComparison.Ordinal);
+        Assert.DoesNotContain("dotnet build-server shutdown", mode, StringComparison.Ordinal);
         Assert.Contains("$slotLease.Stream.Dispose()", mode, StringComparison.Ordinal);
         Assert.Contains("Write-FocusedReceipt -Receipt $receipt", mode, StringComparison.Ordinal);
     }

@@ -107,7 +107,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             Assert.DoesNotContain("args=test", log, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("--filter FullyQualifiedName~FocusedTests", log, StringComparison.Ordinal);
             Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
-            Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
+            Assert.DoesNotContain("args=build-server shutdown", log, StringComparison.Ordinal);
             Assert.DoesNotContain("--disable-build-servers", log);
             Assert.DoesNotContain("-p:UseSharedCompilation=false", log);
             Assert.DoesNotContain("sandbox=1", log);
@@ -206,10 +206,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
 
             Assert.NotEqual(0, process.ExitCode);
             Assert.Contains(expectedError, stderr, StringComparison.OrdinalIgnoreCase);
-            var log = File.ReadAllText(logPath);
-            Assert.DoesNotContain("args=build ", log, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("args=test ", log, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(".dll", log, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(logPath), "The dotnet shim must not run before request validation.");
             Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
         }
         finally

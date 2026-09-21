@@ -438,8 +438,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_build_lock_after_attribution_and_build_server_shutdown")]
-    public async Task GoalAcceptanceVerifierRetriesBuildLockAfterAttributionAndBuildServerShutdown()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_build_lock_after_attribution_and_scoped_recovery")]
+    public async Task GoalAcceptanceVerifierRetriesBuildLockAfterAttributionAndScopedRecovery()
     {
         var root = CreateManifestWorkspace("""
             {
@@ -453,9 +453,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var lockedPath = Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.App.dll");
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(1, $"Csc error CS2012: Cannot open '{lockedPath}' for writing -- The process cannot access the file because it is being used by another process."),
-            new(0, ""),
             new(0, "Build succeeded.")
         ]);
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
@@ -473,11 +471,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.Equal(4, calls.Count);
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.Equal("dotnet", calls[1][0]);
-            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.Equal("dotnet", calls[3][0]);
+            Assert.Equal(2, calls.Count);
+            Assert.All(calls, call => Assert.Equal("dotnet", call[0]));
             var check = Assert.Single(result.Checks!);
             Assert.True(check.LockRemediationApplied);
             Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
@@ -503,7 +498,6 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var missingPath = Path.Combine(root, "artifacts", "obj", "apphost.exe");
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(1, $"error MSB3030: Could not copy the file '{missingPath}' because it was not found.")
         ]);
 
@@ -518,7 +512,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.False(result.Passed);
-            Assert.Equal(2, calls.Count);
+            Assert.Single(calls);
             var check = Assert.Single(result.Checks!);
             Assert.False(check.LockRemediationApplied);
             Assert.Contains("was not found", check.OutputTail, StringComparison.Ordinal);
@@ -600,11 +594,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.True(result!.Passed);
             Assert.True(result.Retried);
             Assert.Equal(2, buildAttempts);
-            Assert.Equal(4, calls.Count);
+            Assert.Equal(2, calls.Count);
             Assert.NotEmpty(delayCallsWhileHeld);
             Assert.Equal(TimeSpan.FromMilliseconds(10), Assert.Single(delayCallsWhileHeld));
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
             var check = Assert.Single(result.Checks!);
             Assert.True(check.LockRemediationApplied);
             Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
@@ -654,7 +646,6 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Equal(stuckPath, blocked!.Attribution.Path);
             Assert.Equal(1, stuckBuildAttempts);
             Assert.Single(stuckCalls.Where(call => !call.SequenceEqual(["dotnet", "build-server", "shutdown"])));
-            Assert.Contains(stuckCalls, call => call.SequenceEqual(["dotnet", "build-server", "shutdown"]));
             Assert.Equal(3, stuckTimeProvider.Delays.Count);
             Assert.All(stuckTimeProvider.Delays, delay => Assert.Equal(TimeSpan.FromMilliseconds(10), delay));
             Assert.Contains("LOCK_TRANSIENT_WAIT ", stuckOutput, StringComparison.Ordinal);
@@ -794,7 +785,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
             Assert.Contains($"holderPid={Environment.ProcessId}", output, StringComparison.Ordinal);
             Assert.Contains("holderName=\"testhost\"", output, StringComparison.Ordinal);
-            Assert.True(calls.Count >= 3);
+            Assert.NotEmpty(calls);
 
             held.Dispose();
             var result = await verifier.RunAsync(root);
@@ -846,7 +837,6 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             """);
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(0, "src/ok.cs\nbin/Debug/generated.dll\n")
         ]);
         var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
@@ -859,8 +849,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 
         Assert.False(result.Passed);
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal(2, calls.Count);
-        Assert.True(calls[1].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
+        Assert.Single(calls);
+        Assert.True(calls[0].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("forbidden changed paths", result.Checks![0].Name);
         Assert.Contains("bin/Debug/generated.dll", result.OutputTail!, StringComparison.Ordinal);
@@ -1139,9 +1129,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.Equal(TimeSpan.FromMinutes(25), calls[0].Timeout);
-            Assert.Equal(TimeSpan.FromMinutes(25), calls[1].Timeout);
+            var call = Assert.Single(calls);
+            Assert.Equal(TimeSpan.FromMinutes(25), call.Timeout);
         }
         finally
         {
@@ -1175,10 +1164,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.Equal(TimeSpan.FromMinutes(7), calls[0].Timeout);
-            Assert.Equal(TimeSpan.FromMinutes(2), calls[1].Timeout);
-            Assert.Equal("custom-check", calls[1].Args[0]);
+            var call = Assert.Single(calls);
+            Assert.Equal(TimeSpan.FromMinutes(2), call.Timeout);
+            Assert.Equal("custom-check", call.Args[0]);
         }
         finally
         {

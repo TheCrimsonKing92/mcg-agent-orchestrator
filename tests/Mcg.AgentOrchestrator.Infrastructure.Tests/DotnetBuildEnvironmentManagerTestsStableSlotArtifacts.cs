@@ -797,6 +797,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_caps_msbuild_parallelism_per_slot")]
     public void DotnetBuildEnvironmentManagerCapsMsbuildParallelismPerSlot()
     {
+        using var gateScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.GateBuildMaxCpuCountVariable, null);
         using var defaultScope = EnvVarScope.ForVariable(DotnetBuildEnvironmentManager.BuildMaxCpuCountVariable, null);
         var defaultArguments = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, null, "default-cpu").Arguments;
         var expectedDefault = Math.Max(2, Environment.ProcessorCount / DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);

@@ -11,9 +11,9 @@ public sealed class ChaosGateGitCollection;
 [Xunit.CollectionDefinition(TestCollections.DotnetBuildSlots, DisableParallelization = true)]
 public sealed class DotnetBuildSlotsCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
-// Environment-manager facts own per-test storage roots. Separate fixture-free collections let
-// these classes overlap one another while preserving explicit collection ownership.
-[Xunit.CollectionDefinition(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+// Environment-manager facts own per-test storage roots. Static-hook facts also assert the
+// process-wide held-lease count, so they cannot overlap any collection that acquires a build lease.
+[Xunit.CollectionDefinition(TestCollections.DotnetBuildEnvironmentManagerStaticHooks, DisableParallelization = true)]
 public sealed class DotnetBuildEnvironmentManagerStaticHooksCollection;
 [Xunit.CollectionDefinition(TestCollections.DotnetBuildEnvironmentManagerFocusedRunner)]
 public sealed class DotnetBuildEnvironmentManagerFocusedRunnerCollection;

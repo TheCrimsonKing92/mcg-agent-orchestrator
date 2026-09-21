@@ -49,7 +49,6 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             foreach (var phaseName in new[]
             {
                 AcceptanceGatePhaseNames.GatePlan,
-                AcceptanceGatePhaseNames.BuildServerShutdown,
                 AcceptanceGatePhaseNames.PlanConstruction,
                 AcceptanceGatePhaseNames.CheckExecution,
                 AcceptanceGatePhaseNames.PolicySynthesis,
@@ -74,15 +73,12 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
         var root = CreateManifestWorkspace(Manifest);
         var time = new RecordingTimeProvider();
         var progress = new List<AcceptanceGateProgress>();
-        var call = 0;
         try
         {
             var verifier = new GoalAcceptanceVerifier((_, _, _) =>
             {
                 time.Advance(TimeSpan.FromSeconds(1));
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    call++ == 0 ? 0 : 7,
-                    "deterministic failure"));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(7, "deterministic failure"));
             }, time);
             var result = await RunWithProgressAsync(verifier, root, progress.Add);
 
@@ -119,13 +115,13 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
 
             var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
             Assert.Equal("deterministic runner fault", innerException.Message);
-            Assert.Equal("build-server-shutdown", exception.GatePhase);
-            Assert.Equal("dotnet build-server shutdown", exception.GateTarget);
+            Assert.Equal("check-execution", exception.GatePhase);
+            Assert.Equal("phase seam", exception.GateTarget);
             Assert.Contains("deterministic runner fault", exception.FaultStack, StringComparison.Ordinal);
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
                 Assert.Single(progress, item => item.Phase == "gate-phase-breakdown").PhaseBreakdown);
             Assert.Equal("faulted", breakdown.Outcome);
-            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.BuildServerShutdown);
+            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.CheckExecution);
         }
         finally
         {
@@ -153,7 +149,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 Assert.Single(progress, item => item.Phase == "gate-phase-breakdown").PhaseBreakdown);
             Assert.Equal("cancelled", breakdown.Outcome);
             Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.GatePlan);
-            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.BuildServerShutdown);
+            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.CheckExecution);
         }
         finally
         {

@@ -15,7 +15,6 @@ public sealed class ChaosGateAcceptanceManifestTests : ChaosGateTestBase
             }
             """);
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(0, ".qwen/settings.json\nsrc/safe.cs")
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>

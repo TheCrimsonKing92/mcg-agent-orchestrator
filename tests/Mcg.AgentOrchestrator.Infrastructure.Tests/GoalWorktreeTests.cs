@@ -2224,7 +2224,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             var log = File.ReadAllText(fixture.DotnetLogPath);
             Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
             Assert.DoesNotContain("args=build ", log, StringComparison.Ordinal);
-            Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("args=build-server shutdown", log, StringComparison.Ordinal);
             Assert.Contains($"args={fixture.AssemblyPath} ", log, StringComparison.OrdinalIgnoreCase);
 
             var source = File.ReadAllText(Path.Combine(FindCurrentSourceRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
@@ -2263,9 +2263,9 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
                 result.Stderr,
                 StringComparison.Ordinal);
 
-            var log = File.ReadAllText(fixture.DotnetLogPath);
-            Assert.DoesNotContain("args=test ", log, StringComparison.Ordinal);
-            Assert.Contains("args=build-server shutdown", log, StringComparison.Ordinal);
+            Assert.False(
+                File.Exists(fixture.DotnetLogPath),
+                "Artifact validation must fail before starting dotnet or shutting down session-global build servers.");
         }
         finally
         {
@@ -2441,8 +2441,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         var shimLines = new List<string>
         {
             "@echo off",
-            ">> \"%DOTNET_SHIM_LOG%\" echo args=%*",
-            "if not \"%~1\"==\"build-server\" goto run-real-dotnet"
+            ">> \"%DOTNET_SHIM_LOG%\" echo args=%*"
         };
         if (shimDelay.HasValue)
         {
@@ -2457,11 +2456,16 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
                 "powershell.exe -NoProfile -NonInteractive -Command \"Set-Content -LiteralPath $env:DOTNET_SHIM_CHILD_PID -Value $PID; " +
                 "Set-Content -LiteralPath $env:DOTNET_SHIM_READY_PATH -Value ready; while ($true) { Start-Sleep -Seconds 60 }\"");
         }
-        shimLines.Add("exit /b 0");
-        shimLines.Add(":run-real-dotnet");
-        shimLines.Add("set \"PATH=%DOTNET_REAL_PATH%\"");
-        shimLines.Add("dotnet.exe %*");
-        shimLines.Add("exit /b %ERRORLEVEL%");
+        if (shimDelay.HasValue || shimNeverExits)
+        {
+            shimLines.Add("exit /b 0");
+        }
+        else
+        {
+            shimLines.Add("set \"PATH=%DOTNET_REAL_PATH%\"");
+            shimLines.Add("dotnet.exe %*");
+            shimLines.Add("exit /b %ERRORLEVEL%");
+        }
         File.WriteAllLines(Path.Combine(shimDirectory, "dotnet.cmd"), shimLines);
 
         return new ReuseFixture(

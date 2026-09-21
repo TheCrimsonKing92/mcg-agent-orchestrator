@@ -495,8 +495,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             var lane = Xunit.Assert.Single(settings.InfrastructureTestLanes);
             Xunit.Assert.Equal(123.5, lane.EstimatedSerialSeconds);
             Xunit.Assert.Equal(["candidate-resource"], lane.ExclusiveResourceKeys);
-            Xunit.Assert.Equal(TimeSpan.FromMinutes(1), calls[0].Timeout);
-            var testCall = Xunit.Assert.Single(calls.Skip(1));
+            var testCall = Xunit.Assert.Single(calls);
             Xunit.Assert.Contains("FullyQualifiedName~CandidateLaneTests", testCall.Arguments);
             Xunit.Assert.Equal(TimeSpan.FromMinutes(3), testCall.Timeout);
         }

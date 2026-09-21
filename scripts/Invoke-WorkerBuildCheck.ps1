@@ -483,7 +483,6 @@ catch {
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
-        & dotnet build-server shutdown *> $null
         $lockStream.Unlock(0, 1)
         $lockStream.Dispose()
     }
