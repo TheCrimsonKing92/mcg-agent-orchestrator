@@ -421,6 +421,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var candidateProbeAssemblyPaths = new List<string>
         {
             Path.Combine(acceptanceAssemblyDirectory, probeAssemblyName),
+            Path.Combine(
+                InfrastructureTestSupport.FindRepositoryRoot(),
+                "bin",
+                probeProjectName,
+                "Debug",
+                probeAssemblyName),
         };
         // Default SDK layout: <testProject>/bin/<Configuration>/<TargetFramework>.
         if (parentDirectory?.Parent?.Parent is { } testProjectDirectory)
