@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
-public sealed class CliGoalAmendDispositionTests : CliCommandTestBase
+public sealed class CliCommandTestsGoalAmendDisposition : CliCommandTestBase
 {
     [Xunit.Fact]
     public async Task GoalAmendReadsDispositionFilePersistsItAndRendersItAgainstAffectedCriterion()
