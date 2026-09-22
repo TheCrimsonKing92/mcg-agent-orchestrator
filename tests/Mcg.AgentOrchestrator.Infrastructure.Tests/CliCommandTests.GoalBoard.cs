@@ -263,6 +263,11 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
                 Path.Combine(root, $"{deadGoal.Tasks.Single().Id.Value}-exit.txt"),
                 DispatchExitArtifacts.Native(0, "worker exited", DateTimeOffset.UtcNow));
             WriteAcceptanceAttempt(workspace, gateGoal.Id.Value, live: true);
+            var leaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            Xunit.Assert.True(leaseStore.TryClaimAcceptanceLease(
+                gateGoal.Id.Value,
+                "goal-replace:test:active",
+                ConductorDriver.EvidenceMutationLeaseDuration));
 
             var output = CaptureConsole(() => GoalBoardCommand.Run(
                 ["goals", "--board", "--all"],
@@ -281,6 +286,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
             Xunit.Assert.Contains("held=worker live", liveRow, StringComparison.Ordinal);
             Xunit.Assert.Contains("work=gate:live", gateRow, StringComparison.Ordinal);
             Xunit.Assert.Contains("held=acceptance live", gateRow, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("lease-status=", gateRow, StringComparison.Ordinal);
             Xunit.Assert.All(new[] { deadRow, liveRow, gateRow }, row =>
                 Xunit.Assert.Contains("attention=unknown intents=unknown", row, StringComparison.Ordinal));
             Xunit.Assert.Equal(1, CountLinesContaining(output, $"[{deadGoal.Id.Value[..8]}]"));
@@ -599,6 +605,158 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void GoalBoardReadsLeaseEvidenceWithoutMutatingRecoveryState()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Persisted goal-evidence lease");
+            var store = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            const string operation = "conductor:developer-branch-integration";
+            const string instance = "board-instance";
+            using var currentProcess = Process.GetCurrentProcess();
+            var ownerProcessStartedAt = new DateTimeOffset(
+                currentProcess.StartTime.ToUniversalTime(),
+                TimeSpan.Zero);
+            var owner = $"goal-evidence:v1:{operation}:{currentProcess.Id}:{instance}";
+            Xunit.Assert.True(store.TryClaimAcceptanceLease(
+                goal.Id.Value,
+                owner,
+                ConductorDriver.EvidenceMutationLeaseDuration));
+            GoalOperationJournal.Begin(
+                root,
+                goal,
+                operation,
+                operationInstanceId: instance,
+                ownerProcessStartedAtUtc: ownerProcessStartedAt);
+            var journalPath = GoalOperationJournal.PathFor(root, goal.Id);
+            var entryCount = GoalOperationJournal.Read(root, goal.Id).Entries.Count;
+
+            var liveOutput = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                utcNow: () => DateTimeOffset.UtcNow.AddMinutes(12),
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty));
+
+            var liveRow = SingleLineContaining(liveOutput, "Persisted goal-evidence lease");
+            Xunit.Assert.Contains($"lease-goal={goal.Id.Value[..8]}", liveRow, StringComparison.Ordinal);
+            Xunit.Assert.Contains("owner-operation=conductor:developer-branch-integrati", liveRow, StringComparison.Ordinal);
+            Xunit.Assert.Contains("lease-status=live", liveRow, StringComparison.Ordinal);
+            Xunit.Assert.Equal(owner, store.TryGetAcceptanceLeaseOwner(goal.Id.Value));
+            Xunit.Assert.Equal(entryCount, GoalOperationJournal.Read(root, goal.Id).Entries.Count);
+
+            using (new FileStream(journalPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var unavailableOutput = CaptureConsole(() => GoalBoardCommand.Run(
+                    ["goals", "--board", "--all"],
+                    new InMemoryTransactionalStateRepository(kernel),
+                    workspace,
+                    processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty));
+                var unavailableRow = SingleLineContaining(unavailableOutput, "Persisted goal-evidence lease");
+                Xunit.Assert.Contains("lease-status=state-unavailable", unavailableRow, StringComparison.Ordinal);
+            }
+
+            Xunit.Assert.Equal(owner, store.TryGetAcceptanceLeaseOwner(goal.Id.Value));
+            Xunit.Assert.Equal(entryCount, GoalOperationJournal.Read(root, goal.Id).Entries.Count);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void GoalBoardRendersLegacyGoalEvidenceOwnerAsStateUnavailable()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Pre-upgrade goal-evidence lease");
+            var store = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            const string owner =
+                "goal-evidence:conductor:developer-branch-integration:32972:a3b675d01a2349aaa8aee97aff86f334";
+            Xunit.Assert.True(store.TryClaimAcceptanceLease(
+                goal.Id.Value,
+                owner,
+                ConductorDriver.EvidenceMutationLeaseDuration));
+
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty));
+
+            var row = SingleLineContaining(output, "Pre-upgrade goal-evidence lease");
+            Xunit.Assert.Contains($"lease-goal={goal.Id.Value[..8]}", row, StringComparison.Ordinal);
+            Xunit.Assert.Contains("owner-operation=unknown", row, StringComparison.Ordinal);
+            Xunit.Assert.Contains("lease-status=state-unavailable", row, StringComparison.Ordinal);
+            Xunit.Assert.Equal(owner, store.TryGetAcceptanceLeaseOwner(goal.Id.Value));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void GoalBoardMalformedLeaseTimestampIsStateUnavailable()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Malformed lease timestamp");
+            var store = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+            const string owner = "goal-evidence:v1:conductor:developer-branch-integration:42:malformed-time";
+            Xunit.Assert.True(store.TryClaimAcceptanceLease(
+                goal.Id.Value,
+                owner,
+                ConductorDriver.EvidenceMutationLeaseDuration));
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                       $"Data Source={workspace.SqliteStatePath};Pooling=False"))
+            {
+                connection.Open();
+                using var corrupt = connection.CreateCommand();
+                corrupt.CommandText = "UPDATE reconcile_acceptance_leases SET acquired_at = 'malformed-timestamp' WHERE goal_id = $goal";
+                corrupt.Parameters.AddWithValue("$goal", goal.Id.Value);
+                Xunit.Assert.Equal(1, corrupt.ExecuteNonQuery());
+            }
+
+            var output = CaptureConsole(() => GoalBoardCommand.Run(
+                ["goals", "--board", "--all"],
+                new InMemoryTransactionalStateRepository(kernel),
+                workspace,
+                processSnapshotFactory: () => ProcessCommandLineSnapshot.Empty));
+
+            var row = SingleLineContaining(output, "Malformed lease timestamp");
+            Xunit.Assert.Contains("lease-status=state-unavailable", row, StringComparison.Ordinal);
+            Xunit.Assert.Equal(owner, store.TryGetAcceptanceLeaseOwner(goal.Id.Value));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static AgentOrchestratorKernel WithGoalStatus(AgentOrchestratorKernel kernel, GoalStatus status)
     {
         var snapshot = kernel.ExportSnapshot();
@@ -772,6 +930,89 @@ public sealed class GoalBoardProjectorTests
         AssertRow(rows, "40000000", "worktree=dirty ahead=0 behind=0");
     }
 
+    [Xunit.Fact]
+    public void GoalEvidenceLeaseRendersRecoveryWithinRowContract()
+    {
+        var now = DateTimeOffset.Parse("2026-08-17T12:00:00Z");
+        var lease = new GoalEvidenceLeaseFact(
+            "10000000000000000000000000000000",
+            "goal-evidence:v1:conductor:developer-branch-integration:42:instance-1",
+            "conductor:developer-branch-integration",
+            "instance-1",
+            now.AddMinutes(-12),
+            GoalEvidenceLeaseRecoveryStatus.TerminalReclaimPending,
+            "reclaimed:prior-operation-instance-with-production-shaped-detail");
+
+        string? row = null;
+        var error = Xunit.Record.Exception(() =>
+            row = Xunit.Assert.Single(GoalBoardProjector.Project(
+                [Fact(
+                    "10000000000000000000000000000000",
+                    status: GoalStatus.AcceptanceFailed,
+                    title: new string('t', 160),
+                    stage: "acceptance-failure-requiring-operator-triage",
+                    work: "reviewer:failed after production-shaped evidence reconciliation",
+                    signals: [new("acceptance-evidence", now.AddMinutes(-12))],
+                    backlog: "12345678/slice-with-retained-follow-up",
+                    worktree: new("conflicting", 123, 456),
+                    recovery: "next 10000000 --full with-production-shaped-detail",
+                    evidenceLease: lease)],
+                new GoalBoardOptions(null),
+                now).Rows));
+
+        Xunit.Assert.Null(error);
+        Xunit.Assert.NotNull(row);
+        Xunit.Assert.Contains("lease-goal=10000000", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("owner-operation=conductor:developer-branch-integrati", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("lease-age=12m", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("lease-status=terminal-reclaim-pending", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("held=goal-evidence lease terminal-reclaim-pending", row, StringComparison.Ordinal);
+        Xunit.Assert.True(row.Length <= 360, $"row length was {row.Length}");
+    }
+
+    [Xunit.Fact]
+    public void GoalEvidenceLeaseWithInterruptedWorkRecoveryStaysWithinRowContract()
+    {
+        var now = DateTimeOffset.Parse("2026-08-17T12:00:00Z");
+        var lease = new GoalEvidenceLeaseFact(
+            "10000000000000000000000000000000",
+            "goal-evidence:v1:conductor:developer-branch-integration:42:instance-1",
+            "conductor:developer-branch-integration",
+            "instance-1",
+            now.AddMinutes(-12),
+            GoalEvidenceLeaseRecoveryStatus.TerminalReclaimPending,
+            "reclaimed:prior-operation-instance-with-production-shaped-detail");
+        const string recovery = "goal-recovery apply 12345678 --action preserve-interrupted-work";
+
+        string? row = null;
+        var error = Xunit.Record.Exception(() =>
+            row = Xunit.Assert.Single(GoalBoardProjector.Project(
+                [Fact(
+                    "10000000000000000000000000000000",
+                    status: GoalStatus.AcceptanceFailed,
+                    title: new string('t', 160),
+                    stage: "acceptance-failure-requiring-operator-triage",
+                    work: "developer:interrupted after production-shaped evidence reconciliation",
+                    signals: [new("acceptance-evidence", now.AddMinutes(-12))],
+                    backlog: "12345678/slice-with-retained-follow-up",
+                    worktree: new("conflicting", 123, 456),
+                    dead: true,
+                    recovery: recovery,
+                    evidenceLease: lease)],
+                new GoalBoardOptions(null),
+                now).Rows));
+
+        Xunit.Assert.Null(error);
+        Xunit.Assert.NotNull(row);
+        Xunit.Assert.Contains($"next={recovery}", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("lease-goal=10000000", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("owner-operation=conductor:developer-branch-integrati", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("lease-age=12m", row, StringComparison.Ordinal);
+        Xunit.Assert.Contains("lease-status=terminal-reclaim-pending", row, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("lease-recovery=", row, StringComparison.Ordinal);
+        Xunit.Assert.True(row.Length <= 360, $"row length was {row.Length}");
+    }
+
     private static GoalBoardGoalFact Fact(
         string id,
         GoalStatus status = GoalStatus.Active,
@@ -787,7 +1028,8 @@ public sealed class GoalBoardProjectorTests
         string? recovery = null,
         bool liveAcceptance = false,
         bool liveWorker = false,
-        GoalLifecycleState? lifecycleState = null) =>
+        GoalLifecycleState? lifecycleState = null,
+        GoalEvidenceLeaseFact? evidenceLease = null) =>
         new(
             id,
             title,
@@ -804,7 +1046,8 @@ public sealed class GoalBoardProjectorTests
             liveAcceptance,
             liveWorker,
             $"next {id[..8]} --full",
-            lifecycleState);
+            lifecycleState,
+            evidenceLease);
 
     private static void AssertRow(IReadOnlyList<string> rows, string id, params string[] expected)
     {

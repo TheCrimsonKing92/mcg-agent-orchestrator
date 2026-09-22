@@ -263,6 +263,76 @@ public sealed class ReconcileSweepRemediationTests
         Xunit.Assert.NotNull(afterRelease);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("goal-evidence:v1:conductor:workspace-create:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:dispatch:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:dispatch-start:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:developer-branch-integration:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:future-operation:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:malformed")]
+    public void JournalBackedGoalEvidenceOwnersAreNeverReclaimedByAgeAlone(string heldOwner)
+    {
+        var dbPath = NewDatabasePath();
+        var store = new ReconcileSweepRemediationStore(dbPath);
+        const string contender = "goal-evidence:v1:conductor:developer-branch-integration:42:new-instance";
+        Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", heldOwner, TimeSpan.FromMinutes(30)));
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            connection.Open();
+            using var age = connection.CreateCommand();
+            age.CommandText = "UPDATE reconcile_acceptance_leases SET acquired_at = $at WHERE goal_id = $goal";
+            age.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.AddHours(-1).ToString("O"));
+            age.Parameters.AddWithValue("$goal", "goal-1");
+            age.ExecuteNonQuery();
+        }
+
+        var acquired = store.TryClaimAcceptanceLease("goal-1", contender, TimeSpan.FromMinutes(30));
+
+        Xunit.Assert.False(acquired);
+        Xunit.Assert.Equal(heldOwner, store.TryGetAcceptanceLeaseOwner("goal-1"));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("legacy-owner")]
+    [Xunit.InlineData("goal-replace:operator:42")]
+    [Xunit.InlineData("reconcile-sweep:conductor:42")]
+    [Xunit.InlineData("goal-evidence:conductor:developer-branch-integration:32972:a3b675d01a2349aaa8aee97aff86f334")]
+    [Xunit.InlineData("goal-evidence:malformed")]
+    [Xunit.InlineData("GOAL-EVIDENCE:conductor:workspace-create:42:held-instance")]
+    public void LegacyAndUnrelatedOwnersRemainEligibleForAgeReclamation(string heldOwner)
+    {
+        var dbPath = NewDatabasePath();
+        var store = new ReconcileSweepRemediationStore(dbPath);
+        const string contender = "goal-evidence:v1:conductor:developer-branch-integration:42:new-instance";
+        Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", heldOwner, TimeSpan.FromMinutes(30)));
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            connection.Open();
+            using var age = connection.CreateCommand();
+            age.CommandText = "UPDATE reconcile_acceptance_leases SET acquired_at = $at WHERE goal_id = $goal";
+            age.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.AddHours(-1).ToString("O"));
+            age.Parameters.AddWithValue("$goal", "goal-1");
+            age.ExecuteNonQuery();
+        }
+
+        var acquired = store.TryClaimAcceptanceLease("goal-1", contender, TimeSpan.FromMinutes(30));
+
+        Xunit.Assert.True(acquired);
+        Xunit.Assert.Equal(contender, store.TryGetAcceptanceLeaseOwner("goal-1"));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceLeaseReplacementIsAtomicAndExpectedOwnerQualified()
+    {
+        var store = new ReconcileSweepRemediationStore(NewDatabasePath());
+        Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", "owner-1", TimeSpan.FromMinutes(30)));
+
+        Xunit.Assert.False(store.TryReplaceAcceptanceLease("goal-1", "foreign-owner", "owner-2"));
+        Xunit.Assert.Equal("owner-1", store.TryGetAcceptanceLeaseOwner("goal-1"));
+        Xunit.Assert.True(store.TryReplaceAcceptanceLease("goal-1", "owner-1", "owner-2"));
+        Xunit.Assert.Equal("owner-2", store.TryGetAcceptanceLeaseOwner("goal-1"));
+    }
+
     [Xunit.Fact]
     public void HeldAcceptanceLeaseRenewsBeyondItsOriginalStaleWindow()
     {
