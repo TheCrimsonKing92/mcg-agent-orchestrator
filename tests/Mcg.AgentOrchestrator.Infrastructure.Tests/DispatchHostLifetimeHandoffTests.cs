@@ -286,7 +286,7 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
     }
 
     [Xunit.Fact]
-    public async Task StartDispatch_SuccessorDetach_LegacyProcessWithoutActiveDurableEntryCancelsAndRequeues()
+    public async Task StartDispatch_RecycledPidWithoutIdentity_RequeuesWithoutKill()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -312,26 +312,35 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
             successorKernel.RecordTaskProcessRefreshed(
                 fixture.Goal.Id,
                 fixture.Task.Id,
-                persistedProcess with { ProcessIdentityStartedAt = null },
+                persistedProcess with
+                {
+                    ProcessId = unrelated.ProcessId,
+                    OwnedProcessIds = null,
+                    ChildProcessId = null,
+                    NonBlockingProcessIds = null,
+                    ProcessIdentityStartedAt = null
+                },
                 verification: null);
             new SpawnRegistry(fixture.Workspace.SqliteStatePath).MarkReleasedEntry(
                 ownership.Id,
                 "test: simulate released durable entry before legacy detach");
 
             WorkerProcessJobs.ConfigureRegistry(fixture.Workspace.SqliteStatePath);
-            Assert.DoesNotContain(
-                WorkerProcessJobs.ListActiveRegistryEntriesForTests(),
-                entry => entry.ProcessId == ownership.ProcessId);
+            var recycledProcess = Assert.IsType<TaskProcessRecord>(
+                successorKernel.GetTask(fixture.Goal.Id, fixture.Task.Id).LastProcess);
+            Assert.Equal(unrelated.ProcessId, recycledProcess.ProcessId);
+            Assert.Null(recycledProcess.ProcessIdentityStartedAt);
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
             var successorRunner = new BackgroundDispatchRunner();
 
             Assert.Equal(0, successorRunner.DetachRunningProcessesForGoal(successorKernel, fixture.Goal.Id));
-            var cancelledTask = successorKernel.GetTask(fixture.Goal.Id, fixture.Task.Id);
-            Assert.Equal(WorkTaskStatus.Cancelled, cancelledTask.Status);
-            Assert.True(cancelledTask.LastProcess!.WasCancelledByConductor);
-            Assert.True(await WaitUntilNotRunningAsync(ownership.ProcessId, TimeSpan.FromSeconds(5)));
+            var interruptedTask = successorKernel.GetTask(fixture.Goal.Id, fixture.Task.Id);
+            Assert.Equal(WorkTaskStatus.Cancelled, interruptedTask.Status);
+            Assert.True(interruptedTask.LastProcess!.WasCancelledByConductor);
+            Assert.False(unrelated.HasExited);
+            Assert.Contains("expected-dispatch-identity-missing", interruptedTask.LastProcess.ExitArtifactReason);
             Assert.Equal(1, successorRunner.RequeueInterruptedDispatches(successorKernel));
             Assert.Equal(WorkTaskStatus.Assigned, successorKernel.GetTask(fixture.Goal.Id, fixture.Task.Id).Status);
-            Assert.False(unrelated.HasExited);
         }
         finally
         {
@@ -1077,6 +1086,8 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
             _standardOutput = process.StandardOutput.ReadToEndAsync();
             _standardError = process.StandardError.ReadToEndAsync();
         }
+
+        public int ProcessId => _process.Id;
 
         public bool HasExited => _process.HasExited;
 

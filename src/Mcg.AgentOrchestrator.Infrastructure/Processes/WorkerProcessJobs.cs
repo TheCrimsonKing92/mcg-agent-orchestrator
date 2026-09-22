@@ -1671,16 +1671,19 @@ public static class WorkerProcessJobs
         string expectedOwnerId,
         out TaskProcessRecord detachedProcess,
         out bool safeToCancelOnFailure,
+        out bool requeueWithoutTerminationOnFailure,
         out string failure)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedOwnerId);
         detachedProcess = expectedProcess;
+        requeueWithoutTerminationOnFailure = false;
         if (expectedProcess.ProcessIdentityStartedAt is not { } expectedProcessStartedAt &&
             !TryResolveLegacyDispatchIdentity(
                 expectedProcess.ProcessId,
                 expectedOwnerId,
                 out expectedProcessStartedAt,
                 out safeToCancelOnFailure,
+                out requeueWithoutTerminationOnFailure,
                 out failure))
         {
             return false;
@@ -1704,10 +1707,12 @@ public static class WorkerProcessJobs
         string expectedOwnerId,
         out DateTimeOffset processStartedAt,
         out bool safeToCancelOnFailure,
+        out bool requeueWithoutTerminationOnFailure,
         out string failure)
     {
         processStartedAt = default;
-        safeToCancelOnFailure = true;
+        safeToCancelOnFailure = false;
+        requeueWithoutTerminationOnFailure = true;
         failure = $"worker-process-detach-failed: pid={processId}; stage=expected-dispatch-identity-missing";
         var registry = Registry;
         if (registry is null)
@@ -1724,7 +1729,7 @@ public static class WorkerProcessJobs
         }
         catch (Exception ex)
         {
-            safeToCancelOnFailure = false;
+            requeueWithoutTerminationOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-identity-read; error={ex.GetType().Name}";
             return false;
         }
@@ -1736,7 +1741,7 @@ public static class WorkerProcessJobs
 
         if (entries.Length != 1)
         {
-            safeToCancelOnFailure = false;
+            requeueWithoutTerminationOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-identity-ambiguous";
             return false;
         }
@@ -1744,19 +1749,20 @@ public static class WorkerProcessJobs
         var entry = entries[0];
         if (!string.Equals(entry.OwnerId, expectedOwnerId, StringComparison.Ordinal))
         {
-            safeToCancelOnFailure = false;
+            requeueWithoutTerminationOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=durable-owner-mismatch; expected_owner={expectedOwnerId}";
             return false;
         }
 
         if (entry.Lifecycle is not (SpawnRegistryLifecycle.RuntimeOwned or SpawnRegistryLifecycle.GracefullyDetached))
         {
-            safeToCancelOnFailure = false;
+            requeueWithoutTerminationOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-lifecycle-unexpected";
             return false;
         }
 
         processStartedAt = entry.ProcessStartedAt;
+        requeueWithoutTerminationOnFailure = false;
         return true;
     }
 
