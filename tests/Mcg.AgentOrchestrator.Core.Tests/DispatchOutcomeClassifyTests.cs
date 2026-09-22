@@ -386,6 +386,22 @@ public sealed class DispatchOutcomeClassifyTests
     }
 
     [Xunit.Fact]
+    public void Classify_EarlyConvergenceExitZeroWithoutRejectionMarker_Fails()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            0,
+            WorkerResultStdout("pass - focused verification completed"));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void Classify_CheckpointResumedDeveloperVerifiedNoChange_Completes()
     {
         const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";

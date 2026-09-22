@@ -1772,7 +1772,7 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        if (verification.Succeeded)
+        if (integrationSatisfied && verification.Succeeded)
         {
             return true;
         }
