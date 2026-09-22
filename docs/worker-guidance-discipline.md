@@ -109,6 +109,26 @@ and say plainly that the path is not a target. Better still, commit the evidence
 file in the goal's own worktree and point at it — a worker asked for data it cannot reach is
 right to refuse, and the fix is to make the data reachable, not to repeat it in a message.
 
+### Failure evidence a worker already has
+
+An already-executed failure can satisfy the investigation gate without making each worker rerun
+it. In the brief, give the typed receipt identifier, source candidate, exact test or check name,
+and quoted assertion, and name the reachable context artifact (normally
+`prior-goal-evidence.md`). A worker's prose claim that a test failed is a lead, not evidence; the
+worker must open the actual trusted typed receipt or attachment. The admission and rejection
+procedure lives in [`systematic-debugging`](../.agents/skills/systematic-debugging/SKILL.md): all
+candidate, input, execution-basis, non-zero-count, and exact-failure checks must pass, while any
+missing, malformed, mismatched, narrative-only, zero-test, contradicted, or environment-incomplete
+evidence routes back to reproduction. This is evidence reuse, not a reproduction waiver, and it
+never replaces fresh, counted post-fix verification.
+
+When measuring the effect, record commands and elapsed time actually observed; never project
+token savings or derive command time from whole-dispatch duration. In the motivating
+`e46c3d92` incident, the recorded cost was two redundant pre-edit command attempts: exit 24 found
+no managed assembly, then exit 27 reported a zero-test selection; command-level elapsed time was
+not separately recorded. That zero-test result is also why a fallback filter must follow actual
+managed discovery, not a guessed project, namespace, method name, or display name.
+
 **An accurate blocker beats an optimistic completion.** When a round may not be able to finish,
 ask for the specific reason instead of another attempt. Name what must be in the blocker: the
 file, the missing seam, the contradiction. After several failed rounds, a precise refusal is more

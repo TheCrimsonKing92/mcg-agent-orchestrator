@@ -46,7 +46,10 @@ public sealed record GoalOperationJournalEntry(
     string? PriorGateMainSha = null,
     string? CurrentHeadMainSha = null,
     int? OperatorRegateCount = null,
-    IReadOnlyList<string>? FailedCheckNames = null)
+    IReadOnlyList<string>? FailedCheckNames = null,
+    string? OperationInstanceId = null,
+    string? LeaseRecovery = null,
+    DateTimeOffset? OwnerProcessStartedAtUtc = null)
 {
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
@@ -223,7 +226,10 @@ internal static class GoalOperationJournal
         Goal goal,
         string operation,
         string? detail = null,
-        string? mainHeadSha = null) =>
+        string? mainHeadSha = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null,
+        DateTimeOffset? ownerProcessStartedAtUtc = null) =>
         Append(
             executionDirectory,
             goal.Id,
@@ -233,14 +239,19 @@ internal static class GoalOperationJournal
             detail,
             branchHeadSha: null,
             mainHeadSha: NormalizeSha(mainHeadSha),
-            acceptanceOutcome: null);
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery,
+            ownerProcessStartedAtUtc: ownerProcessStartedAtUtc);
 
     public static void Completed(
         string executionDirectory,
         Goal goal,
         string operation,
         string? detail = null,
-        string? mainHeadSha = null) =>
+        string? mainHeadSha = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null) =>
         Append(
             executionDirectory,
             goal.Id,
@@ -250,14 +261,18 @@ internal static class GoalOperationJournal
             detail,
             branchHeadSha: null,
             mainHeadSha: NormalizeSha(mainHeadSha),
-            acceptanceOutcome: null);
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery);
 
     public static void Failed(
         string executionDirectory,
         Goal goal,
         string operation,
         string? detail = null,
-        string? mainHeadSha = null) =>
+        string? mainHeadSha = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null) =>
         Append(
             executionDirectory,
             goal.Id,
@@ -267,7 +282,29 @@ internal static class GoalOperationJournal
             detail,
             branchHeadSha: null,
             mainHeadSha: NormalizeSha(mainHeadSha),
-            acceptanceOutcome: null);
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery);
+
+    public static void Aborted(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? detail = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, operation),
+            operation,
+            GoalOperationStatus.Aborted,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: null,
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery);
 
     public static void RecordLandingIntent(
         string executionDirectory,
@@ -623,14 +660,38 @@ internal static class GoalOperationJournal
         Completed(executionDirectory, goal, "conductor:cleanup", detail);
 
     public static GoalOperationJournalSummary Read(string executionDirectory, GoalId goalId)
+        => Read(executionDirectory, goalId, includeArchive: true, rejectMalformedEntries: false);
+
+    internal static GoalOperationJournalSummary ReadStrict(string executionDirectory, GoalId goalId)
+        => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: true);
+
+    public static GoalOperationJournalSummary ReadActive(string executionDirectory, GoalId goalId)
+        => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: false);
+
+    private static GoalOperationJournalSummary Read(
+        string executionDirectory,
+        GoalId goalId,
+        bool includeArchive,
+        bool rejectMalformedEntries)
     {
-        var path = ResolveReadPath(executionDirectory, goalId);
-        if (path is null)
+        var path = PathFor(executionDirectory, goalId);
+        if (!File.Exists(path))
         {
-            return new GoalOperationJournalSummary(PathFor(executionDirectory, goalId), [], [], []);
+            if (!includeArchive)
+            {
+                return new GoalOperationJournalSummary(path, [], [], []);
+            }
+
+            var archivePath = ArchivePathFor(executionDirectory, goalId);
+            if (!File.Exists(archivePath))
+            {
+                return new GoalOperationJournalSummary(path, [], [], []);
+            }
+
+            path = archivePath;
         }
 
-        var entries = ReadEntries(path);
+        var entries = ReadEntries(path, rejectMalformedEntries);
         return BuildSummary(path, entries);
     }
 
@@ -646,16 +707,6 @@ internal static class GoalOperationJournal
         return File.Exists(archivePath) ? archivePath : null;
     }
 
-    public static GoalOperationJournalSummary ReadActive(string executionDirectory, GoalId goalId)
-    {
-        var path = PathFor(executionDirectory, goalId);
-        if (!File.Exists(path))
-        {
-            return new GoalOperationJournalSummary(path, [], [], []);
-        }
-
-        return BuildSummary(path, ReadEntries(path));
-    }
 
     public static bool HasCompletedLandingEvidence(GoalOperationJournalSummary journal) =>
         HasRetiredTerminalDisposition(journal) ||
@@ -866,13 +917,31 @@ internal static class GoalOperationJournal
         }
     }
 
-    private static GoalOperationJournalEntry[] ReadEntries(string path) =>
-        SharedJsonlFile.ReadAllLines(path)
-            .Select(TryDeserialize)
-            .Where(entry => entry is not null)
-            .Select(entry => entry!)
+    private static GoalOperationJournalEntry[] ReadEntries(
+        string path,
+        bool rejectMalformedEntries = false)
+    {
+        var entries = new List<GoalOperationJournalEntry>();
+        foreach (var line in SharedJsonlFile.ReadAllLines(path))
+        {
+            var entry = TryDeserialize(line);
+            if (entry is null)
+            {
+                if (rejectMalformedEntries)
+                {
+                    throw new FormatException($"Malformed goal operation journal entry in '{path}'.");
+                }
+
+                continue;
+            }
+
+            entries.Add(entry);
+        }
+
+        return entries
             .OrderBy(entry => entry.At)
             .ToArray();
+    }
 
     private sealed record AcceptanceEvidenceLine(
         DateTimeOffset At,
@@ -1022,7 +1091,10 @@ internal static class GoalOperationJournal
         string? priorGateMainSha = null,
         string? currentHeadMainSha = null,
         int? operatorRegateCount = null,
-        IReadOnlyList<string>? failedCheckNames = null)
+        IReadOnlyList<string>? failedCheckNames = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null,
+        DateTimeOffset? ownerProcessStartedAtUtc = null)
     {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
@@ -1051,7 +1123,10 @@ internal static class GoalOperationJournal
             PriorGateMainSha: priorGateMainSha,
             CurrentHeadMainSha: currentHeadMainSha,
             OperatorRegateCount: operatorRegateCount,
-            FailedCheckNames: failedCheckNames);
+            FailedCheckNames: failedCheckNames,
+            OperationInstanceId: operationInstanceId,
+            LeaseRecovery: leaseRecovery,
+            OwnerProcessStartedAtUtc: ownerProcessStartedAtUtc);
         SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(entry, JsonOptions));
         TryAppendRunEvent(executionDirectory, entry);
     }

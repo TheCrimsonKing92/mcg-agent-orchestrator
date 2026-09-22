@@ -72,7 +72,7 @@ internal sealed partial class ConductorDriver
 
     private const int MaxCriterionRetryEvidenceLines = 30;
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
     private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
 
     // Finding evidence retries deliver a Conductor-owned receipt or typed refusal to the role that
@@ -170,6 +170,8 @@ internal sealed partial class ConductorDriver
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly Func<Goal, string, IDisposable?> _tryAcquireEvidenceMutationLease;
+    private readonly Func<Goal, GoalEvidenceOperationStart>? _tryBeginDeveloperIntegrationEvidenceOperation;
+    private readonly Func<Goal, GoalEvidenceLeaseFact?>? _tryRecoverTerminalDeveloperIntegrationLease;
     private readonly Func<Goal, ReconcileAcceptanceLeaseState?> _getEvidenceMutationLease;
     private readonly Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> _resolveAcceptanceHeads;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -320,12 +322,22 @@ internal sealed partial class ConductorDriver
         void RefreshJournal(GoalId goalId) =>
             journalFacts[goalId] = ProjectJournalFacts(GoalOperationJournal.Read(dir, goalId));
         var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+        var goalEvidenceOperationCoordinator = new GoalEvidenceOperationCoordinator(
+            evidenceMutationLeaseStore,
+            dir,
+            EvidenceMutationLeaseDuration,
+            pidProbe: new ConductLockPidProbe());
+        _tryBeginDeveloperIntegrationEvidenceOperation = goal =>
+            goalEvidenceOperationCoordinator.TryBegin(goal, "conductor:developer-branch-integration");
+        _tryRecoverTerminalDeveloperIntegrationLease = goal =>
+            goalEvidenceOperationCoordinator.TryRecoverTerminal(goal);
         _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
             goal.Id.Value,
             EvidenceMutationLeaseDuration);
         _utcNow = () => DateTimeOffset.UtcNow;
         IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
         {
+            _tryRecoverTerminalDeveloperIntegrationLease(goal);
             var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
             return evidenceMutationLeaseStore.TryAcquireAcceptanceLease(
                 goal.Id.Value,
@@ -853,29 +865,7 @@ internal sealed partial class ConductorDriver
 
         _integrateMainBeforeDeveloperDispatch = goal =>
         {
-            GoalOperationJournal.Begin(
-                dir,
-                goal,
-                "conductor:developer-branch-integration",
-                "Checking goal branch against current main before Developer dispatch.");
             var result = IntegrateMainBeforeDeveloperDispatch(dir, goal);
-            if (result.CanDispatch)
-            {
-                GoalOperationJournal.Completed(
-                    dir,
-                    goal,
-                    "conductor:developer-branch-integration",
-                    result.Message);
-            }
-            else
-            {
-                GoalOperationJournal.Failed(
-                    dir,
-                    goal,
-                    "conductor:developer-branch-integration",
-                    result.Message);
-            }
-            RefreshJournal(goal.Id);
             return result;
         };
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
@@ -1296,6 +1286,8 @@ internal sealed partial class ConductorDriver
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
         Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null,
+        Func<Goal, GoalEvidenceOperationStart>? tryBeginDeveloperIntegrationEvidenceOperation = null,
+        Func<Goal, GoalEvidenceLeaseFact?>? tryRecoverTerminalDeveloperIntegrationLease = null,
         Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
         ApparatusRedGate? apparatusRedGate = null,
         Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null)
@@ -1412,6 +1404,8 @@ internal sealed partial class ConductorDriver
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
         _tryAcquireEvidenceMutationLease =
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
+        _tryBeginDeveloperIntegrationEvidenceOperation = tryBeginDeveloperIntegrationEvidenceOperation;
+        _tryRecoverTerminalDeveloperIntegrationLease = tryRecoverTerminalDeveloperIntegrationLease;
         _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
         _resolveAcceptanceHeads = resolveAcceptanceHeads ?? (_ => (null, null));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -4313,24 +4307,73 @@ internal sealed partial class ConductorDriver
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
-            using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
-                goal,
-                "conductor:developer-branch-integration");
-            if (integrationEvidenceMutationLease is null)
+            if (_tryBeginDeveloperIntegrationEvidenceOperation is not null)
             {
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        fromState,
-                        $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
-            }
+                var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation(goal);
+                if (operationStart.Scope is null)
+                {
+                    var status = operationStart.LeaseFact is { } leaseFact
+                        ? GoalEvidenceLeaseRecoveryStatuses.Format(leaseFact.RecoveryStatus)
+                        : "state-unavailable";
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            fromState,
+                            $"Goal evidence mutation is held for {goal.Id.Value}; lease-recovery={status}."));
+                }
 
-            var integration = _integrateMainBeforeDeveloperDispatch(goal);
-            if (!integration.CanDispatch)
+                using (operationStart.Scope)
+                {
+                    DeveloperBranchIntegrationResult integration;
+                    try
+                    {
+                        integration = _integrateMainBeforeDeveloperDispatch(goal);
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        operationStart.Scope.Abort(ex.Message);
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        operationStart.Scope.Fail(ex.Message);
+                        throw;
+                    }
+
+                    if (integration.CanDispatch)
+                    {
+                        operationStart.Scope.Complete(integration.Message);
+                    }
+                    else
+                    {
+                        operationStart.Scope.Fail(integration.Message);
+                        return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                    }
+                }
+            }
+            else
             {
-                return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
+                    goal,
+                    "conductor:developer-branch-integration");
+                if (integrationEvidenceMutationLease is null)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            fromState,
+                            $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
+                }
+
+                var integration = _integrateMainBeforeDeveloperDispatch(goal);
+                if (!integration.CanDispatch)
+                {
+                    return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                }
             }
         }
 
@@ -5640,6 +5683,7 @@ internal sealed partial class ConductorDriver
 
     private ReconcileAcceptanceLeaseState? TryGetActiveEvidenceMutationLease(Goal goal)
     {
+        _tryRecoverTerminalDeveloperIntegrationLease?.Invoke(goal);
         var lease = _getEvidenceMutationLease(goal);
         return lease is not null && lease.ExpiresAtUtc > _utcNow()
             ? lease
