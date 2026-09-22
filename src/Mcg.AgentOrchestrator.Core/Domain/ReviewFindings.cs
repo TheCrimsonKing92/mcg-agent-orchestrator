@@ -345,7 +345,10 @@ public sealed record FindingEvidenceOutcome(
     [property: JsonPropertyName("receipt_id")] string? ReceiptId = null,
     [property: JsonPropertyName("reason")] FindingEvidenceNotHonouredReason? Reason = null,
     [property: JsonPropertyName("detail")] string? Detail = null,
-    [property: JsonPropertyName("result_reason")] FindingEvidenceOutcomeReason? ResultReason = null);
+    [property: JsonPropertyName("result_reason")] FindingEvidenceOutcomeReason? ResultReason = null,
+    [property: JsonPropertyName("requested_selection_identity")] string? RequestedSelectionIdentity = null,
+    [property: JsonPropertyName("decision_reason")] string? DecisionReason = null,
+    [property: JsonPropertyName("source_receipt_ids")] IReadOnlyList<string>? SourceReceiptIds = null);
 
 public sealed record FindingEvidenceArmReceipt(
     FindingEvidenceArm Arm,
@@ -355,7 +358,10 @@ public sealed record FindingEvidenceArmReceipt(
     bool Passed,
     string Summary,
     IReadOnlyList<string>? ReceiptPaths = null,
-    IReadOnlyList<string>? FailingTestIdentities = null);
+    IReadOnlyList<string>? FailingTestIdentities = null,
+    int? ExecutedTestCount = null,
+    IReadOnlyList<string>? TestResultPaths = null,
+    IReadOnlyList<AcceptanceCohortEvidenceArtifact>? ReceiptArtifacts = null);
 
 public sealed record FindingEvidenceRequestDisposition(
     string FindingStableId,
@@ -372,7 +378,8 @@ public sealed record FindingEvidenceReceipt(
     string Summary,
     IReadOnlyList<FindingEvidenceArmReceipt>? Arms = null,
     IReadOnlyList<FindingEvidenceRequestDisposition>? RequestDispositions = null,
-    string? FindingRoundFingerprint = null);
+    string? FindingRoundFingerprint = null,
+    string? ExecutionBasisIdentity = null);
 
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,

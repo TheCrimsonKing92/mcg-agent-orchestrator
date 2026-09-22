@@ -56,6 +56,19 @@ public sealed record ReviewFindingResolutionProof(
     [property: JsonPropertyName("candidate_sha")] string? CandidateSha,
     [property: JsonPropertyName("receipt_body")] ReviewFindingContentReference? ReceiptBody = null);
 
+public sealed record ReviewFindingEvidenceSummary(
+    [property: JsonPropertyName("receipt_id")] string ReceiptId,
+    [property: JsonPropertyName("candidate_sha")] string CandidateSha,
+    [property: JsonPropertyName("execution_basis_identity")] string ExecutionBasisIdentity,
+    [property: JsonPropertyName("result")] string Result,
+    [property: JsonPropertyName("coverage")] string Coverage,
+    [property: JsonPropertyName("requested")] IReadOnlyList<string> Requested,
+    [property: JsonPropertyName("covered")] IReadOnlyList<string> Covered,
+    [property: JsonPropertyName("requested_truncated")] int RequestedTruncated,
+    [property: JsonPropertyName("covered_truncated")] int CoveredTruncated,
+    [property: JsonPropertyName("executed_test_count")] int ExecutedTestCount,
+    [property: JsonPropertyName("retained_result_path_count")] int RetainedResultPathCount);
+
 public sealed record CanonicalReviewFindingEntry(
     [property: JsonPropertyName("stable_id")] string StableId,
     [property: JsonPropertyName("role")] AgentRole Role,
@@ -72,7 +85,8 @@ public sealed record CanonicalReviewFindingEntry(
     [property: JsonPropertyName("round")] ReviewFindingContentReference Round,
     [property: JsonPropertyName("receipt_bodies")] IReadOnlyList<ReviewFindingContentReference> ReceiptBodies,
     [property: JsonPropertyName("resolution_proof")] ReviewFindingResolutionProof? ResolutionProof,
-    [property: JsonPropertyName("resolved_anchor_proof")] IReadOnlyList<ReviewFindingLocation> ResolvedAnchorProof);
+    [property: JsonPropertyName("resolved_anchor_proof")] IReadOnlyList<ReviewFindingLocation> ResolvedAnchorProof,
+    [property: JsonPropertyName("evidence_summary")] ReviewFindingEvidenceSummary? EvidenceSummary = null);
 
 public sealed record ReviewFindingRoundIndexEntry(
     [property: JsonPropertyName("task_id")] string TaskId,

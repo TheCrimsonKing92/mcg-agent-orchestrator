@@ -2067,10 +2067,12 @@ internal sealed partial class ConductorDriver
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
+        var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
+        var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(findingEvidenceEngineSettings);
         foreach (var finding in requestingFindings)
         {
             if (!TryNormalizeFindingEvidenceRequest(
-                    finding.EvidenceRequest!, _getFindingEvidenceEngineSettings(goal),
+                    finding.EvidenceRequest!, findingEvidenceEngineSettings,
                     (project, requestedClass) =>
                         _resolveFindingEvidenceSiblingClasses(goal, project, requestedClass),
                     out var typedRequest, out var request,
@@ -2083,6 +2085,8 @@ internal sealed partial class ConductorDriver
             }
 
             var identity = BuildFindingEvidenceIdentity(typedRequest);
+            IReadOnlyList<FindingEvidenceReceipt> reusedSourceReceipts = [];
+            string? coverageDecisionReason = null;
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
             var priorOutcome = mergedFinding?.EvidenceOutcome;
@@ -2097,28 +2101,50 @@ internal sealed partial class ConductorDriver
                         mergedFinding,
                         typedRequest,
                         telemetryCandidateSha,
-                        findingRoundFingerprint))
+                        findingRoundFingerprint,
+                        executionBasisIdentity))
             {
                 continue;
             }
 
-            if (TryGetReusableGreenFindingEvidenceReceipt(
+            if (TryResolveFindingEvidenceCoverage(
                     requestingTask,
                     typedRequest,
                     telemetryCandidateSha,
-                    out var reusableOutcome,
-                    out var reusableReceipt))
+                    executionBasisIdentity,
+                    out var coverageReceipts,
+                    out var uncoveredSelections,
+                    out var coverageReason))
             {
                 reusedGreenReceipt = true;
-                ReattachReusableGreenFindingEvidence(
-                    goal, requestingTask, mergedFinding ?? finding, reusableOutcome!, reusableReceipt!);
-                continue;
+                if (uncoveredSelections.Count == 0)
+                {
+                    ReattachCoverageReusableGreenFindingEvidence(
+                        goal,
+                        requestingTask,
+                        mergedFinding ?? finding,
+                        coverageReceipts,
+                        identity,
+                        coverageReason);
+                    continue;
+                }
+
+                typedRequest = new FindingEvidenceRequest(uncoveredSelections);
+                request = string.Join("; ", uncoveredSelections.Select(FormatFindingEvidenceSelection));
+                reusedSourceReceipts = coverageReceipts;
+                coverageDecisionReason = coverageReason;
             }
 
             var groupIndex = groups.FindIndex(group => string.Equals(group.Identity, identity, StringComparison.Ordinal));
             if (groupIndex < 0)
             {
-                groups.Add(new FindingEvidenceRequestGroup(identity, request, typedRequest, [finding]));
+                groups.Add(new FindingEvidenceRequestGroup(
+                    identity,
+                    request,
+                    typedRequest,
+                    [finding],
+                    reusedSourceReceipts,
+                    coverageDecisionReason));
             }
             else
             {
@@ -2234,23 +2260,7 @@ internal sealed partial class ConductorDriver
         var receiptId = CreateFindingEvidenceReceiptId(
             candidateSha!, findingRoundFingerprint, runnable.Identity);
         var armReceipts = (evidence.Arms ?? [])
-            .Select(arm => new FindingEvidenceArmReceipt(
-                arm.Arm,
-                arm.Sha,
-                arm.Disposition,
-                arm.Accepted,
-                arm.Passed,
-                arm.Summary,
-                arm.Checks
-                    .SelectMany(check => check.TestResultPaths ?? [])
-                    .Concat(arm.Checks.Select(check => check.ArtifactsPath ?? string.Empty))
-                    .Where(path => !string.IsNullOrWhiteSpace(path))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                arm.Checks
-                    .SelectMany(check => check.FailingTestIdentities ?? [])
-                    .Distinct(StringComparer.Ordinal)
-                    .ToArray()))
+            .Select(CreateFindingEvidenceArmReceipt)
             .ToArray();
         var actionableCandidateRed = TryAttributeActionableCandidateRed(
             candidateSha!, evidence, armReceipts, runnable);
@@ -2273,7 +2283,8 @@ internal sealed partial class ConductorDriver
             evidence.Summary,
             armReceipts,
             requestDispositions,
-            findingRoundFingerprint);
+            findingRoundFingerprint,
+            executionBasisIdentity);
         if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
         {
             foreach (var finding in runnable.Findings)
@@ -2325,19 +2336,37 @@ internal sealed partial class ConductorDriver
 
         foreach (var finding in runnable.Findings)
         {
+            var member = runnable.Members.Single(candidate => candidate.Findings.Contains(finding));
+            var sourceReceiptIds = (member.ReusedSourceReceipts ?? [])
+                .Select(sourceReceipt => sourceReceipt.ReceiptId)
+                .Append(receiptId)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var outcome = new FindingEvidenceOutcome(
+                Honoured: true,
+                ReceiptId: receiptId,
+                ResultReason: evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown,
+                RequestedSelectionIdentity: member.Identity,
+                DecisionReason: member.CoverageDecisionReason is null
+                    ? "executed-focused-evidence"
+                    : $"executed-uncovered-after-reuse:{member.CoverageDecisionReason}",
+                SourceReceiptIds: sourceReceiptIds);
+            foreach (var sourceReceipt in member.ReusedSourceReceipts ?? [])
+            {
+                _recordFindingEvidenceOutcome(
+                    goal.Id, requestingTask.Id, finding.StableId, outcome, sourceReceipt);
+            }
             _recordFindingEvidenceOutcome(
                 goal.Id, requestingTask.Id, finding.StableId,
-                new FindingEvidenceOutcome(
-                    Honoured: true,
-                    ReceiptId: receiptId,
-                    ResultReason: evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown),
+                outcome,
                 receipt);
             var resultReason = FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(
                 evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown);
             _recordFindingEvidenceRequest(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence disposition=honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
-                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}");
+                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}; " +
+                $"decision={outcome.DecisionReason}; source_receipt_ids={string.Join(',', sourceReceiptIds)}");
             _recordFindingEvidenceRun(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; finding_id={finding.StableId}; " +
@@ -2603,31 +2632,6 @@ internal sealed partial class ConductorDriver
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
         FindingEvidenceExecutionClassifier.BuildRequestIdentity(request);
-
-    private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
-    {
-        var verificationTicks = requestingTask.LastVerification?.CompletedAt.ToUniversalTime().Ticks ?? 0;
-        var findings = round.Findings
-            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
-            .Select(finding => string.Join(
-                "\u001f",
-                finding.StableId,
-                finding.State,
-                finding.Severity,
-                finding.Category,
-                finding.Location.File,
-                finding.Location.Region,
-                finding.Description,
-                string.Join(
-                    "\u001e",
-                    (finding.EvidenceRequest?.Selections ?? [])
-                        .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
-                        .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
-                        .Select(selection => $"{selection.TestProject}:{selection.TestClass}"))));
-        var payload = $"{requestingTask.Id.Value}\u001d{verificationTicks}\u001d{string.Join("\u001d", findings)}";
-        return "finding-round-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))
-            .ToLowerInvariant()[..24];
-    }
 
     private static IReadOnlyList<FindingEvidenceRequestDisposition> BuildInitialRequestDispositions(
         IReadOnlyList<FindingEvidenceBatch> batches,
@@ -3047,7 +3051,9 @@ internal sealed partial class ConductorDriver
         string Identity,
         string Request,
         FindingEvidenceRequest TypedRequest,
-        List<ReviewFinding> Findings);
+        List<ReviewFinding> Findings,
+        IReadOnlyList<FindingEvidenceReceipt>? ReusedSourceReceipts = null,
+        string? CoverageDecisionReason = null);
 
     private sealed record FindingEvidenceBatch(
         string Identity,
