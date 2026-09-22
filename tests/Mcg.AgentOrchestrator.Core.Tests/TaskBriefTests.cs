@@ -3,6 +3,15 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class TaskBriefTests
 {
     [Xunit.Fact]
+    public void BuildTaskBriefExposesTypedSourceBeforeLegacyProjection()
+    {
+        var method = typeof(AgentOrchestratorKernel).GetMethod("BuildTaskBriefSource");
+
+        Assert.NotNull(method);
+        Assert.Equal("Mcg.AgentOrchestrator.Core.TaskBriefSource", method!.ReturnType.FullName);
+    }
+
+    [Xunit.Fact]
     public void BuildTaskBriefPreflight_DistinguishesUndecidableCriteriaWithoutStartingWorker()
     {
         var kernel = new AgentOrchestratorKernel();
@@ -44,7 +53,10 @@ public sealed class TaskBriefTests
     Assert.Contains("Developer retry note.", brief.Content, StringComparison.Ordinal);
     Assert.Contains("HUMAN_INPUT:", brief.Content, StringComparison.Ordinal);
     Assert.Contains("Report only changed files", brief.Content, StringComparison.Ordinal);
-    Assert.Contains("Keep the response concise", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("No goal repeats/generic progress", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("Keep blockers/tests/errors/sources", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("keep Planner/Researcher artifacts complete", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("excerpt only if missing/conflicting/malformed", brief.Content, StringComparison.Ordinal);
     Assert.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/bin/**", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/obj/**", brief.Content, StringComparison.Ordinal);
@@ -54,6 +66,24 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Content.Contains("Context files:", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("Complete this task as the assigned SDLC role", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_renders_tester_receipt_first_decision_procedure")]
+    public void BuildTaskBriefRendersTesterReceiptFirstDecisionProcedure()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var tester = new TaskSpec(TaskId.New(), "Verify receipt consumption.", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Prevent redundant Tester evidence requests.", [tester]);
+
+        var brief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
+
+        Assert.Contains("RECEIPT-FIRST", brief, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY PATH", brief, StringComparison.Ordinal);
+        Assert.True(
+            brief.IndexOf("RECEIPT-FIRST", StringComparison.Ordinal) <
+            brief.IndexOf("PRIMARY PATH", StringComparison.Ordinal));
+        Assert.Contains("timeout/killed/no-results is inconclusive", brief, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_prefers_bounded_source_survey_for_complex_tasks")]
     public void BuildTaskBriefPrefersBoundedSourceSurveyForComplexTasks()
 {
@@ -105,6 +135,40 @@ public sealed class TaskBriefTests
     Assert.Contains("focused build-check evidence is sufficient for this slice", brief, StringComparison.Ordinal);
     Assert.Contains("category: spec-defect", brief, StringComparison.Ordinal);
 }
+
+    [Xunit.Fact]
+    public void BuildTaskBriefPlannerRendersOnlyTheAuthoritativeRefinedCriteriaList()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var planner = new TaskSpec(TaskId.New(), "Plan the mapped implementation", AgentRole.Planner);
+        var objective = """
+            Keep criteria aligned.
+
+            ## Acceptance criteria
+
+            1. First declared criterion.
+            2. Second declared criterion.
+            """;
+        var goal = kernel.CreateGoal(objective, [planner]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            $"Implement: {objective}",
+            ["First refined criterion.", "Second refined criterion.", "Third refined criterion."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+
+        var brief = kernel.BuildTaskBrief(goal.Id, planner.Id).Content;
+
+        Assert.Contains(
+            "Acceptance criteria (authoritative list validated by PlannerOutputContract):",
+            brief,
+            StringComparison.Ordinal);
+        Assert.Contains("1. First refined criterion.", brief, StringComparison.Ordinal);
+        Assert.Contains("3. Third refined criterion.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("First declared criterion.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Second declared criterion.", brief, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(brief, "1. First refined criterion."));
+    }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_convergence_scope_preserves_finding_severity")]
     public void BuildTaskBriefReviewerConvergenceScopePreservesFindingSeverity()
@@ -188,6 +252,14 @@ public sealed class TaskBriefTests
         StringComparison.Ordinal);
     Assert.Contains(
         "- B-1 | severity=blocking | src/B.cs::B.Run | carry forward; do not re-review unless this exact anchor was touched.",
+        brief,
+        StringComparison.Ordinal);
+    Assert.Contains(
+        "emit exactly one findings entry for every OPEN_ACTIVE_RECHECK stable_id",
+        brief,
+        StringComparison.Ordinal);
+    Assert.Contains(
+        "Narrative does not update the convergence ledger; omission leaves the finding open.",
         brief,
         StringComparison.Ordinal);
 }
@@ -299,7 +371,10 @@ public sealed class TaskBriefTests
     Assert.Contains("Avoid generic status summaries", brief, StringComparison.Ordinal);
     Assert.Contains("Keep the response evidence-focused", brief, StringComparison.Ordinal);
     Assert.Contains("omit generic progress and long logs", brief, StringComparison.Ordinal);
-    Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
+    Assert.Contains("Keep complete blocker/test/error/source evidence", brief, StringComparison.Ordinal);
+    Assert.Contains("required Planner/Researcher artifacts", brief, StringComparison.Ordinal);
+    Assert.Contains("excerpt only if missing, contradictory, or malformed", brief, StringComparison.Ordinal);
+    Assert.True(!brief.Contains("No goal repeats/generic progress", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_adds_exhaustive_reviewer_contract_for_all_intake_labels")]
@@ -1026,8 +1101,152 @@ public sealed class TaskBriefTests
     Assert.Contains("- inherited check [inherited:", brief, StringComparison.Ordinal);
     Assert.Contains("- introduced check [introduced:", brief, StringComparison.Ordinal);
     Assert.Contains("- unknown check [unattributed:", brief, StringComparison.Ordinal);
-    Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
-}
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_observed_correlation_requests_evidence_without_not_attributable_instruction")]
+    public void BuildTaskBriefObservedCorrelationRequestsEvidenceWithoutNotAttributableInstruction()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover observed acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["infrastructure tests"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests",
+                    AcceptanceFailureOrigin.Unattributed,
+                    "matching candidate check label; this correlation does not prove failure origin")
+            ],
+            "observed-red-correlation; candidate journals do not attest main");
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.Contains("One or more failure origins remain unproven", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_authoritative_attested_red_does_not_route_not_attributable_instruction")]
+    public void BuildTaskBriefAuthoritativeAttestedRedDoesNotRouteNotAttributableInstruction()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover executed-baseline acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["infrastructure tests"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests",
+                    AcceptanceFailureOrigin.Unattributed,
+                    "same focused method failed at merge-base base-a, but exact data-case identity was unavailable")
+            ],
+            "attested-red; executed merge-base baseline arm reproduced 1 failing check(s)");
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        // Routing reads typed Origin/Cause only; an authoritative attestation string is reported, never obeyed.
+        Assert.Contains("Clean-test baseline: main main1234 attested-red", brief, StringComparison.Ordinal);
+        Assert.Contains("One or more failure origins remain unproven", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_non_apparatus_inherited_record_does_not_suppress_fix")]
+    public void BuildTaskBriefNonApparatusInheritedRecordDoesNotSuppressFix()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover non-apparatus acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["fixture check"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "fixture check",
+                    AcceptanceFailureOrigin.Inherited,
+                    "focused identity failed at merge-base base-a",
+                    AcceptanceFailureCause.FixturePublication)
+            ]);
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with current evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_proven_apparatus_inherited_record_suppresses_fix")]
+    public void BuildTaskBriefProvenApparatusInheritedRecordSuppressesFix()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover proven apparatus acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["apparatus check"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "apparatus check",
+                    AcceptanceFailureOrigin.Inherited,
+                    "same focused identity failed at merge-base base-a",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with current evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.Contains("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_legacy_unclassified_inherited_record_does_not_suppress_fix")]
+    public void BuildTaskBriefLegacyUnclassifiedInheritedRecordDoesNotSuppressFix()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Fix acceptance failure.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover legacy attributed acceptance failure", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            ["infrastructure tests"],
+            "branch123456",
+            "main123456",
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests",
+                    AcceptanceFailureOrigin.Inherited,
+                    "also failed for goal deadbeef at main main1234")
+            ],
+            "attested-red; historical observed correlation");
+        clock.Advance();
+        kernel.RetryTask(goal.Id, developer.Id, "Recover with current evidence.");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.DoesNotContain("Do NOT attempt to fix these", brief, StringComparison.Ordinal);
+    }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_operator_retry_includes_last_failed_verification_receipt")]
     public void BuildTaskBriefOperatorRetryIncludesLastFailedVerificationReceipt()
@@ -1273,6 +1492,17 @@ public sealed class TaskBriefTests
                 "",
                 DateTimeOffset.UtcNow,
                 MergedReviewFindings: findings));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review current canonical state",
+                "C:\\repo",
+                0,
+                "structured review current",
+                "",
+                DateTimeOffset.UtcNow.AddSeconds(1),
+                MergedReviewFindings: findings));
         for (var index = 0; index < 12; index++)
         {
             kernel.RecordTaskNote(goal.Id, developer.Id, $"operational retry noise {index:D2} {new string('x', 300)}");
@@ -1287,6 +1517,8 @@ public sealed class TaskBriefTests
         Assert.Contains("Distinct actionable finding 00.", brief, StringComparison.Ordinal);
         Assert.Contains("finding-13", brief, StringComparison.Ordinal);
         Assert.Contains("Distinct actionable finding 13.", brief, StringComparison.Ordinal);
+        Assert.Equal(1, brief.Split("stable_id=finding-00", StringSplitOptions.None).Length - 1);
+        Assert.Equal(1, brief.Split("stable_id=finding-13", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("structured_finding_overflow", brief, StringComparison.Ordinal);
     }
 

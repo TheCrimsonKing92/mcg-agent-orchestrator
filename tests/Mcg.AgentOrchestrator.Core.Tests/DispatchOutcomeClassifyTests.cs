@@ -2,6 +2,49 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class DispatchOutcomeClassifyTests
 {
+    private static WorkerContextPackageReceipt EarlyConvergenceReceipt(string candidateSha)
+    {
+        var evidenceHash = new string('a', 64);
+        return new WorkerContextPackageReceipt(
+            "ctxpkg-test",
+            [new WorkerContextSectionReceipt(
+                $"goal/review-finding-receipts/{evidenceHash}.json",
+                1,
+                1,
+                evidenceHash,
+                ContextDeliveryMode.OnDemandFile,
+                ContextContractVersion.V1.Value,
+                [AgentRole.Developer])],
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            EarlyConvergenceEligible: true,
+            EarlyConvergenceCandidateSha: candidateSha,
+            EarlyConvergenceReceiptHashes: [evidenceHash]);
+    }
+
+    private static WorkerContextPackageReceipt CheckpointConvergenceReceipt(string candidateSha)
+    {
+        var evidenceHash = new string('b', 64);
+        return new WorkerContextPackageReceipt(
+            "ctxpkg-checkpoint-test",
+            [new WorkerContextSectionReceipt(
+                $"goal/interrupted-work-checkpoint/{evidenceHash}.json",
+                1,
+                1,
+                evidenceHash,
+                ContextDeliveryMode.OnDemandFile,
+                ContextContractVersion.V1.Value,
+                [AgentRole.Developer])],
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            ProviderUsageValue.Unknown("test"),
+            EarlyConvergenceEligible: true,
+            EarlyConvergenceCandidateSha: candidateSha,
+            EarlyConvergenceReceiptHashes: [evidenceHash],
+            EarlyConvergenceEvidenceSource: EarlyConvergenceEvidenceKind.InterruptedWorkCheckpoint);
+    }
+
     private static TaskSpec SimpleTask(AgentRole role = AgentRole.Developer)
     {
         var clock = new FakeClock();
@@ -63,7 +106,11 @@ public sealed class DispatchOutcomeClassifyTests
         return task;
     }
 
-    private static TaskSpec RetryTaskWithBaseCommit(string baseCommit, AgentRole role = AgentRole.Developer)
+    private static TaskSpec RetryTaskWithBaseCommit(
+        string baseCommit,
+        AgentRole role = AgentRole.Developer,
+        bool includeContextReceipt = true,
+        bool useCheckpointReceipt = false)
     {
         var clock = new FakeClock();
         var kernel = new AgentOrchestratorKernel(clock);
@@ -78,7 +125,12 @@ public sealed class DispatchOutcomeClassifyTests
                 "codex exec prompt",
                 "C:\\repo",
                 clock.UtcNow,
-                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                WorkerProviderKind: ProviderKind.OpenAICodexCli,
+                ContextPackageReceipt: includeContextReceipt
+                    ? useCheckpointReceipt
+                        ? CheckpointConvergenceReceipt(baseCommit)
+                        : EarlyConvergenceReceipt(baseCommit)
+                    : null));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["gate-failure feedback: rerun receipts against current branch"]);
         return task;
@@ -100,7 +152,8 @@ public sealed class DispatchOutcomeClassifyTests
                 "codex exec prompt",
                 "C:\\repo",
                 clock.UtcNow,
-                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                WorkerProviderKind: ProviderKind.OpenAICodexCli,
+                ContextPackageReceipt: EarlyConvergenceReceipt(baseCommit)));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         return task;
     }
@@ -120,7 +173,8 @@ public sealed class DispatchOutcomeClassifyTests
                 "codex exec prompt",
                 "C:\\repo",
                 clock.UtcNow,
-                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                WorkerProviderKind: ProviderKind.OpenAICodexCli,
+                ContextPackageReceipt: EarlyConvergenceReceipt(baseCommit)));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, baseCommit);
         return task;
     }
@@ -180,11 +234,16 @@ public sealed class DispatchOutcomeClassifyTests
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: stdout.Length);
 
-    private static string WorkerResultStdout(string tests, string blockers = "none", string? deferrals = null) =>
+    private static string WorkerResultStdout(
+        string tests,
+        string blockers = "none",
+        string? deferrals = null,
+        bool? assignedScopeComplete = null) =>
         $"WORKER_RESULT:{Environment.NewLine}" +
         $"files: none{Environment.NewLine}" +
         $"tests: {tests}{Environment.NewLine}" +
         (deferrals is null ? string.Empty : $"deferrals: {deferrals}{Environment.NewLine}") +
+        (assignedScopeComplete is null ? string.Empty : $"assigned_scope_complete: {assignedScopeComplete.Value.ToString().ToLowerInvariant()}{Environment.NewLine}") +
         $"blockers: {blockers}{Environment.NewLine}" +
         "END_WORKER_RESULT";
 
@@ -307,15 +366,13 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.DoesNotContain("rule=retry-round-produced-no-commit-and-no-deferral", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Theory]
-    [Xunit.InlineData("pass - focused verification completed")]
-    [Xunit.InlineData("deferred - acceptance gate owns the out-of-scope check")]
-    public void Classify_RetryDeveloperVerifiedNoChange_Completes(string tests)
+    [Xunit.Fact]
+    public void Classify_RetryDeveloperVerifiedNoChange_Completes()
     {
         const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
         var verification = WorkerResultVerification(
             1,
-            WorkerResultStdout(tests),
+            WorkerResultStdout("pass - focused verification completed"),
             standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
 
         var outcome = DispatchFailureClassifier.Classify(
@@ -328,16 +385,80 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Theory]
-    [Xunit.InlineData("pass - focused verification completed")]
-    [Xunit.InlineData("deferred - acceptance gate owns the out-of-scope check")]
-    public void Classify_OperatorRecoverDeveloperVerifiedNoChange_Completes(string tests)
+    [Xunit.Fact]
+    public void Classify_CheckpointResumedDeveloperVerifiedNoChange_Completes()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit, useCheckpointReceipt: true),
+            WorkerResultVerification(
+                1,
+                WorkerResultStdout("pass - focused verification completed"),
+                standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_CheckpointResumedDeveloperWithChangedBaseline_Fails()
+    {
+        const string checkpointCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        const string changedBaseline = "58422231916172e8d172a0cc0428d13d222c071c";
+        var task = RetryTaskWithBaseCommit(checkpointCommit, useCheckpointReceipt: true);
+        task.SetDispatchBaseCommit(changedBaseline);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            task,
+            WorkerResultVerification(
+                1,
+                WorkerResultStdout("pass - focused verification completed"),
+                standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_RetryDeveloperVerifiedNoChangeWithoutConvergenceReceipt_Fails()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit, includeContextReceipt: false),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_RetryDeveloperDeferredNoChange_Fails()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("deferred - acceptance gate owns the out-of-scope check"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+
+        var outcome = DispatchFailureClassifier.Classify(RetryTaskWithBaseCommit(baseCommit), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_OperatorRecoverDeveloperVerifiedNoChange_Completes()
     {
         const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
         var task = RecoveredTaskWithBaseCommit(baseCommit);
         var verification = WorkerResultVerification(
             1,
-            WorkerResultStdout(tests),
+            WorkerResultStdout("pass - focused verification completed"),
             standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
 
         Xunit.Assert.Equal(0, task.CriterionRetryCount);
@@ -351,6 +472,26 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
         Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_ExplicitIncompleteScopeCannotUseVerifiedNoChangeRecovery()
+    {
+        const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed", assignedScopeComplete: false),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true))
+            with { AssignedScopeComplete = false };
+
+        var outcome = DispatchFailureClassifier.Classify(
+            RetryTaskWithBaseCommit(baseCommit),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -600,6 +741,51 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("commit=orchestrator", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify routes incomplete Developer scope to bounded revision before every success branch")]
+    public void ClassifyRoutesIncompleteDeveloperScopeToBoundedRevision()
+    {
+        var verification = WorkerResultVerification(
+            WorkerResultStdout(
+                "pass - focused verification completed",
+                assignedScopeComplete: false),
+            hasCommittedChanges: true)
+            with { AssignedScopeComplete = false };
+
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify gives failing tests precedence over incomplete Developer scope")]
+    public void ClassifyGivesFailingTestsPrecedenceOverIncompleteDeveloperScope()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout(
+                "fail - 1 test failed",
+                assignedScopeComplete: false)) with { AssignedScopeComplete = false });
+
+        Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify rejects malformed Developer scope declaration without treating it as incomplete")]
+    public void ClassifyRejectsMalformedDeveloperScopeDeclaration()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout("pass - focused verification completed")
+                .Replace("blockers: none", "assigned_scope_complete: maybe")));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.DoesNotContain("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify_does_not_apply_failing_tests_rule_to_read_only_roles")]
@@ -1459,6 +1645,182 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify returns provider interruption for a failed turn with no completed turn")]
+    public void ClassifyProviderInterruptionFromFailedTurnWithoutCompletion()
+    {
+        const string stdout = """
+            {"type":"thread.started","thread_id":"test-thread"}
+            {"type":"turn.started"}
+            {"type":"error","message":"provider-specific text must not drive classification"}
+            {"type":"turn.failed","error":{"message":"different provider-specific text"}}
+            """;
+        var stderr =
+            DispatchRejectionDiagnosticMarker.Format(
+                verificationRecognized: false,
+                postDispatchCommits: 0,
+                changedPaths: "none") + "\n" +
+            DispatchFailureDiagnosticMarker.Format(
+                DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Contains("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(TaskOutcomeClass.Environmental, outcome.OutcomeClass);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing,
+            outcome.ClassifierReceipt,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify provider interruption outranks contradictory derived success evidence")]
+    public void ClassifyProviderInterruptionOutranksDerivedSuccessEvidence()
+    {
+        const string stdout = """
+            {"type":"thread.started","thread_id":"test-thread"}
+            {"type":"turn.started"}
+            {"type":"error","message":"provider-specific text must not drive classification"}
+            {"type":"turn.failed","error":{"message":"different provider-specific text"}}
+            WORKER_RESULT:
+            files: src/Changed.cs
+            tests: pass - contradictory derived evidence
+            blockers: none
+            END_WORKER_RESULT
+            """;
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout),
+            workerResultPresent: true,
+            hasCommittedChanges: true);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, outcome.Kind);
+        Xunit.Assert.Contains("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves missing-change failure when any turn completed")]
+    public void ClassifyCompletedTurnPreservesMissingChangeFailure()
+    {
+        const string stdout = """
+            {"type":"thread.started","thread_id":"test-thread"}
+            {"type":"turn.started"}
+            {"type":"error","message":"provider error after completed work"}
+            {"type":"turn.failed","error":{"message":"provider error after completed work"}}
+            {"type":"turn.completed"}
+            """;
+        var stderr = DispatchFailureDiagnosticMarker.Format(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains(
+            "rule=required-file-change-evidence-missing",
+            outcome.ClassifierReceipt,
+            StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "Classify requires positive structured failure evidence for provider interruption")]
+    [Xunit.InlineData("", DispatchOutcomeKind.EmptyOutputFlake, "empty-output-flake")]
+    [Xunit.InlineData("provider unavailable without a structured record", DispatchOutcomeKind.UnknownFailure, "required-file-change-evidence-missing")]
+    [Xunit.InlineData("{\"type\":\"status\",\"message\":\"Selected model is at capacity\"}", DispatchOutcomeKind.UnknownFailure, "required-file-change-evidence-missing")]
+    public void ClassifyRequiresStructuredFailureEvidenceForProviderInterruption(
+        string stdout,
+        DispatchOutcomeKind expectedKind,
+        string expectedRule)
+    {
+        var stderr = DispatchFailureDiagnosticMarker.Format(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Equal(expectedKind, outcome.Kind);
+        Xunit.Assert.Contains($"rule={expectedRule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify ignores structured failure records inside WORKER_RESULT")]
+    public void ClassifyIgnoresProviderFailureRecordInsideWorkerResult()
+    {
+        const string stdout = """
+            WORKER_RESULT:
+            files: none
+            {"type":"error","message":"fixture data only"}
+            {"type":"turn.failed"}
+            END_WORKER_RESULT
+            """;
+        var stderr = DispatchFailureDiagnosticMarker.Format(
+            DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, stdout, stderr));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains(
+            "rule=required-file-change-evidence-missing",
+            outcome.ClassifierReceipt,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify provider interruption is independent of human-readable message text")]
+    public void ClassifyProviderInterruptionIgnoresMessageText()
+    {
+        var first = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "{\"type\":\"error\",\"message\":\"first provider wording\"}"));
+        var second = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "{\"type\":\"error\",\"message\":\"unrelated localized wording\"}"));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, first.Kind);
+        Xunit.Assert.Equal(first.Kind, second.Kind);
+        Xunit.Assert.Contains("rule=provider-interruption", first.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=provider-interruption", second.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify reads provider interruption from the recorded stdout log path")]
+    public void ClassifyProviderInterruptionFromStandardOutputPath()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-provider-interruption-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var stdoutPath = Path.Combine(root, "dispatch.out.log");
+            File.WriteAllText(
+                stdoutPath,
+                "{\"type\":\"thread.started\"}\n" +
+                "{\"type\":\"turn.started\"}\n" +
+                "{\"type\":\"error\",\"message\":\"provider wording\"}\n" +
+                "{\"type\":\"turn.failed\"}");
+            var verification = new TaskVerificationRecord(
+                "cmd",
+                root,
+                1,
+                string.Empty,
+                DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: stdoutPath);
+
+            var outcome = DispatchFailureClassifier.Classify(SimpleTask(), verification);
+
+            Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption, outcome.Kind);
+            Xunit.Assert.Contains("rule=provider-interruption", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact]

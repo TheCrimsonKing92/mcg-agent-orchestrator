@@ -691,6 +691,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Status)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.Objective)));
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.UpdatedAt)));
+        Assert.True(listing.All(m => m.CreatedAt is not null));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_list_metadata_surfaces_active_failed_condition")]
@@ -933,6 +934,31 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(HumanInputRequest.BuildQuestionFingerprint("What should I do?"), restoredRequest.QuestionFingerprint);
         Assert.Equal("stable-worker-result", restoredRequest.BlockerFingerprint);
         Assert.Equal(1, restoredRequest.SuppressionCount);
+    }
+
+    [Xunit.Fact]
+    public async Task ProspectiveEvidenceKindAndOwnerRoundtrip()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Persist future operator evidence", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Observe criterion 4 after implementation.",
+            HumanWaitKind.ProspectiveAcceptanceEvidence,
+            questionFingerprint: HumanInputRequest.BuildPlannerEvidenceFingerprint(4, "live-observation"),
+            evidenceOwner: "operator").Request;
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        var restoredRequest = restored.GetHumanInputRequest(request.Id);
+        Assert.Equal(HumanWaitKind.ProspectiveAcceptanceEvidence, restoredRequest.Kind);
+        Assert.Equal("operator", restoredRequest.EvidenceOwner);
+        Assert.False(restoredRequest.IsCompleted);
     }
 
     [Xunit.Fact]
@@ -1752,6 +1778,82 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_critical_dispatch_checkpoint_rejects_stale_tick_without_overwrite")]
+    public async Task CriticalDispatchCheckpointRejectsStaleTickWithoutOverwrite()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Reject stale paid dispatch");
+        var task = goal.Tasks.Single();
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+
+        var staleTickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        staleTickKernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", "codex exec", "C:\\work", DateTimeOffset.UtcNow));
+        var staleTick = staleTickKernel.ExportGoalSnapshot(goal.Id);
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                operatorKernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Operator preserved existing work.");
+                operatorKernel.RecordTaskVerification(
+                    goal.Id,
+                    task.Id,
+                    new TaskVerificationRecord("manual", "C:\\work", 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+                return Task.FromResult((true, operatorKernel.ExportGoalSnapshot(goal.Id), true));
+            });
+
+        var result = Assert.Single(await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, staleTick, RejectConflict: true)]));
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Skipped, result.Disposition);
+        Assert.Contains("rejected stale tick snapshot", result.Message, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Completed, result.PersistedSnapshot!.Tasks.Single().Status);
+        var restoredTask = (await repo.LoadAsync()).GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
+        Assert.True(restoredTask.LastVerification!.Succeeded);
+        Assert.Null(restoredTask.LastDispatch);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_critical_dispatch_checkpoint_rejects_same_field_divergence")]
+    public async Task CriticalDispatchCheckpointRejectsSameFieldDivergence()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Reject same-field critical conflict");
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+        var stored = baseline with
+        {
+            Tasks = baseline.Tasks.Select(task => task with { Status = WorkTaskStatus.Completed }).ToArray()
+        };
+        _ = await repo.TransactGoalAsync(
+            goal.Id,
+            (_, _) => Task.FromResult((true, (GoalSnapshot?)stored, true)));
+        var current = baseline with
+        {
+            Tasks = baseline.Tasks.Select(task => task with { Status = WorkTaskStatus.Running }).ToArray()
+        };
+
+        var result = Assert.Single(await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, current, RejectConflict: true)]));
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Skipped, result.Disposition);
+        Assert.Equal(WorkTaskStatus.Completed, result.PersistedSnapshot!.Tasks.Single().Status);
+        Assert.Equal(WorkTaskStatus.Completed, (await repo.LoadAsync()).GetTask(goal.Id, goal.Tasks.Single().Id).Status);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_round_trips_gracefully_detached_process_marker")]
     public async Task SqliteOrchestratorStateRepositoryRoundTripsGracefullyDetachedProcessMarker()
     {
@@ -2001,7 +2103,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             (stored, _) =>
             {
                 var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
-                operatorKernel.RequeueInterruptedDispatch(goal.Id, task.Id, "recover old attempt");
+                operatorKernel.RequeueInterruptedDispatch(
+                    goal.Id,
+                    task.Id,
+                    "recover old attempt",
+                    RetryCause.ProviderInterruption);
                 operatorKernel.RecordTaskDispatch(
                     goal.Id,
                     task.Id,
@@ -2071,7 +2177,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             (stored, _) =>
             {
                 var operatorKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
-                operatorKernel.RequeueInterruptedDispatch(goal.Id, task.Id, "recover old attempt");
+                operatorKernel.RequeueInterruptedDispatch(
+                    goal.Id,
+                    task.Id,
+                    "recover old attempt",
+                    RetryCause.ProviderInterruption);
                 return Task.FromResult((true, operatorKernel.ExportSnapshot().Goals.Single(), true));
             });
 
@@ -2334,6 +2444,64 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("operator-authored retry feedback", feedback);
     }
 
+    [Xunit.Theory(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_accepted_retry_feedback_lifecycle")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task TickMergePreservesAcceptedRetryFeedbackLifecycle(bool clearFeedback)
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Preserve accepted retry feedback through tick merge");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+
+        if (clearFeedback)
+        {
+            kernel.RetryTaskWithAuthoritativeFeedback(
+                goal.Id,
+                task.Id,
+                "Accepted operator correction.",
+                RetryCause.NewTestFinding);
+        }
+
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportGoalSnapshot(goal.Id);
+
+        if (clearFeedback)
+        {
+            kernel.ClearCriterionRetryFeedback(goal.Id, task.Id);
+        }
+        else
+        {
+            kernel.RetryTaskWithAuthoritativeFeedback(
+                goal.Id,
+                task.Id,
+                "Accepted operator correction.",
+                RetryCause.NewTestFinding);
+        }
+
+        var current = kernel.ExportGoalSnapshot(goal.Id);
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) => Task.FromResult((
+                true,
+                stored! with { Objective = "Concurrent operator update" },
+                true)));
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, current)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restoredTask = (await repo.LoadAsync()).GetTask(goal.Id, task.Id);
+        if (clearFeedback)
+        {
+            Assert.Null(restoredTask.AcceptedRetryFeedback);
+        }
+        else
+        {
+            Assert.Equal("Accepted operator correction.", restoredTask.AcceptedRetryFeedback?.Message);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TickMergeSliceBatchParentUsesStoreOwnedPrecedence")]
     public async Task TickMergeSliceBatchParentUsesStoreOwnedPrecedence()
     {
@@ -2580,6 +2748,111 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(active.Id.Value, ids);
         Assert.Contains(failed.Id.Value, ids);
         Assert.Contains(waiting.Id.Value, ids);
+    }
+
+    [Xunit.Fact(DisplayName = "ListConductLoopGoalMetadata_preserves_full_summaries_for_every_goal_status")]
+    public async Task ListConductLoopGoalMetadataPreservesFullSummariesForEveryGoalStatus()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var statuses = Enum.GetValues<GoalStatus>();
+        var snapshots = statuses
+            .Select((_, index) => BuildTerminalGoalSnapshot(index + 10))
+            .ToArray();
+        await repo.SaveGoalSnapshotsAsync(snapshots);
+        using (var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            conn.Open();
+            using var command = conn.CreateCommand();
+            command.CommandText = "UPDATE goals SET status = $status WHERE id = $id";
+            var statusParameter = command.Parameters.Add("$status", SqliteType.Text);
+            var idParameter = command.Parameters.Add("$id", SqliteType.Text);
+            for (var index = 0; index < statuses.Length; index++)
+            {
+                statusParameter.Value = statuses[index].ToString();
+                idParameter.Value = snapshots[index].Id;
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+        }
+
+        var expected = ReadLegacyConductLoopGoalMetadata(db);
+        var actual = await repo.ListConductLoopGoalMetadataAsync();
+
+        Assert.Equal(snapshots.Length, actual.Count);
+        Assert.Equal(
+            JsonSerializer.Serialize(expected),
+            JsonSerializer.Serialize(actual));
+    }
+
+    [Xunit.Fact(DisplayName = "ListConductLoopGoalMetadata_skips_terminal_snapshot_json_on_repeated_reads")]
+    public async Task ListConductLoopGoalMetadataSkipsTerminalSnapshotJsonOnRepeatedReads()
+    {
+        var db = TempDb();
+        var statements = new List<string>();
+        var repo = new SqliteOrchestratorStateRepository(db, statements.Add);
+        GoalSnapshot[] terminal =
+        [
+            BuildLargeTerminalGoalSnapshot(0),
+            BuildLargeTerminalGoalSnapshot(1) with { Status = GoalStatus.Cancelled },
+            BuildLargeTerminalGoalSnapshot(2) with { Status = GoalStatus.Superseded }
+        ];
+        var active = BuildTerminalGoalSnapshot(3) with { Status = GoalStatus.Active };
+        var failedActive = BuildTerminalGoalSnapshot(4) with
+        {
+            Status = GoalStatus.Active,
+            Tasks = [BuildTerminalGoalSnapshot(4).Tasks.Single() with { Status = WorkTaskStatus.Failed }]
+        };
+        await repo.SaveGoalSnapshotsAsync([.. terminal, active, failedActive]);
+
+        var largeTimelineListing = await repo.ListConductLoopGoalMetadataAsync();
+        var expectedOrder = largeTimelineListing.Select(row => row.Id).ToArray();
+        var expectedUpdatedAt = largeTimelineListing.ToDictionary(row => row.Id, row => row.UpdatedAt, StringComparer.Ordinal);
+        Assert.Equal(5, expectedOrder.Length);
+
+        using (var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE goals SET snapshot_json = '{not-json' WHERE id IN ($id0, $id1, $id2)";
+            cmd.Parameters.AddWithValue("$id0", terminal[0].Id);
+            cmd.Parameters.AddWithValue("$id1", terminal[1].Id);
+            cmd.Parameters.AddWithValue("$id2", terminal[2].Id);
+            Assert.Equal(3, cmd.ExecuteNonQuery());
+        }
+
+        IReadOnlyList<GoalSummary>? listing = null;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var exception = await Record.ExceptionAsync(async () =>
+                listing = await repo.ListConductLoopGoalMetadataAsync());
+            Assert.Null(exception);
+        }
+
+        Assert.NotNull(listing);
+        Assert.Equal(5, listing.Count);
+        Assert.Equal(expectedOrder, listing.Select(row => row.Id));
+        Assert.All(listing, row => Assert.Equal(expectedUpdatedAt[row.Id], row.UpdatedAt));
+        Assert.All(terminal, snapshot => Assert.Contains(listing, row =>
+            row.Id == snapshot.Id &&
+            row.Status == snapshot.Status.ToString() &&
+            row.Objective == $"Terminal {Array.IndexOf(terminal, snapshot)} title"));
+        var activeSummary = Assert.Single(listing, row => row.Id == active.Id);
+        Assert.Equal("result-3", activeSummary.ResultCommit);
+        Assert.Equal(active.Timeline[0].OccurredAt, activeSummary.CreatedAt);
+        Assert.Equal(active.Timeline[^1].OccurredAt, activeSummary.TerminatedAt);
+        Assert.Null(activeSummary.Condition);
+        var failedSummary = Assert.Single(listing, row => row.Id == failedActive.Id);
+        Assert.Equal("result-4", failedSummary.ResultCommit);
+        Assert.Equal(failedActive.Timeline[0].OccurredAt, failedSummary.CreatedAt);
+        Assert.Equal(failedActive.Timeline[^1].OccurredAt, failedSummary.TerminatedAt);
+        Assert.Equal(GoalLifecycle.ActiveWithFailedTaskCondition, failedSummary.Condition);
+        var metadataStatements = statements
+            .Where(statement => statement.Contains("json_each(goals.snapshot_json", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(3, metadataStatements.Length);
+        var guard = $"CASE WHEN {ConductLoopGoalStatus.SqlNonTerminalPredicate("status")} THEN";
+        Assert.All(metadataStatements, statement =>
+            Assert.Equal(3, statement.Split(guard, StringSplitOptions.None).Length - 1));
     }
 
     [Xunit.Fact(DisplayName = "LoadConductLoopKernel_excludes_terminal_goals_from_active_dictionary")]
@@ -2968,6 +3241,82 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                     Criterion: $"QUESTION_CRITERION_SENTINEL_{index}",
                     BlastRadius: "high")],
                 [$"OPERATOR_ACCEPTANCE_SENTINEL_{index}"]));
+    }
+
+    private static GoalSnapshot BuildLargeTerminalGoalSnapshot(int index)
+    {
+        var snapshot = BuildTerminalGoalSnapshot(index);
+        var firstEvent = snapshot.Timeline.Single();
+        return snapshot with
+        {
+            Timeline = Enumerable.Range(0, 5_000)
+                .Select(eventIndex => firstEvent with
+                {
+                    Message = $"TIMELINE_SENTINEL_{index}_{eventIndex}",
+                    OccurredAt = firstEvent.OccurredAt.AddSeconds(eventIndex)
+                })
+                .ToArray()
+        };
+    }
+
+    private static IReadOnlyList<GoalSummary> ReadLegacyConductLoopGoalMetadata(string db)
+    {
+        using var conn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        conn.Open();
+        using var command = conn.CreateCommand();
+        command.CommandText = $"""
+            SELECT
+                id,
+                status,
+                substr((CASE WHEN instr(replace(objective, char(13), char(10)), char(10)) > 0
+                    THEN substr(replace(objective, char(13), char(10)), 1, instr(replace(objective, char(13), char(10)), char(10)) - 1)
+                    ELSE objective END), 1, 240),
+                updated_at,
+                (
+                    SELECT json_extract(task.value, '$.LastDispatch.ResultCommit')
+                    FROM json_each(goals.snapshot_json, '$.Tasks') AS task
+                    WHERE COALESCE(json_extract(task.value, '$.LastDispatch.ResultCommit'), '') <> ''
+                    ORDER BY CAST(task.key AS INTEGER) DESC
+                    LIMIT 1
+                ) AS result_commit,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) ASC
+                    LIMIT 1
+                ) AS created_at,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) DESC
+                    LIMIT 1
+                ) AS terminated_at,
+                CASE
+                    WHEN status = '{GoalStatus.Active}' AND EXISTS (
+                        SELECT 1
+                        FROM json_each(goals.snapshot_json, '$.Tasks') AS failed_task
+                        WHERE json_extract(failed_task.value, '$.Status') = '{WorkTaskStatus.Failed}'
+                    ) THEN '{GoalLifecycle.ActiveWithFailedTaskCondition}'
+                    ELSE NULL
+                END AS condition
+            FROM goals
+            ORDER BY updated_at DESC
+            """;
+        using var reader = command.ExecuteReader();
+        var results = new List<GoalSummary>();
+        while (reader.Read())
+        {
+            results.Add(new GoalSummary(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), System.Globalization.CultureInfo.InvariantCulture),
+                reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), System.Globalization.CultureInfo.InvariantCulture),
+                reader.IsDBNull(7) ? null : reader.GetString(7)));
+        }
+        return results;
     }
 
     private static string DiagnosticsPath(string dbPath) =>

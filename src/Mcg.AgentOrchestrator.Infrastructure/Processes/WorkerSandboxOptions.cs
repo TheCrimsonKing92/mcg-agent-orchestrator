@@ -8,7 +8,8 @@ public enum WorkerSandboxProvider
     Codex,
     Claude,
     Ollama,
-    Grok
+    Grok,
+    Hermes
 }
 
 public interface IWorkerSandbox

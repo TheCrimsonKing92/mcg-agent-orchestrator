@@ -5,7 +5,9 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record HumanInputDirective(
     string Question,
     string QuestionFingerprint,
-    string? BlockerFingerprint = null);
+    string? BlockerFingerprint = null,
+    HumanWaitKind Kind = HumanWaitKind.SpecClarification,
+    string? EvidenceOwner = null);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {
@@ -24,7 +26,12 @@ public static class AgentOutputDirectives
     public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role)
     {
         var lines = new List<string>();
-        if (role == AgentRole.Planner)
+        if (role == AgentRole.Developer)
+        {
+            lines.Add(
+                "Developer: set `assigned_scope_complete` to `true` only when your assigned implementation is complete; `false` requests bounded revision and excludes later Acceptance/operator evidence.");
+        }
+        else if (role == AgentRole.Planner)
         {
             lines.Add(
                 "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; stdout is authoritative, and a summary or private model-home file path alone is invalid. " +
@@ -36,6 +43,8 @@ public static class AgentOutputDirectives
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
                 "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. " +
                 "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. " +
+                "Evidence needed to decide or plan now is a blocking prerequisite; evidence that can only be produced after the candidate exists is prospective acceptance evidence. " +
+                "For the latter, use availability=post-implementation with owner and omit store; retain the exact criterion obligation without claiming the check was executed. " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create. " +
                 "Mark a new file with the exact token `(new file)` or `— new file` immediately after its backticked path, " +
@@ -86,9 +95,13 @@ public static class AgentOutputDirectives
         {
             lines.Add("citations: <repository files, docs, or evidence sources used>");
         }
+        else if (role == AgentRole.Developer)
+        {
+            lines.Add("assigned_scope_complete: <true|false>");
+        }
         else if (role is AgentRole.Reviewer or AgentRole.Tester)
         {
-            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned,location:{file,region,hunk?},description,evidence_request?:{selections:[{test_project,test_class}]}}; severity is required; evidence_request is optional on any category; [] when none>");
+            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned|acceptance-owned,location:{file,region,hunk?},description,evidence_request?:{selections:[{test_project,test_class}]}}; severity is required; evidence_request is optional on any category; [] when none>");
             lines.Add("touched_anchors: <one-line JSON array of {file,region,hunk?} for prior finding anchors touched by this round's diff; [] when none>");
             if (role == AgentRole.Reviewer)
             {
@@ -174,6 +187,8 @@ public static class AgentOutputDirectives
 
             var hasStore = TryGetRequiredString(root, "store", out var store);
             string availabilityText;
+            var kind = HumanWaitKind.PlannerPrerequisiteEvidence;
+            string? evidenceOwner = null;
             if (availability.Equals("retrievable", StringComparison.OrdinalIgnoreCase))
             {
                 if (!hasStore)
@@ -185,16 +200,33 @@ public static class AgentOutputDirectives
             }
             else if (availability.Equals("never-recorded", StringComparison.OrdinalIgnoreCase))
             {
-                if (hasStore)
+                if (root.TryGetProperty("store", out _))
                 {
                     return MalformedEvidenceRequest("never-recorded evidence must not name a store");
                 }
 
                 availabilityText = "never-recorded; the evidence does not exist in an available record";
             }
+            else if (availability.Equals("post-implementation", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryGetRequiredString(root, "owner", out var owner))
+                {
+                    return MalformedEvidenceRequest("post-implementation evidence must name a non-empty owner");
+                }
+
+                if (root.TryGetProperty("store", out _))
+                {
+                    return MalformedEvidenceRequest("post-implementation evidence must not name a store");
+                }
+
+                availabilityText = $"post-implementation; produced after the candidate exists. Owner: {owner}";
+                kind = HumanWaitKind.ProspectiveAcceptanceEvidence;
+                evidenceOwner = owner;
+            }
             else
             {
-                return MalformedEvidenceRequest("availability must be retrievable or never-recorded");
+                return MalformedEvidenceRequest(
+                    "availability must be retrievable, never-recorded, or post-implementation");
             }
 
             var question =
@@ -202,7 +234,7 @@ public static class AgentOutputDirectives
                 $"Availability: {availabilityText}. Reason: {reason}";
             var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(criterionIndex, evidenceKey);
             return new HumanInputDirectiveParseResult(
-                new HumanInputDirective(question, fingerprint, fingerprint),
+                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner),
                 null);
         }
         catch (JsonException error)

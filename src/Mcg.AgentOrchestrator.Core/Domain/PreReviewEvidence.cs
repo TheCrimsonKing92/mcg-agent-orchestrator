@@ -34,6 +34,11 @@ public sealed record PreReviewEvidenceReceipt(
     DateTimeOffset RecordedAt,
     IReadOnlyList<string>? Advisories = null)
 {
+    public const string SyntheticReuseAdvisory = "reused-current-candidate";
+
+    internal bool IsSyntheticReuse =>
+        (Advisories ?? []).Contains(SyntheticReuseAdvisory, StringComparer.Ordinal);
+
     public bool MatchesCurrentCandidate(
         string goalId,
         string candidateSha,
@@ -55,6 +60,7 @@ public sealed record PreReviewEvidenceReceipt(
         FailingTestIdentities.SequenceEqual(other.FailingTestIdentities, StringComparer.Ordinal) &&
         string.Equals(MappingReason, other.MappingReason, StringComparison.Ordinal) &&
         string.Equals(EvidencePointer, other.EvidencePointer, StringComparison.OrdinalIgnoreCase) &&
+        (IsSyntheticReuse || RecordedAt == other.RecordedAt) &&
         (Advisories ?? []).SequenceEqual(other.Advisories ?? [], StringComparer.Ordinal);
 
     private static bool CheckContentEquals(

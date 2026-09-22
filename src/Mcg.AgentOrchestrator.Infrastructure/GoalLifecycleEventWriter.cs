@@ -77,6 +77,19 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
                     obj["detail"] = skipped.Detail;
                 }
             }
+
+            if (progressEvent.OperatorIntentApplied is { } applied)
+            {
+                obj["operatorIntentApplied"] = new JsonObject
+                {
+                    ["intentId"] = applied.IntentId,
+                    ["verb"] = applied.Verb,
+                    ["taskId"] = applied.TaskId,
+                    ["actor"] = applied.Actor,
+                    ["channel"] = applied.Channel,
+                    ["authenticationAssurance"] = applied.AuthenticationAssurance
+                };
+            }
         });
 
     public void AppendGoalCreated(GoalId goalId, string objective) =>
@@ -301,6 +314,28 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
                 .Select(annotation => JsonValue.Create(annotation)).ToArray());
             obj["operatorContextTruncated"] = receipt.OperatorContextTruncated;
             obj["cancellationWithheld"] = receipt.CancellationWithheld;
+        });
+
+    public void AppendProgressiveReviewGlanceCircuitReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceCircuitReceipt receipt) =>
+        Append(goalId, "ProgressiveReviewGlanceCircuitReceipt", obj =>
+        {
+            obj["taskId"] = taskId.Value;
+            obj["circuitIdentity"] = receipt.CircuitIdentity;
+            obj["admissionOutcome"] = receipt.AdmissionOutcome;
+            obj["openingCause"] = receipt.OpeningCause;
+            obj["originalReason"] = receipt.OriginalReason;
+            obj["actualTokens"] = receipt.ActualTokens;
+            obj["avoidedCallCount"] = receipt.AvoidedCallCount;
+            obj["avoidedInputTokens"] = receipt.AvoidedInputTokens;
+            obj["avoidedOutputTokens"] = receipt.AvoidedOutputTokens;
+            obj["outputEstimateUnavailableReason"] = receipt.OutputEstimateUnavailableReason;
+            obj["admissionLatencyMs"] = receipt.AdmissionLatencyMilliseconds;
+            obj["changedFilesTriggerCount"] = receipt.ChangedFilesTriggerCount;
+            obj["elapsedTriggerCount"] = receipt.ElapsedTriggerCount;
+            obj["probeOutcome"] = receipt.ProbeOutcome;
         });
 
     public void AppendProgressiveReviewGlanceSummary(

@@ -14,6 +14,98 @@ public static class SharedTestSupport
         return path;
     }
 
+    // Total time a temp-directory removal keeps retrying before it fails loudly.
+    public const int RemoveTempDirectoryBudgetMilliseconds = 10_000;
+
+    // Backoff for the first retry; it doubles after each failed attempt.
+    public const int RemoveTempDirectoryInitialBackoffMilliseconds = 50;
+
+    // Ceiling the doubling backoff is clamped to.
+    public const int RemoveTempDirectoryMaximumBackoffMilliseconds = 500;
+
+    /// <summary>
+    /// Removes a temp directory tree, retrying while another process still holds it and
+    /// throwing loudly once the retry budget is spent. Returns silently when the directory
+    /// is already gone or disappears while retrying.
+    /// </summary>
+    public static void RemoveTempDirectory(string path)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        RemoveTempDirectory(path, () => stopwatch.Elapsed, Thread.Sleep);
+    }
+
+    /// <summary>
+    /// Seam overload: <paramref name="elapsed"/> reports time spent since the first attempt and
+    /// <paramref name="delay"/> waits between attempts, so tests drive the retry loop without sleeping.
+    /// </summary>
+    public static void RemoveTempDirectory(
+        string path,
+        Func<TimeSpan> elapsed,
+        Action<TimeSpan> delay,
+        TimeSpan? budget = null,
+        TimeSpan? initialBackoff = null,
+        TimeSpan? maximumBackoff = null)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            // A blank path means the fixture never created its root; that is a test bug to
+            // surface, not a cleanup to tolerate.
+            throw new ArgumentException("A temp directory path is required.", nameof(path));
+        }
+
+        ArgumentNullException.ThrowIfNull(elapsed);
+        ArgumentNullException.ThrowIfNull(delay);
+
+        var totalBudget = budget ?? TimeSpan.FromMilliseconds(RemoveTempDirectoryBudgetMilliseconds);
+        var backoff = initialBackoff ?? TimeSpan.FromMilliseconds(RemoveTempDirectoryInitialBackoffMilliseconds);
+        var backoffCap = maximumBackoff ?? TimeSpan.FromMilliseconds(RemoveTempDirectoryMaximumBackoffMilliseconds);
+
+        var attempts = 0;
+        Exception lastError;
+        while (true)
+        {
+            if (!Directory.Exists(path))
+            {
+                return;
+            }
+
+            attempts++;
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // A holder that released by deleting the tree itself is the same end state.
+                return;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                lastError = error;
+            }
+
+            if (!Directory.Exists(path))
+            {
+                return;
+            }
+
+            var spent = elapsed();
+            if (spent >= totalBudget)
+            {
+                throw new IOException(
+                    $"Failed to remove temp directory '{path}' after {attempts} attempts over "
+                        + $"{spent.TotalMilliseconds:F0} ms. Last error: {lastError.Message}",
+                    lastError);
+            }
+
+            delay(backoff);
+            backoff = backoff >= backoffCap ? backoffCap : Min(backoff + backoff, backoffCap);
+        }
+    }
+
+    private static TimeSpan Min(TimeSpan left, TimeSpan right) => left <= right ? left : right;
+
     public static object CreateRefinedWorkspaceOpaque(string root)
     {
         SeedLocalSkillCatalog(root);

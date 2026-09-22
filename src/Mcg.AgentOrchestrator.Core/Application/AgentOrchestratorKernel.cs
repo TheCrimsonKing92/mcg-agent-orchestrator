@@ -114,6 +114,25 @@ public sealed partial class AgentOrchestratorKernel
         _knownDependencyGoalStatuses[goal.Id] = goal.Status.ToString();
     }
 
+    public void ReplaceGoalStateWithSnapshot(
+        GoalSnapshot snapshot,
+        IReadOnlyList<HumanInputRequestSnapshot> humanInputRequests)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(humanInputRequests);
+        var goalId = new GoalId(snapshot.Id);
+        if (humanInputRequests.Any(request => request.GoalId != snapshot.Id))
+            throw new InvalidOperationException("Goal-scoped state cannot contain human-input requests owned by another goal.");
+
+        ReplaceGoalWithSnapshot(snapshot);
+        foreach (var request in _humanInputRequests.Values.Where(request => request.GoalId == goalId).ToArray())
+            _humanInputRequests.Remove(request.Id);
+        foreach (var request in humanInputRequests.Select(HumanInputRequest.FromSnapshot))
+            _humanInputRequests.Add(request.Id, request);
+        RepairMissingHumanInputRequests();
+        SweepParkedGoalHumanWaits();
+    }
+
     // Additive merge: ingest goals (and their human-input requests) from the snapshot that this kernel
     // does NOT already track, leaving every already-tracked goal's live in-flight state untouched. This
     // is the dynamic-goal-pickup primitive — a long-lived kernel (the daemon's continuous conductor
@@ -242,8 +261,19 @@ public sealed partial class AgentOrchestratorKernel
                 if (_humanInputRequests.Values.Any(request =>
                         request.GoalId == goal.Id &&
                         request.TaskId == task.Id &&
+                        !request.IsCompleted &&
+                        HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
+                {
+                    continue;
+                }
+
+                if (_humanInputRequests.Values.Any(request =>
+                        request.GoalId == goal.Id &&
+                        request.TaskId == task.Id &&
                         !request.IsCompleted))
                 {
+                    RestoreTaskAfterHumanInput(goal, task);
+                    clearedWait = true;
                     continue;
                 }
 

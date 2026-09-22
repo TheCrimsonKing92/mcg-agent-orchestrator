@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -87,6 +89,12 @@ internal sealed class DispatchWorktreeCommitter
                 $"Orchestrator commit-on-behalf failed with {ex.GetType().Name}: {NormalizeDiagnosticText(ex.Message)}");
         }
     }
+
+    internal CommitWorktreeEditsResult TryCommitCheckpoint(
+        string workingDirectory,
+        InterruptedWorkCheckpoint checkpoint,
+        IReadOnlyList<string> dirtyPaths) =>
+        TryCommitWorktreeEdits(workingDirectory, checkpoint.RenderCommitMessage(), dirtyPaths);
 
     internal static string BuildOrchestratorCommitSubject(TaskSpec task, string standardOutput, string standardError)
     {
@@ -210,7 +218,7 @@ internal sealed class DispatchWorktreeCommitter
                 $"expected={expectedBranch}; actual={NormalizeDiagnosticText(branch.Output)}");
         }
 
-        var head = _runGit(workingDirectory, ["rev-parse", "--short", "HEAD"]);
+        var head = _runGit(workingDirectory, ["rev-parse", "HEAD"]);
         var status = _runGit(workingDirectory, ["status", "--short", "--untracked-files=all"]);
         var dispatch = _runGit(workingDirectory, ["log", "--format=%H", $"--since={dispatchedAt:O}"]);
         var changedPaths = _runGit(workingDirectory, ["log", "--name-only", "--format=", $"--since={dispatchedAt:O}"]);
@@ -241,6 +249,7 @@ internal sealed class DispatchWorktreeCommitter
         var evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
             head.Output.Trim(),
+            ComputeDirtyStateHash(status.Output),
             string.IsNullOrWhiteSpace(filteredStatusOutput),
             string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
             FormatStatusShort(new GitCli.GitResult(status.ExitCode, filteredStatusOutput, string.Empty)),
@@ -248,6 +257,12 @@ internal sealed class DispatchWorktreeCommitter
             pathsChangedAfterDispatch,
             GitCli.ParseCommitWorthyStatusPaths(filteredStatusOutput));
         return GoalWorktreeInspectionResult.Available(evidence);
+    }
+
+    internal static string ComputeDirtyStateHash(string statusOutput)
+    {
+        var normalized = statusOutput.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant();
     }
 
     private static string BuildGitInspectionReceipt(string operation, GitCli.GitResult result)
@@ -319,6 +334,7 @@ internal sealed record GoalWorktreeInspectionResult(
 internal sealed record GoalWorktreeDispatchEvidence(
     string Branch,
     string Head,
+    string DirtyStateHash,
     bool IsClean,
     string WorktreeStatus,
     string StatusShort,
@@ -330,7 +346,7 @@ internal sealed record GoalWorktreeDispatchEvidence(
     public bool HasRelevantCommitAfterDispatch => ChangedPaths.Any(path => !GitCli.IsOrchestratorInternalArtifactPath(path));
     public string ChangedPathsSummary => DispatchWorktreeCommitter.FormatChangedPaths(ChangedPaths);
 
-    public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
+    public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
 }
 
 internal readonly record struct CommitWorktreeEditsResult(bool Succeeded, string Diagnostic)

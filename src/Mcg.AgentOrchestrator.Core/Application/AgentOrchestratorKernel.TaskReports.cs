@@ -264,6 +264,9 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var pendingInput = GetPendingHumanInput(goalId);
+        var pendingBlockingInput = pendingInput
+            .Where(request => HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
+            .ToList();
         var gateByTask = BuildVerificationGate(goalId)
             .Tasks
             .ToDictionary(task => task.TaskId);
@@ -272,7 +275,7 @@ public sealed partial class AgentOrchestratorKernel
             .Select(task => BuildTaskStageReadiness(
                 task,
                 gateByTask[task.Id],
-                pendingInput.Count(request => request.TaskId == task.Id)))
+                pendingBlockingInput.Count(request => request.TaskId == task.Id)))
             .ToList();
 
         return new GoalStageReadinessReport(

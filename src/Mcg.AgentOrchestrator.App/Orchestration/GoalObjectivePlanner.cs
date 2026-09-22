@@ -26,12 +26,14 @@ internal enum GoalIntakePipeline
 internal enum GoalIntakePipelineRequest
 {
     Auto,
-    FiveRole
+    FiveRole,
+    DeveloperReviewer,
+    DeveloperOnly
 }
 
 internal static class GoalIntakePipelineRequestParser
 {
-    public const string AllowedValues = "auto, five-role";
+    public const string AllowedValues = "auto, five-role, developer-reviewer, developer-only";
 
     public static GoalIntakePipelineRequest Parse(string value)
     {
@@ -45,13 +47,38 @@ internal static class GoalIntakePipelineRequestParser
             return GoalIntakePipelineRequest.FiveRole;
         }
 
+        if (value.Equals("developer-reviewer", StringComparison.OrdinalIgnoreCase))
+        {
+            return GoalIntakePipelineRequest.DeveloperReviewer;
+        }
+
+        if (value.Equals("developer-only", StringComparison.OrdinalIgnoreCase))
+        {
+            return GoalIntakePipelineRequest.DeveloperOnly;
+        }
+
         throw new ArgumentException($"--pipeline must be one of: {AllowedValues}.");
     }
 
     public static GoalIntakePipeline? ToPipelineOverride(this GoalIntakePipelineRequest request) =>
-        request == GoalIntakePipelineRequest.FiveRole
-            ? GoalIntakePipeline.FiveRole
-            : null;
+        request switch
+        {
+            GoalIntakePipelineRequest.Auto => null,
+            GoalIntakePipelineRequest.FiveRole => GoalIntakePipeline.FiveRole,
+            GoalIntakePipelineRequest.DeveloperReviewer => GoalIntakePipeline.DeveloperReviewer,
+            GoalIntakePipelineRequest.DeveloperOnly => GoalIntakePipeline.DeveloperOnly,
+            _ => throw new ArgumentOutOfRangeException(nameof(request), request, "Unknown goal intake pipeline request.")
+        };
+
+    public static string ToCanonicalValue(this GoalIntakePipelineRequest request) =>
+        request switch
+        {
+            GoalIntakePipelineRequest.Auto => "auto",
+            GoalIntakePipelineRequest.FiveRole => "five-role",
+            GoalIntakePipelineRequest.DeveloperReviewer => "developer-reviewer",
+            GoalIntakePipelineRequest.DeveloperOnly => "developer-only",
+            _ => throw new ArgumentOutOfRangeException(nameof(request), request, "Unknown goal intake pipeline request.")
+        };
 }
 
 internal sealed record GoalIntakePipelineDecision(
@@ -356,35 +383,27 @@ internal static class GoalObjectivePlanner
                 [$"operator override selected {FormatPipeline(forced)}"]);
         }
 
-        if (riskLabels.Contains("scope-implicit", StringComparer.OrdinalIgnoreCase))
-        {
-            return new GoalIntakePipelineDecision(
-                GoalIntakePipeline.FiveRole,
-                IsOverride: false,
-                ["scope-implicit objective needs Planner and Researcher to define the work before implementation"]);
-        }
-
         var reviewReasons = new List<string>();
+        AddReason("scope-implicit", "scope-implicit objective needs Planner and Researcher to define the work before implementation");
         AddReason("high-risk", "high-risk objective needs pre-acceptance review");
         AddReason("security-risk", "security-risk objective needs pre-acceptance review");
         AddReason("multi-scope", "multi-scope objective needs reviewer coverage across touched areas");
         AddReason("external-dependency", "external-dependency objective needs integration-risk review");
         AddReason("complex", "complex objective needs reviewer coverage before acceptance");
 
-        if (reviewReasons.Count > 0)
+        if (reviewReasons.Count == 0)
         {
-            return new GoalIntakePipelineDecision(
-                GoalIntakePipeline.DeveloperReviewer,
-                IsOverride: false,
-                reviewReasons);
+            reviewReasons.Add(fileScopes.Length == 0
+                ? "no routed risk labels found; automatic intake defaults to five-role"
+                : "scoped low-risk objective defaults to five-role intake");
         }
 
+        reviewReasons.Add("two-role and developer-only pipelines require an explicit --pipeline value");
+
         return new GoalIntakePipelineDecision(
-            GoalIntakePipeline.DeveloperOnly,
+            GoalIntakePipeline.FiveRole,
             IsOverride: false,
-            fileScopes.Length == 0
-                ? ["no routed risk labels found"]
-                : ["scoped low-risk objective can be implemented by Developer only"]);
+            reviewReasons);
 
         void AddReason(string label, string reason)
         {
@@ -428,7 +447,7 @@ internal static class GoalObjectivePlanner
                                s.EndsWith(".sln", StringComparison.OrdinalIgnoreCase));
         if (dotnetSignals)
         {
-            return "scripts/Invoke-IsolatedDotnet.ps1 or dotnet test with goal build lease";
+            return "scripts/Invoke-TestSummary.ps1 -Target <project> (managed MTP runner through dotnet)";
         }
 
         var goSignals = tokens.Contains("golang") ||

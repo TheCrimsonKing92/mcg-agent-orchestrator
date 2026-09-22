@@ -341,6 +341,456 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_new_test_absent_at_baseline_does_not_poison_attribution")]
+    public void NewTestAbsentAtBaselineDoesNotPoisonAttribution()
+    {
+        const string introduced = "Sample.Tests.NewFailure";
+        const string inherited = "Sample.Tests.ExistingFailure";
+        const string ambiguous = "Sample.Tests.AmbiguousZeroMatch";
+        const string introducedCheck = "focused new failure";
+        const string inheritedCheck = "focused existing failure";
+        const string ambiguousCheck = "focused ambiguous failure";
+        var baseline = new FocusedEvidenceArmRunResult(
+            FindingEvidenceArm.Baseline,
+            "main-a",
+            FindingEvidenceArmDisposition.ApparatusFailure,
+            Accepted: true,
+            Passed: false,
+            "one selector is absent and one is red",
+            [
+                new AcceptanceCheckResult(
+                    introducedCheck,
+                    false,
+                    null,
+                    "absent from baseline source",
+                    FailureClassification: AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline,
+                    ExecutedTestCount: 0),
+                new AcceptanceCheckResult(
+                    inheritedCheck,
+                    false,
+                    1,
+                    "existing failure",
+                    FailingTestIdentities: [inherited],
+                    ExecutedTestCount: 1),
+                new AcceptanceCheckResult(
+                    ambiguousCheck,
+                    false,
+                    8,
+                    "executed 0 tests",
+                    FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+                    ExecutedTestCount: 0)
+            ]);
+
+        var attributions = AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+            [introduced, inherited, ambiguous],
+            [introduced, inherited, ambiguous],
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [introduced] = introducedCheck,
+                [inherited] = inheritedCheck,
+                [ambiguous] = ambiguousCheck
+            },
+            baseline);
+
+        Assert.Equal(AcceptanceTestFailureOrigin.Introduced, attributions[0].Origin);
+        Assert.Contains("absent at merge-base", attributions[0].Evidence, StringComparison.Ordinal);
+        Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attributions[1].Origin);
+        Assert.Contains("same focused identity failed", attributions[1].Evidence, StringComparison.Ordinal);
+        Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attributions[2].Origin);
+        Assert.Contains("apparatus was unavailable", attributions[2].Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void DifferentTheoryDataCaseAtBaselineRemainsIntroduced()
+    {
+        const string candidateIdentity = "Sample.Tests.TheoryTests.Fails(value: 42)";
+        const string baselineIdentity = "Sample.Tests.TheoryTests.Fails(value: 1)";
+        const string selector = "Sample.Tests.TheoryTests.Fails";
+        const string checkName = "focused baseline theory method";
+        var baseline = new FocusedEvidenceArmRunResult(
+            FindingEvidenceArm.Baseline,
+            "main-a",
+            FindingEvidenceArmDisposition.Red,
+            Accepted: true,
+            Passed: false,
+            "different theory case failed",
+            [
+                new AcceptanceCheckResult(
+                    checkName,
+                    Passed: false,
+                    ExitCode: 1,
+                    OutputTail: "baseline data-case failure",
+                    FailingTestIdentities: [baselineIdentity],
+                    ExecutedTestCount: 1)
+            ]);
+
+        var attribution = Assert.Single(AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+            [candidateIdentity],
+            [selector],
+            new Dictionary<string, string>(StringComparer.Ordinal) { [selector] = checkName },
+            baseline));
+
+        Assert.Equal(AcceptanceTestFailureOrigin.Introduced, attribution.Origin);
+        Assert.Equal(candidateIdentity, attribution.TestIdentity);
+        Assert.Contains("data-case identity", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void MethodOnlyTheoryIdentityAtBaselineRemainsUnattributed()
+    {
+        const string candidateIdentity = "Sample.Tests.TheoryTests.Fails(value: 42)";
+        const string selector = "Sample.Tests.TheoryTests.Fails";
+        const string checkName = "focused baseline theory method";
+        var baseline = new FocusedEvidenceArmRunResult(
+            FindingEvidenceArm.Baseline,
+            "main-a",
+            FindingEvidenceArmDisposition.Red,
+            Accepted: true,
+            Passed: false,
+            "baseline reporter omitted the data case",
+            [
+                new AcceptanceCheckResult(
+                    checkName,
+                    Passed: false,
+                    ExitCode: 1,
+                    OutputTail: "method-only baseline failure",
+                    FailingTestIdentities: [selector],
+                    ExecutedTestCount: 1)
+            ]);
+
+        var attribution = Assert.Single(AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+            [candidateIdentity],
+            [selector],
+            new Dictionary<string, string>(StringComparer.Ordinal) { [selector] = checkName },
+            baseline));
+
+        Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Contains("exact data-case identity was unavailable", attribution.Evidence, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task FailureAttributionCapsRunsAndKeepsOmittedUnattributed()
+    {
+        const string project =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
+            "<Project />");
+        var identities = Enumerable
+            .Range(0, GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities + 2)
+            .Select(index => $"Sample.Tests.AttributionCapTests.Failure{index:D2}")
+            .ToArray();
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "AttributionCapTests.cs"),
+            "namespace Sample.Tests;\n\npublic sealed class AttributionCapTests\n{\n" +
+            string.Join("\n", identities.Select(identity =>
+                $"    [Xunit.Fact]\n    public void {identity[(identity.LastIndexOf('.') + 1)..]}() {{ }}")) +
+            "\n}\n");
+        var testCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
+        try
+        {
+            AssertGitSucceeded(root, "init", "-b", "main");
+            AssertGitSucceeded(root, "config", "user.email", "attribution-cap@example.invalid");
+            AssertGitSucceeded(root, "config", "user.name", "Attribution Cap Fixture");
+            AssertGitSucceeded(root, "add", ".");
+            AssertGitSucceeded(root, "commit", "-m", "baseline");
+            var verifier = new GoalAcceptanceVerifier((args, _, _, _) =>
+            {
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    testCalls.Add(args);
+                    var methodIndex = Array.IndexOf(args, "--filter-method");
+                    Assert.True(methodIndex >= 0 && methodIndex + 1 < args.Length);
+                    var selectedIdentity = args[methodIndex + 1].Trim('*');
+                    WriteMtpTrx(args, executedTestCount: 1, [selectedIdentity]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+            var check = new AcceptanceCheckResult(
+                "core tests",
+                Passed: false,
+                ExitCode: 1,
+                OutputTail: "candidate failures",
+                FailingTestIdentities: identities,
+                TestProjectPath: project);
+            await using var executionOwner = AcceptanceExecutionOwners.CreateAttempt(
+                root,
+                options: new AcceptanceRunExecutionOptions(
+                    RunId: "failure-attribution-cap",
+                    ResultsPrefix: Path.Combine(root, "failure-attribution-cap")));
+            var attributed = await verifier.AttachTestFailureAttributionsAsync(
+                check,
+                new GoalAcceptanceVerifier.AcceptanceManifestCheck
+                {
+                    Name = check.Name,
+                    Type = "dotnet-test",
+                    Runner = "mtp",
+                    Project = project
+                },
+                AcceptanceGateEngineSettings.Load(root),
+                root,
+                GoalId.New(),
+                stableSlotIndex: null,
+                stableSlotLease: null,
+                executionOwner,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(
+                GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities,
+                testCalls.Count);
+            Assert.Equal(identities.Length, attributed.FailingTestAttributions!.Count);
+            var omitted = attributed.FailingTestAttributions
+                .Where(attribution => attribution.Evidence.Contains("omitted", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(2, omitted.Length);
+            Assert.All(omitted, attribution =>
+                Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attribution.Origin));
+            Assert.Equal(
+                identities.Skip(GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities),
+                omitted.Select(attribution => attribution.TestIdentity));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task FailureAttributionCapsRunsAcrossAllFailedChecks()
+    {
+        const string project =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        var root = CreateManifestWorkspace($$"""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "infrastructure tests: First", "type": "dotnet-test", "runner": "mtp", "project": "{{project}}", "arguments": ["--filter", "FullyQualifiedName~FirstAttributionTests"] },
+                { "name": "infrastructure tests: Second", "type": "dotnet-test", "runner": "mtp", "project": "{{project}}", "arguments": ["--filter", "FullyQualifiedName~SecondAttributionTests"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var firstIdentities = Enumerable.Range(0, 3)
+            .Select(index => $"Sample.Tests.FirstAttributionTests.Failure{index:D2}")
+            .ToArray();
+        var secondIdentities = Enumerable.Range(0, 3)
+            .Select(index => $"Sample.Tests.SecondAttributionTests.Failure{index:D2}")
+            .ToArray();
+        var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
+            "<Project />");
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "AttributionTests.cs"),
+            "namespace Sample.Tests;\n\n" +
+            RenderClass("FirstAttributionTests", firstIdentities) + "\n" +
+            RenderClass("SecondAttributionTests", secondIdentities));
+        var focusedCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
+        var focusedWorkingDirectories = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var focusedBuildCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
+        try
+        {
+            AssertGitSucceeded(root, "init", "-b", "main");
+            AssertGitSucceeded(root, "config", "user.email", "gate-cap@example.invalid");
+            AssertGitSucceeded(root, "config", "user.name", "Gate Cap Fixture");
+            AssertGitSucceeded(root, "add", ".");
+            AssertGitSucceeded(root, "commit", "-m", "baseline");
+            var verifier = new GoalAcceptanceVerifier((args, workingDirectory, _, _) =>
+            {
+                if (args is ["dotnet", "build", ..] &&
+                    workingDirectory.Contains("mcg-focused-evidence-baselines", StringComparison.OrdinalIgnoreCase))
+                {
+                    focusedBuildCalls.Add(args);
+                }
+
+                if (!IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                var methodIndex = Array.IndexOf(args, "--filter-method");
+                if (methodIndex >= 0)
+                {
+                    focusedCalls.Add(args);
+                    focusedWorkingDirectories.Add(workingDirectory);
+                    var selectedIdentity = args[methodIndex + 1].Trim('*');
+                    WriteFailedMtpTrx(args, [selectedIdentity]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                }
+
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                var identities = filterIndex >= 0 &&
+                    args[filterIndex + 1].Contains("FirstAttributionTests", StringComparison.Ordinal)
+                    ? firstIdentities
+                    : secondIdentities;
+                WriteFailedMtpTrx(args, identities);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    1,
+                    $"Failed! - Failed: {identities.Length}, Passed: 0, Skipped: 0, Total: {identities.Length}."));
+            });
+
+            var result = await verifier.RunAsync(root, GoalId.New(), stableSlotIndex: null);
+
+            Assert.False(result.Passed);
+            Assert.Equal(2, result.Checks!.Count(check => !check.Passed));
+            Assert.Equal(
+                GoalAcceptanceVerifier.MaxFailureAttributionFocusedEvidenceIdentities,
+                focusedCalls.Count);
+            Assert.Single(focusedWorkingDirectories.Distinct(StringComparer.OrdinalIgnoreCase));
+            Assert.Single(focusedBuildCalls);
+            var attributions = result.Checks!
+                .Where(check => !check.Passed)
+                .SelectMany(check => check.FailingTestAttributions ?? [])
+                .ToArray();
+            Assert.Equal(firstIdentities.Length + secondIdentities.Length, attributions.Length);
+            var omitted = attributions.Where(attribution =>
+                attribution.Evidence.Contains("omitted", StringComparison.Ordinal)).ToArray();
+            Assert.Equal(2, omitted.Length);
+            Assert.All(omitted, attribution =>
+                Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attribution.Origin));
+            Assert.All(
+                attributions.Except(omitted),
+                attribution => Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attribution.Origin));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+
+        static string RenderClass(string className, IEnumerable<string> identities) =>
+            $"public sealed class {className}\n{{\n" +
+            string.Join("\n", identities.Select(identity =>
+                $"    [Xunit.Fact] public void {identity[(identity.LastIndexOf('.') + 1)..]}() {{ }}")) +
+            "\n}\n";
+
+        static void WriteFailedMtpTrx(string[] args, IReadOnlyList<string> identities)
+        {
+            var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+            var trxFileIndex = Array.IndexOf(args, "--report-trx-filename");
+            Assert.True(resultsDirectoryIndex >= 0 && resultsDirectoryIndex + 1 < args.Length);
+            Assert.True(trxFileIndex >= 0 && trxFileIndex + 1 < args.Length);
+            Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
+            var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
+            var definitions = identities.Select((identity, index) =>
+            {
+                var separator = identity.LastIndexOf('.');
+                return new System.Xml.Linq.XElement(
+                    "UnitTest",
+                    new System.Xml.Linq.XAttribute("id", $"failed-{index}"),
+                    new System.Xml.Linq.XElement(
+                        "TestMethod",
+                        new System.Xml.Linq.XAttribute("className", identity[..separator]),
+                        new System.Xml.Linq.XAttribute("name", identity[(separator + 1)..])));
+            });
+            var results = identities.Select((identity, index) =>
+                new System.Xml.Linq.XElement(
+                    "UnitTestResult",
+                    new System.Xml.Linq.XAttribute("testId", $"failed-{index}"),
+                    new System.Xml.Linq.XAttribute("testName", identity),
+                    new System.Xml.Linq.XAttribute("outcome", "Failed")));
+            new System.Xml.Linq.XDocument(
+                new System.Xml.Linq.XElement(
+                    "TestRun",
+                    new System.Xml.Linq.XElement("TestDefinitions", definitions),
+                    new System.Xml.Linq.XElement("Results", results),
+                    new System.Xml.Linq.XElement(
+                        "ResultSummary",
+                        new System.Xml.Linq.XAttribute("outcome", "Failed"),
+                        new System.Xml.Linq.XElement(
+                            "Counters",
+                            new System.Xml.Linq.XAttribute("total", identities.Count),
+                            new System.Xml.Linq.XAttribute("executed", identities.Count),
+                            new System.Xml.Linq.XAttribute("passed", 0),
+                            new System.Xml.Linq.XAttribute("failed", identities.Count),
+                            new System.Xml.Linq.XAttribute("notExecuted", 0)))))
+                .Save(destinationPath);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_candidate_only_method_is_classified_absent_before_baseline_execution")]
+    public void CandidateOnlyMethodIsClassifiedAbsentBeforeBaselineExecution()
+    {
+        const string project =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        const string identity = "Sample.Tests.ExistingTests.CandidateOnlyFailure";
+        var candidateRoot = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var baselineRoot = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            WriteSelectionProject(candidateRoot, includeCandidateOnlyMethod: true);
+            WriteSelectionProject(baselineRoot, includeCandidateOnlyMethod: false);
+            var settings = AcceptanceGateEngineSettings.Load(candidateRoot);
+            var candidate = AcceptanceFailureAttributionPlanner.BuildCandidateSelections(
+                "Infrastructure.Tests",
+                [identity],
+                settings,
+                candidateRoot);
+
+            Assert.True(candidate.Succeeded, candidate.FailureEvidence);
+            var baseline = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
+                "merge-base-sha",
+                candidate.Checks,
+                GoalAcceptanceVerifier.ProjectLabel,
+                settings,
+                baselineRoot);
+
+            Assert.Empty(baseline.ExecutableChecks);
+            var absent = Assert.Single(baseline.SourceClassificationChecks);
+            Assert.Equal(Assert.Single(candidate.Checks).Name, absent.Name);
+            Assert.Equal(project, absent.TestProjectPath);
+            Assert.Equal(
+                AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline,
+                absent.FailureClassification);
+            Assert.Equal(0, absent.ExecutedTestCount);
+            Assert.Contains("does not exist in baseline source", absent.OutputTail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(candidateRoot);
+            DeleteDirectoryWithRetry(baselineRoot);
+        }
+
+        static void WriteSelectionProject(string root, bool includeCandidateOnlyMethod)
+        {
+            var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"), "<Project />");
+            File.WriteAllText(
+                Path.Combine(directory, "ExistingTests.cs"),
+                includeCandidateOnlyMethod
+                    ? "namespace Sample.Tests; sealed class ExistingTests { [Xunit.Fact] public void CandidateOnlyFailure() { } }"
+                    : "namespace Sample.Tests; sealed class ExistingTests { [Xunit.Fact] public void ExistingPassingTest() { } }");
+        }
+    }
+
     [Xunit.Fact]
     public async Task FocusedEvidence_TwoReceiptTargetsAcrossProjects_PreserveFocusedChecks()
     {
@@ -520,6 +970,83 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
             settings,
             out resolved));
         Assert.Equal(secondProject, resolved);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_DeclaredProjectOutsideInfrastructureTestsRootResolvesWithoutANewAlias()
+    {
+        const string standaloneCliProject =
+            "tests/Mcg.AgentOrchestrator.Cli.Tests/Mcg.AgentOrchestrator.Cli.Tests.csproj";
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations = [new AcceptanceMtpInvocation { Project = standaloneCliProject }]
+        };
+
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "Mcg.AgentOrchestrator.Cli.Tests",
+            settings,
+            out var resolved));
+        Assert.Equal(standaloneCliProject, resolved);
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            standaloneCliProject,
+            settings,
+            out resolved));
+        Assert.Equal(standaloneCliProject, resolved);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Unsupported.Tests")]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.App")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj")]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.RealProcessShardProbe")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj")]
+    [Xunit.InlineData("../../../evil/tests/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj")]
+    [Xunit.InlineData("C:/attacker/tests/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj")]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("   ")]
+    public void FocusedEvidence_UnknownNonTestTraversalAndAbsoluteAliasesAreRefused(string alias)
+    {
+        const string cliProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
+            "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
+        const string probeProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/" +
+            "Mcg.AgentOrchestrator.RealProcessShardProbe.csproj";
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations =
+            [
+                new AcceptanceMtpInvocation { Project = cliProject },
+                new AcceptanceMtpInvocation { Project = probeProject }
+            ]
+        };
+
+        Assert.False(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(alias, settings, out var resolved));
+        Assert.Equal(string.Empty, resolved);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_AbsoluteLegacyProjectPathKeepsCandidateRelativeAttribution()
+    {
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations =
+            [
+                new AcceptanceMtpInvocation
+                {
+                    Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+            ]
+        };
+
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "C:\\repo\\tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            settings,
+            out var resolved));
+        Assert.Equal(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            resolved);
+        Assert.Equal("Infrastructure.Tests", GoalAcceptanceVerifier.ProjectLabel(resolved));
     }
 
     [Xunit.Fact]
@@ -841,7 +1368,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 "mtpInvocations": [
                   {
                     "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
-                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.dll",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
                     "arguments": [
                       "{executable}",
                       "--results-directory",

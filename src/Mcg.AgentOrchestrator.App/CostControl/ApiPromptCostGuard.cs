@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.CostControl;
 
-internal sealed record PaidApiPromptRisk(
+public sealed record PaidApiPromptRisk(
     string ProviderName,
     string ModelName,
     TaskComplexity TaskComplexity,
@@ -16,7 +16,7 @@ internal sealed record PaidApiPromptRisk(
     int PriorUnderpoweredCount = 0,
     IReadOnlyList<string>? PriorTaskShapes = null);
 
-internal static class ApiPromptCostGuard
+public static class ApiPromptCostGuard
 {
     public const string DashboardConfirmationQueryName = "confirmLargePaidApiPrompt";
     public const string CliConfirmationFlag = "--confirm-large-paid-api-prompt";

@@ -21,12 +21,14 @@ public static class OperatorChannelFactory
     // persistent User-scoped variable. The harness/process tree may have started before the operator
     // set it, so it's absent from the process env yet present in the User registry; this lets a bare
     // `operator-listen` find the token without an inline env-assignment prefix (which trips approvals).
-    public static string? ResolveBotToken()
+    public static string? ResolveBotToken() => ResolveBotToken(Environment.GetEnvironmentVariable);
+
+    internal static string? ResolveBotToken(Func<string, EnvironmentVariableTarget, string?> readEnvironment)
     {
-        var token = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN");
+        var token = readEnvironment("MCGO_DISCORD_BOT_TOKEN", EnvironmentVariableTarget.Process);
         if (string.IsNullOrWhiteSpace(token) && OperatingSystem.IsWindows())
         {
-            token = Environment.GetEnvironmentVariable("MCGO_DISCORD_BOT_TOKEN", EnvironmentVariableTarget.User);
+            token = readEnvironment("MCGO_DISCORD_BOT_TOKEN", EnvironmentVariableTarget.User);
         }
 
         return token;

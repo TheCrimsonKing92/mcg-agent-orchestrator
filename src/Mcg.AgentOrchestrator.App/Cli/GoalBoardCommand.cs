@@ -53,10 +53,11 @@ internal static class GoalBoardCommand
             ids,
             worktreePaths ?? new Dictionary<GoalId, string>(),
             attention.OpenClarificationGoalIds);
+        var evidenceLeases = ReadEvidenceLeases(workspace, goals);
 
         // Machine process discovery is deliberately captured once for the entire board. Every goal
         // disposition evaluates against this immutable snapshot.
-        var processSnapshot = (processSnapshotFactory ?? ProcessCommandLines.Snapshot)();
+        var processSnapshot = (processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation)();
         var clock = new BoardClock(now);
         var dispositionSurface = new GoalOperatorDispositionSurface(
             clock,
@@ -70,6 +71,7 @@ internal static class GoalBoardCommand
             acceptance,
             worktrees,
             lifecycleFacts,
+            evidenceLeases,
             dispositionSurface,
             processSnapshot)).ToArray();
         var projection = GoalBoardProjector.Project(facts, options, now);
@@ -88,6 +90,7 @@ internal static class GoalBoardCommand
         IReadOnlyDictionary<string, GoalBoardAcceptanceFact> acceptance,
         IReadOnlyDictionary<GoalId, GoalBoardWorktreeFact> worktrees,
         IReadOnlyDictionary<GoalId, GoalLifecycleFacts>? lifecycleFacts,
+        IReadOnlyDictionary<GoalId, GoalEvidenceLeaseFact> evidenceLeases,
         GoalOperatorDispositionSurface dispositionSurface,
         ProcessCommandLineSnapshot processSnapshot)
     {
@@ -181,7 +184,44 @@ internal static class GoalBoardCommand
             acceptanceFact.IsLive,
             liveWorker,
             Fallback(kernel, goal),
-            lifecycleState);
+            lifecycleState,
+            evidenceLeases.TryGetValue(goal.Id, out var evidenceLease) ? evidenceLease : null);
+    }
+
+    private static IReadOnlyDictionary<GoalId, GoalEvidenceLeaseFact> ReadEvidenceLeases(
+        OrchestratorWorkspace workspace,
+        IReadOnlyCollection<Goal> goals)
+    {
+        if (!File.Exists(workspace.SqliteStatePath))
+        {
+            return new Dictionary<GoalId, GoalEvidenceLeaseFact>();
+        }
+
+        var facts = new Dictionary<GoalId, GoalEvidenceLeaseFact>();
+        foreach (var goal in goals)
+        {
+            try
+            {
+                var lease = ReconcileSweepRemediationStore.ReadAcceptanceLease(
+                    workspace.SqliteStatePath,
+                    goal.Id.Value,
+                    ConductorDriver.EvidenceMutationLeaseDuration);
+                if (lease is not null && GoalEvidenceOperationOwner.IsGoalEvidence(lease.Owner))
+                {
+                    facts[goal.Id] = GoalEvidenceOperationCoordinator.Classify(
+                        workspace.ExecutionDirectory,
+                        goal,
+                        lease,
+                        new ConductLockPidProbe());
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                facts[goal.Id] = GoalEvidenceOperationCoordinator.StateUnavailable(goal.Id.Value);
+            }
+        }
+
+        return facts;
     }
 
     private static AttentionRead ReadAttention(OrchestratorWorkspace workspace, IReadOnlyCollection<string> goalIds)

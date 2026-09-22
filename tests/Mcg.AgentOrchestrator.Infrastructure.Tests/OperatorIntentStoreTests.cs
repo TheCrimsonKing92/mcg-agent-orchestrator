@@ -112,7 +112,8 @@ public sealed class OperatorIntentStoreTests
                         item.Goal.Id.Value,
                         item.Task.Id.Value,
                         $"tick-intent-{item.Index}",
-                        $"tick-key-{item.Index}"));
+                        $"tick-key-{item.Index}",
+                        retryCause: RetryCause.NewSourceFinding));
                 }
                 catch (Exception ex)
                 {
@@ -306,6 +307,199 @@ public sealed class OperatorIntentStoreTests
         }
     }
 
+    [Xunit.Theory(DisplayName = "OperatorIntentCoordinator_missing_retry_cause_creates_operator_actionable_hold")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task OperatorIntentCoordinatorMissingRetryCauseCreatesOperatorActionableHold(bool explicitUnknown)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Classify an untyped operator retry");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var latestRetryAtBefore = task.LatestRetryAt;
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = CreateRetryIntent(
+                goal.Id.Value,
+                task.Id.Value,
+                "missing-cause-intent",
+                "missing-cause-key",
+                retryCause: explicitUnknown ? RetryCause.Unknown : null);
+            await store.EnqueueAsync(intent);
+            var coordinator = new OperatorIntentCoordinator(store);
+
+            var result = coordinator.ExecutePending(kernel, goal);
+
+            Xunit.Assert.True(result.MutatedGoalState);
+            var request = Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            Xunit.Assert.Equal(task.Id, request.TaskId);
+            Xunit.Assert.Contains("retry cause", request.Question, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, kernel.GetTask(goal.Id, task.Id).Status);
+            Xunit.Assert.Equal(latestRetryAtBefore, kernel.GetTask(goal.Id, task.Id).LatestRetryAt);
+            Xunit.Assert.DoesNotContain(
+                goal.Timeline,
+                item => item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried);
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+
+            var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            var restoredGoal = restored.GetGoal(goal.Id);
+            var restoredRequest = Xunit.Assert.Single(restored.GetPendingHumanInput(goal.Id));
+            restored.SubmitHumanInput(restoredRequest.Id, nameof(RetryCause.NewSourceFinding));
+            var resumedCoordinator = new OperatorIntentCoordinator(store);
+            var resumed = resumedCoordinator.ExecutePending(restored, restoredGoal);
+            Xunit.Assert.True(resumed.MutatedGoalState);
+            Xunit.Assert.Equal(RetryCause.NewSourceFinding, restored.GetTask(goal.Id, task.Id).PendingRetryCause);
+            Xunit.Assert.Single(restoredGoal.Timeline.Where(item =>
+                item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried));
+            resumedCoordinator.CompletePersisted([goal.Id]);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_retry_cause_answer_resumes_with_prospective_evidence_open")]
+    public async Task OperatorIntentCoordinatorRetryCauseAnswerResumesWithProspectiveEvidenceOpen()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Resume a classified retry while retaining future acceptance evidence");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = CreateRetryIntent(
+                goal.Id.Value,
+                task.Id.Value,
+                "prospective-evidence-intent",
+                "prospective-evidence-key",
+                retryCause: RetryCause.Unknown);
+            await store.EnqueueAsync(intent);
+            var coordinator = new OperatorIntentCoordinator(store);
+
+            Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            var clarification = Xunit.Assert.Single(kernel.GetPendingBlockingHumanInput(goal.Id));
+            var prospective = kernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                task.Id,
+                "Observe the implemented candidate after the retry.",
+                HumanWaitKind.ProspectiveAcceptanceEvidence,
+                questionFingerprint: "criterion-4-live-observation").Request;
+            kernel.SubmitHumanInput(clarification.Id, nameof(RetryCause.NewSourceFinding));
+
+            var resumed = coordinator.ExecutePending(kernel, goal);
+
+            Xunit.Assert.True(resumed.MutatedGoalState);
+            Xunit.Assert.Equal(RetryCause.NewSourceFinding, task.PendingRetryCause);
+            Xunit.Assert.False(prospective.IsCompleted);
+            Xunit.Assert.Equal(HumanWaitKind.ProspectiveAcceptanceEvidence, prospective.Kind);
+            Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            Xunit.Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
+            Xunit.Assert.Single(goal.Timeline.Where(item =>
+                item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried));
+            coordinator.CompletePersisted([goal.Id]);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "OperatorIntentCoordinator_invalid_retry_cause_reprompts_and_preserves_original_intent")]
+    [Xunit.InlineData("not a retry cause", false)]
+    [Xunit.InlineData("999", false)]
+    [Xunit.InlineData("not a retry cause", true)]
+    [Xunit.InlineData("999", true)]
+    public async Task OperatorIntentCoordinatorInvalidRetryCauseRepromptsAndPreservesOriginalIntent(
+        string invalidAnswer,
+        bool anotherAnswerRequired)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "Preserve the original retry after an invalid classification");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = CreateRetryIntent(
+                goal.Id.Value,
+                task.Id.Value,
+                "invalid-cause-intent",
+                "invalid-cause-key",
+                message: "Repair the original source finding.");
+            await store.EnqueueAsync(intent);
+
+            var coordinator = new OperatorIntentCoordinator(store);
+            Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            var original = Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            kernel.SubmitHumanInput(original.Id, invalidAnswer);
+
+            var correction = coordinator.ExecutePending(kernel, goal);
+            Xunit.Assert.True(correction.MutatedGoalState);
+            var replacement = Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            Xunit.Assert.NotEqual(original.Id, replacement.Id);
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+            Xunit.Assert.Empty(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+
+            var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            var restoredGoal = restored.GetGoal(goal.Id);
+            var restoredReplacement = Xunit.Assert.Single(restored.GetPendingHumanInput(goal.Id));
+            restored.SubmitHumanInput(restoredReplacement.Id, nameof(RetryCause.NewSourceFinding));
+            var resumedCoordinator = new OperatorIntentCoordinator(store);
+            if (anotherAnswerRequired)
+            {
+                var otherRequest = restored.RequestHumanInput(
+                    goal.Id, task.Id, "Confirm the unrelated implementation requirement.",
+                    isAutoDefaultable: false, isDismissible: false);
+                Xunit.Assert.False(resumedCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
+                Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(intent.Id))!.Status);
+                Xunit.Assert.Empty(restoredGoal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
+
+                // Restart while the original intent still waits; answering the other obligation
+                // must resume that same correction once, without a second operator retry.
+                restored = AgentOrchestratorKernel.FromSnapshot(restored.ExportSnapshot());
+                restoredGoal = restored.GetGoal(goal.Id);
+                restored.SubmitHumanInput(otherRequest.Id, "Confirmed.");
+                resumedCoordinator = new OperatorIntentCoordinator(store);
+            }
+            Xunit.Assert.True(resumedCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
+
+            var resumedTask = restored.GetTask(goal.Id, task.Id);
+            Xunit.Assert.Equal(RetryCause.NewSourceFinding, resumedTask.PendingRetryCause);
+            Xunit.Assert.Equal("Repair the original source finding.", resumedTask.AcceptedRetryFeedback?.Message);
+            Xunit.Assert.Single(restoredGoal.Timeline.Where(item =>
+                item.TaskId == task.Id && item.Kind == ProgressKind.TaskRetried));
+            resumedCoordinator.CompletePersisted([goal.Id]);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OperatorIntentStore_read_only_open_does_not_create_schema")]
     public void OperatorIntentStoreReadOnlyOpenDoesNotCreateSchema()
     {
@@ -366,9 +560,10 @@ public sealed class OperatorIntentStoreTests
         string taskId,
         string intentId,
         string idempotencyKey,
-        string message = "retry")
+        string message = "retry",
+        RetryCause? retryCause = null)
     {
-        var payload = new RetryOperatorIntentPayload(message, RetryRoundKind.Mechanical);
+        var payload = new RetryOperatorIntentPayload(message, RetryRoundKind.Mechanical, RetryCause: retryCause);
         return new OperatorIntentRecord(
             intentId,
             idempotencyKey,

@@ -301,8 +301,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(2, checkpointCount);
         Assert.Equal(WorkTaskStatus.Failed, secondCheckpointStatus);
         Assert.False(secondCheckpointHasProcess);
-        Assert.Contains("worker-process-registration-failed", startResult.FailureReason, StringComparison.Ordinal);
-        Assert.Contains("stage=durable-registry-write", startResult.FailureReason, StringComparison.Ordinal);
+        var registrationFailure = Assert.IsType<string>(startResult.FailureReason);
+        Assert.True(registrationFailure.Contains("worker-process-registration-failed", StringComparison.Ordinal) && registrationFailure.Contains("stage=durable-registry-write", StringComparison.Ordinal), $"Expected worker process registration failure at stage=durable-registry-write. Actual bounded FailureReason: {registrationFailure[..Math.Min(registrationFailure.Length, 2048)]}");
         Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
         Assert.Null(restoredTask.LastProcess);
         Assert.Contains(restoredGoal.Timeline, evt =>
@@ -429,7 +429,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         });
 
     var cancelled = runner.CancelLatestProcess(kernel, goal.Id, task.Id);
-    kernel.RequeueInterruptedDispatch(goal.Id, task.Id, "Redispatch after stopped worker tree.");
+    kernel.RequeueInterruptedDispatch(
+        goal.Id,
+        task.Id,
+        "Redispatch after stopped worker tree.",
+        RetryCause.ProviderInterruption);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt 2", root, now.AddMinutes(2)));
 
     Assert.True(killed.SequenceEqual([111, 222]));
@@ -865,7 +869,12 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         ownedPids: [444, 555],
         exitFileExists: true);
 
-    var outcome = new BackgroundDispatchRunner(clock, isStillRunning: pid => pid == 444)
+    var outcome = new BackgroundDispatchRunner(
+        clock,
+        isStillRunning: pid => pid == 444,
+        readProcessIdentity: pid => pid == 444
+            ? (process.StartedAt, @"C:\workers\worker-444.exe")
+            : null)
         .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Null(outcome.Verification);
@@ -1289,7 +1298,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     }
     finally
     {
-        _ = GoalWorktrees.DeleteDirectory(root);
+        _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
     }
 }
 
@@ -1342,7 +1351,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     }
     finally
     {
-        _ = GoalWorktrees.DeleteDirectory(root);
+        _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
     }
 }
 

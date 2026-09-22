@@ -7,7 +7,8 @@ internal sealed record PostLandingCanaryProbeResult(
     bool Green,
     PostLandingCanaryFailureReason? FailureReason,
     int ExecutedTestCount,
-    string Detail);
+    string Detail,
+    string SlotResolution = "ambient-grid");
 
 internal static class PostLandingCanaryCommand
 {
@@ -17,7 +18,8 @@ internal static class PostLandingCanaryCommand
     internal static int Run(
         IReadOnlyList<string> args,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
-        Func<IReadOnlyList<string>, int>? completedTestCounter = null)
+        Func<IReadOnlyList<string>, int>? completedTestCounter = null,
+        Func<string, AcceptanceRunExecutionOptions, IAcceptanceAttemptExecutionOwner>? executionOwnerFactory = null)
     {
         if (args.Count != 2 || !args[0].Equals(SubcommandName, StringComparison.Ordinal))
         {
@@ -25,16 +27,34 @@ internal static class PostLandingCanaryCommand
             return 2;
         }
 
+        var slotResolution = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable))
+            ? "ambient-grid"
+            : "isolated-root";
         PostLandingCanaryProbeResult probe;
         try
         {
-            var verification = (acceptanceVerifier ?? new GoalAcceptanceVerifier())
-                .RunAsync(
-                    args[1],
-                    goalId: null,
-                    changedFiles: ["tests/Mcg.AgentOrchestrator.Core.Tests/CanaryTests.cs"])
-                .GetAwaiter()
-                .GetResult();
+            var verifier = acceptanceVerifier ?? new GoalAcceptanceVerifier();
+            var inheritedResultsPrefix = Environment.GetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+            var executionOptions = new AcceptanceRunExecutionOptions(
+                ResultsPrefix: string.IsNullOrWhiteSpace(inheritedResultsPrefix)
+                    ? null
+                    : Path.GetFullPath(inheritedResultsPrefix));
+            executionOwnerFactory ??= static (worktreePath, options) =>
+                AcceptanceExecutionOwners.CreateAttempt(worktreePath, options: options);
+            var executionOwner = executionOwnerFactory(args[1], executionOptions);
+            var verification = AcceptanceExecutionOwnerLifetime.Run(
+                executionOwner,
+                () => verifier.RunOwnedAsync(
+                        args[1],
+                        goalId: null,
+                        changedFiles: ["tests/Mcg.AgentOrchestrator.Core.Tests/CanaryTests.cs"],
+                        stableSlotIndex: null,
+                        stableSlotLease: null,
+                        executionOwner)
+                    .GetAwaiter()
+                    .GetResult());
             var resultPaths = verification.TestResultPaths ?? [];
             var executedTestCount = completedTestCounter is null
                 ? TestCoverageInvariant.ReadCompletedTests(resultPaths).Count
@@ -44,18 +64,21 @@ internal static class PostLandingCanaryCommand
                     true,
                     null,
                     executedTestCount,
-                    $"accept verdict with {executedTestCount} executed test(s)")
+                    $"accept verdict with {executedTestCount} executed test(s)",
+                    slotResolution)
                 : verification.Passed
                     ? new PostLandingCanaryProbeResult(
                         false,
                         PostLandingCanaryFailureReason.EmptyReceipt,
                         0,
-                        "accept verdict had an empty or missing core-tests receipt")
+                        "accept verdict had an empty or missing core-tests receipt",
+                        slotResolution)
                     : new PostLandingCanaryProbeResult(
                         false,
                         ClassifyFailure(verification, executedTestCount),
                         executedTestCount,
-                        verification.OutputTail ?? "gate returned a reject verdict");
+                        verification.OutputTail ?? "gate returned a reject verdict",
+                        slotResolution);
         }
         catch (Exception ex)
         {
@@ -63,7 +86,8 @@ internal static class PostLandingCanaryCommand
                 false,
                 PostLandingCanaryFailureReason.InfrastructureError,
                 0,
-                $"{ex.GetType().Name}: {ex.Message}");
+                $"{ex.GetType().Name}: {ex.Message}",
+                slotResolution);
         }
 
         Console.WriteLine(ResultPrefix + JsonSerializer.Serialize(
@@ -81,10 +105,7 @@ internal static class PostLandingCanaryCommand
         // A gate rejection with checks remains a verdict failure even if its reporter did not flush a TRX.
         if (verification.Checks is null or { Count: 0 } ||
             verification.Checks.Any(check =>
-                string.Equals(
-                    check.FailureClassification,
-                    AcceptanceFailureClassifications.GateEnvironmentInterference,
-                    StringComparison.Ordinal)))
+                AcceptanceFailureClassifications.IsEnvironmentalApparatus(check.FailureClassification)))
         {
             return PostLandingCanaryFailureReason.InfrastructureError;
         }

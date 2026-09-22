@@ -174,6 +174,7 @@ internal static partial class LockAttribution
     internal static TimeSpan? HandleProbeTimeoutForTests { get; set; }
     internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
     internal static bool DisableRestartManagerForTests { get; set; }
+    internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
 
     public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null) =>
         AttributeCore(path, ownershipHint, phase, operation, diagnostics: null);
@@ -474,8 +475,8 @@ internal static partial class LockAttribution
 
             diagnostics?.Record("handle-process-start", "started");
             try { process.StandardInput.Close(); } catch { }
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
+            var outputDrain = PipeDrain.Start(process.StandardOutput, "handle64-stdout-drain");
+            var errorDrain = PipeDrain.Start(process.StandardError, "handle64-stderr-drain");
             if (!process.WaitForExit(testHooks.HandleProbeTimeout ?? HandleProbeTimeout))
             {
                 diagnostics?.Record("handle-wait", "timed-out");
@@ -498,8 +499,6 @@ internal static partial class LockAttribution
                     diagnostics?.Record("handle-reap", $"failed-{exception.GetType().Name}");
                 }
 
-                _ = Task.WhenAny(outputTask, Task.Delay(TimeSpan.FromSeconds(1)));
-                _ = Task.WhenAny(errorTask, Task.Delay(TimeSpan.FromSeconds(1)));
                 return new BuildLockAttribution(
                     path,
                     [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -507,7 +506,25 @@ internal static partial class LockAttribution
             }
 
             diagnostics?.Record("handle-wait", $"exited-{process.ExitCode}");
-            var output = outputTask.GetAwaiter().GetResult() + Environment.NewLine + errorTask.GetAwaiter().GetResult();
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var outputDrained = outputDrain.Join(drainDeadline);
+            var errorDrained = errorDrain.Join(drainDeadline);
+            if (!outputDrained || !errorDrained)
+            {
+                var drainDiagnostic = PipeDrain.DescribeTimeout(
+                    "handle64",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    outputDrain,
+                    errorDrain);
+                diagnostics?.Record("handle-drain", drainDiagnostic);
+                Trace.TraceWarning(drainDiagnostic);
+                return new BuildLockAttribution(
+                    path,
+                    [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
+                    "handle64-timeout");
+            }
+
+            var output = outputDrain.Text + Environment.NewLine + errorDrain.Text;
             var holders = ParseHandleOutput(output, ownershipHint);
             diagnostics?.Record("handle-parse", holders.Count == 0 ? "empty" : $"holders-{holders.Count}");
             return holders.Count == 0 ? null : new BuildLockAttribution(path, holders, "handle64");
@@ -521,44 +538,102 @@ internal static partial class LockAttribution
 
     private static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)
     {
-        var snapshot = ProcessCommandLines.Snapshot();
-        var holders = snapshot.Read(Process.GetProcesses().Select(process => process.Id))
-            .Where(pair => IsOrchestratorOwned(pair.Value, ownershipHint))
-            .Select(pair => new BuildLockHolder(pair.Key, TryProcessName(pair.Key), pair.Value, true, TryProcessStartTime(pair.Key)))
+        var snapshot = ProcessCommandLineSnapshotForTests?.Invoke() ?? ProcessCommandLines.Snapshot();
+        if (snapshot.Failure is { } failure)
+        {
+            return new BuildLockAttribution(
+                path,
+                [new BuildLockHolder(
+                    null,
+                    $"process-inspection-unavailable-{failure.Status}-{failure.NativeError}-{failure.Operation}",
+                    null,
+                    false)],
+                "process-snapshot-unavailable");
+        }
+
+        var holders = snapshot.Records.Values
+            .Where(record =>
+                record.Status == ProcessInspectionStatus.Available &&
+                !string.IsNullOrWhiteSpace(record.CommandLine) &&
+                IsOrchestratorOwned(record.CommandLine, ownershipHint) &&
+                CommandLineReferencesLock(record.CommandLine, path, ownershipHint))
+            .OrderBy(record => record.ProcessId)
+            .Select(record => new BuildLockHolder(
+                record.ProcessId,
+                string.IsNullOrWhiteSpace(record.Name) ? null : record.Name,
+                record.CommandLine,
+                true,
+                record.StartedAt))
             .Take(8)
             .ToArray();
         return new BuildLockAttribution(path, holders, "process-snapshot");
     }
 
+    private static bool CommandLineReferencesLock(string commandLine, string path, string? ownershipHint)
+    {
+        var normalizedCommandLine = NormalizePathSeparators(commandLine);
+        var normalizedPath = NormalizePathSeparators(path);
+        if (!string.IsNullOrWhiteSpace(normalizedPath) &&
+            normalizedCommandLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(ownershipHint) ||
+            !PathIsAtOrUnder(path, ownershipHint))
+        {
+            return false;
+        }
+
+        var normalizedHint = NormalizePathSeparators(ownershipHint);
+        return !string.IsNullOrWhiteSpace(normalizedHint) &&
+            normalizedCommandLine.Contains(normalizedHint, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathIsAtOrUnder(string path, string directory)
+    {
+        try
+        {
+            var normalizedPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var normalizedDirectory = Path.GetFullPath(directory)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return normalizedPath.Equals(normalizedDirectory, StringComparison.OrdinalIgnoreCase) ||
+                normalizedPath.StartsWith(
+                    normalizedDirectory + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizePathSeparators(string value) =>
+        value.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+
     private static List<BuildLockHolder> ParseHandleOutput(string output, string? ownershipHint)
     {
-        var commandLines = new Dictionary<int, string>();
+        var parsed = output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => (Line: line, Match: HandlePidPattern.Match(line)))
+            .Where(item => item.Match.Success && int.TryParse(
+                item.Match.Groups["pid"].Value,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out _))
+            .Select(item => (
+                item.Line,
+                Pid: int.Parse(item.Match.Groups["pid"].Value, System.Globalization.CultureInfo.InvariantCulture)))
+            .ToArray();
+        var commandLines = ProcessCommandLines.Read(parsed.Select(item => item.Pid));
         var holders = new List<BuildLockHolder>();
-        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var item in parsed)
         {
-            var pidMatch = HandlePidPattern.Match(line);
-            if (!pidMatch.Success ||
-                !int.TryParse(pidMatch.Groups["pid"].Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var pid))
-            {
-                continue;
-            }
-
-            if (commandLines.Count == 0)
-            {
-                commandLines = ProcessCommandLines.Read([pid]);
-            }
-            else if (!commandLines.ContainsKey(pid))
-            {
-                foreach (var item in ProcessCommandLines.Read([pid]))
-                {
-                    commandLines[item.Key] = item.Value;
-                }
-            }
-
-            commandLines.TryGetValue(pid, out var commandLine);
-            var nameMatch = HandleNamePattern.Match(line);
-            var processName = nameMatch.Success ? nameMatch.Groups["name"].Value : TryProcessName(pid);
-            holders.Add(new BuildLockHolder(pid, processName, commandLine, IsOrchestratorOwned(commandLine, ownershipHint), TryProcessStartTime(pid)));
+            commandLines.TryGetValue(item.Pid, out var commandLine);
+            var nameMatch = HandleNamePattern.Match(item.Line);
+            var processName = nameMatch.Success ? nameMatch.Groups["name"].Value : TryProcessName(item.Pid);
+            holders.Add(new BuildLockHolder(item.Pid, processName, commandLine, IsOrchestratorOwned(commandLine, ownershipHint), TryProcessStartTime(item.Pid)));
         }
 
         return holders

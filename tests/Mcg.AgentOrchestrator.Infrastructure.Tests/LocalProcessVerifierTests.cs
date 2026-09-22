@@ -9,9 +9,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     {
         var goalId = new GoalId("12345678123456781234567812345678");
         var taskId = new TaskId("abcdef01abcdef01abcdef01abcdef01");
+        var storageRoot = new DotnetBuildStorageRoot(CreateTempDirectory());
         try
         {
-            var prepared = LocalProcessVerifier.PrepareCommand(" dotnet test Example.sln --verbosity minimal ", goalId, taskId);
+            var prepared = LocalProcessVerifier.PrepareCommand(
+                " dotnet test Example.sln --verbosity minimal ", goalId, taskId, storageRoot);
 
             Assert.True(prepared.Command.StartsWith("dotnet test Example.sln --verbosity minimal", StringComparison.Ordinal));
             Assert.False(prepared.Command.Contains('\'', StringComparison.Ordinal));
@@ -34,7 +36,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storageRoot);
         }
     }
 
@@ -42,21 +44,25 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     public void LocalProcessVerifierReusesGoalBuildLeaseAcrossTasks()
     {
         var goalId = new GoalId("b16b00b5b16b00b5b16b00b5b16b00b5");
+        var storageRoot = new DotnetBuildStorageRoot(CreateTempDirectory());
         try
         {
             var developer = LocalProcessVerifier.PrepareCommand(
                 "dotnet test Example.sln --verbosity minimal",
                 goalId,
-                new TaskId("11111111111111111111111111111111"));
+                new TaskId("11111111111111111111111111111111"),
+                storageRoot);
             var tester = LocalProcessVerifier.PrepareCommand(
                 "dotnet test Example.sln --verbosity minimal",
                 goalId,
-                new TaskId("22222222222222222222222222222222"));
+                new TaskId("22222222222222222222222222222222"),
+                storageRoot);
             var reviewer = LocalProcessVerifier.PrepareCommand(
                 "dotnet test Example.sln --verbosity minimal",
                 goalId,
-                new TaskId("33333333333333333333333333333333"));
-            var expectedArtifacts = DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId);
+                new TaskId("33333333333333333333333333333333"),
+                storageRoot);
+            var expectedArtifacts = DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId, storageRoot);
 
             Assert.True(developer.Command.Contains(expectedArtifacts, StringComparison.OrdinalIgnoreCase));
             Assert.True(tester.Command.Contains(expectedArtifacts, StringComparison.OrdinalIgnoreCase));
@@ -69,7 +75,7 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storageRoot);
         }
     }
 
@@ -103,7 +109,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_leaves_non_dotnet_verification_commands_unchanged")]
     public void LocalProcessVerifierLeavesNonDotnetVerificationCommandsUnchanged()
     {
-        var prepared = LocalProcessVerifier.PrepareCommand("Write-Output ok", new GoalId("12345678123456781234567812345678"), TaskId.New());
+        var prepared = LocalProcessVerifier.PrepareCommand(
+            "Write-Output ok",
+            new GoalId("12345678123456781234567812345678"),
+            TaskId.New(),
+            new DotnetBuildStorageRoot(CreateTempDirectory()));
 
         Assert.Equal("Write-Output ok", prepared.Command);
         Assert.Equal("Write-Output", prepared.FileName);
@@ -114,7 +124,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_leaves_dotnet_commands_without_goal_context_unchanged")]
     public void LocalProcessVerifierLeavesDotnetCommandsWithoutGoalContextUnchanged()
     {
-        var prepared = LocalProcessVerifier.PrepareCommand("dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'");
+        var prepared = LocalProcessVerifier.PrepareCommand(
+            "dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'",
+            null,
+            null,
+            new DotnetBuildStorageRoot(CreateTempDirectory()));
 
         Assert.Equal("dotnet test Mcg.AgentOrchestrator.sln --filter 'AgentCatalog|WorkerProfile'", prepared.Command);
         Assert.Equal("dotnet", prepared.FileName);
@@ -149,13 +163,11 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
                 TaskId.New());
 
             Assert.Equal(0, record.ExitCode);
-            Assert.Equal(2, calls.Count);
+            Assert.Single(calls);
             Assert.Equal("dotnet", calls[0].FileName);
-            Assert.True(calls[0].Arguments.SequenceEqual(["build-server", "shutdown"]));
-            Assert.Equal("dotnet", calls[1].FileName);
-            Assert.DoesNotContain("powershell.exe", calls[1].Arguments);
-            Assert.DoesNotContain("pwsh", calls[1].Arguments);
-            Assert.Contains("--artifacts-path", calls[1].Arguments);
+            Assert.DoesNotContain("powershell.exe", calls[0].Arguments);
+            Assert.DoesNotContain("pwsh", calls[0].Arguments);
+            Assert.Contains("--artifacts-path", calls[0].Arguments);
             Assert.Contains("dotnet direct launch", record.StandardOutput);
         }
         finally
@@ -164,23 +176,28 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
         }
     }
 
+}
+
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+public sealed class LocalProcessVerifierStaticHookTests : DotnetBuildEnvironmentManagerRootedTestBase
+{
     [Xunit.Fact(DisplayName = "LocalProcessVerifier_retries_once_on_CS2012_and_returns_passed")]
     public async Task LocalProcessVerifierRetriesOnceOnCs2012AndReturnsPassed()
     {
         var goalId = new GoalId("fedcba98fedcba98fedcba98fedcba98");
         var calls = new List<(string FileName, IReadOnlyList<string> Arguments)>();
         var responses = new Queue<LocalProcessVerifier.CommandResult>([
-            new(0, "", ""),
             new(1, "error CS2012: Cannot open 'Core.dll' for writing", ""),
-            new(0, "", ""),
             new(0, "Test run succeeded.", "")
         ]);
+        var shutdownCount = 0;
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => shutdownCount++;
 
         var verifier = new LocalProcessVerifier((fileName, args, _, _) =>
         {
             calls.Add((fileName, args));
             return Task.FromResult(responses.Dequeue());
-        });
+        }, StorageRoot);
 
         try
         {
@@ -191,22 +208,21 @@ public sealed class LocalProcessVerifierDotnetBuildSlotTests : LocalProcessVerif
                 TaskId.New());
 
             Assert.Equal(0, record.ExitCode);
-            Assert.Equal(4, calls.Count);
+            Assert.Equal(2, calls.Count);
+            Assert.Equal(1, shutdownCount);
             Assert.Equal("dotnet", calls[0].FileName);
-            Assert.True(calls[0].Arguments.SequenceEqual(["build-server", "shutdown"]));
-            Assert.Equal("dotnet", calls[2].FileName);
-            Assert.True(calls[2].Arguments.SequenceEqual(["build-server", "shutdown"]));
             Assert.Equal("dotnet", calls[1].FileName);
-            Assert.Equal("dotnet", calls[3].FileName);
-            Assert.DoesNotContain("powershell.exe", calls[1].Arguments);
-            Assert.DoesNotContain("pwsh", calls[1].Arguments);
-            Assert.Contains("--artifacts-path", calls[1].Arguments);
-            Assert.Equal(calls[1].FileName, calls[3].FileName);
-            Assert.True(calls[1].Arguments.SequenceEqual(calls[3].Arguments));
+            Assert.DoesNotContain("powershell.exe", calls[0].Arguments);
+            Assert.DoesNotContain("pwsh", calls[0].Arguments);
+            Assert.Contains("--artifacts-path", calls[0].Arguments);
+            Assert.Equal(calls[0].FileName, calls[1].FileName);
+            Assert.True(calls[0].Arguments.SequenceEqual(calls[1].Arguments));
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 }
@@ -221,12 +237,6 @@ public sealed class LocalProcessVerifierTests : LocalProcessVerifierTestBase
         var verifier = new LocalProcessVerifier(async (fileName, args, _, timeout, cancellationToken) =>
         {
             calls.Add((fileName, args, timeout));
-            if (fileName.Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
-                args.SequenceEqual(["build-server", "shutdown"]))
-            {
-                return new LocalProcessVerifier.CommandResult(0, "", "");
-            }
-
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(timeout);
             await Task.Delay(TimeSpan.FromSeconds(5), timeoutCts.Token);
@@ -238,8 +248,8 @@ public sealed class LocalProcessVerifierTests : LocalProcessVerifierTestBase
             var record = await verifier.RunAsync("custom-check --slow", "C:\\fake\\dir");
 
             Assert.Equal(-1, record.ExitCode);
-            Assert.Equal(2, calls.Count);
-            Assert.Equal(TimeSpan.FromMinutes(0.001), calls[1].Timeout);
+            Assert.Single(calls);
+            Assert.Equal(TimeSpan.FromMinutes(0.001), calls[0].Timeout);
             Assert.Contains("acceptance-check-timeout: local-process-verification elapsed=0.1s budget=0.1s", record.StandardOutput);
             Assert.False(record.StandardOutput.Contains("A task was canceled", StringComparison.OrdinalIgnoreCase));
         }

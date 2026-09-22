@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Infrastructure;
 

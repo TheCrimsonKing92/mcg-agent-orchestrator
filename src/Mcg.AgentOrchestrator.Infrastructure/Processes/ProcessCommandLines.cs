@@ -1,17 +1,61 @@
-using System.Diagnostics;
-
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>
-/// Cross-platform, best-effort lookup of process command lines by pid, shared by the build-daemon
-/// reaper and the worktree lock-holder diagnostic. Windows uses <c>wmic</c>; Linux reads
-/// <c>/proc/&lt;pid&gt;/cmdline</c>. Only pids whose command line could be read are returned —
-/// callers must treat a missing entry as "unknown", never as "matches".
+/// Cross-platform process inspection shared by process-ownership consumers. Windows uses native
+/// Toolhelp/PEB inspection; Linux reads <c>/proc</c>. Unavailable records remain in snapshots so
+/// callers can fail closed instead of confusing an unreadable process with an absent process.
 /// </summary>
 internal static class ProcessCommandLines
 {
-    public static ProcessCommandLineSnapshot Snapshot() =>
-        new(ReadAll());
+    public static ProcessCommandLineSnapshot Snapshot() => ToSnapshot(ReadAllRecords());
+
+    public static ProcessCommandLineSnapshot SnapshotOperation()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var operation = WindowsNativeProcessInspection.BeginOperation();
+            return new ProcessCommandLineSnapshot(processIds => operation.ReadRequested(processIds));
+        }
+
+        return Snapshot();
+    }
+
+    public static ProcessCommandLineSnapshot Snapshot(IEnumerable<int> pids) =>
+        ToSnapshot(ReadRecords(pids.Distinct().ToArray()));
+
+    public static ProcessCommandLineSnapshot SnapshotByNames(IEnumerable<string> processNames)
+    {
+        var names = processNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => Path.GetFileNameWithoutExtension(name)!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (names.Count == 0)
+        {
+            return ProcessCommandLineSnapshot.Empty;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return ToSnapshot(WindowsNativeProcessInspection.ReadByNames(names));
+        }
+
+        var records = ReadAllRecords().Records
+            .Where(pair => names.Contains(pair.Value.Name))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        return new ProcessCommandLineSnapshot(records);
+    }
+
+    public static ProcessCommandLineSnapshot Snapshot(ProcessInspectionQuery query)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return ToSnapshot(WindowsNativeProcessInspection.BeginOperation().ReadCandidates(query));
+        }
+
+        // Keep the established /proc behavior intact. The caller applies the same final query
+        // predicates after this snapshot; only Windows needs the native-read cost bound here.
+        return Snapshot();
+    }
 
     public static Dictionary<int, string> Read(IEnumerable<int> pids)
     {
@@ -21,149 +65,120 @@ internal static class ProcessCommandLines
             return [];
         }
 
+        return ReadRecords(pidList).Records
+            .Where(pair => pair.Value.Status == ProcessInspectionStatus.Available &&
+                !string.IsNullOrWhiteSpace(pair.Value.CommandLine))
+            .ToDictionary(pair => pair.Key, pair => pair.Value.CommandLine!);
+    }
+
+    private static WindowsNativeProcessInspection.ProcessInspectionResult ReadAllRecords()
+    {
         if (OperatingSystem.IsWindows())
         {
-            return ReadWindows(pidList);
+            return WindowsNativeProcessInspection.Read();
         }
 
         if (OperatingSystem.IsLinux())
         {
-            return ReadLinux(pidList);
+            return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                ReadLinuxRecords(EnumerateLinuxProcessIds()));
         }
 
-        return [];
+        return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            new Dictionary<int, ProcessInspectionRecord>());
     }
 
-    private static Dictionary<int, string> ReadAll()
+    private static WindowsNativeProcessInspection.ProcessInspectionResult ReadRecords(IReadOnlyCollection<int> pids)
     {
         if (OperatingSystem.IsWindows())
         {
-            return ReadWindowsAll();
+            return WindowsNativeProcessInspection.Read(pids);
         }
 
         if (OperatingSystem.IsLinux())
         {
-            return ReadLinuxAll();
+            return WindowsNativeProcessInspection.ProcessInspectionResult.Success(ReadLinuxRecords(pids));
         }
 
-        return [];
+        return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            new Dictionary<int, ProcessInspectionRecord>());
     }
 
-    private static Dictionary<int, string> ReadWindowsAll()
+    private static ProcessCommandLineSnapshot ToSnapshot(
+        WindowsNativeProcessInspection.ProcessInspectionResult result) =>
+        new(result.Records, result.Failure);
+
+    private static IReadOnlyDictionary<int, ProcessInspectionRecord> ReadLinuxRecords(IEnumerable<int> pids)
     {
-        try
+        var result = new Dictionary<int, ProcessInspectionRecord>();
+        foreach (var pid in pids.Distinct())
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "wmic",
-                Arguments = "process get ProcessId,CommandLine /format:list",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return [];
-            }
-
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            if (!process.WaitForExit(3000))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                return [];
-            }
-
-            var output = outputTask.GetAwaiter().GetResult();
-            return GoalWorktrees.ParseWmicListOutput(output);
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private static Dictionary<int, string> ReadWindows(List<int> pids)
-    {
-        try
-        {
-            var filter = string.Join(" OR ", pids.Select(pid => $"ProcessId={pid}"));
-            var psi = new ProcessStartInfo
-            {
-                FileName = "wmic",
-                Arguments = $"process where \"({filter})\" get ProcessId,CommandLine /format:list",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(psi);
-            if (process is null)
-            {
-                return [];
-            }
-
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            if (!process.WaitForExit(3000))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                return [];
-            }
-
-            var output = outputTask.GetAwaiter().GetResult();
-            return GoalWorktrees.ParseWmicListOutput(output);
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private static Dictionary<int, string> ReadLinux(List<int> pids)
-    {
-        var result = new Dictionary<int, string>();
-        foreach (var pid in pids)
-        {
+            string? commandLine = null;
+            var status = ProcessInspectionStatus.Available;
             try
             {
                 var path = $"/proc/{pid}/cmdline";
                 if (!File.Exists(path))
                 {
-                    continue;
+                    status = ProcessInspectionStatus.Exited;
                 }
-
-                // /proc/<pid>/cmdline is NUL-separated argv; join into a readable command line.
-                var raw = File.ReadAllText(path);
-                var commandLine = raw.Replace('\0', ' ').Trim();
-                if (!string.IsNullOrWhiteSpace(commandLine))
+                else
                 {
-                    result[pid] = commandLine;
+                    commandLine = File.ReadAllText(path).Replace('\0', ' ').Trim();
                 }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                status = ProcessInspectionStatus.AccessDenied;
+            }
+            catch (IOException)
+            {
+                status = ProcessInspectionStatus.NativeFailure;
             }
             catch
             {
-                // Best-effort; an unreadable /proc entry is treated as "unknown" by callers.
+                status = ProcessInspectionStatus.NativeFailure;
             }
+
+            string name;
+            string? executablePath = null;
+            DateTimeOffset? startedAt = null;
+            try
+            {
+                using var process = System.Diagnostics.Process.GetProcessById(pid);
+                name = process.ProcessName;
+                try { executablePath = process.MainModule?.FileName; } catch { }
+                try { startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); } catch { }
+            }
+            catch
+            {
+                name = string.Empty;
+                status = ProcessInspectionStatus.Exited;
+            }
+
+            result[pid] = new ProcessInspectionRecord(
+                pid,
+                ProcessParentIdResolver.TryGetParentProcessId(pid) ?? 0,
+                name,
+                executablePath,
+                startedAt,
+                commandLine,
+                status);
         }
 
         return result;
     }
 
-    private static Dictionary<int, string> ReadLinuxAll()
+    private static IReadOnlyList<int> EnumerateLinuxProcessIds()
     {
         try
         {
-            var pids = Directory
+            return Directory
                 .EnumerateDirectories("/proc")
                 .Select(Path.GetFileName)
                 .Where(name => int.TryParse(name, out _))
                 .Select(int.Parse)
                 .ToList();
-
-            return ReadLinux(pids);
         }
         catch
         {
@@ -174,30 +189,106 @@ internal static class ProcessCommandLines
 
 public sealed class ProcessCommandLineSnapshot
 {
-    private readonly IReadOnlyDictionary<int, string> _commandLines;
+    private readonly Dictionary<int, ProcessInspectionRecord> _records;
     private readonly Action<int>? _onRead;
+    private readonly Func<IReadOnlyCollection<int>, WindowsNativeProcessInspection.ProcessInspectionResult>? _readRecords;
+    private ProcessInspectionFailure? _failure;
+    private bool _hasLazyRead;
 
     internal ProcessCommandLineSnapshot(IReadOnlyDictionary<int, string> commandLines, Action<int>? onRead = null)
+        : this(commandLines.ToDictionary(
+            pair => pair.Key,
+            pair => new ProcessInspectionRecord(
+                pair.Key,
+                0,
+                string.Empty,
+                null,
+                null,
+                pair.Value,
+                ProcessInspectionStatus.Available)), onRead)
     {
-        _commandLines = commandLines;
+    }
+
+    internal ProcessCommandLineSnapshot(
+        IReadOnlyDictionary<int, ProcessInspectionRecord> records,
+        Action<int>? onRead = null)
+        : this(records, failure: null, onRead)
+    {
+    }
+
+    internal ProcessCommandLineSnapshot(
+        IReadOnlyDictionary<int, ProcessInspectionRecord> records,
+        ProcessInspectionFailure? failure,
+        Action<int>? onRead = null)
+    {
+        _records = records.ToDictionary(pair => pair.Key, pair => pair.Value);
+        _failure = failure;
         _onRead = onRead;
     }
 
+    internal ProcessCommandLineSnapshot(
+        Func<IReadOnlyCollection<int>, WindowsNativeProcessInspection.ProcessInspectionResult> readRecords)
+    {
+        _records = [];
+        _readRecords = readRecords;
+    }
+
     public static ProcessCommandLineSnapshot Empty { get; } = new(new Dictionary<int, string>());
+
+    public IReadOnlyDictionary<int, ProcessInspectionRecord> Records => _readRecords is null
+        ? _records
+        : throw new InvalidOperationException(
+            "A partial operation-backed process snapshot cannot be enumerated as a complete snapshot; request explicit process ids instead.");
+
+    public ProcessInspectionFailure? Failure => _readRecords is not null && !_hasLazyRead
+        ? throw new InvalidOperationException(
+            "A partial operation-backed process snapshot has not inspected any requested process ids.")
+        : _failure;
+
+    public bool TryGetRecord(int processId, out ProcessInspectionRecord record)
+    {
+        EnsureRecords([processId]);
+        return _records.TryGetValue(processId, out record!);
+    }
 
     public IReadOnlyDictionary<int, string> Read(IEnumerable<int> pids)
     {
         var result = new Dictionary<int, string>();
         var distinctPids = pids.Distinct().ToArray();
         _onRead?.Invoke(distinctPids.Length);
+        EnsureRecords(distinctPids);
         foreach (var pid in distinctPids)
         {
-            if (_commandLines.TryGetValue(pid, out var commandLine))
+            if (_records.TryGetValue(pid, out var record) &&
+                record.Status == ProcessInspectionStatus.Available &&
+                !string.IsNullOrWhiteSpace(record.CommandLine))
             {
-                result[pid] = commandLine;
+                result[pid] = record.CommandLine;
             }
         }
 
         return result;
+    }
+
+    private void EnsureRecords(IReadOnlyCollection<int> processIds)
+    {
+        if (_readRecords is null)
+        {
+            return;
+        }
+
+        var missing = processIds.Where(processId => !_records.ContainsKey(processId)).Distinct().ToArray();
+        if (missing.Length == 0)
+        {
+            return;
+        }
+
+        var inspected = _readRecords(missing);
+        _hasLazyRead = true;
+        _failure ??= inspected.Failure;
+        foreach (var pair in inspected.Records)
+        {
+            _records[pair.Key] = pair.Value;
+        }
     }
 }

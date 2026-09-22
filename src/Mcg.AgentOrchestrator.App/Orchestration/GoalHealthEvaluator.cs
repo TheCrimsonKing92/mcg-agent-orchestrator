@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum GoalHealthDisposition
+public enum GoalHealthDisposition
 {
     Healthy,
     Active,
@@ -15,7 +15,7 @@ internal enum GoalHealthDisposition
     Blocked
 }
 
-internal sealed record GoalHealthReport(
+public sealed record GoalHealthReport(
     GoalId GoalId,
     string GoalPrefix,
     GoalHealthDisposition Disposition,
@@ -24,7 +24,7 @@ internal sealed record GoalHealthReport(
     string SuggestedCommand,
     IReadOnlyList<string> Reasons);
 
-internal static class GoalHealthEvaluator
+public static class GoalHealthEvaluator
 {
     public static GoalHealthReport Build(
         AgentOrchestratorKernel kernel,

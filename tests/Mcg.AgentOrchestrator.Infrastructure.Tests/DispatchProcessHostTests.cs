@@ -348,6 +348,7 @@ public sealed class DispatchProcessHostTests
         Task<int>? runTask = null;
         int? heartbeatChildPid = null;
         var gatePath = Path.Combine(dir, "release-child");
+        var readyPath = Path.Combine(dir, "child-ready");
         try
         {
             var stdoutPath = Path.Combine(dir, "out.log");
@@ -359,7 +360,7 @@ public sealed class DispatchProcessHostTests
             var shell = EscapePowerShellSingleQuoted(WorkerShell.Executable);
             File.WriteAllText(
                 childScriptPath,
-                $"while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(gatePath)}')) {{ [void][Math]::Sqrt(1234567) }}{Environment.NewLine}exit 23",
+                $"[IO.File]::WriteAllText('{EscapePowerShellSingleQuoted(readyPath)}', [string]$PID); while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(gatePath)}')) {{ [void][Math]::Sqrt(1234567) }}{Environment.NewLine}exit 23",
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             var command =
                 $"& '{shell}' -NoProfile -NonInteractive -InputFormat None -File " +
@@ -384,7 +385,7 @@ public sealed class DispatchProcessHostTests
                 {
                     try
                     {
-                        if (!File.Exists(heartbeatPath))
+                        if (!File.Exists(heartbeatPath) || !File.Exists(readyPath))
                             return false;
 
                         using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
@@ -395,6 +396,8 @@ public sealed class DispatchProcessHostTests
                             return false;
                         }
 
+                        if (!int.TryParse(File.ReadAllText(readyPath), out var readyPid) || childPid.GetInt32() != readyPid)
+                            return false;
                         heartbeatChildPid = childPid.GetInt32();
                         return true;
                     }
@@ -432,6 +435,101 @@ public sealed class DispatchProcessHostTests
         {
             try { File.WriteAllText(gatePath, "release"); } catch { }
             try { runTask?.Wait(TimeSpan.FromSeconds(5)); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void TerminalHeartbeat_ParkedPeriodicWrite_RemainsTerminal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-heartbeat-race-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        Task<int>? runTask = null;
+        var periodicWriteTimedOut = 0;
+        using var periodicWriteParked = new ManualResetEventSlim();
+        using var releasePeriodicWrite = new ManualResetEventSlim();
+        var workerGatePath = Path.Combine(dir, "release-worker");
+        var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+        try
+        {
+            DispatchProcessHost.HeartbeatWriteGuard.BeforeMoveForTests = (destinationPath, state) =>
+            {
+                if (!string.Equals(destinationPath, heartbeatPath, StringComparison.Ordinal) ||
+                    !string.Equals(state, "running", StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                periodicWriteParked.Set();
+                if (!releasePeriodicWrite.Wait(TimeSpan.FromSeconds(10)))
+                {
+                    Interlocked.Exchange(ref periodicWriteTimedOut, 1);
+                }
+            };
+
+            var command =
+                $"while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(workerGatePath)}')) " +
+                "{ Start-Sleep -Milliseconds 10 }; exit 0";
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                command,
+                dir,
+                Path.Combine(dir, "out.log"),
+                Path.Combine(dir, "err.log"),
+                Path.Combine(dir, "exit.txt"),
+                heartbeatPath,
+                DisableSharedCompilation: false,
+                Provider: WorkerSandboxProvider.Claude,
+                HeartbeatIntervalMilliseconds: 25);
+            var parametersPath = Path.Combine(dir, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, parameters);
+
+            runTask = Task.Run(() => DispatchProcessHost.Run(parametersPath));
+            Assert.True(
+                periodicWriteParked.Wait(TimeSpan.FromSeconds(10)),
+                "A periodic heartbeat write did not reach the pre-publication hook.");
+
+            File.WriteAllText(workerGatePath, "release");
+            Assert.True(
+                SpinWait.SpinUntil(() => ReadHeartbeatState(heartbeatPath) == "exited", TimeSpan.FromSeconds(10)),
+                "The terminal heartbeat was not published while the periodic write was parked.");
+
+            releasePeriodicWrite.Set();
+            Assert.Equal(0, runTask.GetAwaiter().GetResult());
+            Assert.Equal(0, Volatile.Read(ref periodicWriteTimedOut));
+            Assert.Equal("exited", ReadHeartbeatState(heartbeatPath));
+        }
+        finally
+        {
+            DispatchProcessHost.HeartbeatWriteGuard.BeforeMoveForTests = null;
+            releasePeriodicWrite.Set();
+            try { File.WriteAllText(workerGatePath, "release"); } catch { }
+            try { runTask?.Wait(TimeSpan.FromSeconds(5)); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void HeartbeatWriteGuard_TerminalPublished_RejectsLateNonTerminalWrite()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-heartbeat-write-guard-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+            var writer = new DispatchProcessHost.HeartbeatWriteGuard(heartbeatPath, durable: false);
+
+            writer.Write("running", "{\"state\":\"running\"}");
+            Assert.Equal("running", ReadHeartbeatState(heartbeatPath));
+
+            writer.WriteTerminal("exited", "{\"state\":\"exited\"}");
+            Assert.Equal("exited", ReadHeartbeatState(heartbeatPath));
+
+            writer.Write("running", "{\"state\":\"running\"}");
+            Assert.Equal("exited", ReadHeartbeatState(heartbeatPath));
+            Assert.Empty(Directory.EnumerateFiles(dir, "heartbeat.json.*.tmp"));
+        }
+        finally
+        {
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
@@ -774,6 +872,16 @@ public sealed class DispatchProcessHostTests
         try
         {
             Directory.CreateDirectory(worktree);
+
+            // Isolated synthetic login source. Claude seeding fails closed on an unusable source, so
+            // without an injected source this fixture would resolve the operator's REAL profile
+            // credential store and pass or fail according to host auth rather than sandbox scoping.
+            var credentialSource = Path.Combine(root, "claude-source");
+            Directory.CreateDirectory(credentialSource);
+            File.WriteAllText(
+                Path.Combine(credentialSource, ".credentials.json"),
+                "{\"claudeAiOauth\":{\"accessToken\":\"synthetic-sandbox-scoping-token\"}}");
+
             var startInfo = CreateSandboxStartInfo(worktree);
             var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude);
 
@@ -781,19 +889,127 @@ public sealed class DispatchProcessHostTests
                 startInfo,
                 parameters,
                 new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
-                protectWorkspaceBoundary: _ => { });
+                protectWorkspaceBoundary: _ => { },
+                providerEnvironmentReader: name => name switch
+                {
+                    "CLAUDE_CONFIG_DIR" => credentialSource,
+                    // Explicitly absent: API-key mode would bypass source seeding entirely, so a host
+                    // that happens to export a key must not change what this fixture exercises.
+                    "ANTHROPIC_API_KEY" => null,
+                    _ => null,
+                });
 
             var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
             Assert.False(Directory.Exists(Path.Combine(sandboxRoot, "codex-home")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "temp")));
             Assert.True(Directory.Exists(Path.Combine(sandboxRoot, "bin")));
-            Assert.Equal(Path.Combine(sandboxRoot, "claude-config"), startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+            var claudeConfig = Path.Combine(sandboxRoot, "claude-config");
+            Assert.Equal(claudeConfig, startInfo.Environment["CLAUDE_CONFIG_DIR"]);
+
+            // The injected source is the one that was seeded: proves the seam is actually honored,
+            // so a regression cannot silently fall back to the host store and still pass here.
+            Assert.Contains(
+                "synthetic-sandbox-scoping-token",
+                File.ReadAllText(Path.Combine(claudeConfig, ".credentials.json")),
+                StringComparison.Ordinal);
+
+            // The setup artifact reports the resolved source seeding consumed - source kind, directory
+            // and status only. It is the same resolved result, so the artifact cannot name one login
+            // while the sandbox holds another, and it carries no credential material.
+            using var setup = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            var recordedSource = setup.RootElement.GetProperty("credentialSource");
+            Assert.Equal(Path.GetFullPath(credentialSource), recordedSource.GetProperty("directory").GetString());
+            Assert.True(recordedSource.GetProperty("isExplicitSource").GetBoolean());
+            Assert.Equal("LocalMaterialPresent", recordedSource.GetProperty("status").GetString());
+            Assert.DoesNotContain(
+                "synthetic-sandbox-scoping-token",
+                setup.RootElement.GetRawText(),
+                StringComparison.Ordinal);
         }
         finally
         {
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_seeds_the_transported_selection_over_its_own_environment")]
+    public void ApplyWorkerSandboxSeedsTheTransportedSelectionOverItsOwnEnvironment()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-provider-sandbox-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(worktree);
+
+            // Two usable logins. The conductor selected the first; the dispatch host's own environment
+            // points at the second. The host process must seed the conductor's decision - re-selecting
+            // locally is exactly how preflight's reported login and the seeded login drifted apart.
+            var conductorSource = WriteSyntheticLogin(root, "conductor-source", "transported-selection-token");
+            var hostSource = WriteSyntheticLogin(root, "host-source", "host-local-selection-token");
+
+            var preflight = DispatchProcessHost.PreflightClaudeCredentialSource(
+                WorkerSandboxProvider.Claude,
+                sandboxLowIntegrity: true,
+                environmentReader: name => name == "CLAUDE_CONFIG_DIR" ? conductorSource : null);
+            var selection = preflight?.ToTransportedSelection();
+            Assert.Equal(Path.GetFullPath(conductorSource), selection?.DirectoryPath);
+
+            var startInfo = CreateSandboxStartInfo(worktree);
+            var parameters = CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Claude) with
+            {
+                ClaudeCredentialSelection = selection
+            };
+
+            DispatchProcessHost.ApplyWorkerSandbox(
+                startInfo,
+                parameters,
+                new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                protectWorkspaceBoundary: _ => { },
+                providerEnvironmentReader: name => name switch
+                {
+                    "CLAUDE_CONFIG_DIR" => hostSource,
+                    // Explicitly absent: API-key mode would bypass source seeding entirely, so a host
+                    // that happens to export a key must not change what this fixture exercises.
+                    "ANTHROPIC_API_KEY" => null,
+                    _ => null,
+                });
+
+            var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
+            var claudeConfig = Path.Combine(sandboxRoot, "claude-config");
+            var seeded = File.ReadAllText(Path.Combine(claudeConfig, ".credentials.json"));
+            Assert.Contains("transported-selection-token", seeded, StringComparison.Ordinal);
+            Assert.DoesNotContain("host-local-selection-token", seeded, StringComparison.Ordinal);
+
+            // The setup artifact an operator reads names the transported source too, so the reported
+            // login and the seeded login are one source of truth.
+            using var setup = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(sandboxRoot, DispatchProcessHost.LowIntegritySetupArtifactName)));
+            Assert.Equal(
+                Path.GetFullPath(conductorSource),
+                setup.RootElement.GetProperty("credentialSource").GetProperty("directory").GetString());
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static string WriteSyntheticLogin(string root, string name, string token)
+    {
+        var directory = Path.Combine(root, name);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(
+            Path.Combine(directory, ".credentials.json"),
+            "{\"claudeAiOauth\":{\"accessToken\":\"" + token + "\"}}");
+        return directory;
     }
 
     [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_scopes_grok_home_to_grok_provider")]
@@ -861,6 +1077,9 @@ public sealed class DispatchProcessHostTests
             var grokHome = Path.Combine(sandboxRoot, "grok-home");
             Assert.Equal(grokHome, startInfo.Environment["GROK_HOME"]);
             Assert.True(Directory.Exists(grokHome));
+            Assert.Equal(
+                worktree.Replace('\\', '/'),
+                startInfo.Environment[HarnessHookRootContract.EnvironmentVariableName]);
             Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
             Assert.False(startInfo.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
         }
@@ -1697,6 +1916,50 @@ public sealed class DispatchProcessHostTests
     }
 
     [Xunit.Fact]
+    public void DispatchProcessIdentityEvidence_MissingOrRecycledIdentityNeverEstablishesOwnership()
+    {
+        const int processId = 43_316;
+        var recorded = new SpawnProcessIdentity(
+            processId,
+            DateTimeOffset.Parse("2026-08-24T14:20:35Z"),
+            @"C:\workers\claude.exe");
+        var recycled = recorded with { StartedAt = recorded.StartedAt.AddDays(3) };
+
+        Assert.False(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [], _ => recycled));
+        Assert.False(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [recorded], _ => recycled));
+        Assert.False(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [recorded], _ => null));
+        Assert.True(DispatchProcessIdentityEvidence.IsRecordedOwner(processId, [recorded], _ => recorded));
+    }
+
+    [Xunit.Fact]
+    public void DispatchHeartbeatIdentityTracker_RecordsRecycledCurrentOwnerWithoutErasingHistory()
+    {
+        const int hostProcessId = 10;
+        const int workerProcessId = 20;
+        var host = new SpawnProcessIdentity(hostProcessId, DateTimeOffset.Parse("2026-08-30T05:48:32Z"), @"C:\host.exe");
+        var worker = new SpawnProcessIdentity(workerProcessId, DateTimeOffset.Parse("2026-08-30T05:48:33Z"), @"C:\worker.exe");
+        var recycled = worker with { StartedAt = worker.StartedAt.AddMinutes(30) };
+        var tracker = new DispatchHeartbeatProcessIdentityTracker();
+
+        var first = tracker.Capture(
+            hostProcessId,
+            [workerProcessId],
+            () => [workerProcessId],
+            processId => processId == hostProcessId ? host : worker);
+        var second = tracker.Capture(
+            hostProcessId,
+            [workerProcessId],
+            () => [workerProcessId],
+            processId => processId == hostProcessId ? host : recycled);
+
+        Assert.Contains(worker, first.Current);
+        Assert.Contains(recycled, second.Current);
+        Assert.Contains(worker, second.Recorded);
+        Assert.Contains(recycled, second.Recorded);
+        Assert.All(second.Current, identity => Assert.Contains(identity, second.Recorded));
+    }
+
+    [Xunit.Fact]
     public void DispatchProcessHost_CaptureHeartbeatProcessIdentitiesIncludesHostIdentity()
     {
         var hostIdentity = new SpawnProcessIdentity(
@@ -2087,26 +2350,71 @@ public sealed class DispatchProcessHostTests
         try
         {
             CreateLinkedWorktree(repo, worktree);
-            var warmup = RunMeasuredDispatch(root, worktree, logs, "warmup");
-            Assert.Equal("complete", warmup.Phase);
-
+            MeasuredDispatch? warmup = null;
             var receiptHitMeasurements = new List<MeasuredDispatch>();
-            for (var attempt = 1; attempt <= 5; attempt++)
+            var artifactWriteAttempted = false;
+            Exception? artifactWriteFailure = null;
+
+            void WriteMeasurementArtifactBestEffort()
             {
-                var measurement = RunMeasuredDispatch(root, worktree, logs, $"receipt-hit-{attempt}");
-                receiptHitMeasurements.Add(measurement);
+                if (warmup is null || artifactWriteAttempted)
+                {
+                    return;
+                }
+
+                artifactWriteAttempted = true;
+                try
+                {
+                    var measurementArtifact = WriteReceiptHitMeasurementArtifact(warmup, receiptHitMeasurements);
+                    Console.WriteLine($"receipt-hit measurement artifact: {measurementArtifact}");
+                }
+                catch (Exception exception)
+                {
+                    artifactWriteFailure = exception;
+                }
             }
 
-            Assert.All(receiptHitMeasurements, measurement =>
+            try
             {
-                Assert.Equal("receipt-hit", measurement.Phase);
-                Assert.InRange(measurement.SandboxPrepElapsedMs, 0, 10_000);
-                Assert.InRange(measurement.DispatchElapsedMs, 0, 10_000);
-                Assert.Contains("worker-first-output", File.ReadAllText(measurement.StdoutPath), StringComparison.Ordinal);
-            });
+                warmup = RunMeasuredDispatch(root, worktree, logs, "warmup");
+                Assert.Equal("complete", warmup.Phase);
+                Assert.False(warmup.PrepReceiptHit);
+                Assert.Contains(
+                    WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase,
+                    warmup.SandboxPrepEvents.Select(evt => evt.Phase));
+                Assert.Contains(
+                    WorkerSandboxPreparer.ProtectGitMetadataPhase,
+                    warmup.SandboxPrepEvents.Select(evt => evt.Phase));
 
-            var measurementArtifact = WriteReceiptHitMeasurementArtifact(warmup, receiptHitMeasurements);
-            Console.WriteLine($"receipt-hit measurement artifact: {measurementArtifact}");
+                for (var attempt = 1; attempt <= 5; attempt++)
+                {
+                    var measurement = RunMeasuredDispatch(root, worktree, logs, $"receipt-hit-{attempt}");
+                    receiptHitMeasurements.Add(measurement);
+                }
+
+                WriteMeasurementArtifactBestEffort();
+
+                Assert.All(receiptHitMeasurements, measurement =>
+                {
+                    var phases = measurement.SandboxPrepEvents.Select(evt => evt.Phase).ToArray();
+                    Assert.DoesNotContain(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase, phases);
+                    Assert.DoesNotContain(WorkerSandboxPreparer.ProtectGitMetadataPhase, phases);
+                    Assert.Equal("receipt-hit", measurement.Phase);
+                    Assert.Contains("receipt-fast-path", phases);
+                    Assert.True(measurement.PrepReceiptHit);
+                    Assert.Contains("worker-first-output", File.ReadAllText(measurement.StdoutPath), StringComparison.Ordinal);
+                });
+
+                if (artifactWriteFailure is not null)
+                {
+                    throw new InvalidOperationException("Failed to write the receipt-hit measurement artifact.", artifactWriteFailure);
+                }
+            }
+            catch
+            {
+                WriteMeasurementArtifactBestEffort();
+                throw;
+            }
         }
         finally
         {
@@ -2270,18 +2578,22 @@ public sealed class DispatchProcessHostTests
 
         var artifact = new
         {
-            beforeReceiptHitElapsedMs = new[] { 123070, 123946, 122308, 128467 },
+            measurementModel = "DispatchElapsedMs includes SandboxPrepElapsedMs; dispatchMinusSandboxPrepElapsedMs is the exclusive remainder.",
             warmup = new
             {
                 phase = warmup.Phase,
                 sandboxPrepElapsedMs = warmup.SandboxPrepElapsedMs,
-                dispatchElapsedMs = warmup.DispatchElapsedMs
+                dispatchElapsedMs = warmup.DispatchElapsedMs,
+                dispatchMinusSandboxPrepElapsedMs = warmup.DispatchElapsedMs - warmup.SandboxPrepElapsedMs,
+                sandboxPrepEvents = SerializeSandboxPrepEvents(warmup.SandboxPrepEvents)
             },
             receiptHits = receiptHitMeasurements.Select(measurement => new
             {
                 phase = measurement.Phase,
                 sandboxPrepElapsedMs = measurement.SandboxPrepElapsedMs,
-                dispatchElapsedMs = measurement.DispatchElapsedMs
+                dispatchElapsedMs = measurement.DispatchElapsedMs,
+                dispatchMinusSandboxPrepElapsedMs = measurement.DispatchElapsedMs - measurement.SandboxPrepElapsedMs,
+                sandboxPrepEvents = SerializeSandboxPrepEvents(measurement.SandboxPrepEvents)
             }).ToArray()
         };
 
@@ -2361,7 +2673,14 @@ public sealed class DispatchProcessHostTests
             Assert.NotEqual(heartbeatPath, prepHeartbeatPath);
         }
 
-        var terminalPrepEvent = ReadSandboxPrepEvents(stderrPath)
+        var sandboxPrepEvents = ReadSandboxPrepEvents(stderrPath);
+        var setupArtifactPath = Path.Combine(
+            worktree,
+            ".mcg-sandbox",
+            DispatchProcessHost.LowIntegritySetupArtifactName);
+        using var setupArtifact = JsonDocument.Parse(File.ReadAllText(setupArtifactPath));
+        var prepReceiptHit = setupArtifact.RootElement.GetProperty("prepReceiptHit").GetBoolean();
+        var terminalPrepEvent = sandboxPrepEvents
             .LastOrDefault(evt =>
             {
                 var phase = evt.GetProperty("phase").GetString();
@@ -2374,7 +2693,9 @@ public sealed class DispatchProcessHostTests
             terminalPrepEvent.GetProperty("phase").GetString() ?? string.Empty,
             elapsed.GetInt64(),
             stopwatch.ElapsedMilliseconds,
-            stdoutPath);
+            prepReceiptHit,
+            stdoutPath,
+            sandboxPrepEvents.Select(ToSandboxPrepEvent).ToArray());
     }
 
     private static JsonElement[] ReadSandboxPrepEvents(string stderrPath)
@@ -2384,6 +2705,20 @@ public sealed class DispatchProcessHostTests
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .ToArray();
     }
+
+    private static object[] SerializeSandboxPrepEvents(IReadOnlyCollection<SandboxPrepEvent> events)
+        => events.Select(evt => new
+        {
+            phase = evt.Phase,
+            startedAt = evt.StartedAt,
+            elapsedMs = evt.ElapsedMs
+        }).Cast<object>().ToArray();
+
+    private static SandboxPrepEvent ToSandboxPrepEvent(JsonElement evt)
+        => new(
+            evt.GetProperty("phase").GetString() ?? string.Empty,
+            evt.GetProperty("startedAt").GetDateTimeOffset(),
+            evt.TryGetProperty("elapsedMs", out var elapsedMs) ? elapsedMs.GetInt64() : null);
 
     private static ProcessStartInfo BuildGrandchildReapWrapperStartInfo(
         string fixtureRoot,
@@ -2670,7 +3005,11 @@ public sealed class DispatchProcessHostTests
         string Phase,
         long SandboxPrepElapsedMs,
         long DispatchElapsedMs,
-        string StdoutPath);
+        bool PrepReceiptHit,
+        string StdoutPath,
+        IReadOnlyCollection<SandboxPrepEvent> SandboxPrepEvents);
+
+    private sealed record SandboxPrepEvent(string Phase, DateTimeOffset StartedAt, long? ElapsedMs);
 
     private static string EscapePowerShellSingleQuoted(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);
@@ -2971,6 +3310,23 @@ public sealed class DispatchProcessHostTests
         finally
         {
             CloseHandle(token);
+        }
+    }
+
+    private static string? ReadHeartbeatState(string path)
+    {
+        try
+        {
+            using var heartbeat = JsonDocument.Parse(File.ReadAllText(path));
+            return heartbeat.RootElement.GetProperty("state").GetString();
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

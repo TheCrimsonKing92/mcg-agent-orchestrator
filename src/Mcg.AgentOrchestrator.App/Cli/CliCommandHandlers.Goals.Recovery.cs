@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
@@ -13,10 +12,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static partial class CliCommandHandlers
 {
 // Deterministic recovery: one `recover <goal> <note>` owns the multi-step "unblock" dances the
-// operator used to memorize. It answers any open human-input requests (which `SubmitHumanInput`
-// flips to Running), normalizes stuck/orphaned tasks to Failed so `RetryTask` accepts them, then
-// retries them back to a dispatchable state — all with the single operator note. Genuinely running
-// tasks (a live process) are left alone.
+// operator used to memorize. It answers blocking human-input requests (which `SubmitHumanInput`
+// flips to Running) while retaining prospective acceptance evidence, normalizes stuck/orphaned tasks
+// to Failed so `RetryTask` accepts them, then retries them back to a dispatchable state — all with the
+// single operator note. Genuinely running tasks (a live process) are left alone.
 private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<string> parts)
 {
     if (parts.Count < 3)
@@ -29,13 +28,23 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     var goal = context.CurrentGoal;
     var note = ResolveTextArgument(parts, inlineIndex: 2, "recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>", "--text-file");
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
+    var actions = 0;
+    if (SpecRefinementLaunchAttemptStore.ForWorkspace(context.Workspace).Reset(goal.Id))
+    {
+        Console.WriteLine("recover: cleared spec-refinement failed-claim escalation.");
+        actions++;
+    }
 
-    var sweep = TerminalGoalSweep.Run(context.Kernel, context.Workspace.ExecutionDirectory, goal.Id);
+    var sweep = TerminalGoalSweep.Run(
+        context.Kernel,
+        context.Workspace.ExecutionDirectory,
+        goal.Id,
+        cleanupHooks: context.CleanupContext.Hooks,
+        orchestratorDirectory: context.Workspace.OrchestratorDirectory);
     ConsoleViews.PrintTerminalGoalSweep(sweep);
     TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
     goal = context.Kernel.GetGoal(goal.Id);
     context.CurrentGoal = goal;
-    var actions = 0;
     if (sweep.Changed)
     {
         actions++;
@@ -47,11 +56,13 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         actions++;
     }
 
+    var processInspection = new ProcessInspectionSnapshotScope(ProcessCommandLines.SnapshotOperation);
     var worktreeRecovery = GoalRecoveryPlanner.Build(
         context.Kernel,
         goal,
         context.Workspace.ExecutionDirectory,
-        includeCleanupBackoff: false);
+        includeCleanupBackoff: false,
+        processSnapshotFactory: processInspection.Get);
     var worktreeBlocksDiagnosis = worktreeRecovery.WorktreeDirty == true ||
         !string.IsNullOrWhiteSpace(worktreeRecovery.WorktreeStatusError);
     if (worktreeRecovery.WorktreeDirty == true)
@@ -71,7 +82,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             "lifecycle/task desync recovery is unsafe until git status succeeds.");
     }
 
-    foreach (var request in context.Kernel.GetPendingHumanInput(goal.Id).ToList())
+    foreach (var request in context.Kernel.GetPendingBlockingHumanInput(goal.Id).ToList())
     {
         context.Kernel.SubmitHumanInput(request.Id, note);
         Console.WriteLine($"recover: answered human-input request {request.Id.Value[..8]}.");
@@ -87,7 +98,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         }
 
         if (task.LastProcess is { CompletedAt: null } && task.LastVerification is null &&
-            DispatchRecoveryView.Evaluate(goal, task) is { } recoveryDecision)
+            DispatchRecoveryView.Evaluate(goal, task, processInspection.Get()) is { } recoveryDecision)
         {
             PrintRecoverDispatchRecovery(task, goal, recoveryDecision);
             if (recoveryDecision.Action is DispatchRecoveryAction.Hold or DispatchRecoveryAction.ClassifyBlocker)
@@ -97,7 +108,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
             var runner = new BackgroundDispatchRunner();
             var outcome = runner.ReconcileLatestProcess(context.Kernel, goal.Id, task.Id);
-            runner.ApplyRefreshOutcomeAndWriteDiagnostics(context.Kernel, goal.Id, task.Id, outcome);
+            runner.ApplyRefreshOutcomeAndWriteDiagnostics(
+                context.Kernel,
+                goal.Id,
+                task.Id,
+                outcome,
+                processInspection.Get);
             goal = context.Kernel.GetGoal(goal.Id);
             context.CurrentGoal = goal;
             var refreshedTask = goal.Tasks.First(candidate => candidate.Id == task.Id);
@@ -113,7 +129,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
                 outcome.Verification is { } refreshVerification &&
                 DispatchRecoveryPolicy.IsStaleDispatchRetryVerification(refreshVerification))
             {
-                context.Kernel.RetryTask(goal.Id, refreshedTask.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask));
+                context.Kernel.RetryTask(
+                    goal.Id,
+                    refreshedTask.Id,
+                    note,
+                    invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask),
+                    retryCause: RetryCause.EnvironmentApparatusFailure);
                 Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");
                 alreadyReset.Add(refreshedTask.Id);
                 actions++;
@@ -132,7 +153,11 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
         if (task.Status == WorkTaskStatus.Cancelled)
         {
-            context.Kernel.RequeueInterruptedDispatch(goal.Id, task.Id, note);
+            context.Kernel.RequeueInterruptedDispatch(
+                goal.Id,
+                task.Id,
+                note,
+                RetryCause.EnvironmentApparatusFailure);
             Console.WriteLine($"recover: requeued interrupted task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
             alreadyReset.Add(task.Id);
             actions++;
@@ -145,7 +170,13 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             context.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, note);
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, note, invalidateDownstream: !HasRunningDownstreamTask(goal, task));
+        context.Kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            note,
+            retryCause: RetryCause.EnvironmentApparatusFailure,
+            invalidateDownstream: !HasRunningDownstreamTask(goal, task),
+            retryRoundKind: null);
         Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
         alreadyReset.Add(task.Id);
         actions++;
@@ -171,14 +202,19 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         }
 
         var hasIncompleteEarlierStage = goal.Tasks.Any(candidate =>
-            GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+            DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
             candidate.Status != WorkTaskStatus.Completed);
         if (hasIncompleteEarlierStage)
         {
             continue;
         }
 
-        context.Kernel.RetryTask(goal.Id, task.Id, $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}", invalidateDownstream: !HasRunningDownstreamTask(goal, task));
+        context.Kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}",
+            invalidateDownstream: !HasRunningDownstreamTask(goal, task),
+            retryCause: RetryCause.EnvironmentApparatusFailure);
         Console.WriteLine($"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
         actions++;
     }
@@ -222,7 +258,7 @@ private static void PrintRecoverDispatchRecovery(TaskSpec task, Goal goal, Dispa
 
 private static bool HasRunningDownstreamTask(Goal goal, TaskSpec task) =>
     goal.Tasks.Any(candidate =>
-        GoalManagementCommandService.IsEarlierSdlcStageOf(task.RequiredRole, candidate.RequiredRole) &&
+        DispatchReadinessRules.IsEarlierSdlcStageOf(task.RequiredRole, candidate.RequiredRole) &&
         candidate.LastProcess is { IsRunning: true });
 
 // Deterministic verification from git ground truth: when a goal still has un-verified work tasks

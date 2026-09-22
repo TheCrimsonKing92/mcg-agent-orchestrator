@@ -19,7 +19,9 @@ public enum ContextArtifactKind
 public enum ContextDeliveryMode
 {
     InlineFull,
-    MandatoryFile
+    MandatoryFile,
+    OnDemandFile,
+    HistoricalFile
 }
 
 public readonly record struct ContextContractVersion(int Value)
@@ -57,6 +59,73 @@ public readonly record struct LogicalArtifactIdentity
     public override string ToString() => Value;
 }
 
+public static class WorkerContextProjectionBoundary
+{
+    public const string StartPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:";
+    public const string EndPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_END:";
+    public const string LiteralPrefix = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_LITERAL:";
+    public const string MarkerSuffix = " -->";
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    public static string Start(LogicalArtifactIdentity identity) =>
+        Format(StartPrefix, identity);
+
+    public static string End(LogicalArtifactIdentity identity) =>
+        Format(EndPrefix, identity);
+
+    public static string EscapeReservedLiteral(string line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        if (!line.Contains(StartPrefix, StringComparison.Ordinal) &&
+            !line.Contains(EndPrefix, StringComparison.Ordinal) &&
+            !line.Contains(LiteralPrefix, StringComparison.Ordinal))
+        {
+            return line;
+        }
+
+        return $"{LiteralPrefix}{Convert.ToBase64String(StrictUtf8.GetBytes(line))}{MarkerSuffix}";
+    }
+
+    public static string RestoreReservedLiteral(string marker)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        if (!marker.StartsWith(LiteralPrefix, StringComparison.Ordinal) ||
+            !marker.EndsWith(MarkerSuffix, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Typed projection literal marker is malformed.", nameof(marker));
+        }
+
+        var encoded = marker[LiteralPrefix.Length..^MarkerSuffix.Length];
+        try
+        {
+            var bytes = Convert.FromBase64String(encoded);
+            if (!string.Equals(Convert.ToBase64String(bytes), encoded, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Typed projection literal marker is not canonical base64.", nameof(marker));
+            }
+
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (Exception exception) when (exception is FormatException or DecoderFallbackException)
+        {
+            throw new ArgumentException("Typed projection literal marker is malformed.", nameof(marker), exception);
+        }
+    }
+
+    private static string Format(string prefix, LogicalArtifactIdentity identity)
+    {
+        if (identity.Value.Contains("<!--", StringComparison.Ordinal) ||
+            identity.Value.Contains("-->", StringComparison.Ordinal) ||
+            identity.Value.Contains('\r', StringComparison.Ordinal) ||
+            identity.Value.Contains('\n', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Typed projection identity cannot contain Markdown comment or line boundaries.", nameof(identity));
+        }
+
+        return $"{prefix}{identity.Value}{MarkerSuffix}";
+    }
+}
+
 public sealed class WorkerContextArtifact
 {
     private readonly byte[]? _authoritativeBytes;
@@ -78,7 +147,8 @@ public sealed class WorkerContextArtifact
         ContextContractVersion contractVersion,
         byte[]? authoritativeBytes,
         string? mandatoryRelativePath,
-        string? fallbackReason)
+        string? fallbackReason,
+        int authoritativeByteCount)
     {
         Identity = identity;
         Kind = kind;
@@ -89,6 +159,7 @@ public sealed class WorkerContextArtifact
         _authoritativeBytes = authoritativeBytes?.ToArray();
         MandatoryRelativePath = mandatoryRelativePath;
         FallbackReason = fallbackReason;
+        AuthoritativeByteCount = authoritativeByteCount;
     }
 
     public LogicalArtifactIdentity Identity { get; }
@@ -100,6 +171,7 @@ public sealed class WorkerContextArtifact
     public byte[]? AuthoritativeBytes => _authoritativeBytes?.ToArray();
     public string? MandatoryRelativePath { get; }
     public string? FallbackReason { get; }
+    public int AuthoritativeByteCount { get; }
     public static WorkerContextArtifact Create(
         LogicalArtifactIdentity identity,
         ContextArtifactKind kind,
@@ -109,7 +181,8 @@ public sealed class WorkerContextArtifact
         ContextContractVersion contractVersion,
         string? mandatoryRelativePath = null,
         string? expectedContentHash = null,
-        string? fallbackReason = null)
+        string? fallbackReason = null,
+        int? authoritativeByteCount = null)
     {
         if (contractVersion.Value <= 0)
         {
@@ -143,14 +216,23 @@ public sealed class WorkerContextArtifact
             throw new ArgumentException("Authoritative bytes do not match the expected SHA-256 hash.", nameof(authoritativeBytes));
         }
 
+        var byteCount = authoritativeByteCount ?? authoritativeBytes?.Length ?? 0;
+        if (byteCount < 0 || (authoritativeBytes is not null && byteCount != authoritativeBytes.Length))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(authoritativeByteCount),
+                "Authoritative byte count must be non-negative and match supplied authoritative bytes.");
+        }
+
         if (deliveryMode == ContextDeliveryMode.InlineFull && authoritativeBytes is null)
         {
             throw new ArgumentException("InlineFull requires complete authoritative bytes.", nameof(authoritativeBytes));
         }
 
-        if (deliveryMode == ContextDeliveryMode.MandatoryFile && string.IsNullOrWhiteSpace(mandatoryRelativePath))
+        if (deliveryMode is ContextDeliveryMode.MandatoryFile or ContextDeliveryMode.OnDemandFile or ContextDeliveryMode.HistoricalFile &&
+            string.IsNullOrWhiteSpace(mandatoryRelativePath))
         {
-            throw new ArgumentException("MandatoryFile requires a relative materialization path.", nameof(mandatoryRelativePath));
+            throw new ArgumentException("File-backed delivery requires a relative materialization path.", nameof(mandatoryRelativePath));
         }
 
         return new WorkerContextArtifact(
@@ -162,25 +244,8 @@ public sealed class WorkerContextArtifact
             contractVersion,
             authoritativeBytes,
             mandatoryRelativePath,
-            fallbackReason);
-    }
-
-    public WorkerContextArtifact WithInlineFallback(string reason)
-    {
-        if (AuthoritativeBytes is null)
-        {
-            throw new WorkerContextPreparationException(Identity, reason, "Complete authoritative bytes are unavailable for inline fallback.");
-        }
-
-        return Create(
-            Identity,
-            Kind,
-            AuthoritativeBytes,
-            RoleVisibility,
-            ContextDeliveryMode.InlineFull,
-            ContractVersion,
-            expectedContentHash: ContentHash,
-            fallbackReason: reason);
+            fallbackReason,
+            byteCount);
     }
 
     public static string Hash(ReadOnlySpan<byte> bytes) =>
@@ -191,7 +256,9 @@ public sealed record WorkerContextPackage(
     string SemanticPackageId,
     ContextContractVersion ContractVersion,
     AgentRole TargetRole,
-    IReadOnlyList<WorkerContextArtifact> Artifacts)
+    IReadOnlyList<WorkerContextArtifact> Artifacts,
+    ReviewFindingHistoryProjectionMetrics? ReviewFindingProjection = null,
+    InterruptedWorkCheckpointProjectionMetrics? InterruptedWorkCheckpointProjection = null)
 {
     // This is semantic attestation/cache identity only. It is not delivery, read, or acknowledgment evidence.
 }
@@ -255,7 +322,8 @@ public sealed record WorkerContextSectionReceipt(
     int ContractVersion,
     IReadOnlyList<AgentRole> RoleVisibility,
     string? FallbackReason = null,
-    string? MandatoryRelativePath = null);
+    string? MandatoryRelativePath = null,
+    ContextArtifactKind? ArtifactKind = null);
 
 public sealed record MandatoryContextFileDescriptor(
     string LogicalIdentity,
@@ -265,13 +333,82 @@ public sealed record MandatoryContextFileDescriptor(
     AgentRole TargetRole,
     IReadOnlyList<AgentRole> RoleVisibility);
 
+public sealed record WorkerRetryFeedbackPromptReceipt(
+    string LogicalIdentity,
+    string AcceptedRetryTaskId,
+    DateTimeOffset AcceptedRetryOccurredAt,
+    string AcceptedFeedbackSha256,
+    string TypedArtifactSha256,
+    string RenderedProjectionSha256,
+    string GeneratedPromptSha256,
+    ContextDeliveryMode DeliveryMode);
+
+public enum EarlyConvergenceEvidenceKind
+{
+    ReviewFindingReceipt,
+    InterruptedWorkCheckpoint
+}
+
+public sealed record InterruptedWorkCheckpointProjectionMetrics(
+    string CandidateSha,
+    string ReceiptHash);
+
 public sealed record WorkerContextPackageReceipt(
     string SemanticPackageId,
     IReadOnlyList<WorkerContextSectionReceipt> Sections,
     ProviderUsageValue InputTokens,
     ProviderUsageValue CachedInputTokens,
-    ProviderUsageValue OutputTokens)
+    ProviderUsageValue OutputTokens,
+    int RenderedPromptBytes = 0,
+    ReviewFindingHistoryProjectionMode? ReviewFindingProjectionMode = null,
+    int UniqueReviewFindingRoundCount = 0,
+    int DuplicateReviewFindingRoundCount = 0,
+    int UniqueFindingEvidenceReceiptCount = 0,
+    int DuplicateFindingEvidenceReceiptCount = 0,
+    string? ReviewFindingFallbackReason = null,
+    int RenderedPromptCharacters = 0,
+    int DeliveredArtifactBytes = 0,
+    int OnDemandArtifactBytes = 0,
+    int ToolTranscriptCharacters = 0,
+    int ModelInputTokenEstimate = 0,
+    bool EarlyConvergenceEligible = false,
+    string? EarlyConvergenceCandidateSha = null,
+    IReadOnlyList<string>? EarlyConvergenceReceiptHashes = null,
+    bool ValidatedForIdempotentReuse = false,
+    int BaselinePromptCharacters = 0,
+    int BaselineDeliveredArtifactBytes = 0,
+    int BaselineToolTranscriptCharacters = 0,
+    int BaselineModelInputTokenEstimate = 0,
+    WorkerRetryFeedbackPromptReceipt? RetryFeedbackPromptReceipt = null,
+    EarlyConvergenceEvidenceKind EarlyConvergenceEvidenceSource = EarlyConvergenceEvidenceKind.ReviewFindingReceipt)
 {
+    public bool HasEarlyConvergenceEvidenceFor(string? candidateSha)
+    {
+        if (!EarlyConvergenceEligible ||
+            string.IsNullOrWhiteSpace(candidateSha) ||
+            string.IsNullOrWhiteSpace(EarlyConvergenceCandidateSha) ||
+            !string.Equals(EarlyConvergenceCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+            EarlyConvergenceReceiptHashes is not { Count: > 0 } hashes ||
+            hashes.Distinct(StringComparer.Ordinal).Count() != hashes.Count)
+        {
+            return false;
+        }
+
+        return hashes.All(hash =>
+            hash.Length == 64 &&
+            hash.All(Uri.IsHexDigit) &&
+            Sections.Any(section =>
+                section.ContractVersion == ContextContractVersion.V1.Value &&
+                section.DeliveryMode == ContextDeliveryMode.OnDemandFile &&
+                string.Equals(section.ContentHash, hash, StringComparison.Ordinal) &&
+                string.Equals(
+                    section.LogicalIdentity,
+                    EarlyConvergenceEvidenceSource == EarlyConvergenceEvidenceKind.ReviewFindingReceipt
+                        ? $"goal/review-finding-receipts/{hash}.json"
+                        : $"goal/interrupted-work-checkpoint/{hash}.json",
+                    StringComparison.Ordinal)));
+    }
+
     public WorkerContextPackageReceipt WithProviderUsage(ProviderReportedUsage? usage, string unavailableReason = "absent") => this with
     {
         InputTokens = MergeUsageValue(InputTokens, usage?.InputTokens, unavailableReason),
@@ -285,6 +422,36 @@ public sealed record WorkerContextPackageReceipt(
         CachedInputTokens = MergeUsageValue(CachedInputTokens, usage?.CachedInputTokens, unavailableReason),
         OutputTokens = MergeUsageValue(OutputTokens, usage?.OutputTokens, unavailableReason)
     };
+
+    public WorkerContextPackageReceipt WithToolTranscriptCharacters(int characterCount) => this with
+    {
+        ToolTranscriptCharacters = characterCount < 0
+            ? throw new ArgumentOutOfRangeException(nameof(characterCount))
+            : characterCount
+    };
+
+    public WorkerContextPackageReceipt WithValidatedContext() => this with
+    {
+        ValidatedForIdempotentReuse = true
+    };
+
+    public WorkerContextPackageReceipt WithBaselineMeasurements(
+        int promptCharacters,
+        int deliveredArtifactBytes,
+        int toolTranscriptCharacters) => this with
+    {
+        BaselinePromptCharacters = RequireNonNegative(promptCharacters, nameof(promptCharacters)),
+        BaselineDeliveredArtifactBytes = RequireNonNegative(deliveredArtifactBytes, nameof(deliveredArtifactBytes)),
+        BaselineToolTranscriptCharacters = RequireNonNegative(toolTranscriptCharacters, nameof(toolTranscriptCharacters)),
+        BaselineModelInputTokenEstimate = EstimateInputTokens(RequireNonNegative(promptCharacters, nameof(promptCharacters)))
+    };
+
+    private static int RequireNonNegative(int value, string parameterName) => value < 0
+        ? throw new ArgumentOutOfRangeException(parameterName)
+        : value;
+
+    private static int EstimateInputTokens(int characterCount) =>
+        characterCount / 4 + (characterCount % 4 == 0 ? 0 : 1);
 
     private static ProviderUsageValue MergeUsageValue(
         ProviderUsageValue current,

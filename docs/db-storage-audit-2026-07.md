@@ -59,6 +59,14 @@ Not implemented in this goal:
 - Automatic maintenance from the conductor tick path.
 - A migration that rewrites existing retained tick payloads in place.
 
+## Supersession note — 2026-09-02
+
+Later conductor work now schedules the run-event maintenance path daily, requests a weekly off-peak `VACUUM`, and prunes aged `goal.operation` rows only for goals whose persisted state is terminal. The historical list above remains scoped to the July goal.
+
+Generated-evidence maintenance now runs under a cross-process sweep lease and emits policy-versioned `retention.reclamation` run events. It applies terminal-owner, live-attempt, age, per-goal-directory byte, and count decisions to dispatch logs plus acceptance, pre-review, and MTP test-run trees; prompt deletion additionally requires an exact persisted `PromptPath`. Canonical `.attempt.json` records remain as the small ownership index after bulk attempt artifacts are reclaimed. Ambiguous or unrecorded ownership retains, goal-event JSONL remains raw for replay, and partial file-lock or receipt-persistence failures preserve a durable decision ledger. The byte ceiling is intentionally scoped per goal and evidence family so non-terminal or lease-deferred data cannot force deletion from another goal.
+
+MTP test runs created after this change carry an atomic `.mtp-run-ownership.json` sidecar. Daily maintenance resolves its attempt id through canonical acceptance metadata, requires a unique terminal owner and reconciled attempt, and acquires the attempt-writer lease before applying the 14-day or 100-directory bound. Final and last-failing attempts remain protected. Legacy, unowned, ambiguous, non-terminal, live, or locked directories remain retained with typed reasons.
+
 ## Target Structure
 
 Recommended follow-up increments:

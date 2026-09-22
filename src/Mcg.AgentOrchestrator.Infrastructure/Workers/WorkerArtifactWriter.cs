@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
@@ -8,7 +9,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class WorkerArtifactWriter
 {
     private const int PriorVerificationMaxChars = 40000;
-    private const int GuidanceFileMaxChars = 30000;
     private const int CurrentEvidenceMaxChars = 20000;
     private const int DigestTextMaxChars = 700;
     private const int DigestEvidenceMaxChars = 500;
@@ -78,8 +78,20 @@ internal sealed class WorkerArtifactWriter
         WriteOptionalArtifact(
             Path.Combine(contextDirectory, "prior-goal-evidence.md"),
             citedPriorEvidence);
-        WriteText(Path.Combine(contextDirectory, "deterministic-verification.md"), BuildDeterministicVerification(goal, task, workingDirectory));
-        WriteText(Path.Combine(contextDirectory, "workflow-brokers.md"), BuildWorkflowBrokers(goal, task, workingDirectory, plannerUsesDurableResearch));
+        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
+        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles, workingDirectory);
+        WriteText(
+            Path.Combine(contextDirectory, "deterministic-verification.md"),
+            BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan));
+        WriteText(
+            Path.Combine(contextDirectory, "workflow-brokers.md"),
+            BuildWorkflowBrokers(
+                goal,
+                task,
+                workingDirectory,
+                plannerUsesDurableResearch,
+                changedFiles,
+                testImpactPlan));
         WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch));
         WriteText(Path.Combine(contextDirectory, "selected-skills.md"), _skillSelector.BuildSelectedSkills(goal, task, workingDirectory));
         var sourceSurveyPath = Path.Combine(contextDirectory, "source-survey.md");
@@ -347,8 +359,10 @@ internal sealed class WorkerArtifactWriter
 
             lines.Add(string.Empty);
             lines.Add("### Stdout");
-            lines.Add(task.LastVerification.AuthoritativeStandardOutput ??
-                $"[authoritative stdout unavailable: {task.LastVerification.FullStandardOutputUnavailableReason ?? "unknown"}]");
+            lines.Add(WorkerVerificationEvidence.ProjectStandardOutputForContext(
+                task,
+                task.LastVerification,
+                new LogicalArtifactIdentity("task/last-verification/stdout")));
             if (!string.IsNullOrWhiteSpace(task.LastVerification.AuthoritativeStandardError))
             {
                 lines.Add(string.Empty);
@@ -368,7 +382,12 @@ internal sealed class WorkerArtifactWriter
         return string.Join(Environment.NewLine, lines);
     }
 
-    private string BuildDeterministicVerification(Goal goal, TaskSpec task, string workingDirectory)
+    private string BuildDeterministicVerification(
+        Goal goal,
+        TaskSpec task,
+        string workingDirectory,
+        IReadOnlyList<string> changedFiles,
+        RepositoryTestImpactPlan testImpactPlan)
     {
         var priorTasks = goal.Tasks.TakeWhile(t => t.Id != task.Id).ToList();
         var completedPriorTasks = priorTasks.Where(t => t.Status == WorkTaskStatus.Completed).ToList();
@@ -425,14 +444,13 @@ internal sealed class WorkerArtifactWriter
             }
         }
 
-        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
             goal.Objective,
             task.Description,
             task.VerificationPlan,
-            changedFiles);
+            changedFiles,
+            testImpactPlan);
         lines.Add(string.Empty);
         lines.Add("## Test Impact Plan");
         lines.Add(testImpactPlan.Summary);
@@ -507,16 +525,22 @@ internal sealed class WorkerArtifactWriter
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        bool plannerUsesDurableResearch)
+        bool plannerUsesDurableResearch,
+        IReadOnlyList<string> changedFiles,
+        RepositoryTestImpactPlan testImpactPlan)
     {
-        var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             task.RequiredRole,
             goal.Objective,
             task.Description,
             task.VerificationPlan,
-            changedFiles);
+            changedFiles,
+            testImpactPlan);
+        var testImpactCommands = testImpactPlan.Checks
+            .Where(check => check.Command.Count > 0)
+            .Select(check => check.CommandLine)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         var goalPrefix = goal.Id.Value.Length <= 8 ? goal.Id.Value : goal.Id.Value[..8];
         var attemptName = $"{task.RequiredRole.ToString().ToLowerInvariant()}-{task.Id.Value[..8]}";
         var toolchain = TargetToolchainDetector.Detect(workingDirectory);
@@ -534,6 +558,7 @@ internal sealed class WorkerArtifactWriter
             $"  Use for: choosing focused tests, identifying required checks, and {brokerNote}.",
             $"  Suggested command shape: `{brokerCommandHint}`",
             $"  Current recommendation: {testImpactPlan.Summary}",
+            $"  Current commands: {(testImpactCommands.Length == 0 ? "(none)" : string.Join(" ; ", testImpactCommands))}",
             "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
             "- static-policy-checks",
             "  Artifact: deterministic-verification.md",
@@ -596,7 +621,7 @@ internal sealed class WorkerArtifactWriter
             $"- digest.md inline target: {DigestTextMaxChars} chars per text section, {DigestEvidenceMaxChars} chars per evidence section.",
             $"- prior-task-evidence.md retrieval budget: {PriorVerificationMaxChars} chars.",
             $"- diff-summary.md retrieval budget: {WorkerGitContext.DiffSummaryRetrievalMaxChars} chars.",
-            $"- guidance file retrieval budget: {GuidanceFileMaxChars} chars per copied guidance artifact.",
+            "- guidance files are copied completely and hash-attested; delivery mode is selected by worker-profile policy capability.",
             "- Large paid prompt risk is evaluated before dispatch; prefer handles below over copying large artifacts into task prose.",
             string.Empty,
             "## Retrieval Handles",
@@ -700,7 +725,7 @@ internal sealed class WorkerArtifactWriter
                     lines.Add(resolution.Plan);
                     lines.Add(string.Empty);
                     lines.Add("### Planner WORKER_RESULT Receipt");
-                    lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
+                    lines.Add(WorkerVerificationEvidence.ProjectStandardOutputForContext(priorTask, verification));
                 }
                 else
                 {
@@ -711,7 +736,7 @@ internal sealed class WorkerArtifactWriter
             else
             {
                 lines.Add("### Stdout");
-                lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
+                lines.Add(WorkerVerificationEvidence.ProjectStandardOutputForContext(priorTask, verification));
             }
 
             if (!string.IsNullOrWhiteSpace(verification.AuthoritativeStandardError))
@@ -727,12 +752,6 @@ internal sealed class WorkerArtifactWriter
 
         return string.Join(Environment.NewLine, lines);
     }
-
-    private static string ResolveAuthoritativeStandardOutputOrUnavailable(TaskVerificationRecord verification) =>
-        verification.AuthoritativeStandardOutput ??
-        (WorkerVerificationEvidence.TryRecoverLegacySnapshotStandardOutput(verification, out var recoveredOutput)
-            ? recoveredOutput
-            : $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
 
     private static IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> ResolveDurablePlannerPlans(
         IReadOnlyList<TaskSpec> goalTasks,
@@ -921,10 +940,7 @@ internal sealed class WorkerArtifactWriter
             }
 
             var targetPath = Path.Combine(contextDirectory, fileName);
-            WriteText(targetPath, WorkerContextHelpers.TrimArtifactBlock(
-                File.ReadAllText(sourcePath),
-                GuidanceFileMaxChars,
-                preserveCompleteArtifacts));
+            WriteText(targetPath, File.ReadAllText(sourcePath));
             copied.Add(fileName);
         }
 

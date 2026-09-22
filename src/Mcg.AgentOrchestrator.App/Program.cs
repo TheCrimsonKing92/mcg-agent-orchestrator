@@ -26,6 +26,37 @@ if (args.Length >= 1 && args[0] == PostLandingCanaryCommand.SubcommandName)
     return PostLandingCanaryCommand.Run(args);
 }
 
+// Process inspection and guarded stopping deliberately bypass workspace, provider, and catalog
+// startup. These bounded operator primitives must remain available and cheap while unrelated
+// orchestrator source is changing; their wrapper only reuses an older build when this early path
+// and its process subsystem are unchanged.
+if (args.Length >= 1 && args[0].Equals("repo-process-info", StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        RepoProcessCliCommand.PrintInfo(args, Console.Out);
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
+if (args.Length >= 1 && args[0].Equals("repo-process-stop", StringComparison.OrdinalIgnoreCase))
+{
+    try
+    {
+        return RepoProcessCliCommand.Stop(args, Console.Out) ? 0 : 1;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Error: {ex.Message}");
+        return 1;
+    }
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;
@@ -58,6 +89,12 @@ catch (ArgumentException ex)
 {
     Console.Error.WriteLine($"Error: {ex.Message}");
     return 1;
+}
+
+var commandCapability = CliCommandCapabilities.Classify(startupArgs);
+if (commandCapability == CliCommandCapability.DashboardHost)
+{
+    return OptionalDashboardHostLauncher.Run(args);
 }
 
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
@@ -180,9 +217,10 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
     }
 }
 
+WorktreeCleanupContext cleanupContext;
 try
 {
-    GoalWorktreeOrphanSweepScheduler.Configure(
+    cleanupContext = new WorktreeCleanupContext(
         WorktreeCleanupConfiguration.Load(AppContext.BaseDirectory),
         workspace.OrchestratorDirectory);
 }
@@ -210,14 +248,18 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-var providers = ProviderRegistryFactory.CreateDefaultProviders();
-var agentFallback = ProviderRegistryFactory.IsLlamaCppReachable() ? AgentCatalog.LlamaCppDefault() : null;
+var providers = commandCapability == CliCommandCapability.Execution
+    ? ProviderRegistryFactory.CreateDefaultProviders()
+    : new InMemoryModelProviderRegistry([]);
+var agentFallback = commandCapability == CliCommandCapability.Execution && ProviderRegistryFactory.IsLlamaCppReachable()
+    ? AgentCatalog.LlamaCppDefault()
+    : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
 var operatorBotToken = OperatorChannelFactory.ResolveBotToken();
 IOperatorChannel operatorChannel;
-if (SkipsStartupOperatorChannel(startupArgs))
+if (commandCapability != CliCommandCapability.Execution || SkipsStartupOperatorChannel(startupArgs))
 {
     operatorChannel = NullOperatorChannel.Instance;
 }
@@ -231,11 +273,6 @@ else
     {
         operatorChannel = NullOperatorChannel.Instance;
     }
-}
-
-if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype-ui", StringComparison.OrdinalIgnoreCase))
-{
-    return DashboardHost.RunPrototypeUi(startupArgs, providers, agentFallback, tenantSelection.TenantName);
 }
 
 if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison.OrdinalIgnoreCase))
@@ -298,7 +335,7 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     Goal? commandCurrentGoal = null;
     try
     {
-        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel);
+        CliCommandDispatcher.ExecuteCommand(startupArgs, commandKernel, workspace, ref agents, providers, ref workerProfiles, ref commandCurrentGoal, operatorChannel, cleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -334,11 +371,15 @@ try
 
     ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
-    ProgramStartupLifecycle.InitializeWorkerProcessTracking(
-        RunsStartupCleanup(startupArgs),
-        authorityTransferRequested,
-        workspace.SqliteStatePath,
-        workspace.ExecutionDirectory);
+    if (commandCapability == CliCommandCapability.Execution)
+    {
+        ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+            RunsStartupCleanup(startupArgs),
+            authorityTransferRequested,
+            workspace.SqliteStatePath,
+            workspace.ExecutionDirectory,
+            cleanupContext);
+    }
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
@@ -353,7 +394,7 @@ if (startupArgs.Count > 0)
 {
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
+        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
@@ -383,8 +424,8 @@ Console.WriteLine("    Show recommended next action and print the exact command 
 Console.WriteLine("    --full: also surfaces status, monitor, readiness, evidence, stages, gates, verify-needed,");
 Console.WriteLine("            input-needed, subscription-plan, model-outcomes, durations, dispatch-value, loop-health, failure-triage,");
 Console.WriteLine("            goal-recovery, supervisor, and operator-inbox detail in one output.");
-Console.WriteLine("  goal <objective> [--pipeline auto|five-role] [--simple] [--from-backlog] [--run --confirm-batch-start]");
-Console.WriteLine("    Create a goal. --pipeline: automatic selection or explicitly require five roles. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
+Console.WriteLine("  goal <objective> [--pipeline auto|five-role|developer-reviewer|developer-only] [--simple] [--from-backlog] [--run --confirm-batch-start]");
+Console.WriteLine("    Create a goal. --pipeline: automatic five-role selection or an explicit pipeline override. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
 Console.WriteLine("  accept [goal-id] [--skip-verify] [--autonomy <policy>]");
 Console.WriteLine("    Accept a completed goal: run acceptance checks, merge workspace, and clean up worktree.");
 Console.WriteLine("  stop <goal-id> <reason>|--text-file <path> --as cancel|park|abandon|supersede [--confirm-goal-stop|--confirm-goal-park|--confirm-goal-abandon]");
@@ -410,7 +451,7 @@ Console.WriteLine("  simple-hosted-dashboard [port|url] [--refresh seconds] [--o
 Console.WriteLine("  open-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  transcript [path]");
 Console.WriteLine("  simple-goal <objective>, goal-plan [heading-filter] [--create-goals|--create-simple-goals] [--backlog-coverage full|slice]");
-Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|five-role]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
+Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|five-role|developer-reviewer|developer-only]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
 Console.WriteLine("  intent-template [template request] [--create-goal|--create-simple-goal]");
 Console.WriteLine("  goals, agents, autonomy-policies");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");
@@ -480,7 +521,7 @@ while (true)
             continue;
         }
 
-        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel);
+        CliPersistentStateRunner.ExecuteCommand(command, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
     }
     catch (Exception ex)
     {
@@ -575,7 +616,8 @@ internal static class ProgramStartupLifecycle
         bool runsStartupCleanup,
         bool authorityTransferRequested,
         string stateStorePath,
-        string executionDirectory)
+        string executionDirectory,
+        WorktreeCleanupContext? cleanupContext = null)
     {
         WorkerProcessJobs.ConfigureRegistry(stateStorePath);
         if (authorityTransferRequested)
@@ -586,7 +628,8 @@ internal static class ProgramStartupLifecycle
         WorkerProcessJobs.SweepStartupOrphans();
         if (runsStartupCleanup)
         {
-            GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+            (cleanupContext ?? new WorktreeCleanupContext(GoalWorktreeCleanupOptions.Default))
+                .Scheduler.SweepNow(executionDirectory);
         }
     }
 }

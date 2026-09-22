@@ -38,6 +38,7 @@ internal enum GoalCreationLifecycleEffectKind
     CleanedUp,
     ProgressiveReviewGlanceReceipt,
     ProgressiveReviewGlanceGuardReceipt,
+    ProgressiveReviewGlanceCircuitReceipt,
     ProgressiveReviewGlanceSummary
 }
 
@@ -57,6 +58,37 @@ internal sealed record GoalCreationDeliveryReceipt(
 internal sealed record GoalCreationDeliveryResult(
     string GoalId,
     GoalCreationDeliveryDisposition Disposition);
+
+internal static class GoalReplacementTransferLeaseClock
+{
+    private static readonly AsyncLocal<TimeProvider?> TimeProviderOverride = new();
+    private static readonly AsyncLocal<Action<TimeSpan>?> WaitOverride = new();
+
+    internal static TimeProvider Current => TimeProviderOverride.Value ?? TimeProvider.System;
+    internal static Action<TimeSpan> CurrentWait => WaitOverride.Value ?? Thread.Sleep;
+
+    internal static IDisposable Push(TimeProvider timeProvider, Action<TimeSpan> wait)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(wait);
+        var previousTimeProvider = TimeProviderOverride.Value;
+        var previousWait = WaitOverride.Value;
+        TimeProviderOverride.Value = timeProvider;
+        WaitOverride.Value = wait;
+        return new RestoreAction(() =>
+        {
+            TimeProviderOverride.Value = previousTimeProvider;
+            WaitOverride.Value = previousWait;
+        });
+    }
+
+    private sealed class RestoreAction(Action restore) : IDisposable
+    {
+        private Action? _restore = restore;
+
+        public void Dispose() => Interlocked.Exchange(ref _restore, null)?.Invoke();
+    }
+}
 
 internal static class GoalCreationSideEffectDelivery
 {
@@ -173,6 +205,7 @@ internal static class GoalCreationLifecycleEffectDelivery
         string? Model,
         string? Profile);
     internal sealed record GlanceGuardPayload(string TaskId, ProgressiveReviewGlanceGuardReceipt Receipt);
+    internal sealed record GlanceCircuitPayload(string TaskId, ProgressiveReviewGlanceCircuitReceipt Receipt);
     internal sealed record GlanceSummaryPayload(
         int TotalGlances,
         int OnTrack,
@@ -270,6 +303,10 @@ internal static class GoalCreationLifecycleEffectDelivery
             case GoalCreationLifecycleEffectKind.ProgressiveReviewGlanceGuardReceipt:
                 var guard = GoalCreationSideEffectDelivery.DeserializePayload<GlanceGuardPayload>(effect.PayloadJson);
                 writer.AppendProgressiveReviewGlanceGuardReceipt(goalId, new TaskId(guard.TaskId), guard.Receipt);
+                break;
+            case GoalCreationLifecycleEffectKind.ProgressiveReviewGlanceCircuitReceipt:
+                var circuit = GoalCreationSideEffectDelivery.DeserializePayload<GlanceCircuitPayload>(effect.PayloadJson);
+                writer.AppendProgressiveReviewGlanceCircuitReceipt(goalId, new TaskId(circuit.TaskId), circuit.Receipt);
                 break;
             case GoalCreationLifecycleEffectKind.ProgressiveReviewGlanceSummary:
                 var summary = GoalCreationSideEffectDelivery.DeserializePayload<GlanceSummaryPayload>(effect.PayloadJson);
@@ -409,6 +446,9 @@ internal sealed class DeferredGoalLifecycleEventWriter : IGoalLifecycleEventWrit
 
     public void AppendProgressiveReviewGlanceGuardReceipt(GoalId goalId, TaskId taskId, ProgressiveReviewGlanceGuardReceipt receipt) =>
         Append(GoalCreationLifecycleEffectKind.ProgressiveReviewGlanceGuardReceipt, goalId, new GoalCreationLifecycleEffectDelivery.GlanceGuardPayload(taskId.Value, receipt), writer => writer.AppendProgressiveReviewGlanceGuardReceipt(goalId, taskId, receipt));
+
+    public void AppendProgressiveReviewGlanceCircuitReceipt(GoalId goalId, TaskId taskId, ProgressiveReviewGlanceCircuitReceipt receipt) =>
+        Append(GoalCreationLifecycleEffectKind.ProgressiveReviewGlanceCircuitReceipt, goalId, new GoalCreationLifecycleEffectDelivery.GlanceCircuitPayload(taskId.Value, receipt), writer => writer.AppendProgressiveReviewGlanceCircuitReceipt(goalId, taskId, receipt));
 
     public void AppendProgressiveReviewGlanceSummary(GoalId goalId, int totalGlances, int onTrack, int concern, int fundamentalMisdirection, int invalid, int totalTokens) =>
         Append(GoalCreationLifecycleEffectKind.ProgressiveReviewGlanceSummary, goalId, new GoalCreationLifecycleEffectDelivery.GlanceSummaryPayload(totalGlances, onTrack, concern, fundamentalMisdirection, invalid, totalTokens), writer => writer.AppendProgressiveReviewGlanceSummary(goalId, totalGlances, onTrack, concern, fundamentalMisdirection, invalid, totalTokens));

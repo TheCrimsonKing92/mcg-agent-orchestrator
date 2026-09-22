@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum GoalSupervisorProposalKind
+public enum GoalSupervisorProposalKind
 {
     RefreshRunningProcess,
     ReDelegateAfterRecoverableFailure,
@@ -14,14 +14,14 @@ internal enum GoalSupervisorProposalKind
     Monitor
 }
 
-internal sealed record GoalSupervisorPlan(
+public sealed record GoalSupervisorPlan(
     GoalId GoalId,
     string GoalPrefix,
     string PolicyName,
     bool ApplySafe,
     IReadOnlyList<GoalSupervisorProposal> Proposals);
 
-internal sealed record GoalSupervisorProposal(
+public sealed record GoalSupervisorProposal(
     GoalSupervisorProposalKind Kind,
     int? TaskNumber,
     TaskId? TaskId,
@@ -32,11 +32,11 @@ internal sealed record GoalSupervisorProposal(
     string Reason,
     string SuggestedCommand);
 
-internal sealed record GoalSupervisorApplyResult(
+public sealed record GoalSupervisorApplyResult(
     GoalSupervisorPlan Plan,
     IReadOnlyList<string> AppliedActions);
 
-internal static class GoalSupervisor
+public static class GoalSupervisor
 {
     public static GoalSupervisorPlan Build(
         AgentOrchestratorKernel kernel,

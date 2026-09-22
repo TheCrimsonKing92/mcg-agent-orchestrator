@@ -2,14 +2,14 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum AutonomyPolicyKind
+public enum AutonomyPolicyKind
 {
     Observe,
     SafeAuto,
     SupervisedAuto
 }
 
-internal enum AutonomyAction
+public enum AutonomyAction
 {
     DispatchStart,
     ModelRun,
@@ -22,7 +22,7 @@ internal enum AutonomyAction
     BacklogLogEdit
 }
 
-internal sealed record AutonomyPolicy(
+public sealed record AutonomyPolicy(
     AutonomyPolicyKind Kind,
     string Name,
     string Description,
@@ -139,7 +139,7 @@ internal sealed record AutonomyPolicy(
     };
 }
 
-internal static class AutonomyPolicyEvidence
+public static class AutonomyPolicyEvidence
 {
     public static void Record(
         AgentOrchestratorKernel kernel,

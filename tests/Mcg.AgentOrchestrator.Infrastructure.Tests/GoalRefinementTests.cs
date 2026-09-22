@@ -10,6 +10,110 @@ public sealed class GoalRefinementTests
 {
     // --- Binding selection and configuration failures ---
 
+    [Xunit.Fact]
+    public async Task DeclaredOperatorOwnershipMarkerSeedsRefinedSpecOwnership()
+    {
+        const string criterion =
+            "The operator records the deployed measurement. REAL-WORLD-DEPENDENT, operator-owned.";
+        var objective = $"""
+            Record the deployed measurement.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Record the deployed measurement.",
+              "acceptanceCriteria": [{{System.Text.Json.JsonSerializer.Serialize(criterion)}}],
+              "verificationClass": "RealWorldDependent",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(
+            [criterion],
+            kernel.GetGoal(goalId).RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+    }
+
+    [Xunit.Fact]
+    public async Task IncidentalOperatorMentionDoesNotSeedOperatorOwnership()
+    {
+        const string criterion =
+            "The operator-visible hold reason reports the pending entry age. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+        var objective = $"""
+            Report the pending entry age.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Report the pending entry age.",
+              "acceptanceCriteria": [{{System.Text.Json.JsonSerializer.Serialize(criterion)}}],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Empty(kernel.GetGoal(goalId).RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+    }
+
+    [Xunit.Fact]
+    public void SpecRefinerPromptRequiresOneToOneDeclaredCriterionMapping()
+    {
+        var prompt = SpecRefinerPlanner.BuildPrompt("Refine these criteria.");
+
+        Xunit.Assert.Contains(
+            "Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.",
+            prompt,
+            StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"declared_index\": integer", prompt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("1-based declared_index", prompt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalRefinementServiceKeepsBf434fdbCriterionFiveAsOneRefinedEntry()
+    {
+        const string criterion = "Reviewer evidence that no other shipped caller depends on the automatic DeveloperReviewer result: cite each read of PipelineDecision.Pipeline in src (the planner file has reads around lines 502, 536 and 553) and state whether it is display-only or behavioural.";
+        var objective = $"""
+            Preserve the historical acceptance criterion.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = """
+            ```json
+            {
+              "behavioralContract": "Preserve evidence classification.",
+              "acceptanceCriteria": [
+                "Reviewer evidence that no other shipped caller depends on the automatic DeveloperReviewer result: cite each read of PipelineDecision.Pipeline in src (the planner file has reads around lines 502, 536 and 553)",
+                "and state whether it is display-only or behavioural."
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal([criterion], result.Spec.AcceptanceCriteria);
+        Xunit.Assert.Equal([criterion], kernel.GetGoal(goalId).RefinedSpec!.AcceptanceCriteria);
+    }
+
     [Xunit.Fact(DisplayName = "GoalRefinementService_throws_when_no_refiner_binding")]
     public async Task ThrowsWhenNoRefinerBinding()
     {
@@ -48,11 +152,11 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
 
             Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
             var repeated = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal));
             Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", repeated.Message, StringComparison.Ordinal);
             Xunit.Assert.Equal(0, provider.InvocationCount);
             var message = Xunit.Assert.Single(
@@ -127,7 +231,7 @@ public sealed class GoalRefinementTests
                         (stored, _) =>
                         {
                             var storedGoal = stored.GetGoal(goal.Id);
-                            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                                 stored,
                                 workspace,
                                 providers,
@@ -141,7 +245,7 @@ public sealed class GoalRefinementTests
                         (stored, _) =>
                         {
                             var storedGoal = stored.GetGoal(goal.Id);
-                            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                                 stored,
                                 workspace,
                                 providers,
@@ -169,13 +273,28 @@ public sealed class GoalRefinementTests
 
         static int ReadCommittedOutboxCount(string databasePath, string messageId)
         {
-            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+            using var connection = new SqliteConnection(
+                $"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(*) FROM state_outbox WHERE id = $id";
             command.Parameters.AddWithValue("$id", messageId);
             return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
         }
+    }
+
+    [Xunit.Fact]
+    public void DetachedRefinementLaunchCarriesExecutorLogStamp()
+    {
+        const string stamp = "20260920044315000";
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var goalId = new GoalId("1234567890abcdef");
+
+        var request = GoalRefinementWorkCoordinator.CreateLaunchRequest(workspace, goalId, stamp);
+
+        Xunit.Assert.Equal(stamp, request.Args[^1]);
+        Xunit.Assert.EndsWith($"spec-refinement-12345678-{stamp}.out.log", request.StdoutPath, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith($"spec-refinement-12345678-{stamp}.err.log", request.StderrPath, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -276,7 +395,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState!.Status);
         Xunit.Assert.Contains("owner=durable-outbox phase=provider-refinement", failedState.Detail, StringComparison.Ordinal);
         var failedConsumer = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                 awaitKernel(repository),
                 workspace,
                 new InMemoryModelProviderRegistry([]),
@@ -305,7 +424,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Quarantined, quarantineState!.Status);
         var loaded = await repository.LoadAsync();
         var quarantineConsumer = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                 loaded,
                 workspace,
                 new InMemoryModelProviderRegistry([]),
@@ -416,7 +535,7 @@ public sealed class GoalRefinementTests
 
         var profile = new WorkerProfile("test-profile", "Write-Output {promptPath}");
         var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
-        _ = GoalManagementCommandService.ProfileDispatchTask(
+        _ = new GoalDispatchOperations().ProfileDispatchTask(
             kernel,
             workspace,
             goal,
@@ -429,7 +548,7 @@ public sealed class GoalRefinementTests
 
         var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.ProfileDispatchTask(
+            new GoalDispatchOperations().ProfileDispatchTask(
                 kernel,
                 workspace,
                 goal,
@@ -483,7 +602,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.NotNull(reloadedResearcher.LastDispatch);
         var reloadedPlanner = reloadedGoal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var preflight = await Xunit.Assert.ThrowsAsync<WorkerSubscriptionPreflightException>(
-            () => Task.Run(() => GoalManagementCommandService.ProfileDispatchTask(
+            () => Task.Run(() => new GoalDispatchOperations().ProfileDispatchTask(
                 reloadedKernel,
                 workspace,
                 reloadedGoal,
@@ -529,7 +648,7 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -542,7 +661,7 @@ public sealed class GoalRefinementTests
                 Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind)).Id);
 
             var again = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -610,7 +729,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.True(processed.Attached);
         Xunit.Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(kernel.GetGoal(goal.Id)));
 
-        GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+        GoalDispatchOperations.EnsureRefinedForSpecConsumer(
             kernel,
             workspace,
             providers,
@@ -701,8 +820,8 @@ public sealed class GoalRefinementTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_reviewer_lane")]
-    public void GoalLifecycleCommandsRecordsAutoPipelineDecisionAndCreatesReviewerLane()
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_five_role_lane")]
+    public void GoalLifecycleCommandsRecordsAutoPipelineDecisionAndCreatesFiveRoleLane()
     {
         var kernel = new AgentOrchestratorKernel();
 
@@ -711,10 +830,12 @@ public sealed class GoalRefinementTests
             AgentCatalog.Default().Agents,
             "Update security token rollback behavior in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs and tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AuthPolicyTests.cs");
 
-        Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], goal.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            goal.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
-            evt.Message.Contains("Intake pipeline decision (auto): developer-reviewer", StringComparison.Ordinal) &&
+            evt.Message.Contains("Intake pipeline decision (auto): five-role", StringComparison.Ordinal) &&
             evt.Message.Contains("security-risk", StringComparison.Ordinal));
     }
 
@@ -740,11 +861,44 @@ public sealed class GoalRefinementTests
     {
         Xunit.Assert.Equal(GoalIntakePipelineRequest.Auto, GoalIntakePipelineRequestParser.Parse("AUTO"));
         Xunit.Assert.Equal(GoalIntakePipelineRequest.FiveRole, GoalIntakePipelineRequestParser.Parse("Five-Role"));
+        Xunit.Assert.Equal(GoalIntakePipelineRequest.DeveloperReviewer, GoalIntakePipelineRequestParser.Parse("Developer-Reviewer"));
+        Xunit.Assert.Equal(GoalIntakePipelineRequest.DeveloperOnly, GoalIntakePipelineRequestParser.Parse("Developer-Only"));
         Xunit.Assert.Null(GoalIntakePipelineRequest.Auto.ToPipelineOverride());
         Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, GoalIntakePipelineRequest.FiveRole.ToPipelineOverride());
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, GoalIntakePipelineRequest.DeveloperReviewer.ToPipelineOverride());
+        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, GoalIntakePipelineRequest.DeveloperOnly.ToPipelineOverride());
+        Xunit.Assert.Equal("auto", GoalIntakePipelineRequest.Auto.ToCanonicalValue());
+        Xunit.Assert.Equal("five-role", GoalIntakePipelineRequest.FiveRole.ToCanonicalValue());
+        Xunit.Assert.Equal("developer-reviewer", GoalIntakePipelineRequest.DeveloperReviewer.ToCanonicalValue());
+        Xunit.Assert.Equal("developer-only", GoalIntakePipelineRequest.DeveloperOnly.ToCanonicalValue());
 
-        var exception = Xunit.Assert.Throws<ArgumentException>(() => GoalIntakePipelineRequestParser.Parse("developer-reviewer"));
-        Xunit.Assert.Contains("auto, five-role", exception.Message, StringComparison.Ordinal);
+        var exception = Xunit.Assert.Throws<ArgumentException>(() => GoalIntakePipelineRequestParser.Parse("two-role"));
+        Xunit.Assert.Contains("auto, five-role, developer-reviewer, developer-only", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void GoalObjectivePlannerAutomaticPipelinePreservesAllRiskReasons()
+    {
+        const string objective =
+            "Migrate authentication token rollback through an external service API across " +
+            "src/Mcg.AgentOrchestrator.App/AuthPolicy.cs " +
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AuthPolicyTests.cs " +
+            "scripts/RepairAuth.ps1 and config/auth.json.";
+
+        var plan = GoalObjectivePlanner.Build(objective);
+
+        Xunit.Assert.Contains("high-risk", plan.RiskLabels);
+        Xunit.Assert.Contains("security-risk", plan.RiskLabels);
+        Xunit.Assert.Contains("multi-scope", plan.RiskLabels);
+        Xunit.Assert.Contains("external-dependency", plan.RiskLabels);
+        Xunit.Assert.Contains("complex", plan.RiskLabels);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.False(plan.PipelineDecision.IsOverride);
+        Xunit.Assert.Contains("high-risk objective needs pre-acceptance review", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("security-risk objective needs pre-acceptance review", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("multi-scope objective needs reviewer coverage across touched areas", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("external-dependency objective needs integration-risk review", plan.PipelineDecision.Reasons);
+        Xunit.Assert.Contains("complex objective needs reviewer coverage before acceptance", plan.PipelineDecision.Reasons);
     }
 
     [Xunit.Fact]
@@ -758,7 +912,8 @@ public sealed class GoalRefinementTests
         var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintGoalObjectivePlan(forcedPlan));
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, AgentCatalog.Default().Agents, forcedPlan);
 
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, automaticPlan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, automaticPlan.PipelineDecision.Pipeline);
+        Xunit.Assert.False(automaticPlan.PipelineDecision.IsOverride);
         Xunit.Assert.Equal(
             [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             goal.Tasks.Select(task => task.RequiredRole));
@@ -822,7 +977,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(TaskComplexity.Simple, plan.EstimatedComplexity);
         Xunit.Assert.DoesNotContain("complex", plan.RiskLabels);
         Xunit.Assert.Contains("docs/operator-runbook.md", plan.FileScopes);
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
     }
 
     [Xunit.Fact]
@@ -836,7 +991,7 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.Equal(TaskComplexity.Complex, plan.EstimatedComplexity);
         Xunit.Assert.Contains("complex", plan.RiskLabels);
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
     }
 
     [Xunit.Fact]
@@ -980,7 +1135,7 @@ public sealed class GoalRefinementTests
             goal,
             task,
             "retry",
-            """{"message":"Retry after running gh pr checkout and git push."}""");
+            """{"message":"Retry after running gh pr checkout and git push.","cause":"ContractClarification"}""");
 
         var queuedIntent = Xunit.Assert.IsType<OperatorIntentDto>(queued);
         Xunit.Assert.Equal(OperatorIntentStatus.Pending, queuedIntent.Status);
@@ -1268,6 +1423,12 @@ public sealed class GoalRefinementTests
         var precedent = await precedentStore.TryGetPrecedentAsync("external-contract");
         Xunit.Assert.NotNull(precedent);
         Xunit.Assert.Equal("Stripe", precedent!.Choice);
+        var resolvedItem = Xunit.Assert.Single(collab.Items);
+        var authoritativeAnswer = Xunit.Assert.Single(resolvedItem.AnswerHistory!);
+        Xunit.Assert.Equal(resolvedItem.Id, precedent.OriginItemId);
+        Xunit.Assert.Equal(resolvedItem.GoalId, precedent.OriginGoalId);
+        Xunit.Assert.Equal(authoritativeAnswer.Id, precedent.OriginAnswerId);
+        Xunit.Assert.Equal(authoritativeAnswer.BriefVersion, precedent.OriginBriefVersion);
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_kernel_resolve_falls_back_when_goal_missing")]
@@ -1310,6 +1471,8 @@ public sealed class GoalRefinementTests
         var precedent = await precedentStore.TryGetPrecedentAsync("external-contract");
         Xunit.Assert.NotNull(precedent);
         Xunit.Assert.Equal("Stripe", precedent!.Choice);
+        Xunit.Assert.Equal(resolvedItem.Id, precedent.OriginItemId);
+        Xunit.Assert.Equal(resolvedItem.AuthoritativeAnswer!.Id, precedent.OriginAnswerId);
         Xunit.Assert.Contains("Warning:", warningOutput, StringComparison.Ordinal);
         Xunit.Assert.Contains(correlationKey, warningOutput, StringComparison.Ordinal);
     }
@@ -1351,6 +1514,187 @@ public sealed class GoalRefinementTests
         // The decision should record the precedent answer
         Xunit.Assert.Single(goal.RefinedSpec!.Decisions);
         Xunit.Assert.Equal("Stripe", goal.RefinedSpec!.Decisions[0].Choice);
+        Xunit.Assert.Contains(
+            "Unlinked legacy precedent",
+            goal.RefinedSpec.Decisions[0].Rationale,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_linked_precedent_with_missing_origin_fails_closed")]
+    public async Task LinkedPrecedentWithMissingOriginFailsClosed()
+    {
+        const string json = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "billing-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+        var tempDir = CreateTempDirectory();
+        var precedentStore = new SpecRefinerPrecedentStore(Path.Combine(tempDir, "precedents.json"));
+        await precedentStore.RecordPrecedentAsync(
+            "billing-provider",
+            "A",
+            "Malformed linked guidance.",
+            originItemId: "missing-item");
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: json,
+            precedentStore: precedentStore);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Empty(result.Spec.Decisions);
+        Xunit.Assert.Single(collab.Items);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_superseded_answer_is_authoritative_for_matching_later_fork")]
+    public async Task SupersededAnswerIsAuthoritativeForMatchingLaterFork()
+    {
+        const string matchingJson = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "billing-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+        const string differentTopicJson = """
+            ```json
+            {
+              "behavioralContract": "Integrates with shipping.",
+              "acceptanceCriteria": ["Shipment created"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "shipping-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "UPS or FedEx?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(text: matchingJson, providerName: "fake-refiner")
+        ]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var firstGoal = kernel.CreateGoal("Choose a billing provider");
+        var service = CreateWorkspaceService(workspace, providers);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+
+        await service.RefineAsync(kernel, firstGoal.Id);
+        var firstItem = Xunit.Assert.Single(await store.ListAsync(firstGoal.Id.Value));
+        Xunit.Assert.True(await service.TryResolveOpenClarificationAsync(firstItem.CorrelationKey!, "A"));
+        var superseded = await store.SupersedeClarificationAsync(
+            firstGoal.Id.Value,
+            firstItem.Id,
+            "B",
+            HumanInputAnswerOrigin.Operator,
+            firstGoal.AuthoritativeBrief.Version);
+
+        var secondGoal = kernel.CreateGoal("Choose the same billing provider again");
+        var matchingResult = await service.RefineAsync(kernel, secondGoal.Id);
+        var matchingDecision = Xunit.Assert.Single(matchingResult.Spec.Decisions);
+
+        Xunit.Assert.Equal("B", matchingDecision.Choice);
+        Xunit.Assert.Equal("B", superseded.AuthoritativeAnswer!.Text);
+        Xunit.Assert.Contains(superseded.Id, matchingDecision.Rationale, StringComparison.Ordinal);
+        Xunit.Assert.Contains(superseded.AuthoritativeAnswer.Id, matchingDecision.Rationale, StringComparison.Ordinal);
+        var firstAnswer = Xunit.Assert.Single(superseded.AnswerHistory!, answer => answer.Text == "A");
+        Xunit.Assert.True(firstAnswer.IsRetracted);
+        Xunit.Assert.NotNull(firstAnswer.SupersededByAnswerId);
+
+        await new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath)
+            .RecordPrecedentAsync(
+                "billing-provider",
+                "A",
+                "Legacy snapshot restored during rollback.");
+        var rollbackGoal = kernel.CreateGoal("Choose the billing provider after snapshot rollback");
+        var rollbackResult = await service.RefineAsync(kernel, rollbackGoal.Id);
+        var rollbackDecision = Xunit.Assert.Single(rollbackResult.Spec.Decisions);
+        Xunit.Assert.Equal("B", rollbackDecision.Choice);
+        Xunit.Assert.Contains(
+            superseded.AuthoritativeAnswer.Id,
+            rollbackDecision.Rationale,
+            StringComparison.Ordinal);
+
+        var differentProviders = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(text: differentTopicJson, providerName: "fake-refiner")
+        ]);
+        var thirdGoal = kernel.CreateGoal("Choose a shipping provider");
+        var differentResult = await CreateWorkspaceService(workspace, differentProviders)
+            .RefineAsync(kernel, thirdGoal.Id);
+
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, differentResult.Outcome);
+        Xunit.Assert.Empty(differentResult.Spec.Decisions);
+        Xunit.Assert.Single(await store.ListAsync(thirdGoal.Id.Value));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_linked_precedent_remains_applicable_after_origin_brief_revision")]
+    public async Task LinkedPrecedentRemainsApplicableAfterOriginBriefRevision()
+    {
+        const string matchingJson = """
+            ```json
+            {
+              "behavioralContract": "Integrates with billing.",
+              "acceptanceCriteria": ["Charge applied"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "external-contract", "topicKey": "billing-provider", "refinerConfidence": "low", "blastRadius": "high", "question": "Stripe or Paddle?", "choice": "", "rationale": "No prior art."}]
+            }
+            ```
+            """;
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var providers = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(text: matchingJson, providerName: "fake-refiner")
+        ]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var originGoal = kernel.CreateGoal("Choose a billing provider.");
+        var service = CreateWorkspaceService(workspace, providers);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+
+        await service.RefineAsync(kernel, originGoal.Id);
+        var originItem = Xunit.Assert.Single(await store.ListAsync(originGoal.Id.Value));
+        Xunit.Assert.True(await service.TryResolveOpenClarificationAsync(
+            kernel,
+            originItem.CorrelationKey!,
+            "A"));
+        var authoritativeAnswer = Xunit.Assert.Single(
+            await store.ListAsync(originGoal.Id.Value)).AuthoritativeAnswer;
+        Xunit.Assert.NotNull(authoritativeAnswer);
+        kernel.ReviseGoalBrief(
+            originGoal.Id,
+            "Choose a billing provider under the revised compliance constraints.",
+            "Clarify the compliance basis without replacing the provider answer.");
+        var laterGoal = kernel.CreateGoal("Choose the same billing provider again.");
+
+        var result = await service.RefineAsync(kernel, laterGoal.Id);
+
+        var decision = Xunit.Assert.Single(result.Spec.Decisions);
+        Xunit.Assert.Equal(2, originGoal.AuthoritativeBrief.Version);
+        Xunit.Assert.Equal(1, authoritativeAnswer.BriefVersion);
+        Xunit.Assert.Equal("A", decision.Choice);
+        Xunit.Assert.Contains("brief: 1", decision.Rationale, StringComparison.Ordinal);
+        Xunit.Assert.Empty(await store.ListAsync(laterGoal.Id.Value));
     }
 
     // --- HasOpenClarification static helper ---
@@ -1508,7 +1852,7 @@ public sealed class GoalRefinementTests
         var planner = kernel.GetGoal(goalId).Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var brief = kernel.BuildTaskBrief(goalId, planner.Id).Content;
         Xunit.Assert.Equal(
-            declaredCriteria.Select(criterion => $"- {criterion}"),
+            declaredCriteria.Select((criterion, index) => $"{index + 1}. {criterion}"),
             ExtractRenderedAcceptanceCriteria(brief));
 
         var contractRoot = CreateTempDirectory();
@@ -1687,6 +2031,17 @@ public sealed class GoalRefinementTests
     [Xunit.Fact(DisplayName = "GoalRefinementService_uses_subscription_cli_when_binding_has_subscription")]
     public async Task GoalRefinementServiceUsesSubscriptionCliWhenBindingHasSubscription()
     {
+        const string response = """
+            ```json
+            {
+              "behavioralContract": "Subscription CLI refined the goal.",
+              "acceptanceCriteria": ["No API provider is required"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
         var catalog = new ModelFunctionCatalog([
             new ModelFunctionBinding(
                 ModelFunctionPurposes.SpecRefiner,
@@ -1705,17 +2060,7 @@ public sealed class GoalRefinementTests
                 sub.WorkerProfileName,
                 sub.ModelAlias ?? string.Empty,
                 sub.ReasoningEffort,
-                (_, _, _) => Task.FromResult("""
-                    ```json
-                    {
-                      "behavioralContract": "Subscription CLI refined the goal.",
-                      "acceptanceCriteria": ["No API provider is required"],
-                      "verificationClass": "TestVerifiable",
-                      "decisions": [],
-                      "forks": []
-                    }
-                    ```
-                    """)));
+                (_, _, _) => Task.FromResult(response)));
 
         var result = await service.RefineAsync(kernel, goalId);
 
@@ -1724,7 +2069,13 @@ public sealed class GoalRefinementTests
         var receipt = GoalRefinementGate.BuildPolicyReceipt(result);
         Xunit.Assert.Contains("outcome=completed", receipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("reason_code=", receipt, StringComparison.Ordinal);
-        Xunit.Assert.Equal("Subscription CLI refined the goal.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
+        var recordedGoal = kernel.GetGoal(goalId);
+        Xunit.Assert.Equal("Subscription CLI refined the goal.", recordedGoal.RefinedSpec!.BehavioralContract);
+        var rawDecision = Xunit.Assert.Single(recordedGoal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("Spec refiner raw output: ", StringComparison.Ordinal)));
+        var rawPath = rawDecision.Message["Spec refiner raw output: ".Length..];
+        Xunit.Assert.Equal(response, await File.ReadAllTextAsync(rawPath));
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_subscription_timeout_records_fallback_reason_and_invocation")]
@@ -1937,7 +2288,7 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.True(GoalRefinementGate.HasOpenClarification(workspace, goal));
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(
-            () => GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+            () => new GoalDispatchOperations().SubscriptionDispatchReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -2129,7 +2480,7 @@ public sealed class GoalRefinementTests
         try
         {
             var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2322,7 +2673,7 @@ public sealed class GoalRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task Resolve_OperatorOwned_MovesCriterionOutOfWorkerSet()
+    public async Task Resolve_OperatorOwned_RetainsCriterionAndCreatesObligation()
     {
         const string criterion =
             "Benchmark wall-clock performance on this host while the machine is idle.";
@@ -2337,14 +2688,11 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.True(resolved);
         var spec = kernel.GetGoal(goalId).RefinedSpec!;
-        Xunit.Assert.Empty(spec.AcceptanceCriteria);
+        Xunit.Assert.Equal([criterion], spec.AcceptanceCriteria);
         Xunit.Assert.Equal([criterion], spec.OperatorOwnedAcceptanceCriteria);
+        var obligation = Xunit.Assert.Single(kernel.GetGoal(goalId).CriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
         Xunit.Assert.Empty(spec.OpenQuestions);
-
-        var task = kernel.GetGoal(goalId).Tasks[0];
-        var brief = kernel.BuildTaskBrief(goalId, task.Id).Content;
-        Xunit.Assert.Contains("OPERATOR-OWNED / post-landing criteria", brief, StringComparison.Ordinal);
-        Xunit.Assert.Contains(criterion, brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -2431,7 +2779,7 @@ public sealed class GoalRefinementTests
         _ = CreateMigratedStateRepository(workspace.SqliteStatePath);
 
         var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() =>
-            GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+            new GoalDispatchOperations().SubscriptionDispatchReadyTasks(
                 kernel,
                 workspace,
                 goal,
@@ -2563,7 +2911,7 @@ public sealed class GoalRefinementTests
         try
         {
             var first = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2579,7 +2927,7 @@ public sealed class GoalRefinementTests
             kernel = await repository.LoadAsync();
 
             var second = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
                     kernel,
                     workspace,
                     providers,
@@ -2694,7 +3042,7 @@ public sealed class GoalRefinementTests
     private static string[] ExtractRenderedAcceptanceCriteria(string brief)
     {
         var normalizedBrief = brief.ReplaceLineEndings("\n");
-        const string acceptanceHeading = "Acceptance criteria:\n";
+        const string acceptanceHeading = "Acceptance criteria (authoritative list validated by PlannerOutputContract):\n";
         var acceptanceHeadingIndex = normalizedBrief.IndexOf(acceptanceHeading, StringComparison.Ordinal);
         Xunit.Assert.True(acceptanceHeadingIndex >= 0, "Planner brief is missing its acceptance criteria heading.");
         var acceptanceStart = acceptanceHeadingIndex + acceptanceHeading.Length;
@@ -2723,7 +3071,8 @@ public sealed class GoalRefinementTests
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
-            WorkerProfileCatalog.Default());
+            WorkerProfileCatalog.Default(),
+            rawOutputDirectory: workspace.LogDirectory);
 
     private static (
         GoalRefinementService Service,
@@ -2761,7 +3110,8 @@ public sealed class GoalRefinementTests
             prec,
             workerProfiles,
             subscriptionCompleterFactory,
-            subscriptionTimeout: subscriptionTimeout);
+            subscriptionTimeout: subscriptionTimeout,
+            rawOutputDirectory: Path.Combine(tempDir, "logs"));
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(objective);
 

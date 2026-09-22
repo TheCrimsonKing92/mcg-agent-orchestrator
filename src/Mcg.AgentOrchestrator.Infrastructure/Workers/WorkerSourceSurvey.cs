@@ -17,7 +17,8 @@ internal sealed class WorkerSourceSurvey
 
     internal string BuildSourceSurvey(Goal goal, TaskSpec task, string workingDirectory)
     {
-        var sourceFiles = EnumerateSourceFiles(workingDirectory).ToList();
+        var inventory = BuildInventory(workingDirectory);
+        var sourceFiles = EnumerateSourceFiles(workingDirectory, inventory).ToList();
         var terms = BuildSearchTerms(goal, task);
         var matches = sourceFiles
             .Where(path => terms.Any(term => path.Contains(term, StringComparison.OrdinalIgnoreCase)))
@@ -43,6 +44,10 @@ internal sealed class WorkerSourceSurvey
             $"Working directory: {workingDirectory}",
             $"Source files indexed: {sourceFiles.Count}",
             $"Returned file limit: {SourceSurveyMaxFiles}",
+            $"Inventory source: {inventory.Origin}",
+            inventory.Complete
+                ? "Traversal: complete"
+                : $"Traversal: incomplete - {string.Join(", ", inventory.IncompleteReasons)}",
             "Regeneration: generated at dispatch preparation; treat as stale when source files, git status, objective, task text, or verification plan changes after dispatch.",
             string.Empty,
             "## Directory Counts"
@@ -262,61 +267,34 @@ internal sealed class WorkerSourceSurvey
         return ".: repository root";
     }
 
-    private static IEnumerable<string> EnumerateSourceFiles(string workingDirectory)
+    private static RepositorySourceInventoryResult BuildInventory(string workingDirectory)
     {
         if (!Directory.Exists(workingDirectory))
         {
-            return [];
+            return new RepositorySourceInventoryResult(
+                Path.GetFullPath(workingDirectory),
+                [],
+                [],
+                "filesystem-fallback",
+                Complete: false,
+                UnreadableDirectoryCount: 1,
+                SkippedLinkBoundaryCount: 0,
+                IncompleteReasons: ["inventory root was not found"]);
         }
 
+        return RepositorySourceInventory.Build(workingDirectory);
+    }
+
+    private static IEnumerable<string> EnumerateSourceFiles(
+        string workingDirectory,
+        RepositorySourceInventoryResult inventory)
+    {
         var toolchain = TargetToolchainDetector.Detect(workingDirectory);
         var extensions = TargetToolchainDetector.GetSourceExtensions(toolchain);
 
-        return EnumerateFilesPruned(workingDirectory, workingDirectory)
+        return inventory.Files
             .Where(path => extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static IEnumerable<string> EnumerateFilesPruned(string root, string directory)
-    {
-        foreach (var childDirectory in Directory.EnumerateDirectories(directory))
-        {
-            var relativeDirectory = Path.GetRelativePath(root, childDirectory).Replace('\\', '/');
-            if (IsExcludedSurveyPath(relativeDirectory))
-            {
-                continue;
-            }
-
-            foreach (var childFile in EnumerateFilesPruned(root, childDirectory))
-            {
-                yield return childFile;
-            }
-        }
-
-        foreach (var file in Directory.EnumerateFiles(directory))
-        {
-            var relativePath = Path.GetRelativePath(root, file).Replace('\\', '/');
-            if (!IsExcludedSurveyPath(relativePath))
-            {
-                yield return relativePath;
-            }
-        }
-    }
-
-    private static bool IsExcludedSurveyPath(string relativePath)
-    {
-        var normalized = relativePath.Replace('\\', '/');
-        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return segments.Any(segment =>
-            segment.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals(".scratch", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals(".orchestrator-context", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals(".orchestrator-prototype", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals(".orchestrator-worktrees", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("TestResults", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("playwright-report", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string GetSurveyDirectory(string relativePath)

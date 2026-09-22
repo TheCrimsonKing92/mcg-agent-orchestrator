@@ -26,7 +26,9 @@ public sealed record GoalSnapshot(
     IReadOnlyList<GoalBriefVersion>? BriefVersions = null,
     IReadOnlyList<RefinedSpecVersionSnapshot>? RefinedSpecVersions = null,
     SourceBacklogCoverage? SourceBacklogCoverage = null,
-    string? SliceBatchParentId = null);
+    string? SliceBatchParentId = null,
+    bool? AcceptanceFailureDeferredForRetry = null,
+    IReadOnlyList<CriterionEvidenceObligation>? CriterionEvidenceObligations = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,
@@ -51,7 +53,10 @@ public sealed record EffectiveAcceptanceCriteriaCorrectionSnapshot(
     string? SourceTaskId,
     ProgressKind SourceKind,
     bool IsWaiver = false,
-    string? CapturedAcceptanceCriteriaHash = null);
+    string? CapturedAcceptanceCriteriaHash = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<CriterionDisposition>? Dispositions = null);
 
 public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,
@@ -68,7 +73,8 @@ public sealed record RefinedSpecSnapshot(
     IReadOnlyList<RefinedSpecDecisionSnapshot> Decisions,
     IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions,
     IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null,
-    IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null);
+    IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null,
+    IReadOnlyList<string>? AcceptanceGateOwnedAcceptanceCriteria = null);
 
 public sealed record RefinedSpecVersionSnapshot(
     int Version,
@@ -114,7 +120,16 @@ public sealed record TaskSnapshot(
     PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null,
     string? InterruptedDispatchRecoveryId = null,
     bool WasCancelledByConductor = false,
-    IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null);
+    IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null,
+    RetryCause PendingRetryCause = RetryCause.Unknown,
+    IReadOnlyList<RetryAdmissionReceipt>? RetryAdmissionHistory = null,
+    RetryAdmissionRoute? RetryAdmissionHoldRoute = null,
+    ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint = null,
+    AcceptedRetryFeedback? AcceptedRetryFeedback = null,
+    IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceHistory = null,
+    int PreReviewEvidenceAttemptCount = 0,
+    InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint = null,
+    int ConductorRoutingRevision = 0);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -162,7 +177,8 @@ public sealed record TaskVerificationSnapshot(
     string? AuthoritativeStandardErrorUnavailableReason = null,
     PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null,
     bool CompletionVerdictVerifiedSuccess = false,
-    string? CompletionVerdictRule = null)
+    string? CompletionVerdictRule = null,
+    bool? AssignedScopeComplete = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -198,7 +214,15 @@ public sealed record TaskDispatchSnapshot(
     string? ReviewFindingTouchProofDiagnostic = null,
     ReviewRetryCapReceipt? ReviewRetryCap = null,
     WorkerContextPackageReceipt? ContextPackageReceipt = null,
-    int PlannerSampleCount = 1);
+    int PlannerSampleCount = 1,
+    RetryContextFingerprint? RetryContextFingerprint = null,
+    PaidRouteClassification PaidRoute = PaidRouteClassification.Unknown,
+    // Selected and reported by this dispatch's Claude auth preflight; absent for every other provider and
+    // for dispatches recorded before the preflight-to-dispatch handoff existed. Path and source kind only.
+    string? ClaudeCredentialSourceDirectory = null,
+    bool ClaudeCredentialSourceIsExplicit = false,
+    string? AssignedAgentId = null,
+    int ConductorRoutingRevision = 0);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,
@@ -236,7 +260,8 @@ public sealed record ProgressEventSnapshot(
     string Message,
     DateTimeOffset OccurredAt,
     TaskRequeueSkippedPayload? RequeueSkipped = null,
-    IReadOnlyList<OperatorGateRecord>? OperatorGates = null);
+    IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
+    OperatorIntentAppliedPayload? OperatorIntentApplied = null);
 
 public sealed record HumanInputRequestSnapshot(
     string Id,
@@ -262,7 +287,8 @@ public sealed record HumanInputRequestSnapshot(
     IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
     IReadOnlyList<HumanInputAnswerRecord>? AnswerHistory = null,
     int SuppressionAnswerRevision = 0,
-    long SuppressionRevision = 0);
+    long SuppressionRevision = 0,
+    string? EvidenceOwner = null);
 
 public static class VerificationTextBounds
 {

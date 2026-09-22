@@ -14,6 +14,21 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        if (HasActiveApparatusHold(goal, out _))
+        {
+            var failure = goal.LatestAcceptanceFailure!;
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Acceptance apparatus hold remains active for unchanged candidate " +
+                    $"{FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)}. " +
+                    "Repair main or confirm acceptance-retry before another acceptance process starts.",
+                    StableIdentity: $"acceptance-apparatus:{failure.BranchHeadSha ?? "unknown"}:{failure.MainHeadSha ?? "unknown"}"));
+        }
+
         var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy);
         if (sharedAcceptance is not null)
         {
@@ -43,7 +58,12 @@ internal sealed partial class ConductorDriver
         try
         {
             acceptance = RunInlineLandingSourceSizePreflight(goal) ??
-                _runAcceptanceVerification(goal, null, null, CancellationToken.None);
+                _runAcceptanceVerification(
+                    goal,
+                    null,
+                    null,
+                    CancellationToken.None,
+                    new AcceptanceRunExecutionOptions());
         }
         catch (AcceptanceInfrastructureDeferredException ex)
         {
@@ -130,28 +150,43 @@ internal sealed partial class ConductorDriver
 
         ConductorParallelAcceptanceRunAcceptance runAcceptance = _isConductorTick
             ? RunParallelLandingAcceptance
-            : (attemptCandidate, attemptPolicy, lease, cancellationToken) =>
+            : (attemptCandidate, attemptPolicy, lease, cancellationToken, executionOptions) =>
                 RunParallelLandingAcceptance(
                     attemptCandidate,
                     attemptPolicy,
                     lease,
                     cancellationToken,
+                    executionOptions,
                     omitStableSlotIndexWithoutLease: true);
-        var decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
-            candidate,
-            policy,
-            runAcceptance,
-            _isConductorTick
-                ? AcceptanceStableSlotExhaustionPolicy.Fail
-                : AcceptanceStableSlotExhaustionPolicy.DegradeToSerial);
-        if (_isConductorTick &&
-            decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
-            decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+        ConductorParallelAcceptanceAttemptDecision decision;
+        try
         {
             decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
                 candidate,
                 policy,
-                runAcceptance);
+                runAcceptance,
+                _isConductorTick
+                    ? AcceptanceStableSlotExhaustionPolicy.Fail
+                    : AcceptanceStableSlotExhaustionPolicy.DegradeToSerial);
+            if (_isConductorTick &&
+                decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
+                decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
+                    candidate,
+                    policy,
+                    runAcceptance);
+            }
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Acceptance artifact writer busy; retry on next conduct tick. {ex.Message}"));
         }
 
         if (!_isConductorTick &&
@@ -343,12 +378,14 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         DotnetBuildEnvironmentLease? stableSlotLease,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        AcceptanceRunExecutionOptions executionOptions) =>
         RunParallelLandingAcceptance(
             candidate,
             policy,
             stableSlotLease,
             cancellationToken,
+            executionOptions,
             omitStableSlotIndexWithoutLease: false);
 
     internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
@@ -356,6 +393,7 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken,
+        AcceptanceRunExecutionOptions executionOptions,
         bool omitStableSlotIndexWithoutLease)
     {
         var effectiveCandidate = candidate;
@@ -393,7 +431,8 @@ internal sealed partial class ConductorDriver
                         ? null
                         : effectiveCandidate.SlotIndex,
                     stableSlotLease,
-                    cancellationToken));
+                    cancellationToken,
+                    executionOptions));
         }
         catch (Exception ex)
         {

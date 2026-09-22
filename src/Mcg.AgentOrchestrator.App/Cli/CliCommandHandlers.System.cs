@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -150,6 +149,20 @@ internal static partial class CliCommandHandlers
         string notFoundMessage,
         string ambiguousMessage)
     {
+        return TryResolveClarificationByShortId(
+                clarifications,
+                identityUniverse,
+                id,
+                ambiguousMessage)
+            ?? throw new ArgumentException(notFoundMessage);
+    }
+
+    private static CollaborationItem? TryResolveClarificationByShortId(
+        IReadOnlyList<CollaborationItem> clarifications,
+        IReadOnlyList<CollaborationItem> identityUniverse,
+        string id,
+        string ambiguousMessage)
+    {
         var exactCorrelationMatch = clarifications
             .FirstOrDefault(c => string.Equals(c.CorrelationKey, id, StringComparison.OrdinalIgnoreCase));
         if (exactCorrelationMatch is not null)
@@ -162,12 +175,10 @@ internal static partial class CliCommandHandlers
                 ClarificationTopicId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (matches.Count == 0)
-            throw new ArgumentException(notFoundMessage);
         if (matches.Count > 1)
             throw new ArgumentException(string.Format(ambiguousMessage, matches.Count));
 
-        return matches[0];
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     private static CollaborationItem? ResolveClarificationByExactShortId(
@@ -256,6 +267,10 @@ internal static partial class CliCommandHandlers
                 HandleRunEventsMaintenance(parts, context);
                 return false;
 
+            case "state-db-maintenance":
+                HandleStateDatabaseMaintenance(parts, context);
+                return false;
+
             case "run-event":
             {
                 if (parts.Count is < 3 or > 5 ||
@@ -309,7 +324,7 @@ internal static partial class CliCommandHandlers
             }
 
             case "cleanup-status":
-                PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupHooks);
+                PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupContext.Hooks);
                 return false;
 
             case "attention":
@@ -476,11 +491,8 @@ internal static partial class CliCommandHandlers
                     return changed;
                 }
 
-                // `attention answer <goal-id-prefix> <id> <answer...>`: resolve one open clarification with a
-                // real answer (vs. `dismiss`). The <id> is the stable short id from `attention show` (matched
-                // by prefix), so resolving one clarification never shifts the identity of the others. The
-                // answer is written into the RefinedSpec question and recorded as a precedent on the next
-                // refinement pass (SyncAnsweredClarifications).
+                // `attention answer [<goal-id-prefix>] <id> <answer...>` resolves either identity printed by
+                // `attention show`: collaboration clarifications retain precedence, then typed human waits.
                 if (parts.Count > 1 && parts[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
                 {
                     if (parts.Count < 4)
@@ -495,7 +507,9 @@ internal static partial class CliCommandHandlers
                         clarificationIdentityUniverse,
                         parts[2],
                         $"Id '{parts[2]}' is ambiguous ({{0}} matches); use a goal-scoped id from `attention show <goal-id>` or a full correlation key.");
-                    var scoped = globalClarification is null;
+                    var globalHumanRequest = globalClarification is null && context.Kernel.HumanInputRequests.Any(request =>
+                        request.Id.Value.StartsWith(parts[2], StringComparison.OrdinalIgnoreCase));
+                    var scoped = globalClarification is null && !globalHumanRequest;
                     var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
 
                     if (scoped && parts.Count < 5)
@@ -507,16 +521,49 @@ internal static partial class CliCommandHandlers
                         scoped ? 4 : 3,
                         "attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>",
                         "--text-file");
-                    var clarification = scoped
-                        ? ResolveClarificationByShortId(
-                            AllClarificationsForGoal(store, goal!),
-                            clarificationIdentityUniverse
-                                .Where(item => string.Equals(item.GoalId, goal!.Id.Value, StringComparison.OrdinalIgnoreCase))
-                                .ToList(),
+
+                    if (globalHumanRequest)
+                    {
+                        var request = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, id);
+                        context.Kernel.SubmitHumanInput(request.Id, answer);
+                        context.CurrentGoal = context.Kernel.GetGoal(request.GoalId);
+                        ConsoleViews.PrintGoal(context.CurrentGoal);
+                        return true;
+                    }
+
+                    CollaborationItem? clarification = globalClarification;
+                    if (scoped)
+                    {
+                        var scopedClarifications = AllClarificationsForGoal(store, goal!);
+                        var scopedIdentityUniverse = clarificationIdentityUniverse
+                            .Where(item => string.Equals(item.GoalId, goal!.Id.Value, StringComparison.OrdinalIgnoreCase))
+                            .ToList();
+                        clarification = TryResolveClarificationByShortId(
+                            scopedClarifications,
+                            scopedIdentityUniverse,
                             id,
-                            $"Clarification id '{id}' was not found for goal '{goal!.Id.Value}'. Run `attention show {goal.Id.Value[..8]}` to list valid identifiers.",
-                            $"Id '{id}' is ambiguous ({{0}} matches); copy a full id from `attention show {goal!.Id.Value[..8]}` or use a full correlation key.")
-                        : globalClarification!;
+                            $"Id '{id}' is ambiguous ({{0}} matches); copy a full id from `attention show {goal!.Id.Value[..8]}` or use a full correlation key.");
+                        if (clarification is null)
+                        {
+                            var matchesHumanRequest = context.Kernel.HumanInputRequests.Any(request =>
+                                request.GoalId == goal!.Id &&
+                                request.Id.Value.StartsWith(id, StringComparison.OrdinalIgnoreCase));
+                            if (matchesHumanRequest)
+                            {
+                                var request = OrchestratorEntityResolver.ResolveHumanInputRequest(
+                                    context.Kernel,
+                                    goal!.Id,
+                                    id);
+                                context.Kernel.SubmitHumanInput(request.Id, answer);
+                                context.CurrentGoal = goal;
+                                ConsoleViews.PrintGoal(context.CurrentGoal);
+                                return true;
+                            }
+
+                            throw new ArgumentException(
+                                $"Clarification id '{id}' was not found for goal '{goal!.Id.Value}'. Run `attention show {goal.Id.Value[..8]}` to list valid identifiers, including human-wait request ids.");
+                        }
+                    }
 
                     if (CollaborationItemLifecycle.IsTerminal(clarification.Status))
                     {
@@ -576,7 +623,10 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "repo-process-stop":
-                RepoProcessCliCommand.Stop(parts, Console.Out);
+                if (!RepoProcessCliCommand.Stop(parts, Console.Out))
+                {
+                    throw new CliExitException(1);
+                }
                 return false;
 
             case "stable-slot-dotnet":
@@ -602,6 +652,18 @@ internal static partial class CliCommandHandlers
                     context.Workspace.TrialComparisonReceiptDirectory,
                     Console.Out,
                     selector => ResolveHistoricalTrial(context, selector));
+                return false;
+
+            case "hermes-acp-trial":
+                HermesAcpCliCommand.ExecuteAsync(parts, Console.Out, Console.Error)
+                    .GetAwaiter()
+                    .GetResult();
+                return false;
+
+            case "hermes-acp-verify-identity":
+                HermesAcpCliCommand.ExecuteIdentityVerificationAsync(parts, Console.Out)
+                    .GetAwaiter()
+                    .GetResult();
                 return false;
 
             case "architecture":
@@ -823,90 +885,30 @@ internal static partial class CliCommandHandlers
 
             case "dashboard":
             {
-                var dashboardMode = GetFlagValue(parts, "--mode");
-                if (dashboardMode is not null)
-                {
-                    var baseArgs = RemoveFlagWithValue(parts, "--mode");
-                    switch (dashboardMode.ToLowerInvariant())
-                    {
-                        case "local":
-                        {
-                            var modeArgList = new List<string>(baseArgs) { [0] = "serve-dashboard" };
-                            var localArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "serve-dashboard", defaultOpenBrowser: false);
-                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, localArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                            return false;
-                        }
-                        case "hosted":
-                        {
-                            var modeArgList = new List<string>(baseArgs) { [0] = "hosted-dashboard" };
-                            var hostedModeArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "hosted-dashboard", defaultOpenBrowser: false);
-                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, hostedModeArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                            return false;
-                        }
-                        case "read-only":
-                        {
-                            var modeArgList = new List<string>(baseArgs) { [0] = "simple-hosted-dashboard" };
-                            var readOnlyArgs = DashboardHost.ParseDashboardHostArgs(modeArgList, "simple-hosted-dashboard", defaultOpenBrowser: false);
-                            DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, readOnlyArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                            return false;
-                        }
-                        default:
-                            throw new ArgumentException($"Unknown dashboard mode '{dashboardMode}'. Use: local|hosted|read-only");
-                    }
-                }
-
-                var dashboardArgs = DashboardHost.ParseDashboardArgs(parts);
-                var dashboardPath = dashboardArgs.Path;
-                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dashboardPath))!);
-                var dashboardOptions = dashboardArgs.Options with
-                {
-                    AgentDefinitions = context.Agents,
-                    WorkerProfiles = context.WorkerProfiles
-                };
-                File.WriteAllText(dashboardPath, DashboardRenderer.Render(context.Kernel, dashboardOptions));
-                Console.WriteLine($"Dashboard: {Path.GetFullPath(dashboardPath)}");
-                if (dashboardArgs.Options.AutoRefreshSeconds is > 0)
-                {
-                    Console.WriteLine($"Auto-refresh: {dashboardArgs.Options.AutoRefreshSeconds.Value}s");
-                }
+                var exitCode = CliCommandCapabilities.Classify(parts) == CliCommandCapability.DashboardHost
+                    ? OptionalDashboardHostLauncher.Run(parts)
+                    : OptionalDashboardHostLauncher.RunStatic(parts, context);
+                if (exitCode != 0)
+                    throw new CliExitException(exitCode);
                 return false;
             }
 
             case "serve-dashboard":
-                var serveArgs = DashboardHost.ParseDashboardHostArgs(parts, "serve-dashboard", defaultOpenBrowser: false);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, serveArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                return false;
-
             case "hosted-dashboard":
-                var hostedArgs = DashboardHost.ParseDashboardHostArgs(parts, "hosted-dashboard", defaultOpenBrowser: false);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, hostedArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                return false;
-
             case "simple-hosted-dashboard":
-                var simpleHostedArgs = DashboardHost.ParseDashboardHostArgs(parts, "simple-hosted-dashboard", defaultOpenBrowser: false);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, simpleHostedArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
-                return false;
-
             case "open-dashboard":
-                var openArgs = DashboardHost.ParseDashboardHostArgs(parts, "open-dashboard", defaultOpenBrowser: true);
-                DashboardHost.RunDashboardHostAsync(context.Workspace, context.Providers, openArgs, new AgentCatalog(context.Agents)).GetAwaiter().GetResult();
+            {
+                var exitCode = OptionalDashboardHostLauncher.Run(parts);
+                if (exitCode != 0)
+                    throw new CliExitException(exitCode);
                 return false;
+            }
 
             case "transcript":
                 context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, null);
-                var transcriptPath = parts.Count > 1
-                    ? parts[1]
-                    : context.Workspace.TranscriptPath;
-                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(transcriptPath))!);
-                File.WriteAllText(
-                    transcriptPath,
-                    GoalTranscriptRenderer.Render(
-                        context.Kernel,
-                        context.CurrentGoal,
-                        context.WorkerProfiles,
-                        context.Agents,
-                        context.Workspace.ExecutionDirectory));
-                Console.WriteLine($"Transcript: {Path.GetFullPath(transcriptPath)}");
+                var transcriptExitCode = OptionalDashboardHostLauncher.RunStatic(parts, context);
+                if (transcriptExitCode != 0)
+                    throw new CliExitException(transcriptExitCode);
                 return false;
 
             default:
@@ -933,19 +935,29 @@ internal static partial class CliCommandHandlers
         var store = new SqliteRunEventStore(
             context.Workspace.RunEventStorePath,
             ensureSchema: !File.Exists(context.Workspace.RunEventStorePath));
+        SqliteMaintenanceLease? vacuumLease = null;
+        if (vacuum && !SqliteMaintenanceLease.TryAcquireExclusive(
+                SqliteMaintenanceLease.ForDatabase(context.Workspace.RunEventStorePath), out vacuumLease))
+        {
+            throw new InvalidOperationException(
+                "Full run-events VACUUM was refused because active conductor work holds the maintenance lease.");
+        }
+
+        using var heldVacuumLease = vacuumLease;
         var options = new RunEventMaintenanceOptions(
             TimeSpan.FromDays(retentionDays),
             keepRows,
             vacuum,
             MaxConductorTickPayloadBytes: payloadMaxBytes,
             DeleteBatchSize: batchSize,
-            LegacyOversizedConductorTickPurge: legacyPurge);
+            LegacyOversizedConductorTickPurge: legacyPurge,
+            OfflineVacuumAuthorized: vacuum);
         var result = store.MaintainAsync(options)
             .GetAwaiter()
             .GetResult();
 
         var mode = legacyPurge ? "legacy-purge" : "manual";
-        var status = result.Deferred ? "deferred" : "completed";
+        var status = result.Disposition.ToString().ToLowerInvariant();
         var receipt = RunEventMaintenanceCadence.FormatReceipt(mode, options, result);
         Console.WriteLine(receipt);
         try
@@ -973,14 +985,118 @@ internal static partial class CliCommandHandlers
             Console.WriteLine($"deferredReason={result.DeferredReason}");
         }
 
-        if (!result.Deferred)
+        RunEventMaintenanceCadence.TryAppendRunEventReceipt(
+            store,
+            mode,
+            options,
+            result,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static void HandleStateDatabaseMaintenance(
+        IReadOnlyList<string> parts,
+        CliExecutionContext context) =>
+        HandleStateDatabaseMaintenance(
+            parts,
+            context,
+            GateHeartbeatArtifacts.ReadStableSlots().Any(status => !status.IsAvailable),
+            conversionUtcNow: null);
+
+    internal static void HandleStateDatabaseMaintenance(
+        IReadOnlyList<string> parts,
+        CliExecutionContext context,
+        bool activeGate,
+        DateTimeOffset? conversionUtcNow)
+    {
+        if (parts.Count < 2 ||
+            (!parts[1].Equals("plan", StringComparison.OrdinalIgnoreCase) &&
+             !parts[1].Equals("execute", StringComparison.OrdinalIgnoreCase) &&
+             !parts[1].Equals("convert-copy", StringComparison.OrdinalIgnoreCase) &&
+             !parts[1].Equals("convert-live", StringComparison.OrdinalIgnoreCase)))
         {
-            RunEventMaintenanceCadence.TryAppendRunEventReceipt(
-                store,
-                mode,
-                options,
-                result,
-                DateTimeOffset.UtcNow);
+            throw new ArgumentException(CliCommandHelp.StateDatabaseMaintenanceUsage);
+        }
+
+        var databasePath = context.Workspace.SqliteStatePath;
+        var activeDispatchOrGate = activeGate || context.Kernel.Goals.Any(goal =>
+            goal.Tasks.Any(task =>
+                task.Status == WorkTaskStatus.Running ||
+                task.LastProcess is { IsRunning: true }));
+        if (parts[1].Equals("plan", StringComparison.OrdinalIgnoreCase))
+        {
+            var leasePath = SqliteMaintenanceLease.ForDatabase(databasePath);
+            var activeConductor = !SqliteMaintenanceLease.TryAcquireExclusive(leasePath, out var probeLease);
+            probeLease?.Dispose();
+            var metrics = StateDatabaseMaintenance.Probe(databasePath);
+            var plan = StateDatabaseMaintenance.Plan(metrics, activeConductor, activeDispatchOrGate);
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"STATE_DB_MAINTENANCE_PLAN decision={plan.Decision} reason={plan.Reason} activeConductor={activeConductor} activeDispatchOrGate={activeDispatchOrGate} pageCount={metrics.PageCount} pageSize={metrics.PageSize} freelistCount={metrics.FreelistCount} reclaimableBytes={metrics.ReclaimableBytes} databaseBytes={metrics.DatabaseBytes} journalMode={metrics.JournalMode} autoVacuum={metrics.AutoVacuumMode}"));
+            return;
+        }
+
+        if (parts[1].Equals("convert-copy", StringComparison.OrdinalIgnoreCase) ||
+            parts[1].Equals("convert-live", StringComparison.OrdinalIgnoreCase))
+        {
+            var conversionOptions = ResolveStateDatabaseConversionOptions(parts, activeDispatchOrGate, conversionUtcNow);
+            var conversion = StateDatabaseOfflineConversion.ExecuteAsync(
+                    databasePath,
+                    conversionOptions)
+                .GetAwaiter()
+                .GetResult();
+            WriteStateDatabaseMaintenanceReceipt(context, conversion.FormatReceipt(), "state-db-offline-conversion");
+            return;
+        }
+
+        if (!HasCliConfirmation(parts, "--confirm-offline"))
+            throw new ArgumentException(CliCommandHelp.StateDatabaseMaintenanceUsage);
+
+        var result = StateDatabaseMaintenance.ExecuteAsync(databasePath, activeDispatchOrGate)
+            .GetAwaiter()
+            .GetResult();
+        WriteStateDatabaseMaintenanceReceipt(context, result.FormatReceipt(), "state-db-maintenance");
+    }
+
+    internal static StateDatabaseOfflineConversionOptions ResolveStateDatabaseConversionOptions(
+        IReadOnlyList<string> parts,
+        bool activeDispatchOrGate,
+        DateTimeOffset? utcNow = null)
+    {
+        var createCopy = parts.Count > 1 &&
+            parts[1].Equals("convert-copy", StringComparison.OrdinalIgnoreCase);
+        var replaceLive = parts.Count > 1 &&
+            parts[1].Equals("convert-live", StringComparison.OrdinalIgnoreCase);
+        var outputPath = GetFlagValue(parts, "--output");
+        if ((!createCopy && !replaceLive) ||
+            !HasCliConfirmation(parts, "--confirm-offline") ||
+            (createCopy && string.IsNullOrWhiteSpace(outputPath)) ||
+            (replaceLive && (!HasCliConfirmation(parts, "--confirm-live-replacement") || outputPath is not null)))
+        {
+            throw new ArgumentException(CliCommandHelp.StateDatabaseMaintenanceUsage);
+        }
+
+        return new StateDatabaseOfflineConversionOptions(
+            createCopy
+                ? StateDatabaseOfflineConversionMode.CreateCopy
+                : StateDatabaseOfflineConversionMode.ReplaceLive,
+            CopyOutputPath: outputPath,
+            ExplicitlyAuthorized: true,
+            ActiveDispatchOrGate: activeDispatchOrGate,
+            UtcNow: utcNow);
+    }
+
+    private static void WriteStateDatabaseMaintenanceReceipt(
+        CliExecutionContext context,
+        string receipt,
+        string eventKind)
+    {
+        Console.WriteLine(receipt);
+        try
+        {
+            new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+                .Append(eventKind, null, receipt);
+        }
+        catch
+        {
         }
     }
 
@@ -1341,7 +1457,7 @@ internal static partial class CliCommandHandlers
     }
 
     private static bool GitCommitShaExists(string executionDirectory, string sha) =>
-        GitCli.Run(executionDirectory, 5_000, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
+        GitCli.Run(executionDirectory, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
 
     private static DateTimeOffset? ParseDurationsSince(string? value)
     {
@@ -1376,13 +1492,17 @@ internal static partial class CliCommandHandlers
             throw new ArgumentException("Usage: stable-slot-dotnet <dotnet-arguments>");
         }
 
-        using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock();
+        // One root owns this command's slot lease and its run cleanup: acquiring under the configured
+        // root and cleaning up under the ambient one would leave the run directory behind.
+        var storageRoot = context.CleanupHooks.BuildStorageRoot;
+        using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+            storageRoot: storageRoot);
         if (parts[1].Equals("mtp-test", StringComparison.OrdinalIgnoreCase))
         {
             var resultsSurviveCleanup = RunStableSlotMtpTest(parts, context, lease);
             if (resultsSurviveCleanup)
             {
-                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment, storageRoot);
             }
 
             return;
@@ -1399,7 +1519,7 @@ internal static partial class CliCommandHandlers
         }
 
         lease.ReleaseExecutionLock();
-        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment);
+        DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(lease.Environment, storageRoot);
     }
 
     private static bool RunStableSlotMtpTest(
@@ -1422,7 +1542,15 @@ internal static partial class CliCommandHandlers
             projectName,
             "debug",
             $"{projectName}{(OperatingSystem.IsWindows() ? ".exe" : string.Empty)}");
-        if (ShouldBuildStableSlotMtpProject(noBuild, File.Exists(executable)))
+        var managedAssembly = Path.Combine(
+            environment.ArtifactsPath,
+            "bin",
+            projectName,
+            "debug",
+            $"{projectName}.dll");
+        if (ShouldBuildStableSlotMtpProject(
+                noBuild,
+                File.Exists(executable) && File.Exists(managedAssembly)))
         {
             var buildExit = RunStableSlotProcess(
                 "dotnet",
@@ -1440,10 +1568,17 @@ internal static partial class CliCommandHandlers
             throw new InvalidOperationException($"MTP test executable was not produced: {executable}");
         }
 
+        if (!File.Exists(managedAssembly))
+        {
+            throw new InvalidOperationException($"MTP test managed assembly was not produced: {managedAssembly}");
+        }
+
         buildLease.ReleaseExecutionLock();
         var configuredResultsDirectory = ReadStableSlotOption(parts, "--results-directory");
-        var resultsDirectory = configuredResultsDirectory ??
-            Path.Combine(environment.ArtifactsPath, "TestResults");
+        var resultsDirectory = ResolveStableSlotResultsDirectory(
+            configuredResultsDirectory,
+            context.Workspace.RootDirectory,
+            Path.Combine(environment.ArtifactsPath, "TestResults"));
         Directory.CreateDirectory(resultsDirectory);
         var mtpArguments = new List<string>
         {
@@ -1463,8 +1598,8 @@ internal static partial class CliCommandHandlers
         }
 
         var testExit = RunStableSlotProcess(
-            executable,
-            mtpArguments,
+            "dotnet",
+            [managedAssembly, .. mtpArguments],
             context.Workspace.RootDirectory,
             configureDotnetEnvironment: false);
         if (testExit != 0)
@@ -1481,8 +1616,16 @@ internal static partial class CliCommandHandlers
                     StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static bool ShouldBuildStableSlotMtpProject(bool noBuild, bool executableExists) =>
-        !noBuild || !executableExists;
+    internal static bool ShouldBuildStableSlotMtpProject(bool noBuild, bool artifactsExist) =>
+        !noBuild || !artifactsExist;
+
+    internal static string ResolveStableSlotResultsDirectory(
+        string? configuredResultsDirectory,
+        string workspaceRoot,
+        string defaultResultsDirectory) =>
+        configuredResultsDirectory is null
+            ? Path.GetFullPath(defaultResultsDirectory)
+            : Path.GetFullPath(configuredResultsDirectory, Path.GetFullPath(workspaceRoot));
 
     private static string? ReadStableSlotOption(IReadOnlyList<string> parts, string option)
     {
@@ -1527,7 +1670,7 @@ internal static partial class CliCommandHandlers
         return arguments;
     }
 
-    private static int RunStableSlotProcess(
+    internal static int RunStableSlotProcess(
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
@@ -1555,14 +1698,35 @@ internal static partial class CliCommandHandlers
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start dotnet process.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        process.WaitForExit();
-        Console.Out.Write(standardOutput.GetAwaiter().GetResult());
-        Console.Error.Write(standardError.GetAwaiter().GetResult());
-        return process.ExitCode;
+        Process process;
+        using (ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
+        {
+            process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start dotnet process.");
+        }
+
+        using (process)
+        {
+            var standardOutput = PipeDrain.Start(process.StandardOutput, "cli-process-stdout-drain");
+            var standardError = PipeDrain.Start(process.StandardError, "cli-process-stderr-drain");
+            process.WaitForExit();
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var outputDrained = standardOutput.Join(drainDeadline);
+            var errorDrained = standardError.Join(drainDeadline);
+            Console.Out.Write(standardOutput.Text);
+            Console.Error.Write(standardError.Text);
+            if (!outputDrained || !errorDrained)
+            {
+                Console.Error.WriteLine(PipeDrain.DescribeTimeout(
+                    "CLI child process",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    standardOutput,
+                    standardError));
+                return process.ExitCode == 0 ? 1 : process.ExitCode;
+            }
+
+            return process.ExitCode;
+        }
     }
 
     private static void PrintCleanupStatus(
@@ -1621,9 +1785,9 @@ internal static partial class CliCommandHandlers
         return HistoricalTrialReplayResolver.Resolve(kernel, selector);
     }
 
-    private static DistributedArchitectureDto BuildCliArchitectureReport(CliExecutionContext context)
+    private static DistributedArchitectureReport BuildCliArchitectureReport(CliExecutionContext context)
     {
-        return DistributedArchitectureDto.Create(
+        return DistributedArchitectureReport.Create(
             context.Workspace,
             context.Agents,
             context.WorkerProfiles,

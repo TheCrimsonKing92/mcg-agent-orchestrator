@@ -117,9 +117,13 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var logs = new PostLandingCanaryLogSession(_logDirectory, request.LandingSha);
         var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, logs, cancellationToken)
             .ConfigureAwait(false);
+        var canaryBuildEnvironmentRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"mcg-pc-{Environment.ProcessId}-{Guid.NewGuid():N}"[..24]);
         Exception? runFailure = null;
         try
         {
+            Directory.CreateDirectory(canaryBuildEnvironmentRoot);
             var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
             if (!baseline.HeadSha.Equals(request.LandingSha, StringComparison.OrdinalIgnoreCase))
@@ -165,7 +169,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 logs,
                 "run-canary-probe",
                 cancellationToken,
-                logs.ReceiptPrefix).ConfigureAwait(false);
+                logs.ReceiptPrefix,
+                canaryBuildEnvironmentRoot).ConfigureAwait(false);
 
             var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
@@ -215,11 +220,12 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             }
 
             return probe.Green
-                ? PostLandingCanaryOutcome.Passed(probe.ExecutedTestCount, probe.Detail)
+                ? PostLandingCanaryOutcome.Passed(probe.ExecutedTestCount, probe.Detail, probe.SlotResolution)
                 : PostLandingCanaryOutcome.Failed(
                     probe.FailureReason ?? PostLandingCanaryFailureReason.InfrastructureError,
                     probe.Detail,
-                    probe.ExecutedTestCount);
+                    probe.ExecutedTestCount,
+                    probe.SlotResolution);
         }
         catch (Exception ex)
         {
@@ -235,6 +241,20 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             catch when (runFailure is not null)
             {
                 // Preserve the primary canary failure; stale temporary worktrees are pruned by git maintenance.
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(canaryBuildEnvironmentRoot))
+                    {
+                        Directory.Delete(canaryBuildEnvironmentRoot, recursive: true);
+                    }
+                }
+                catch when (runFailure is not null)
+                {
+                    // Preserve the primary canary failure; the isolated root contains only run-scoped build state.
+                }
             }
         }
     }
@@ -447,6 +467,33 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
     }
 
+    /// <param name="inheritableWindowObserver">
+    /// Per-launch hook invoked immediately before CreateProcessW, while this launch's inheritable
+    /// capture duplicates exist. Only a test supplies it; no production caller does.
+    /// </param>
+    internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessForTestsAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        string logDirectory,
+        string operation,
+        CancellationToken cancellationToken,
+        Action<IReadOnlyList<int>>? descendantObservation = null,
+        Action? inheritableWindowObserver = null)
+    {
+        var result = await RunProcessAsync(
+                fileName,
+                arguments,
+                workingDirectory,
+                new PostLandingCanaryLogSession(logDirectory, "test-candidate"),
+                operation,
+                cancellationToken,
+                descendantObservation: descendantObservation,
+                inheritableWindowObserver: inheritableWindowObserver)
+            .ConfigureAwait(false);
+        return (result.ExitCode, result.Stdout, result.Stderr);
+    }
+
     private static async Task<PostLandingCanaryProcessResult> RunProcessAsync(
         string fileName,
         IReadOnlyList<string> arguments,
@@ -454,7 +501,10 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         PostLandingCanaryLogSession logs,
         string operation,
         CancellationToken cancellationToken,
-        string? acceptanceAttemptResultsPrefix = null)
+        string? acceptanceAttemptResultsPrefix = null,
+        string? dotnetIsolatedRoot = null,
+        Action<IReadOnlyList<int>>? descendantObservation = null,
+        Action? inheritableWindowObserver = null)
     {
         var nativeFileCapture = OperatingSystem.IsWindows();
         var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
@@ -467,16 +517,24 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         if (!string.IsNullOrWhiteSpace(acceptanceAttemptResultsPrefix))
         {
+            if (string.IsNullOrWhiteSpace(dotnetIsolatedRoot))
+            {
+                throw new InvalidOperationException("A canary probe launch requires an isolated dotnet build root.");
+            }
+
             // Set this after hermetic cleanup: it is a run-scoped output contract, not ambient operator state.
             startInfo.Environment[GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable] =
                 Path.GetFullPath(acceptanceAttemptResultsPrefix);
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+                Path.GetFullPath(dotnetIsolatedRoot);
         }
         using var process = nativeFileCapture
             ? WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
                 startInfo,
                 stdoutPath,
                 stderrPath,
-                $"post-landing-canary:{workingDirectory}")
+                $"post-landing-canary:{workingDirectory}",
+                inheritableWindowObserver)
             : WorkerProcessJobs.StartRegisteredOrThrow(
                 startInfo,
                 $"post-landing-canary:{workingDirectory}");
@@ -485,8 +543,17 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             process.StandardInput.Close();
         }
 
+        var processId = process.Id;
+        var processExitTask = process.WaitForExitAsync(CancellationToken.None);
+        WorkerProcessJobReleaseEvidence? releaseEvidence = null;
+        Task<IReadOnlyList<ProcessInspectionRecord>?>? descendantObservationTask = null;
+        IReadOnlyList<ProcessInspectionRecord>? observedDescendantIdentities = [];
+        var exitCode = 0;
         try
         {
+            descendantObservationTask = nativeFileCapture
+                ? ObserveIdentityBoundDescendantsUntilExitAsync(processId, processExitTask, descendantObservation)
+                : null;
             // Do not cancel pipe drains before the killed process tree closes its handles.
             // Completion of this method is the coordinator's termination confirmation.
             var stdoutTask = nativeFileCapture
@@ -497,16 +564,14 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 : CopyCapturedOutputAsync(process.StandardError, stderrPath);
             try
             {
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                await processExitTask.WaitAsync(cancellationToken).ConfigureAwait(false);
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                var stdout = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
-                    .ConfigureAwait(false);
-                var stderr = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
-                    .ConfigureAwait(false);
-                return new PostLandingCanaryProcessResult(
-                    process.ExitCode,
-                    stdout,
-                    stderr);
+                if (descendantObservationTask is not null)
+                {
+                    observedDescendantIdentities = await descendantObservationTask.ConfigureAwait(false);
+                }
+
+                exitCode = process.ExitCode;
             }
             catch (OperationCanceledException)
             {
@@ -517,12 +582,11 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                     try { process.Kill(entireProcessTree: true); } catch { }
                 }
 
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                await processExitTask.ConfigureAwait(false);
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                if (!process.HasExited)
+                if (descendantObservationTask is not null)
                 {
-                    throw new InvalidOperationException(
-                        $"Post-landing canary process tree rooted at pid {process.Id} did not terminate.");
+                    observedDescendantIdentities = await descendantObservationTask.ConfigureAwait(false);
                 }
 
                 throw;
@@ -530,8 +594,218 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
         finally
         {
-            WorkerProcessJobs.Release(process.Id);
+            if (nativeFileCapture)
+            {
+                releaseEvidence = WorkerProcessJobs.ReleaseWithCompletionEvidence(processId, out _);
+            }
+            else
+            {
+                WorkerProcessJobs.Release(processId);
+            }
         }
+
+        if (nativeFileCapture)
+        {
+            var survivingDescendantProcessIds = ListStillLiveIdentityBoundProcessIds(observedDescendantIdentities);
+            // The process has exited and its job is released: a token firing now must not turn a
+            // completed run with readable captures into a cancellation the coordinator reads as a timeout.
+            var stdoutObservation = await PostLandingCanaryCaptureAvailability.AwaitReadableAsync(
+                    stdoutPath,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            EnsureRetainedCaptureReadable(
+                stdoutPath,
+                stdoutObservation,
+                releaseEvidence!,
+                survivingDescendantProcessIds);
+            var stderrObservation = await PostLandingCanaryCaptureAvailability.AwaitReadableAsync(
+                    stderrPath,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            EnsureRetainedCaptureReadable(
+                stderrPath,
+                stderrObservation,
+                releaseEvidence!,
+                survivingDescendantProcessIds);
+        }
+
+        var stdout = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
+            .ConfigureAwait(false);
+        var stderr = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
+            .ConfigureAwait(false);
+        return new PostLandingCanaryProcessResult(exitCode, stdout, stderr);
+    }
+
+    /// <summary>
+    /// A retained capture is complete only when the runner can open it exclusively AND every process it
+    /// launched is proven released. A refused exclusive open is never accepted, whoever holds the file:
+    /// naming the holder explains the failure, it does not excuse it. Consumers read the retained logs
+    /// with File.ReadAllText, which opens FileShare.Read and throws while any foreign write handle
+    /// lives, so a broad-sharing read here would prove nothing about what they will see.
+    /// </summary>
+    /// <param name="readHolders">
+    /// The holder read used to name the processes in the failure message. Defaults to the real
+    /// <see cref="FileHandleHolders"/> read; a test passes its own. It is invoked once, synchronously,
+    /// on the failure path only, and adds no wait budget.
+    /// </param>
+    internal static void EnsureRetainedCaptureReadable(
+        string path,
+        RetainedCaptureObservation observation,
+        WorkerProcessJobReleaseEvidence releaseEvidence,
+        IReadOnlyList<int>? survivingDescendantProcessIds,
+        Func<string, FileHandleHolderObservation>? readHolders = null)
+    {
+        var ownershipProven =
+            releaseEvidence.RegistrationFound &&
+            releaseEvidence.TerminationRequested &&
+            releaseEvidence.JobExitConfirmed &&
+            survivingDescendantProcessIds is { Count: 0 };
+
+        if (observation.ExclusiveOpenSucceeded && ownershipProven)
+        {
+            return;
+        }
+
+        var holders = observation.Holders ?? (readHolders ?? FileHandleHolders.Read).Invoke(path);
+        throw new InvalidOperationException(
+            $"retained-capture-incomplete: path={path}; " +
+            $"exclusive-open={observation.ExclusiveOpenSucceeded.ToString().ToLowerInvariant()}; " +
+            $"attempts={observation.Attempts}; elapsed-ms={observation.Elapsed.TotalMilliseconds:F0}; " +
+            $"last-error={observation.LastErrorCode ?? "unknown"}; " +
+            $"registration-found={releaseEvidence.RegistrationFound.ToString().ToLowerInvariant()}; " +
+            $"termination-requested={releaseEvidence.TerminationRequested.ToString().ToLowerInvariant()}; " +
+            $"job-exit-confirmed={releaseEvidence.JobExitConfirmed.ToString().ToLowerInvariant()}; " +
+            $"surviving-descendants={FormatProcessIds(survivingDescendantProcessIds)}; " +
+            $"capture-holders={holders.Format()}; " +
+            $"stable-length={FormatStableLength(observation)}");
+    }
+
+    private static string FormatProcessIds(IReadOnlyList<int>? processIds) =>
+        processIds is null ? "observation-failed" :
+        processIds.Count == 0 ? "none" : string.Join(',', processIds);
+
+    private static string FormatStableLength(RetainedCaptureObservation observation) =>
+        observation.FirstObservedLength is not { } first || observation.LastObservedLength is not { } last
+            ? "unknown"
+            : observation.LengthWasStable ? $"stable({first})" : $"grew({first}->{last})";
+
+    /// <summary>
+    /// Observes the launched process's identity-bound descendants until it exits. Returns null when any
+    /// poll failed to observe: an unreadable poll leaves an unknown descendant set, and an unknown set is
+    /// not an empty one. Swallowing the failure and returning no descendants would let
+    /// <see cref="EnsureRetainedCaptureReadable"/> read "nothing survives" out of "nothing was seen" and
+    /// call ownership proven, so the failure is surfaced instead and the run is reported incomplete.
+    /// </summary>
+    private static async Task<IReadOnlyList<ProcessInspectionRecord>?> ObserveIdentityBoundDescendantsUntilExitAsync(
+        int processId,
+        Task processExitTask,
+        Action<IReadOnlyList<int>>? descendantObservation)
+    {
+        var observed = new Dictionary<int, ProcessInspectionRecord>();
+        var observationFailed = false;
+        var polls = 0;
+        while (!processExitTask.IsCompleted)
+        {
+            try
+            {
+                var inspection = WindowsNativeProcessInspection.ReadIdentityBoundDescendants(processId);
+                var processIds = inspection.Records.Keys.OrderBy(descendantId => descendantId).ToArray();
+                descendantObservation?.Invoke(processIds);
+                if (inspection.Failure is null)
+                {
+                    foreach (var record in inspection.Records.Values)
+                    {
+                        observed.TryAdd(record.ProcessId, record);
+                    }
+                }
+                else
+                {
+                    observationFailed = true;
+                    Console.Error.WriteLine(
+                        $"canary-descendant-observation-failed: pid={processId}; failure={inspection.Failure}");
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                observationFailed = true;
+                Console.Error.WriteLine(
+                    $"canary-descendant-observation-failed: pid={processId}; error={exception.GetType().Name}");
+            }
+
+            polls++;
+            if (!processExitTask.IsCompleted)
+            {
+                await Task.Delay(DescendantPollInterval(polls), CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+
+        await processExitTask.ConfigureAwait(false);
+        return observationFailed ? null : observed.Values.ToArray();
+    }
+
+    /// <summary>
+    /// Each poll is a full system process enumeration plus a per-tree-member handle read; this host
+    /// reports ~1270 processes per enumeration. Descendants are spawned early, so the dense window that
+    /// catches them is kept and the sustained cost over a multi-minute build launch is backed off
+    /// instead of held at 20 enumerations per second for the whole run.
+    /// </summary>
+    private static TimeSpan DescendantPollInterval(int polls) =>
+        polls < 20 ? TimeSpan.FromMilliseconds(50) :
+        polls < 40 ? TimeSpan.FromMilliseconds(250) :
+        TimeSpan.FromMilliseconds(1000);
+
+    /// <summary>
+    /// Re-checks each observed descendant identity after exit. Null in means the observation itself
+    /// failed, and null out means the surviving set is unknown, which
+    /// <see cref="EnsureRetainedCaptureReadable"/> treats as ownership unproven.
+    /// </summary>
+    private static IReadOnlyList<int>? ListStillLiveIdentityBoundProcessIds(
+        IReadOnlyList<ProcessInspectionRecord>? expectedIdentities)
+    {
+        if (expectedIdentities is null)
+        {
+            return null;
+        }
+
+        if (expectedIdentities.Count == 0)
+        {
+            return [];
+        }
+
+        var surviving = new List<int>();
+        foreach (var expected in expectedIdentities)
+        {
+            try
+            {
+                using var current = Process.GetProcessById(expected.ProcessId);
+                if (current.HasExited)
+                {
+                    continue;
+                }
+
+                var currentStartedAt = new DateTimeOffset(current.StartTime.ToUniversalTime());
+                if (expected.StartedAt.HasValue &&
+                    expected.StartedAt.Value == currentStartedAt &&
+                    !current.HasExited)
+                {
+                    surviving.Add(expected.ProcessId);
+                }
+            }
+            catch (ArgumentException)
+            {
+                // The observed identity has exited and its pid is not currently assigned.
+            }
+            catch (InvalidOperationException)
+            {
+                // The observed identity exited while its handle-backed state was being read.
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return null;
+            }
+        }
+
+        return surviving.Distinct().OrderBy(processId => processId).ToArray();
     }
 
     internal static ProcessStartInfo BuildFileCaptureStartInfo(

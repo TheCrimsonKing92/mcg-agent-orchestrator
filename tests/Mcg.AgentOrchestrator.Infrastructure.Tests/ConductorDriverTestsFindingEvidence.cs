@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -11,7 +12,7 @@ using System.Xml.Linq;
 using static ConductorDriverTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class ConductorDriverTestsFindingEvidence
+public sealed partial class ConductorDriverTestsFindingEvidence
 {
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_evidence_request_runs_focused_evidence_and_retries_reviewer_only")]
     public void ConductorDriverReviewerEvidenceRequestRunsFocusedEvidenceAndRetriesReviewerOnly()
@@ -26,7 +27,18 @@ public sealed class ConductorDriverTestsFindingEvidence
         }
 
         var request = "Infrastructure.Tests:ConductorDriverTests";
-        FailReviewerNeedsWork(kernel, goal, reviewer, "missing focused conductor evidence", request);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "missing focused conductor evidence",
+            findings:
+            [
+                EvidenceFindingWithRequest(
+                    "missing focused conductor evidence",
+                    category: FindingCategory.TestEvidence,
+                    classes: ["ConductorDriverTests"])
+            ]);
         var focusedRuns = 0;
         var retriedTaskIds = new List<TaskId>();
         string? retryMessage = null;
@@ -92,9 +104,9 @@ public sealed class ConductorDriverTestsFindingEvidence
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(FindingCategory.Correctness)]
-    [Xunit.InlineData(FindingCategory.Unspecified)]
-    public void StructuredRequestRunsDespiteUnrelatedBlocker(FindingCategory category)
+    [Xunit.InlineData("cdbed959")]
+    [Xunit.InlineData("cdde61cc")]
+    public void StructuredRequestIsSuppressedByUnresolvedWritableBlocker(string incident)
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -105,6 +117,24 @@ public sealed class ConductorDriverTestsFindingEvidence
         }
 
         const string evidenceBlocker = "Infrastructure.Tests ConductorDriverTests receipts are missing.";
+        var evidenceCategory = incident == "cdde61cc"
+            ? FindingCategory.AcceptanceOwned
+            : FindingCategory.TestEvidence;
+        var nonWritableObligation = incident == "cdde61cc"
+            ? new ReviewFinding(
+                "acceptance-obligation",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("tests/AcceptanceReceipt.cs", "FocusedGreen"),
+                "Acceptance must retain the focused-GREEN obligation.",
+                FindingSeverity.Blocking,
+                FindingCategory.AcceptanceOwned)
+            : new ReviewFinding(
+                "operator-obligation",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("docs/operator-runbook.md", "Receipt"),
+                "Operator evidence remains outstanding.",
+                FindingSeverity.Blocking,
+                FindingCategory.OperatorOwned);
         FailReviewerNeedsWork(
             kernel,
             goal,
@@ -114,7 +144,7 @@ public sealed class ConductorDriverTestsFindingEvidence
             [
                 EvidenceFindingWithRequest(
                     evidenceBlocker,
-                    category: FindingCategory.Correctness,
+                    category: evidenceCategory,
                     classes: ["ConductorDriverTests"]),
                 new ReviewFinding(
                     "other-blocker",
@@ -122,7 +152,8 @@ public sealed class ConductorDriverTestsFindingEvidence
                     new ReviewFindingLocation("src/Test.cs", "Run"),
                     "defect remains",
                     FindingSeverity.Blocking,
-                    category)
+                    FindingCategory.Correctness),
+                nonWritableObligation
             ]);
         var focusedRuns = 0;
         TaskId? retriedTaskId = null;
@@ -143,19 +174,506 @@ public sealed class ConductorDriverTestsFindingEvidence
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            recordFindingEvidenceSuppressed: (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
+            {
+                kernel.RecordFindingEvidenceSuppressed(
+                    goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);
+                kernel.RecordFindingEvidenceSuppressed(
+                    goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        var suppression = Assert.Single(goal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.FindingEvidenceSuppressed));
+        Assert.Equal(reviewer.Id, suppression.TaskId);
+        Assert.Contains($"goal_id={goal.Id}", suppression.Message, StringComparison.Ordinal);
+        Assert.Contains($"task_id={reviewer.Id}", suppression.Message, StringComparison.Ordinal);
+        Assert.Contains("candidate_sha=abc1234", suppression.Message, StringComparison.Ordinal);
+        Assert.Contains("blocker_ids=other-blocker", suppression.Message, StringComparison.Ordinal);
+        Assert.Contains("evidence_request_id=evidence-request-", suppression.Message, StringComparison.Ordinal);
+        Assert.Contains("chosen_owner=Developer", suppression.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=unresolved-writable-blockers-on-unchanged-candidate", suppression.Message, StringComparison.Ordinal);
+        Assert.Contains("suppression_identity=evidence-suppression-", suppression.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.FindingEvidenceRunRecorded);
+        Assert.Contains(
+            "finding-evidence-suppressed",
+            kernel.BuildTaskBrief(goal.Id, developer.Id).Content,
+            StringComparison.Ordinal);
+        Assert.Equal("Finding evidence suppressed", DashboardDisplayNames.Display(ProgressKind.FindingEvidenceSuppressed));
+    }
+
+    [Xunit.Fact]
+    public void InvalidEvidenceRequestIsSuppressedBeforeNormalizationWhileWritableBlockerRemains()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "invalid evidence request; source repair remains",
+            findings:
+            [
+                EvidenceFindingWithRequest(
+                    "Invalid evidence request must not preempt source routing.",
+                    id: "invalid-request",
+                    category: FindingCategory.AcceptanceOwned,
+                    classes: [""]),
+                new ReviewFinding(
+                    "source-defect",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/Test.cs", "Run"),
+                    "Source defect remains.",
+                    FindingSeverity.Blocking,
+                    FindingCategory.Correctness)
+            ]);
+        TaskId? retriedTaskId = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            recordFindingEvidenceSuppressed: (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
+                kernel.RecordFindingEvidenceSuppressed(
+                    goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.FindingEvidenceSuppressed);
+        Assert.Null(reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(finding => finding.StableId == "invalid-request").EvidenceOutcome);
+    }
+
+    [Xunit.Fact]
+    public void WritableEvidenceRequestingFindingSuppressesItsOwnFocusedRun()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "The writable defect needs source repair and carries a focused evidence request.",
+            findings:
+            [
+                EvidenceFindingWithRequest(
+                    "The writable defect needs source repair and carries a focused evidence request.",
+                    id: "self-owned-writable-request",
+                    category: FindingCategory.Correctness,
+                    classes: ["ConductorDriverTests"])
+            ]);
+        var focusedRuns = 0;
+        TaskId? retriedTaskId = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "focused request passed", []);
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            recordFindingEvidenceSuppressed: (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
+                kernel.RecordFindingEvidenceSuppressed(
+                    goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
+        var suppression = Assert.Single(goal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.FindingEvidenceSuppressed));
+        Assert.Contains("blocker_ids=self-owned-writable-request", suppression.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void SuppressionIdentityIgnoresHarmlessFindingDescriptionRewording()
+    {
+        var first = CaptureReviewerSuppression(
+            "abc1234",
+            EvidenceFindingWithRequest(
+                "Focused evidence is required.",
+                id: "acceptance-request",
+                category: FindingCategory.AcceptanceOwned,
+                classes: ["ConductorDriverTests"]),
+            new ReviewFinding(
+                "source-defect",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/Test.cs", "Run"),
+                "Source defect remains.",
+                FindingSeverity.Blocking,
+                FindingCategory.Correctness));
+        var reworded = CaptureReviewerSuppression(
+            "abc1234",
+            EvidenceFindingWithRequest(
+                "Please run the same focused evidence.",
+                id: "acceptance-request",
+                category: FindingCategory.AcceptanceOwned,
+                classes: ["ConductorDriverTests"]),
+            new ReviewFinding(
+                "source-defect",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/Test.cs", "Run"),
+                "The same source defect is still open, phrased differently.",
+                FindingSeverity.Blocking,
+                FindingCategory.Correctness));
+
+        Assert.Equal(0, first.FocusedRuns);
+        Assert.Equal(0, reworded.FocusedRuns);
+        Assert.Equal(Assert.Single(first.Suppressions).Identity, Assert.Single(reworded.Suppressions).Identity);
+    }
+
+    [Xunit.Fact]
+    public void PartialWritableBlockerResolutionStillSuppressesFocusedRun()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var firstLocation = new ReviewFindingLocation("src/First.cs", "Run");
+        var secondLocation = new ReviewFindingLocation("src/Second.cs", "Run");
+        var requestFinding = EvidenceFindingWithRequest(
+            "Focused evidence is required.",
+            id: "acceptance-request",
+            category: FindingCategory.AcceptanceOwned,
+            classes: ["ConductorDriverTests"]);
+        var firstBlocker = new ReviewFinding(
+            "first-source-defect",
+            ReviewFindingState.Open,
+            firstLocation,
+            "First source defect remains.",
+            FindingSeverity.Blocking,
+            FindingCategory.Correctness);
+        var secondBlocker = new ReviewFinding(
+            "second-source-defect",
+            ReviewFindingState.Open,
+            secondLocation,
+            "Second source defect remains.",
+            FindingSeverity.Blocking,
+            FindingCategory.TestCoverage);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "Focused evidence and two source repairs are required.",
+            findings: [requestFinding, firstBlocker, secondBlocker],
+            reviewedCommit: "abc1234");
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck partially resolved source blockers");
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review",
+            reviewFindingTouchedAnchors: [firstLocation, secondLocation],
+            baseCommit: "abc1234");
+        FailStructuredReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "review",
+            [requestFinding, firstBlocker with { State = ReviewFindingState.Resolved }, secondBlocker]);
+        var focusedRuns = 0;
+        TaskId? retriedTaskId = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "focused request passed", []);
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordFindingEvidenceSuppressed: (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
+                kernel.RecordFindingEvidenceSuppressed(
+                    goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
+        var suppression = Assert.Single(goal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.FindingEvidenceSuppressed));
+        Assert.Contains("blocker_ids=second-source-defect", suppression.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("first-source-defect", suppression.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ChangedWritableBlockerSetCreatesNewSuppressionIdentity()
+    {
+        var request = EvidenceFindingWithRequest(
+            "Focused evidence is required.",
+            id: "acceptance-request",
+            category: FindingCategory.AcceptanceOwned,
+            classes: ["ConductorDriverTests"]);
+        var firstBlocker = new ReviewFinding(
+            "first-source-defect",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/First.cs", "Run"),
+            "First source defect remains.",
+            FindingSeverity.Blocking,
+            FindingCategory.Correctness);
+        var secondBlocker = new ReviewFinding(
+            "second-source-defect",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Second.cs", "Run"),
+            "Second source defect remains.",
+            FindingSeverity.Blocking,
+            FindingCategory.TestCoverage);
+
+        var first = CaptureReviewerSuppression("abc1234", request, firstBlocker);
+        var changed = CaptureReviewerSuppression("abc1234", request, firstBlocker, secondBlocker);
+
+        Assert.NotEqual(Assert.Single(first.Suppressions).Identity, Assert.Single(changed.Suppressions).Identity);
+        Assert.Equal(["first-source-defect"], Assert.Single(first.Suppressions).BlockerIds);
+        Assert.Equal(
+            ["first-source-defect", "second-source-defect"],
+            Assert.Single(changed.Suppressions).BlockerIds);
+    }
+
+    [Xunit.Fact]
+    public void UnavailableCandidateShaSuppressesFocusedRunWhileWritableBlockerRemains()
+    {
+        var capture = CaptureReviewerSuppression(
+            "not-a-candidate-sha",
+            EvidenceFindingWithRequest(
+                "Focused evidence is required.",
+                id: "acceptance-request",
+                category: FindingCategory.AcceptanceOwned,
+                classes: ["ConductorDriverTests"]),
+            new ReviewFinding(
+                "source-defect",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/Test.cs", "Run"),
+                "Source defect remains.",
+                FindingSeverity.Blocking,
+                FindingCategory.Correctness));
+
+        Assert.Equal(0, capture.FocusedRuns);
+        Assert.Equal(AgentRole.Developer, capture.RetriedRole);
+        var suppression = Assert.Single(capture.Suppressions);
+        Assert.Equal("unavailable", suppression.CandidateSha);
+        Assert.Equal("candidate-sha-unavailable-with-unresolved-writable-blockers", suppression.Reason);
+    }
+
+    [Xunit.Fact]
+    public void MultipleEvidenceRequestsProduceIndependentSuppressionIdentities()
+    {
+        var capture = CaptureReviewerSuppression(
+            "abc1234",
+            EvidenceFindingWithRequest(
+                "Infrastructure evidence is required.",
+                id: "infrastructure-request",
+                category: FindingCategory.AcceptanceOwned,
+                classes: ["ConductorDriverTests"]),
+            EvidenceFindingWithRequest(
+                "Core evidence is required.",
+                id: "core-request",
+                category: FindingCategory.AcceptanceOwned,
+                project: "Core.Tests",
+                classes: ["ReviewFindingRoutingTests"]),
+            new ReviewFinding(
+                "source-defect",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/Test.cs", "Run"),
+                "Source defect remains.",
+                FindingSeverity.Blocking,
+                FindingCategory.Correctness));
+
+        Assert.Equal(0, capture.FocusedRuns);
+        Assert.Equal(AgentRole.Developer, capture.RetriedRole);
+        Assert.Equal(2, capture.Suppressions.Length);
+        Assert.Equal(2, capture.Suppressions.Select(item => item.RequestId).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(2, capture.Suppressions.Select(item => item.Identity).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(capture.Suppressions, item => Assert.Equal(["source-defect"], item.BlockerIds));
+    }
+
+    [Xunit.Fact]
+    public void StructuredRequestRunsWhenOnlyAdvisoryWritableFindingRemains()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "focused receipt missing",
+            findings:
+            [
+                EvidenceFindingWithRequest("focused receipt missing", classes: ["ConductorDriverTests"]),
+                new ReviewFinding(
+                    "advisory-cleanup",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/Test.cs", "Run"),
+                    "Optional cleanup.",
+                    FindingSeverity.Advisory,
+                    FindingCategory.Correctness)
+            ]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "focused request passed", []);
+            },
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(1, focusedRuns);
-        Assert.Equal(reviewer.Id, retriedTaskId);
-        Assert.Contains(goal.Timeline, evt =>
-            evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
-            evt.Message.Contains("disposition=honoured", StringComparison.Ordinal) &&
-            evt.Message.Contains("finding_id=missing-receipts", StringComparison.Ordinal));
-        var findings = reviewer.VerificationHistory.Last().MergedReviewFindings!;
-        Assert.True(findings.Single(finding => finding.StableId == "missing-receipts").EvidenceOutcome?.Honoured);
-        Assert.Null(findings.Single(finding => finding.StableId == "other-blocker").EvidenceOutcome);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.FindingEvidenceSuppressed);
+    }
+
+    [Xunit.Fact]
+    public void StructuredRequestRunsForNewCandidateShaDespitePriorWritableBlocker()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "focused receipt missing; source defect remains",
+            findings:
+            [
+                EvidenceFindingWithRequest(
+                    "focused receipt missing",
+                    category: FindingCategory.AcceptanceOwned,
+                    classes: ["ConductorDriverTests"]),
+                new ReviewFinding(
+                    "source-defect",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/Test.cs", "Run"),
+                    "Source defect remains.",
+                    FindingSeverity.Blocking,
+                    FindingCategory.Correctness)
+            ],
+            reviewedCommit: "abc1234");
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("def5678"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "new candidate evidence passed", []);
+            },
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.FindingEvidenceSuppressed);
+    }
+
+    [Xunit.Fact]
+    public void StructuredRequestRunsAfterEveryWritableBlockerIsExplicitlyResolved()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var sourceLocation = new ReviewFindingLocation("src/Test.cs", "Run");
+        var requestFinding = EvidenceFindingWithRequest(
+            "focused receipt missing",
+            category: FindingCategory.AcceptanceOwned,
+            classes: ["ConductorDriverTests"]);
+        var sourceFinding = new ReviewFinding(
+            "source-defect",
+            ReviewFindingState.Open,
+            sourceLocation,
+            "Source defect remains.",
+            FindingSeverity.Blocking,
+            FindingCategory.Correctness);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "focused receipt missing; source defect remains",
+            findings: [requestFinding, sourceFinding],
+            reviewedCommit: "abc1234");
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck resolved source blocker");
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review",
+            reviewFindingTouchedAnchors: [sourceLocation],
+            baseCommit: "abc1234");
+        FailStructuredReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "review",
+            [requestFinding, sourceFinding with { State = ReviewFindingState.Resolved }]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "resolved blocker evidence passed", []);
+            },
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.FindingEvidenceSuppressed);
     }
 
     [Xunit.Fact]
@@ -169,7 +687,7 @@ public sealed class ConductorDriverTestsFindingEvidence
         var finding = EvidenceFindingWithRequest(
             "Conductor routing needs an executed receipt.",
             id: "tester-evidence",
-            category: FindingCategory.Correctness,
+            category: FindingCategory.TestEvidence,
             project: "Mcg.AgentOrchestrator.Infrastructure.Tests",
             classes: ["ConductorDriverTests"]);
         var output = string.Join(
@@ -219,6 +737,16 @@ public sealed class ConductorDriverTestsFindingEvidence
         Assert.Contains("evidence_index:", nonRequesterBrief, StringComparison.Ordinal);
         Assert.DoesNotContain("evidence_receipt:", nonRequesterBrief, StringComparison.Ordinal);
         Assert.DoesNotContain("tester requested evidence passed", nonRequesterBrief, StringComparison.Ordinal);
+        // The point-of-decision fields on that line: a passing receipt reads as measured only at the
+        // exact candidate it was taken on. An unknown candidate, or a later one, stays unmeasured
+        // even though the same honoured receipt is attached to the finding.
+        Assert.Equal("state=candidate-unknown; candidate_sha=unavailable", EvidenceIndexState(nonRequesterBrief));
+        Assert.Equal(
+            "state=executed-on-candidate; candidate_sha=abc1234",
+            EvidenceIndexState(kernel.BuildTaskBrief(goal.Id, developer.Id, targetHeadCommit: "abc1234").Content));
+        Assert.Equal(
+            "state=pending-execution; candidate_sha=def5678",
+            EvidenceIndexState(kernel.BuildTaskBrief(goal.Id, developer.Id, targetHeadCommit: "def5678").Content));
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == tester.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
@@ -486,6 +1014,17 @@ public sealed class ConductorDriverTestsFindingEvidence
                     requestedClass));
 
         Assert.Equal("Infrastructure.Tests:ThisClassIsNotDeclaredAnywhereTests", request);
+    }
+
+    // The trailing `state=...; candidate_sha=...` of the single evidence_index line in a brief.
+    private static string EvidenceIndexState(string brief)
+    {
+        var line = Assert.Single(
+            brief.Split(Environment.NewLine),
+            candidate => candidate.Contains("evidence_index:", StringComparison.Ordinal));
+        var start = line.IndexOf("state=", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"evidence_index line carried no state=: {line}");
+        return line[start..];
     }
 
     private static string CaptureNormalizedFindingEvidenceRequest(
@@ -1306,10 +1845,14 @@ public sealed class ConductorDriverTestsFindingEvidence
                     id: "expression",
                     classes: ["FullyQualifiedName~GoalAcceptanceVerifierTests"])
             ]);
+        var requests = new List<string>();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
             runFocusedEvidence: (_, request) =>
-                DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Green),
+            {
+                requests.Add(request);
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Green);
+            },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
@@ -1318,16 +1861,28 @@ public sealed class ConductorDriverTestsFindingEvidence
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        var receipt = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!);
-        Assert.Contains(receipt.RequestDispositions!, disposition =>
+        Assert.Equal(
+            [
+                "Infrastructure.Tests:ConductorDriverTests",
+                "Infrastructure.Tests:FullyQualifiedName~GoalAcceptanceVerifierTests"
+            ],
+            requests);
+        var receipts = reviewer.VerificationHistory.Last().FindingEvidenceReceipts!;
+        Assert.Equal(2, receipts.Count);
+        Assert.Contains(receipts[0].RequestDispositions!, disposition =>
             disposition.FindingStableId == "bare" &&
             disposition.Disposition == "executed-standalone" &&
             disposition.Reason == "incompatible-filter-semantics");
-        Assert.Contains(receipt.RequestDispositions!, disposition =>
+        Assert.Contains(receipts[0].RequestDispositions!, disposition =>
             disposition.FindingStableId == "expression" &&
             disposition.Disposition == "pending-standalone" &&
             disposition.Reason == "incompatible-filter-semantics");
+        Assert.Contains(receipts[1].RequestDispositions!, disposition =>
+            disposition.FindingStableId == "expression" &&
+            disposition.Disposition == "executed-standalone" &&
+            disposition.Reason == "single-request");
     }
 
     [Xunit.Fact]
@@ -1527,6 +2082,52 @@ public sealed class ConductorDriverTestsFindingEvidence
     }
 
     [Xunit.Fact]
+    public void AcceptanceOwnedCandidateRedDoesNotBecomeDeveloperRepairScope()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "Acceptance-owned focused evidence is RED.",
+            findings:
+            [
+                EvidenceFindingWithRequest(
+                    "Acceptance owns the focused-GREEN receipt.",
+                    id: "acceptance-request",
+                    category: FindingCategory.AcceptanceOwned,
+                    classes: ["GateReadyCandidateProjectorTests"])
+            ]);
+        TaskId? retriedTaskId = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) => CandidateRedFindingEvidence(request, candidateSha),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(reviewer.Id, retriedTaskId);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void CandidateRedAttributionRequiresTestClassBoundary()
     {
         const string candidateSha = "abc1234";
@@ -1601,7 +2202,7 @@ public sealed class ConductorDriverTestsFindingEvidence
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red);
+                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -1625,53 +2226,6 @@ public sealed class ConductorDriverTestsFindingEvidence
         Assert.Equal(2, receipts.Length);
         Assert.Contains(receipts, receipt => receipt.CandidateSha == "abc1234");
         Assert.Contains(receipts, receipt => receipt.CandidateSha == "def5678");
-    }
-
-    [Xunit.Fact]
-    public void ChangedFindingRoundAtSameCandidateDoesNotReusePriorReceipt()
-    {
-        const string candidateSha = "abc1234";
-        var (kernel, goal) = SoftwareGoal();
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
-        var finding = EvidenceFindingWithRequest(
-            "The first finding round needs focused evidence.",
-            id: "same-sha-new-round");
-        FailReviewerNeedsWork(kernel, goal, reviewer, "first finding round", findings: [finding]);
-        var focusedRuns = 0;
-        var driver = MakeDriver(
-            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
-            runFocusedEvidence: (_, request) =>
-            {
-                focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red);
-            },
-            dispatchAndStart: _ => DispatchStartOutcome.Started(),
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
-            recordFindingEvidenceRequest: (goalId, taskId, message) =>
-                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
-            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-        var repeatedFinding = finding with { Description = "A changed finding round still needs focused evidence." };
-        FailReviewerNeedsWork(kernel, goal, reviewer, "changed finding round", findings: [repeatedFinding]);
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(2, focusedRuns);
-        var receipts = reviewer.VerificationHistory
-            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .DistinctBy(receipt => receipt.ReceiptId)
-            .ToArray();
-        Assert.Equal(2, receipts.Length);
-        Assert.All(receipts, receipt => Assert.Equal(candidateSha, receipt.CandidateSha));
-        Assert.Equal(2, receipts.Select(receipt => receipt.FindingRoundFingerprint).Distinct().Count());
     }
 
     [Xunit.Theory]
@@ -1734,51 +2288,6 @@ public sealed class ConductorDriverTestsFindingEvidence
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("reason=unsupported-project", retryBrief, StringComparison.Ordinal);
         Assert.Contains("valid evidence passed", retryBrief, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact]
-    public void FindingEvidenceRequestAcceptsRegisteredCliInfrastructureProject()
-    {
-        const string cliProject =
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
-            "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
-        var (kernel, goal) = SoftwareGoal();
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
-        var finding = EvidenceFindingWithRequest(
-            "The extracted CLI project needs focused evidence.",
-            id: "cli-extracted-project",
-            project: "Infrastructure.Cli.Tests",
-            classes: ["CliArgumentNormalizationTests", "CliCommandTestsAddTaskCommands"]);
-        FailReviewerNeedsWork(kernel, goal, reviewer, "registered extracted project", findings: [finding]);
-        string? request = null;
-        var driver = MakeDriver(
-            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            getFindingEvidenceEngineSettings: _ => new AcceptanceGateEngineSettings
-            {
-                MtpInvocations = [new AcceptanceMtpInvocation { Project = cliProject }]
-            },
-            runFocusedEvidence: (_, value) =>
-            {
-                request = value;
-                return new FocusedEvidenceRunResult(value, true, true, "registered project passed", []);
-            },
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
-            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(
-            "Infrastructure.Cli.Tests:CliArgumentNormalizationTests; Infrastructure.Cli.Tests:CliCommandTestsAddTaskCommands",
-            request);
-        var recorded = reviewer.VerificationHistory.Last().MergedReviewFindings!;
-        Assert.True(recorded.Single(item => item.StableId == "cli-extracted-project").EvidenceOutcome?.Honoured);
     }
 
     [Xunit.Fact]
@@ -2088,5 +2597,62 @@ public sealed class ConductorDriverTestsFindingEvidence
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
+
+    private static SuppressionCapture CaptureReviewerSuppression(
+        string candidateSha,
+        params ReviewFinding[] findings)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            string.Join("; ", findings.Select(finding => finding.Description)),
+            findings: findings);
+        var focusedRuns = 0;
+        AgentRole? retriedRole = null;
+        var suppressions = new List<SuppressionCall>();
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "focused request passed", []);
+            },
+            retryTask: (goalId, taskId, message) =>
+            {
+                retriedRole = goal.Tasks.Single(task => task.Id == taskId).RequiredRole;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordFindingEvidenceSuppressed: (_, _, actualCandidateSha, blockerIds, requestId, _, reason, identity) =>
+                suppressions.Add(new SuppressionCall(
+                    actualCandidateSha,
+                    blockerIds.ToArray(),
+                    requestId,
+                    reason,
+                    identity)));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        return new SuppressionCapture(suppressions.ToArray(), focusedRuns, retriedRole);
+    }
+
+    private sealed record SuppressionCapture(
+        SuppressionCall[] Suppressions,
+        int FocusedRuns,
+        AgentRole? RetriedRole);
+
+    private sealed record SuppressionCall(
+        string CandidateSha,
+        string[] BlockerIds,
+        string RequestId,
+        string Reason,
+        string Identity);
 
 }

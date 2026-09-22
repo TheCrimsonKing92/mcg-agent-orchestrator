@@ -282,7 +282,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
-    public void CliBacklogIntakeReportsActualAutomaticReducedPipeline()
+    public void CliBacklogIntakeReportsAutomaticFiveRolePipeline()
     {
         var root = CreateTempDirectory();
         SeedBacklog(root, """
@@ -310,15 +310,15 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
                 ref currentGoal));
 
         Xunit.Assert.NotNull(currentGoal);
-        Xunit.Assert.InRange(currentGoal!.Tasks.Count, 1, 2);
-        Xunit.Assert.Equal(AgentRole.Developer, currentGoal.Tasks[0].RequiredRole);
-        Xunit.Assert.DoesNotContain(currentGoal.Tasks, task => task.RequiredRole is AgentRole.Researcher or AgentRole.Planner or AgentRole.Tester);
-        var expectedWorkflow = currentGoal.Tasks.Count == 1 ? "developer-only" : "developer-reviewer";
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            currentGoal!.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains("Created goal from backlog slice.", output, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("Created five-role", output, StringComparison.Ordinal);
-        Xunit.Assert.Contains($"\"workflow\":\"{expectedWorkflow}\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"workflow\":\"five-role\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"selectionSource\":\"automatic\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"reasons\":[", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("require an explicit --pipeline value", output, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -425,7 +425,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var existingGoal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, agents, item.SuggestedObjective);
         Xunit.Assert.Equal(
-            [AgentRole.Developer, AgentRole.Reviewer],
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             existingGoal.Tasks.Select(task => task.RequiredRole));
         if (reuseByIntakeRecord)
         {
@@ -457,7 +457,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("does not match the explicitly requested intake pipeline", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Requested workflow='five-role'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("selectionSource='explicitly-required'", exception.Message, StringComparison.Ordinal);
-        Xunit.Assert.Contains("persisted workflow='developer-reviewer'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("persisted workflow='five-role'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("selectionSource='automatic'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Existing goal was not reused", exception.Message, StringComparison.Ordinal);
     }
@@ -601,19 +601,22 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("docs/usage.md", docs.FileScopes);
         Xunit.Assert.Contains(docs.RequiredVerification, item => item.Contains("documentation diff", StringComparison.Ordinal));
         Xunit.Assert.True(code.CanCreateGoal);
-        Xunit.Assert.Contains(code.RequiredTools, item => item.Contains("Invoke-IsolatedDotnet", StringComparison.Ordinal));
+        Xunit.Assert.Contains(code.RequiredTools, item => item.Contains("Invoke-TestSummary", StringComparison.Ordinal));
         Xunit.Assert.Single(code.TaskBoundaries);
         Xunit.Assert.Equal(AgentRole.Developer, code.TaskBoundaries[0].Role);
         Xunit.Assert.True(high.CanCreateGoal);
         Xunit.Assert.Contains("high-risk", high.RiskLabels);
         Xunit.Assert.Contains("multi-scope", high.RiskLabels);
         Xunit.Assert.Contains("security-risk", high.RiskLabels);
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, docs.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, docs.PipelineDecision.Pipeline);
         Xunit.Assert.False(docs.PipelineDecision.IsOverride);
         Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, code.PipelineDecision.Pipeline);
         Xunit.Assert.True(code.PipelineDecision.IsOverride);
-        Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, high.PipelineDecision.Pipeline);
-        Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], high.TaskBoundaries.Select(boundary => boundary.Role));
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, high.PipelineDecision.Pipeline);
+        Xunit.Assert.False(high.PipelineDecision.IsOverride);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            high.TaskBoundaries.Select(boundary => boundary.Role));
         Xunit.Assert.Contains(high.PipelineDecision.Reasons, reason => reason.Contains("security-risk", StringComparison.Ordinal));
     }
 

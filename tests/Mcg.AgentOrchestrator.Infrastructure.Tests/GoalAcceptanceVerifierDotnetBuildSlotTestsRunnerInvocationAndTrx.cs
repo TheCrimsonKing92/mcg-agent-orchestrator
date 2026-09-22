@@ -63,10 +63,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             var result = await verifier.RunAsync(root, goalId);
 
             Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-
-            var dotnetArgs = calls[1];
+            var dotnetArgs = Assert.Single(calls);
             AssertIsolatedTestCommand(dotnetArgs);
             Assert.Equal("Mcg.AgentOrchestrator.sln", dotnetArgs[2]);
             Assert.Contains("--filter", dotnetArgs);
@@ -180,7 +177,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
                 call[2].Contains("Mcg.AgentOrchestrator.Core.Tests", StringComparison.Ordinal));
 
             var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
-            Assert.Equal(Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug", "Mcg.AgentOrchestrator.Core.Tests.exe"), mtpCall[0]);
+            Assert.Equal("dotnet", mtpCall[0], ignoreCase: true);
+            Assert.Equal(
+                Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core.Tests", "debug", "Mcg.AgentOrchestrator.Core.Tests.dll"),
+                mtpCall[1],
+                ignoreCase: true);
             AssertArgumentPair(mtpCall, "--filter-class", "*GoalLifecycleTests*");
             AssertArgumentPair(mtpCall, "--filter-not-class", "*SlowCoreTests*");
             Assert.Contains("--filter-not-trait", mtpCall);
@@ -252,12 +253,70 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
 
         Assert.Equal(
             [
-                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
-                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1"
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures: Assert.Contains() Failure: Sub-string not found",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42): Expected shard count to be 2, but found 1"
             ],
             evidence);
         Assert.DoesNotContain(evidence, line =>
             line.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void FailureIdentitiesRetainOnlyFatalNonpassingOutcomes()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var trxPath = Path.Combine(root, "mixed-nonpassing.trx");
+        try
+        {
+            var rows = new[]
+            {
+                (Id: "failed-1", ClassName: "MixedOutcomeTests", MethodName: "Fails", Outcome: "Failed"),
+                (Id: "timeout-1", ClassName: "MixedOutcomeTests", MethodName: "TimesOut", Outcome: "Timeout"),
+                (Id: "skipped-1", ClassName: "MixedOutcomeTests", MethodName: "Skips", Outcome: "Skipped"),
+                (Id: "not-executed-1", ClassName: "MixedOutcomeTests", MethodName: "DoesNotExecute", Outcome: "NotExecuted")
+            };
+            new XDocument(
+                new XElement(
+                    "TestRun",
+                    new XElement(
+                        "TestDefinitions",
+                        rows.Select(row =>
+                            new XElement(
+                                "UnitTest",
+                                new XAttribute("id", row.Id),
+                                new XElement(
+                                    "TestMethod",
+                                    new XAttribute("className", row.ClassName),
+                                    new XAttribute("name", row.MethodName))))),
+                    new XElement(
+                        "Results",
+                        rows.Select(row =>
+                            new XElement(
+                                "UnitTestResult",
+                                new XAttribute("testId", row.Id),
+                                new XAttribute("testName", $"{row.ClassName}.{row.MethodName}"),
+                                new XAttribute("outcome", row.Outcome))))))
+                .Save(trxPath);
+
+            var identities = GoalAcceptanceVerifier.ExtractTrxFailureIdentities(trxPath);
+
+            Assert.Equal(
+                [
+                    "MixedOutcomeTests.Fails",
+                    "MixedOutcomeTests.TimesOut"
+                ],
+                identities);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceTrxFailureReader_preserves_full_nonpassing_evidence")]
@@ -329,11 +388,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             Assert.False(result.Passed);
             var output = Assert.Single(result.Checks!).OutputTail;
             Assert.Contains(
-                "[FAIL] Retry evidence includes failed test names: Assert.Contains() Failure: Sub-string not found",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures: Assert.Contains() Failure: Sub-string not found",
                 output,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "[FAIL] MTP shard preserves theory display name(value: 42): Expected shard count to be 2, but found 1",
+                "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42): Expected shard count to be 2, but found 1",
                 output,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("Passing MTP test is not surfaced", output, StringComparison.Ordinal);
@@ -346,11 +405,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         }
     }
 
-    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_explains_missing_or_empty_trx")]
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_explains_missing_or_green_trx")]
     [Xunit.InlineData(false, "failed — no TRX produced (shard was killed or crashed before reporter flushed)")]
-    [Xunit.InlineData(true, "failed — TRX found but contained no failure records (process may have exited before tests ran)")]
-    public async Task GoalAcceptanceVerifierFailedMtpShardExplainsMissingOrEmptyTrx(
-        bool writeEmptyTrx,
+    [Xunit.InlineData(true, "failed — 1 of 1 tests executed and every TRX record is green (outcome=Completed)")]
+    public async Task GoalAcceptanceVerifierFailedMtpShardExplainsMissingOrGreenTrx(
+        bool writeGreenTrx,
         string expectedEvidence)
     {
         var root = CreateManifestWorkspace("""
@@ -367,12 +426,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         {
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, "TestResults", writeEmptyTrx ? "empty-trx" : "missing-trx"));
+                Path.Combine(root, "TestResults", writeGreenTrx ? "green-trx" : "missing-trx"));
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (writeEmptyTrx)
+                    if (writeGreenTrx)
                     {
                         WriteMtpTrx(args);
                     }

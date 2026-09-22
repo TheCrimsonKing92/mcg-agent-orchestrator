@@ -12,12 +12,12 @@ public sealed class ProgressiveReviewSteeringTests
 
     public static TheoryData<string, AgentRole, string> DefaultCatalogFixtureDispatches => new()
     {
-        { "default-planner-dispatch-fixture", AgentRole.Planner, AgentCatalog.OpenAiSolSubscriptionModelAlias },
+        { "default-planner-dispatch-fixture", AgentRole.Planner, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
         { "default-ideation-dispatch-fixture", AgentRole.Ideation, AgentCatalog.OpenAiSubscriptionModelAlias },
-        { "default-researcher-dispatch-fixture", AgentRole.Researcher, AgentCatalog.OpenAiSolSubscriptionModelAlias },
-        { "default-developer-dispatch-fixture", AgentRole.Developer, AgentCatalog.OpenAiSolSubscriptionModelAlias },
-        { "default-tester-dispatch-fixture", AgentRole.Tester, AgentCatalog.OpenAiSolSubscriptionModelAlias },
-        { "default-reviewer-dispatch-fixture", AgentRole.Reviewer, AgentCatalog.OpenAiSolSubscriptionModelAlias }
+        { "default-researcher-dispatch-fixture", AgentRole.Researcher, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
+        { "default-developer-dispatch-fixture", AgentRole.Developer, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
+        { "default-tester-dispatch-fixture", AgentRole.Tester, AgentCatalog.OpenAiTerraSubscriptionModelAlias },
+        { "default-reviewer-dispatch-fixture", AgentRole.Reviewer, AgentCatalog.OpenAiTerraSubscriptionModelAlias }
     };
 
     [Theory(DisplayName = "ProgressiveReviewSteering_each_default_fixture_dispatch_matches_activated_agent_catalog")]
@@ -100,9 +100,9 @@ public sealed class ProgressiveReviewSteeringTests
         const string fixtureName = "negative-control-stale-developer-fixture";
         var catalog = AgentCatalog.Default();
         var expectedAlias = catalog.GetRequired(AgentRole.Developer).Subscription!.ModelAlias;
-        var staleAlias = string.Equals(expectedAlias, AgentCatalog.OpenAiSolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase)
+        var staleAlias = string.Equals(expectedAlias, AgentCatalog.OpenAiTerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase)
             ? AgentCatalog.OpenAiSubscriptionModelAlias
-            : AgentCatalog.OpenAiSolSubscriptionModelAlias;
+            : AgentCatalog.OpenAiTerraSubscriptionModelAlias;
         var staleDispatch = new TaskDispatchRecord(
             "codex-cli",
             "fixture-command",
@@ -194,9 +194,9 @@ public sealed class ProgressiveReviewSteeringTests
 
         Assert.True(result.MutatedTaskState, string.Join(Environment.NewLine, result.ProgressLines));
         Assert.True(order.IndexOf("cancel") >= 0);
-        Assert.True(order.IndexOf("probe:6001") > order.IndexOf("cancel"));
+        Assert.True(order.LastIndexOf("probe:6001") > order.IndexOf("cancel"));
         Assert.True(
-            order.IndexOf("start") > order.IndexOf("probe:6001"),
+            order.IndexOf("start") > order.LastIndexOf("probe:6001"),
             $"order={string.Join(',', order)}; receipts={string.Join(" | ", store.Receipts.Select(item => item.Outcome))}; checks={string.Join(" | ", store.Receipts.SelectMany(item => item.AdmissionChecks))}");
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("warm-resume", receipt.Decision);
@@ -617,6 +617,61 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Contains("partial dispatch receipt consumed", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.True(File.Exists(cancelledProcessRecord.ExitCodePath));
         Assert.Equal("cancelled", ProcessLogReader.ReadHeartbeat(cancelledProcessRecord).State);
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_preserves_existing_terminal_heartbeat_evidence")]
+    public void PreservesExistingTerminalHeartbeatEvidence()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var terminalObservedAt = now.AddSeconds(1);
+        var root = CreateGitRepository("mcg-steer-preserve-terminal-proof");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var cancelledProcessRecord = task.LastProcess!;
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "preserve terminal evidence")).GetAwaiter().GetResult();
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                var current = k.GetTask(goalId, taskId).LastProcess!;
+                var cancelled = current with { CompletedAt = terminalObservedAt, WasCancelled = true };
+                k.RecordTaskProcessCancelled(goalId, taskId, cancelled);
+                File.WriteAllText(cancelled.ExitCodePath, "1");
+                File.WriteAllText(
+                    BackgroundDispatchRunner.GetHeartbeatPath(cancelled),
+                    $$"""
+                    {"pid":6001,"childPid":null,"ownedPids":[6001],"ownedProcessIdentities":[{"processId":6001,"startedAt":"2026-07-20T11:59:00Z","imagePath":"C:\\workers\\worker-6001.exe"}],"state":"exited","lastObservedAt":"{{terminalObservedAt:O}}","lastProgressAt":"{{terminalObservedAt:O}}","stdoutBytes":12,"stderrBytes":3,"ownedCpuMs":4,"providerSessionId":"session-preserved","worktreeHeadSha":"head-preserved","dirtyStateHash":"dirty-preserved"}
+                    """);
+                return cancelled;
+            },
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                var started = new TaskProcessRecord(7011, dispatch.Command, dispatch.WorkingDirectory, "out-preserved.log", "err-preserved.log", "exit-preserved.txt", now.AddSeconds(2), null, null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            currentHead: head);
+
+        var result = coordinator.ExecutePending(kernel, goal);
+        var preserved = ProcessLogReader.ReadHeartbeat(cancelledProcessRecord, now.AddMinutes(1));
+
+        Assert.True(result.MutatedTaskState);
+        Assert.Equal("warm-resume", Assert.Single(store.Receipts).Decision);
+        Assert.Equal("exited", preserved.State);
+        Assert.Equal(terminalObservedAt, preserved.LastObservedAt);
+        Assert.Equal(terminalObservedAt, preserved.LastProgressAt);
+        Assert.Equal("session-preserved", preserved.ProviderSessionId);
+        Assert.Equal("head-preserved", preserved.WorktreeHeadSha);
+        Assert.Equal("dirty-preserved", preserved.DirtyStateHash);
+        Assert.Equal([6_001], preserved.OwnedProcessIds);
+        var preservedIdentity = Assert.Single(preserved.OwnedProcessIdentities);
+        Assert.Equal(6_001, preservedIdentity.ProcessId);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-20T11:59:00Z"), preservedIdentity.StartedAt);
+        Assert.Equal(@"C:\workers\worker-6001.exe", preservedIdentity.ImagePath);
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_first_misdirection_steers_second_same_round_misdirection_attention")]
@@ -1143,6 +1198,61 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_blocks_resume_when_live_lineage_identity_is_unreadable")]
+    public void BlocksResumeWhenLiveLineageIdentityIsUnreadable()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-unreadable-lineage-child");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "do not start while an unreadable lineage child is alive")).GetAwaiter().GetResult();
+        var attentionStore = new FakeCollaborationItemStore();
+        var started = false;
+        const int unreadableChildPid = 6_102;
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] postCancelSnapshot =
+        [
+            // The wrapper is gone, but Toolhelp retains the child's parent PID.
+            new(unreadableChildPid, 6_001, "unreadable-child")
+        ];
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            attentionStore,
+            isProcessRunning: pid => pid == unreadableChildPid,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (_, _, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("start must not run over a live unreadable lineage descendant");
+            },
+            currentHead: head,
+            readProcessIdentity: processId => processId == unreadableChildPid ? null : TestProcessIdentity(processId),
+            listConservativeLineageDescendants: (ancestorProcessId, ancestorStartedAt) =>
+                WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+                    ancestorProcessId,
+                    ancestorStartedAt,
+                    () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(postCancelSnapshot),
+                    seed => new ProcessInspectionRecord(
+                        seed.ProcessId,
+                        seed.ParentProcessId,
+                        seed.Name,
+                        null,
+                        null,
+                        null,
+                        ProcessInspectionStatus.AccessDenied)));
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.False(started);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("owned pid(s) still alive: 6102", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_blocks_resume_when_terminal_cancel_proof_is_absent")]
     public void BlocksResumeWhenTerminalCancelProofIsAbsent()
     {
@@ -1286,7 +1396,9 @@ public sealed class ProgressiveReviewSteeringTests
         IReadOnlyList<AgentDefinition>? agents = null,
         ProgressiveReviewSteeringOptions? options = null,
         string? currentHead = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
+        Func<int, DateTimeOffset, IReadOnlyList<int>>? listConservativeLineageDescendants = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         return new ProgressiveReviewSteeringCoordinator(
@@ -1305,7 +1417,9 @@ public sealed class ProgressiveReviewSteeringTests
             prepareFreshDispatch: prepareFreshDispatch,
             headResolver: currentHead is null ? null : _ => currentHead,
             capturedHeadIsAncestor: currentHead is null ? null : SameHead,
-            prepareFreshDispatchWithPolicy: prepareFreshDispatchWithPolicy);
+            prepareFreshDispatchWithPolicy: prepareFreshDispatchWithPolicy,
+            readProcessIdentity: readProcessIdentity ?? (processId => TestProcessIdentity(processId)),
+            listConservativeLineageDescendants: listConservativeLineageDescendants);
     }
 
     private static bool SameHead(string _, string? capturedHead, string? currentHead) =>
@@ -1332,7 +1446,7 @@ public sealed class ProgressiveReviewSteeringTests
         string? reviewFindingTouchProofDiagnostic = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
         WorkerContextPackageReceipt? contextPackageReceipt = null,
-        string dispatchedModel = AgentCatalog.OpenAiSolSubscriptionModelAlias)
+        string dispatchedModel = AgentCatalog.OpenAiTerraSubscriptionModelAlias)
     {
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "logs"));
         var clock = new TestClock(dispatchedAt);
@@ -1378,6 +1492,7 @@ public sealed class ProgressiveReviewSteeringTests
             null,
             OwnedProcessIds: [6001]);
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        WriteHeartbeat(process, dispatchedAt, childPid: null, ownedPids: [process.ProcessId], state: "running");
         if (clockOffsetAfterDispatch is { } offset)
         {
             clock.Advance(offset);
@@ -1456,12 +1571,22 @@ public sealed class ProgressiveReviewSteeringTests
         var childPidJson = childPid.HasValue
             ? childPid.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "null";
+        var identityPids = ownedPids
+            .Concat(childPid is > 0 ? [childPid.Value] : [])
+            .Concat(process.ProcessId > 0 ? [process.ProcessId] : [])
+            .Distinct()
+            .ToArray();
+        var identities = string.Join(",", identityPids.Select(processId =>
+            $$"""{"processId":{{processId}},"startedAt":"2026-07-20T11:59:00Z","imagePath":"C:\\workers\\worker-{{processId}}.exe"}"""));
         File.WriteAllText(
             BackgroundDispatchRunner.GetHeartbeatPath(process),
             $$"""
-            {"pid":{{process.ProcessId}},"childPid":{{childPidJson}},"ownedPids":[{{string.Join(",", ownedPids)}}],"state":"{{state}}","lastObservedAt":"{{observedAt:O}}","lastProgressAt":"{{observedAt:O}}","stdoutBytes":0,"stderrBytes":0,"ownedCpuMs":0}
+            {"pid":{{process.ProcessId}},"childPid":{{childPidJson}},"ownedPids":[{{string.Join(",", ownedPids)}}],"ownedProcessIdentities":[{{identities}}],"state":"{{state}}","lastObservedAt":"{{observedAt:O}}","lastProgressAt":"{{observedAt:O}}","stdoutBytes":0,"stderrBytes":0,"ownedCpuMs":0}
             """);
     }
+
+    private static SpawnProcessIdentity TestProcessIdentity(int processId) =>
+        new(processId, DateTimeOffset.Parse("2026-07-20T11:59:00Z"), $@"C:\workers\worker-{processId}.exe");
 
     private static void WriteExitAndHeartbeat(
         TaskProcessRecord process,

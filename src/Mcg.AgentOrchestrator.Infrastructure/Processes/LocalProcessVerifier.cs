@@ -22,18 +22,34 @@ public sealed class LocalProcessVerifier
         TimeSpan? Elapsed = null);
 
     private readonly Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
+    private readonly DotnetBuildStorageRoot _storageRoot;
 
-    public LocalProcessVerifier() : this(RunCommandAsync) { }
+    public LocalProcessVerifier() : this(RunCommandAsync, DotnetBuildEnvironmentManager.CaptureStorageRoot()) { }
 
     internal LocalProcessVerifier(Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> runner)
+        : this(runner, DotnetBuildEnvironmentManager.CaptureStorageRoot())
+    {
+    }
+
+    internal LocalProcessVerifier(
+        Func<string, IReadOnlyList<string>, string, CancellationToken, Task<CommandResult>> runner,
+        DotnetBuildStorageRoot storageRoot)
         : this((fileName, args, workingDirectory, _, cancellationToken) =>
-            runner(fileName, args, workingDirectory, cancellationToken))
+            runner(fileName, args, workingDirectory, cancellationToken), storageRoot)
     {
     }
 
     internal LocalProcessVerifier(Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> runner)
+        : this(runner, DotnetBuildEnvironmentManager.CaptureStorageRoot())
+    {
+    }
+
+    internal LocalProcessVerifier(
+        Func<string, IReadOnlyList<string>, string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
+        DotnetBuildStorageRoot storageRoot)
     {
         _runner = runner;
+        _storageRoot = storageRoot;
     }
 
     public async Task<TaskVerificationRecord> RunAsync(
@@ -53,61 +69,56 @@ public sealed class LocalProcessVerifier
             throw new ArgumentException("Value cannot be empty.", nameof(workingDirectory));
         }
 
-        // Shut down build servers to release file locks before running verification.
-        await _runner(
-            "dotnet",
-            ["build-server", "shutdown"],
-            workingDirectory,
-            AcceptanceCheckTimeouts.DefaultTimeout,
-            cancellationToken).ConfigureAwait(false);
-
         var completedAt = DateTimeOffset.UtcNow;
-        var preparedCommand = PrepareCommand(command, goalId, taskId);
+        var preparedCommand = PrepareCommand(command, goalId, taskId, _storageRoot);
         var elapsed = Stopwatch.StartNew();
         var commandTimeout = AcceptanceCheckTimeouts.DefaultTimeout;
 
-        using var leaseLock = preparedCommand.BuildEnvironment is null
+        DotnetBuildEnvironmentLease? executionLease = preparedCommand.BuildEnvironment is null
             ? null
-            : DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(preparedCommand.BuildEnvironment, cancellationToken);
-
-        var result = await RunPreparedCommandAsync(
-            preparedCommand,
-            workingDirectory,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-
-        if (result.ExitCode != 0 && (result.Stdout + result.Stderr).Contains("CS2012", StringComparison.Ordinal))
+            : DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(preparedCommand.BuildEnvironment, cancellationToken);
+        try
         {
-            // CS2012 is a transient file-lock on obj dlls; a second build-server shutdown
-            // clears residual compiler processes before the single allowed retry.
-            await _runner(
-                "dotnet",
-                ["build-server", "shutdown"],
-                workingDirectory,
-                AcceptanceCheckTimeouts.DefaultTimeout,
-                cancellationToken).ConfigureAwait(false);
-            result = await RunPreparedCommandAsync(
+            var result = await RunPreparedCommandAsync(
                 preparedCommand,
                 workingDirectory,
                 commandTimeout,
                 cancellationToken).ConfigureAwait(false);
+
+            if (executionLease is not null && result.ExitCode != 0 &&
+                (result.Stdout + result.Stderr).Contains("CS2012", StringComparison.Ordinal))
+            {
+                executionLease.MarkCompilerLockRemediationRequired();
+                executionLease.Dispose();
+                executionLease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
+                    preparedCommand.BuildEnvironment!, cancellationToken);
+                result = await RunPreparedCommandAsync(
+                    preparedCommand,
+                    workingDirectory,
+                    commandTimeout,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            elapsed.Stop();
+            completedAt = DateTimeOffset.UtcNow;
+
+            var standardOutput = BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) +
+                (result.TimedOut ? BuildTimeoutEvidence(result) : string.Empty) +
+                result.Stdout;
+            return new TaskVerificationRecord(
+                preparedCommand.Command,
+                workingDirectory,
+                result.ExitCode,
+                standardOutput,
+                result.Stderr,
+                completedAt,
+                FullStandardOutput: standardOutput,
+                FullStandardError: result.Stderr);
         }
-
-        elapsed.Stop();
-        completedAt = DateTimeOffset.UtcNow;
-
-        var standardOutput = BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) +
-            (result.TimedOut ? BuildTimeoutEvidence(result) : string.Empty) +
-            result.Stdout;
-        return new TaskVerificationRecord(
-            preparedCommand.Command,
-            workingDirectory,
-            result.ExitCode,
-            standardOutput,
-            result.Stderr,
-            completedAt,
-            FullStandardOutput: standardOutput,
-            FullStandardError: result.Stderr);
+        finally
+        {
+            executionLease?.Dispose();
+        }
     }
 
     private async Task<CommandResult> RunPreparedCommandAsync(
@@ -137,7 +148,11 @@ public sealed class LocalProcessVerifier
         }
     }
 
-    internal static PreparedCommand PrepareCommand(string command, GoalId? goalId = null, TaskId? taskId = null)
+    internal static PreparedCommand PrepareCommand(
+        string command,
+        GoalId? goalId,
+        TaskId? taskId,
+        DotnetBuildStorageRoot storageRoot)
     {
         var commandToRun = command.Trim();
         var executionArguments = TokenizeSimpleCommand(commandToRun);
@@ -149,7 +164,7 @@ public sealed class LocalProcessVerifier
         }
 
         var attemptName = taskId is null ? "verify" : $"verify-{Prefix(taskId.Value)}";
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName);
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, attemptName, storageRoot: storageRoot);
         arguments = [.. arguments, .. environment.Arguments];
         return new PreparedCommand(
             JoinDisplayCommand([fileName, .. arguments]),
@@ -274,7 +289,7 @@ public sealed class LocalProcessVerifier
             ? $"{timeout.TotalMinutes:0.#}m"
             : $"{timeout.TotalSeconds:0.#}s";
 
-    private static async Task<CommandResult> RunCommandAsync(
+    internal static async Task<CommandResult> RunCommandAsync(
         string fileName,
         IReadOnlyList<string> args,
         string workingDirectory,
@@ -286,6 +301,7 @@ public sealed class LocalProcessVerifier
             FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
@@ -300,9 +316,10 @@ public sealed class LocalProcessVerifier
         // as the acceptance gate: a verification result must describe the code, not the launch context.
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start process: {fileName}");
-        WorkerProcessJobs.RegisterOrThrow(process, $"local-verification:{workingDirectory}");
+        using var process = WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(
+            startInfo,
+            $"local-verification:{workingDirectory}");
+        process.CompleteInput();
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(commandTimeout);
@@ -310,14 +327,36 @@ public sealed class LocalProcessVerifier
 
         try
         {
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            var stdoutDrain = PipeDrain.Start(process.StandardOutput, "local-verification-stdout-drain");
+            var stderrDrain = PipeDrain.Start(process.StandardError, "local-verification-stderr-drain");
 
             await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
 
-            var stdout = await stdoutTask.ConfigureAwait(false);
-            var stderr = await stderrTask.ConfigureAwait(false);
+            var remainingMilliseconds = Math.Max(
+                0,
+                (int)Math.Min(int.MaxValue, (commandTimeout - elapsed.Elapsed).TotalMilliseconds));
+            var drainDeadline = Environment.TickCount64 + remainingMilliseconds;
+            var stdoutDrained = stdoutDrain.Join(drainDeadline);
+            var stderrDrained = stderrDrain.Join(drainDeadline);
+            var stdout = stdoutDrain.Text;
+            var stderr = stderrDrain.Text;
             elapsed.Stop();
+            if (!stdoutDrained || !stderrDrained)
+            {
+                var diagnostic = PipeDrain.DescribeTimeout(
+                    "local verification",
+                    remainingMilliseconds,
+                    stdoutDrain,
+                    stderrDrain);
+                return new CommandResult(
+                    -1,
+                    stdout,
+                    PipeDrain.AppendDiagnostic(stderr, diagnostic),
+                    TimedOut: true,
+                    Timeout: commandTimeout,
+                    Elapsed: elapsed.Elapsed);
+            }
+
             return new CommandResult(process.ExitCode, stdout, stderr, Elapsed: elapsed.Elapsed);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -338,10 +377,6 @@ public sealed class LocalProcessVerifier
             try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { /* best effort */ }
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
             throw;
-        }
-        finally
-        {
-            WorkerProcessJobs.Release(process.Id);
         }
     }
 }

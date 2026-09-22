@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Providers;
 
-internal static class ProviderRegistryFactory
+public static class ProviderRegistryFactory
 {
     public static IModelProviderRegistry CreateDefaultProviders()
     {

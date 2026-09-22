@@ -35,7 +35,9 @@ internal sealed class CliExecutionContext(
     Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
     TransientSqliteLoadHold? initialConductLoopLoadHold = null,
     Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null,
-    Action? reportGoalCreationProgress = null)
+    Action? reportGoalCreationProgress = null,
+    Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalGoalKernel = null,
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -61,6 +63,22 @@ public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persi
 
 public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
     persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
+
+public void PersistCriticalGoalCheckpoint(
+    AgentOrchestratorKernel checkpointKernel,
+    IReadOnlyCollection<GoalId> changedGoalIds)
+{
+    if (persistCriticalGoalKernel is null)
+    {
+        throw new InvalidOperationException(
+            "Critical goal persistence is unavailable; worker start was aborted.");
+    }
+
+    persistCriticalGoalKernel(checkpointKernel, changedGoalIds);
+}
+
+public void RecordDurableGoalBaseline(GoalSnapshot snapshot) =>
+    recordDurableGoalBaseline?.Invoke(snapshot);
 
 public IReadOnlyList<GoalSnapshotCheckpointResult> CheckpointGoals(
     AgentOrchestratorKernel checkpointKernel,
@@ -129,9 +147,18 @@ public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAccep
 
 public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
 
-public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
+    private ICliGoalWorktreeService? worktrees;
 
-public GoalWorktreeCleanupHooks CleanupHooks { get; init; } = GoalWorktreeCleanupHooks.Default;
+    public ICliGoalWorktreeService Worktrees
+    {
+        get => worktrees ?? new DefaultCliGoalWorktreeService(CleanupContext);
+        init => worktrees = value;
+    }
+
+    public WorktreeCleanupContext CleanupContext { get; init; } =
+        new(GoalWorktreeCleanupOptions.Default);
+
+    public GoalWorktreeCleanupHooks CleanupHooks => CleanupContext.Hooks;
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 
@@ -243,7 +270,9 @@ internal sealed record AcceptanceMergeCommitRequest(
 
 internal sealed record AcceptanceMergeGuardPreflightRequest(
     GoalId GoalId,
-    AcceptanceMergeGuardSnapshot ProposedGuard);
+    AcceptanceMergeGuardSnapshot ProposedGuard,
+    string? CurrentBranchHeadSha,
+    string? CurrentMainHeadSha);
 
 internal sealed record AcceptanceMergeGuardPreflightResult(
     AcceptanceMergeGuardSnapshot CurrentGuard,
@@ -318,13 +347,18 @@ internal interface ICliGoalWorktreeService
 
 internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
 {
-    public static DefaultCliGoalWorktreeService Instance { get; } = new();
+    private readonly GoalWorktreeCleanupHooks cleanupHooks;
 
-    private DefaultCliGoalWorktreeService() { }
+    public DefaultCliGoalWorktreeService(WorktreeCleanupContext cleanupContext)
+    {
+        ArgumentNullException.ThrowIfNull(cleanupContext);
+        cleanupHooks = cleanupContext.Hooks;
+    }
 
     public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
 
-    public string Ensure(string executionDirectory, GoalId goalId) => GoalWorktrees.Ensure(executionDirectory, goalId);
+    public string Ensure(string executionDirectory, GoalId goalId) =>
+        GoalWorktrees.Ensure(executionDirectory, goalId, cleanupHooks);
 
     public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
 
@@ -334,14 +368,14 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         AgentOrchestratorKernel? kernel = null,
         int? gitTimeoutMilliseconds = null) =>
         gitTimeoutMilliseconds is { } timeout
-            ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout)
-            : GoalWorktrees.Remove(executionDirectory, goalId, kernel);
+            ? GoalWorktrees.Remove(executionDirectory, goalId, kernel, timeout, hooks: cleanupHooks)
+            : GoalWorktrees.Remove(executionDirectory, goalId, kernel, cleanupHooks);
 
     public GoalWorktreeRemoveResult RemoveTerminalNow(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel kernel) =>
-        GoalWorktrees.RemoveTerminalNow(executionDirectory, goalId, kernel);
+        GoalWorktrees.RemoveTerminalNow(executionDirectory, goalId, kernel, cleanupHooks);
 
     public bool IsGitWorkTree(string executionDirectory) => GoalWorktrees.IsGitWorkTree(executionDirectory);
 
@@ -383,7 +417,9 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
         string? executionDirectory = null) =>
-        GoalAcceptanceEvidenceBundleBuilder.Build(kernel, goal, worktreePath, verification, verificationSkipped, executionDirectory);
+        GoalAcceptanceEvidenceBundleBuilder.Build(
+            kernel, goal, worktreePath, verification, verificationSkipped,
+            cleanupHooks.BuildStorageRoot, executionDirectory);
 }
 
 internal sealed record AcceptanceHostStopRequest(

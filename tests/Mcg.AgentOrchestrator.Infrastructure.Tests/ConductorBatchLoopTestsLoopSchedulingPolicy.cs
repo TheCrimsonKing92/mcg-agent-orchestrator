@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -293,7 +294,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var started = coordinator.Evaluate(
                 candidate,
                 explicitPreset.Policy,
-                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+                (_, _, _, _, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
             var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(started.Attempt.MetadataPath),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -351,7 +352,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var started = coordinator.Evaluate(
                 candidate,
                 configured,
-                (_, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
+                (_, _, _, _, _) => throw new InvalidOperationException("The owned-process stub must not run acceptance inline."));
             var roundTripped = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(started.Attempt.MetadataPath),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -760,7 +761,17 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                     return DispatchStartOutcome.Started();
                 });
 
-            new ConductorBatchLoop(measuredSweep: loopKernel => TerminalGoalSweep.Run(loopKernel, root, cache: cache)).Run(
+            new ConductorBatchLoop(measuredSweep: loopKernel => TerminalGoalSweep.Run(loopKernel, root, cache: cache) with
+            {
+                GitIndexDurationMs = 11,
+                EvidenceDurationMs = 12,
+                EphemeralDurationMs = 13,
+                AttentionDurationMs = 14,
+                MergeEvidenceDurationMs = 15,
+                GoalsDurationMs = 16,
+                GitSpawnCount = 17,
+                GoalsSweptCount = 18
+            }).Run(
                 kernel,
                 driver,
                 ConductorAutonomyPolicy.Conservative,
@@ -774,13 +785,112 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                     }
                 });
 
-            Assert.Contains(secondTick!.ProgressLines!, line =>
+            var sweepLine = Assert.Single(secondTick!.ProgressLines!, line =>
                 line.StartsWith("PHASE_TIMING tick=2 phase=sweep ", StringComparison.Ordinal) &&
                 line.Contains("sweep_cache_hits=1", StringComparison.Ordinal));
+            Assert.Contains("dependency_metadata_ms=", sweepLine, StringComparison.Ordinal);
+            Assert.Contains("dependency_journals_read=0", sweepLine, StringComparison.Ordinal);
+            Assert.Contains("sweep_cache_hits=1 sweep_cache_misses=0 sweep_git_index_ms=11 sweep_evidence_ms=12 sweep_ephemeral_ms=13 sweep_attention_ms=14 sweep_merge_evidence_ms=15 sweep_goals_ms=16 sweep_git_spawns=17 sweep_goals_swept=18", sweepLine, StringComparison.Ordinal);
         }
         finally
         {
             TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_failure_reports_zero_timing_fields")]
+    public void TerminalGoalSweep_failure_reports_zero_timing_fields()
+    {
+        var (kernel, _) = SimpleGoal("sweep failure timing goal");
+        BatchTickSummary? tickSummary = null;
+
+        new ConductorBatchLoop(measuredSweep: _ => throw new InvalidOperationException("injected sweep failure")).Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: tick => tickSummary = tick);
+
+        var sweepLine = Assert.Single(tickSummary!.ProgressLines!, line =>
+            line.StartsWith("PHASE_TIMING tick=1 phase=sweep ", StringComparison.Ordinal));
+        Assert.Contains("sweep_git_index_ms=0 sweep_evidence_ms=0 sweep_ephemeral_ms=0 sweep_attention_ms=0 sweep_merge_evidence_ms=0 sweep_goals_ms=0 sweep_git_spawns=0 sweep_goals_swept=0", sweepLine, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Sweep_phase_timing_reports_every_attributed_operation")]
+    public void SweepPhaseTimingReportsEveryAttributedOperation()
+    {
+        var (kernel, goal) = SimpleGoal("sweep phase attribution goal");
+        var timingLines = new List<string>();
+        var fakeTimestamp = 0L;
+        var phaseSeconds = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            ["sweep"] = 9,
+            ["persist-sweep-terminalizations"] = 8,
+            ["recover-interrupted-dispatches"] = 7,
+            ["self-relaunch-drain"] = 1,
+            ["count-running-dispatches"] = 5,
+            ["await-canary-tasks"] = 4,
+            ["readmit-resolved-set-aside-goals"] = 3,
+            ["mark-completed-dependency-goals"] = 2,
+            ["reconcile-unscoped-dispatchable-goals"] = 1
+        };
+        var driver = MakeDriver();
+        var landingReceiptSent = false;
+
+        new ConductorBatchLoop(
+            measuredSweep: _ =>
+            {
+                if (!landingReceiptSent)
+                {
+                    driver.SuccessfulLandingSink!(new ConductorLandingReceipt(
+                        goal.Id.Value,
+                        ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"]));
+                    landingReceiptSent = true;
+                }
+                return null;
+            },
+            selfRelaunch: _ => new ConductorSelfRelaunchResult(false, "build", "planned rollback"),
+            selfRelaunchEnabled: true,
+            janitorialPhaseProbe: phase => fakeTimestamp += phaseSeconds.GetValueOrDefault(phase) * Stopwatch.Frequency,
+            janitorialTimestamp: () => fakeTimestamp).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: tick => timingLines.AddRange(tick.ProgressLines ?? []));
+
+        var sweepLine = Assert.Single(timingLines, line =>
+            line.StartsWith("PHASE_TIMING ", StringComparison.Ordinal) &&
+            line.Contains("phase=sweep ", StringComparison.Ordinal) &&
+            line.Contains("self_relaunch_drain_ms=10000", StringComparison.Ordinal));
+        var keys = new[]
+        {
+            "terminal_sweep_ms",
+            "persist_terminalizations_ms",
+            "recover_dispatches_ms",
+            "count_dispatches_ms",
+            "self_relaunch_drain_ms",
+            "canary_await_ms",
+            "readmit_setaside_ms",
+            "mark_dependencies_ms",
+            "reconcile_unscoped_ms"
+        };
+        var values = keys.ToDictionary(key => key, key => ReadTimingValue(sweepLine, key), StringComparer.Ordinal);
+
+        Assert.Equal(
+            [10_000L, 9_000L, 8_000L, 7_000L, 5_000L, 4_000L, 3_000L, 2_000L, 1_000L],
+            [values["self_relaunch_drain_ms"], values["terminal_sweep_ms"], values["persist_terminalizations_ms"],
+                values["recover_dispatches_ms"], values["count_dispatches_ms"], values["canary_await_ms"],
+                values["readmit_setaside_ms"], values["mark_dependencies_ms"], values["reconcile_unscoped_ms"]]);
+        Assert.True(keys.Select(key => sweepLine.IndexOf(key, StringComparison.Ordinal)).SequenceEqual(
+            keys.Select(key => sweepLine.IndexOf(key, StringComparison.Ordinal)).Order()));
+
+        static long ReadTimingValue(string line, string key)
+        {
+            var token = Assert.Single(line.Split(' '), part => part.StartsWith($"{key}=", StringComparison.Ordinal));
+            return long.Parse(token[(key.Length + 1)..]);
         }
     }
 
@@ -898,8 +1008,6 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
     public void TerminalGoalSweepPendingCleanupBlockerIsNotCacheSkipped()
     {
         var root = CreateTempDirectory("mcg-terminal-sweep-cleanup-blocker");
-        var originalDeleteDirectoryForCleanup = GoalWorktrees.DeleteDirectoryForCleanup;
-        var originalWarnings = GoalWorktrees.CleanupWarningSink;
         try
         {
             Directory.CreateDirectory(Path.Combine(root, ".git"));
@@ -915,22 +1023,25 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             var attempts = 0;
             var cache = new TerminalGoalSweepCache();
 
-            GoalWorktrees.DeleteDirectoryForCleanup = path =>
+            var hooks = new GoalWorktreeCleanupHooks
             {
-                if (path.Equals(contextPath, StringComparison.OrdinalIgnoreCase))
+                DeleteDirectoryForCleanup = path =>
                 {
-                    attempts++;
-                    return GoalWorktreeDeleteResult.Failed(
-                        GoalWorktreeDeleteFailureKind.Unknown,
-                        "Directory deletion failed.");
-                }
+                    if (path.Equals(contextPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        attempts++;
+                        return GoalWorktreeDeleteResult.Failed(
+                            GoalWorktreeDeleteFailureKind.Unknown,
+                            "Directory deletion failed.");
+                    }
 
-                return originalDeleteDirectoryForCleanup(path);
+                    return GoalWorktrees.DeleteDirectoryWithReason(path);
+                },
+                CleanupWarningSink = _ => { }
             };
-            GoalWorktrees.CleanupWarningSink = _ => { };
 
-            var first = TerminalGoalSweep.Run(kernel, root, cache: cache);
-            var second = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            var first = TerminalGoalSweep.Run(kernel, root, cache: cache, cleanupHooks: hooks);
+            var second = TerminalGoalSweep.Run(kernel, root, cache: cache, cleanupHooks: hooks);
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(0, second.CacheHitCount);
@@ -945,8 +1056,6 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         }
         finally
         {
-            GoalWorktrees.DeleteDirectoryForCleanup = originalDeleteDirectoryForCleanup;
-            GoalWorktrees.CleanupWarningSink = originalWarnings;
             TryDeleteDirectory(root);
         }
     }
@@ -1284,5 +1393,236 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Assert.False(summary.StopRequested);
         Assert.Equal(1, summary.Ticks);
         Assert.Equal(0, summary.Advanced);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_launch_policy_uses_injected_instants_for_cadence")]
+    public void SpecRefinementLaunchPolicyUsesInjectedInstantsForCadence()
+    {
+        var launchedAt = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+        var attempt = new SpecRefinementLaunchAttempt(
+            launchedAt,
+            ConsecutiveFailedClaims: 0,
+            EscalatedAt: null,
+            "goal-spec-refinement:goal",
+            "C:\\state.db");
+
+        var deferred = SpecRefinementLaunchPolicy.Decide(
+            attempt,
+            launchedAt.AddMinutes(14).AddSeconds(59),
+            GoalRefinementWorkCoordinator.RecoveryLaunchCadence,
+            GoalRefinementWorkCoordinator.ConsecutiveFailedClaimLimit);
+        var due = SpecRefinementLaunchPolicy.Decide(
+            attempt,
+            launchedAt.AddMinutes(15).AddSeconds(1),
+            GoalRefinementWorkCoordinator.RecoveryLaunchCadence,
+            GoalRefinementWorkCoordinator.ConsecutiveFailedClaimLimit);
+
+        Assert.Equal(SpecRefinementLaunchDecisionKind.DeferCadence, deferred.Kind);
+        Assert.Equal(SpecRefinementLaunchDecisionKind.Launch, due.Kind);
+        Assert.Equal(1, due.ConsecutiveFailedClaims);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_failed_claim_count_survives_store_reconstruction")]
+    public void SpecRefinementFailedClaimCountSurvivesStoreReconstruction()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-attempt-store"));
+        var goalId = GoalId.New();
+        var saved = new SpecRefinementLaunchAttempt(
+            new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero),
+            ConsecutiveFailedClaims: 2,
+            EscalatedAt: null,
+            GoalRefinementWorkCoordinator.MessageId(goalId),
+            workspace.SqliteStatePath);
+
+        SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Save(goalId, saved);
+        var reloaded = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Get(goalId);
+
+        Assert.Equal(saved, reloaded);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_processing_claim_resets_failures_without_relaunch")]
+    public void SpecRefinementProcessingClaimResetsFailuresWithoutRelaunch()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-processing"));
+        var goalId = GoalId.New();
+        var processingStartedAt = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+        SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Save(
+            goalId,
+            new SpecRefinementLaunchAttempt(
+                processingStartedAt,
+                ConsecutiveFailedClaims: 2,
+                EscalatedAt: null,
+                GoalRefinementWorkCoordinator.MessageId(goalId),
+                workspace.SqliteStatePath));
+        var launches = 0;
+        GoalRefinementWorkCoordinator.UtcNowOverride = () => processingStartedAt.AddMinutes(1);
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+        };
+        try
+        {
+            var result = GoalRefinementWorkCoordinator.TryLaunchIfDue(
+                workspace,
+                goalId,
+                OrchestratorStateOutboxStatus.Processing,
+                processingStartedAt);
+
+            Assert.False(result.Started);
+            Assert.Equal(GoalRefinementWorkCoordinator.ClaimInProgressDetail, result.Detail);
+            Assert.Equal(0, launches);
+            Assert.Null(SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Get(goalId));
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_expired_processing_lease_escalates_without_resetting_failures")]
+    public void SpecRefinementExpiredProcessingLeaseEscalatesWithoutResettingFailures()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-expired-processing"));
+        var goalId = GoalId.New();
+        var launchedAt = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+        var now = launchedAt + GoalRefinementWorkCoordinator.RecoveryLaunchCadence + TimeSpan.FromSeconds(1);
+        SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Save(
+            goalId,
+            new SpecRefinementLaunchAttempt(
+                launchedAt,
+                ConsecutiveFailedClaims: 2,
+                EscalatedAt: null,
+                GoalRefinementWorkCoordinator.MessageId(goalId),
+                workspace.SqliteStatePath));
+        var launches = 0;
+        GoalRefinementWorkCoordinator.UtcNowOverride = () => now;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+        };
+        try
+        {
+            var result = GoalRefinementWorkCoordinator.TryLaunchIfDue(
+                workspace,
+                goalId,
+                OrchestratorStateOutboxStatus.Processing,
+                launchedAt);
+
+            Assert.False(result.Started);
+            Assert.Contains("SPEC_REFINEMENT_OPERATOR_RECOVERY", result.Detail, StringComparison.Ordinal);
+            Assert.Equal(0, launches);
+            Assert.Equal(3, GoalRefinementWorkCoordinator.GetConsecutiveFailedClaims(workspace, goalId));
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_third_failed_claim_escalates_and_stops_launching")]
+    public void SpecRefinementThirdFailedClaimEscalatesAndStopsLaunching()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-escalation"));
+        var goalId = GoalId.New();
+        var now = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+        var launches = 0;
+        GoalRefinementWorkCoordinator.UtcNowOverride = () => now;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+        {
+            launches++;
+            return new GoalRefinementWorkLaunchResult(true, launches, "test-launch");
+        };
+        try
+        {
+            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+            Assert.True(GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId).Started);
+            now += GoalRefinementWorkCoordinator.RecoveryLaunchCadence.Add(TimeSpan.FromSeconds(1));
+
+            var escalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+            var stillEscalated = GoalRefinementWorkCoordinator.TryLaunchIfDue(workspace, goalId);
+
+            Assert.False(escalated.Started);
+            Assert.False(stillEscalated.Started);
+            Assert.Equal(3, launches);
+            Assert.Contains("SPEC_REFINEMENT_OPERATOR_RECOVERY", escalated.Detail, StringComparison.Ordinal);
+            Assert.Contains($"message_id={GoalRefinementWorkCoordinator.MessageId(goalId)}", escalated.Detail, StringComparison.Ordinal);
+            Assert.Contains($"store_path={Path.GetFullPath(workspace.SqliteStatePath)}", escalated.Detail, StringComparison.Ordinal);
+            Assert.Contains("consecutive_failed_claims=3", escalated.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_claim_miss_is_stderr_failure_and_nonzero_exit")]
+    public void SpecRefinementClaimMissIsStderrFailureAndNonzeroExit()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-claim-miss"));
+        var goalId = GoalId.New();
+        string stdout = string.Empty;
+        CliExitException? failure = null;
+
+        var stderr = AsyncLocalConsoleRouter.CaptureError(() =>
+            stdout = AsyncLocalConsoleRouter.Capture(() =>
+                failure = Assert.Throws<CliExitException>(() =>
+                    GoalRefinementWorkOutcomeReporter.Report(
+                        new GoalRefinementWorkProcessResult(goalId.Value, Claimed: false, Attached: false),
+                        workspace))));
+
+        Assert.NotNull(failure);
+        Assert.NotEqual(0, failure.ExitCode);
+        Assert.DoesNotContain("SPEC_REFINEMENT_WORK_COMPLETE", stdout, StringComparison.Ordinal);
+        Assert.Contains("SPEC_REFINEMENT_WORK_FAILED", stderr, StringComparison.Ordinal);
+        Assert.Contains($"message_id={GoalRefinementWorkCoordinator.MessageId(goalId)}", stderr, StringComparison.Ordinal);
+        Assert.Contains($"store_path={Path.GetFullPath(workspace.SqliteStatePath)}", stderr, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Spec_refinement_pending_hold_reports_pending_age")]
+    public async Task SpecRefinementPendingHoldReportsPendingAge()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory("mcg-refinement-pending-age"));
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            DefaultAgents(),
+            "Research and plan a focused implementation with tests.");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        await repository.SaveAsync(kernel);
+        var message = GoalRefinementWorkCoordinator.CreateMessage(goal.Id) with
+        {
+            CreatedAt = new DateTimeOffset(2026, 9, 21, 1, 0, 0, TimeSpan.Zero)
+        };
+        await repository.EnsureOutboxMessageAsync(message);
+        GoalRefinementWorkCoordinator.UtcNowOverride = () =>
+            new DateTimeOffset(2026, 9, 21, 15, 2, 0, TimeSpan.Zero);
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, _) =>
+            new GoalRefinementWorkLaunchResult(true, 7, "test-launch");
+        try
+        {
+            var pending = Assert.Throws<InvalidOperationException>(() =>
+                GoalDispatchOperations.EnsureRefinedForSpecConsumer(
+                    kernel,
+                    workspace,
+                    providers: null,
+                    kernel.GetGoal(goal.Id)));
+
+            Assert.Contains("pending_age=14h02m", pending.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+            GoalRefinementWorkCoordinator.UtcNowOverride = null;
+        }
     }
 }

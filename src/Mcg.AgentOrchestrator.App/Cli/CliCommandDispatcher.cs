@@ -41,10 +41,15 @@ public static bool ExecuteCommand(
     Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
     TransientSqliteLoadHold? initialConductLoopLoadHold = null,
     Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null,
-    Action? reportGoalCreationProgress = null)
+    Action? reportGoalCreationProgress = null,
+    Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalGoalKernel = null,
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+    WorktreeCleanupContext? cleanupContext = null)
 {
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
+    var operationCleanupContext = cleanupContext ?? WorktreeCleanupContext.Load(
+        attentionStoreDirectory: workspace.OrchestratorDirectory);
     var context = new CliExecutionContext(
         kernel,
         workspace,
@@ -74,14 +79,19 @@ public static bool ExecuteCommand(
         checkpointGoalKernel: checkpointGoalKernel,
         initialConductLoopLoadHold: initialConductLoopLoadHold,
         finalizeGoalReplacement: finalizeGoalReplacement,
-        reportGoalCreationProgress: reportGoalCreationProgress)
+        reportGoalCreationProgress: reportGoalCreationProgress,
+        persistCriticalGoalKernel: persistCriticalGoalKernel,
+        recordDurableGoalBaseline: recordDurableGoalBaseline)
     {
         EventWriter = eventWriter,
-        AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),
+        AcceptanceVerifier = acceptanceVerifier ?? (operationCleanupContext.Hooks.BuildStorageRoot is { } storageRoot
+            ? new GoalAcceptanceVerifier(storageRoot)
+            : new GoalAcceptanceVerifier()),
         RunInjectedAcceptanceVerifierInCurrentProcess = acceptanceVerifier is not null,
         GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds,
         StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,
-        StableSlotSelector = stableSlotSelector
+        StableSlotSelector = stableSlotSelector,
+        CleanupContext = operationCleanupContext
     };
     bool changed;
     try

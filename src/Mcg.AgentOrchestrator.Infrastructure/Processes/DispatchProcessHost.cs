@@ -81,7 +81,13 @@ public static class DispatchProcessHost
         int HeartbeatIntervalMilliseconds = 15_000,
         IReadOnlyList<MandatoryContextFileDescriptor>? MandatoryContextFiles = null,
         ProcessOutputDrainPolicy? OutputDrainPolicy = null,
-        string? SandboxInstanceName = null);
+        string? SandboxInstanceName = null,
+        // The Claude credential source the CONDUCTOR selected during dispatch preflight, transported to
+        // this detached host so seeding consumes that decision instead of selecting again in a process
+        // whose environment may differ. Path and source kind only - no credential material crosses here,
+        // and the payload is re-read at seeding time. Null for non-Claude dispatches; a Claude sandbox
+        // dispatch that arrives without it fails before launch rather than re-deriving a source.
+        ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -292,7 +298,13 @@ public static class DispatchProcessHost
         WorkerSandboxPreparer preparer,
         Action<string, DateTimeOffset, TimeSpan>? recordStep = null,
         Action<string>? protectWorkspaceBoundary = null,
-        Action<string>? protectGitMetadata = null)
+        Action<string>? protectGitMetadata = null,
+        // Injected environment for the Claude path, so a sandbox test resolves nothing from process
+        // state and never falls through to the operator's REAL credential store (which would make it
+        // depend on host auth). It answers ANTHROPIC_API_KEY in every case; it selects a source ONLY
+        // when the dispatch transported none, which in production is a hard failure, not a fallback -
+        // see CreateClaudeCredentialResolver.
+        Func<string, string?>? providerEnvironmentReader = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -391,14 +403,25 @@ public static class DispatchProcessHost
             var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
             Directory.CreateDirectory(tempDir);
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
-            WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
+            TrackAction("materialize-shims", () => WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]));
 
-            SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
-            SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath);
+            // The credential source this dispatch actually seeded, carried to the setup artifact so an
+            // operator can read which login a worker was launched with. It is the resolved result
+            // seeding consumed, not a re-derived guess about it.
+            ClaudeCredentialResolution? seededCredentialSource = null;
+            TrackAction("materialize-provider-seed", () => seededCredentialSource = SeedProviderEnvironment(
+                startInfo,
+                parameters.Provider,
+                sandboxRoot,
+                parameters.StderrPath,
+                // The conductor's transported selection, rehydrated into the single resolver this host
+                // seeds from. No candidate evaluation happens in this process.
+                claudeCredentialResolver: CreateClaudeCredentialResolver(parameters, providerEnvironmentReader)));
+            TrackAction("materialize-ca-bundle", () => SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath));
 
             // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
             // the worktree must read as clean after the orchestrator commits the worker's real edits.
-            ExcludeSandboxFromGit(parameters.WorkingDirectory);
+            TrackAction("materialize-git-exclude", () => ExcludeSandboxFromGit(parameters.WorkingDirectory));
 
             startInfo.Environment["TEMP"] = tempDir;
             startInfo.Environment["TMP"] = tempDir;
@@ -406,12 +429,19 @@ public static class DispatchProcessHost
             // its disposable module-analysis cache inside the ignored worker sandbox; relocating
             // LOCALAPPDATA/APPDATA breaks unrelated per-user tool and PowerShell resolution.
             startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
-            WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, effectivePreparation);
-
-            // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
-            // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
             var dropScript = Path.Combine(sandboxRoot, "drop-to-low.ps1");
-            File.WriteAllText(dropScript, DropToLowScript);
+            TrackAction("materialize-artifacts", () =>
+            {
+                WriteLowIntegritySetupArtifact(
+                    sandboxRoot,
+                    parameters.WorkingDirectory,
+                    effectivePreparation,
+                    seededCredentialSource);
+
+                // Prepend a self-drop-to-Low wrapper. ArgumentList is [BaseArgs..., Command]; replace Command
+                // with ". 'drop.ps1'; <Command>" so the worker (and its children: codex/node) run Low.
+                File.WriteAllText(dropScript, DropToLowScript);
+            });
             var lastIndex = startInfo.ArgumentList.Count - 1;
             if (lastIndex >= 0)
             {
@@ -453,17 +483,114 @@ public static class DispatchProcessHost
         environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDirectory, "ModuleAnalysisCache");
     }
 
-    internal static void SeedProviderEnvironment(
+    /// <summary>
+    /// Runs the Claude credential preflight ONCE for a dispatch about to be launched, and returns the
+    /// reported view whose <see cref="ClaudeCliAuthState.ToTransportedSelection"/> the conductor puts in
+    /// <see cref="DispatchRunParameters.ClaudeCredentialSelection"/>. The detached host then seeds from
+    /// that selection instead of resolving again (see
+    /// <see cref="ClaudeCredentialResolver.ForTransportedSelection"/>), so the source reported here is
+    /// the source the worker receives - derived from this state, never computed a second time.
+    /// Returns null for non-Claude or non-sandbox dispatches, which seed no Claude login and must not
+    /// touch a credential store at all.
+    /// A rejected source is still reported and still transported on purpose: the host's pre-launch
+    /// failure must name the source preflight named rather than fall back to a locally chosen one.
+    /// </summary>
+    internal static ClaudeCliAuthState? PreflightClaudeCredentialSource(
+        WorkerSandboxProvider provider,
+        bool sandboxLowIntegrity,
+        ClaudeCredentialResolver? resolver = null,
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null) =>
+        provider == WorkerSandboxProvider.Claude && sandboxLowIntegrity
+            ? ClaudeCliAuthProbe.From(
+                resolver ?? new ClaudeCredentialResolver(environmentReader, defaultHomeProvider))
+            : null;
+
+    /// <summary>
+    /// The selection a dispatch start hands to the detached host. The conductor's dispatch preflight
+    /// already chose it while preparing this dispatch and recorded it on the dispatch record, so the
+    /// recorded decision is consumed VERBATIM here: no candidate is evaluated, no credential store is
+    /// read, and the login the recorded preflight finding names is the login the host seeds.
+    /// <paramref name="recordedSourceDirectory"/> is blank only for a dispatch that never ran a Claude
+    /// auth preflight - one prepared before this handoff existed, or one whose worker sandbox was
+    /// disabled when it was prepared and enabled by the time it started. Such a dispatch has no reported
+    /// source to honor, so this boundary performs the single resolution itself rather than transporting
+    /// nothing and failing a launch whose preflight never claimed a source.
+    /// Returns null for non-Claude or non-sandbox dispatches, which seed no Claude login at all and must
+    /// not touch a credential store.
+    /// </summary>
+    internal static ClaudeCredentialSourceSelection? TransportedClaudeCredentialSelection(
+        string? recordedSourceDirectory,
+        bool recordedSourceIsExplicit,
+        WorkerSandboxProvider provider,
+        bool sandboxLowIntegrity,
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null)
+    {
+        if (provider != WorkerSandboxProvider.Claude || !sandboxLowIntegrity)
+        {
+            return null;
+        }
+
+        return ClaudeCredentialSourceSelection.FromRecordedSelection(
+                recordedSourceDirectory,
+                recordedSourceIsExplicit)
+            ?? PreflightClaudeCredentialSource(
+                provider,
+                sandboxLowIntegrity,
+                environmentReader: environmentReader,
+                defaultHomeProvider: defaultHomeProvider)
+                ?.ToTransportedSelection();
+    }
+
+    /// <summary>
+    /// Builds the ONE resolver this dispatch host uses for the Claude credential source. The conductor's
+    /// transported selection wins whenever it is present; the injected environment reader is a test-only
+    /// fallback for host tests that construct their own synthetic source. With neither, the resolver
+    /// resolves to <see cref="ClaudeCredentialStatus.SelectionNotTransported"/>, so subscription seeding
+    /// fails before launch instead of silently re-deriving a source in this process.
+    /// </summary>
+    internal static ClaudeCredentialResolver CreateClaudeCredentialResolver(
+        DispatchRunParameters parameters,
+        Func<string, string?>? providerEnvironmentReader = null) =>
+        parameters.ClaudeCredentialSelection is null && providerEnvironmentReader is not null
+            ? new ClaudeCredentialResolver(providerEnvironmentReader)
+            : ClaudeCredentialResolver.ForTransportedSelection(
+                parameters.ClaudeCredentialSelection,
+                providerEnvironmentReader);
+
+    /// <summary>
+    /// Publishes the provider's sandbox environment onto <paramref name="startInfo"/>. For Claude
+    /// subscription auth it returns the ONE resolved credential source that was seeded, so a caller
+    /// can report which login the worker will use; every other provider and API-key mode return null.
+    /// </summary>
+    internal static ClaudeCredentialResolution? SeedProviderEnvironment(
         ProcessStartInfo startInfo,
         WorkerSandboxProvider provider,
         string sandboxRoot,
         string? stderrPath = null,
         Func<string?>? anthropicApiKeyAccessor = null,
-        Func<string>? claudeCredentialDirectoryAccessor = null)
+        Func<string>? claudeCredentialDirectoryAccessor = null,
+        Func<string, string?>? environmentReader = null,
+        Func<string?>? defaultHomeProvider = null,
+        // Transported-resolution seam: a caller that already resolved the Claude credential source
+        // (auth preflight) passes its resolver so seeding consumes that ONE resolved result instead of
+        // computing a second selection that could disagree. It takes precedence over the three
+        // accessor/reader inputs above, which only describe how to build a resolver when none exists.
+        ClaudeCredentialResolver? claudeCredentialResolver = null)
     {
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
         startInfo.Environment.Remove("GROK_HOME");
+        startInfo.Environment.Remove("HERMES_HOME");
+        startInfo.Environment.Remove(HarnessHookRootContract.EnvironmentVariableName);
+
+        var hookRoot = HarnessHookRootContract.Apply(startInfo);
+        var hookDiagnostic = HarnessHookRootContract.DescribeUnsupported(hookRoot);
+        if (hookDiagnostic is not null && !string.IsNullOrWhiteSpace(stderrPath))
+        {
+            AppendDispatchStderrDiagnostic(stderrPath, hookDiagnostic);
+        }
 
         if (provider == WorkerSandboxProvider.Codex)
         {
@@ -471,24 +598,36 @@ public static class DispatchProcessHost
             Directory.CreateDirectory(codexHome);
             SeedCodexAuth(codexHome);
             startInfo.Environment["CODEX_HOME"] = codexHome;
-            return;
+            return null;
         }
 
         if (provider == WorkerSandboxProvider.Claude)
         {
-            SeedClaudeEnvironment(
+            return SeedClaudeEnvironment(
                 startInfo,
                 sandboxRoot,
                 stderrPath,
                 anthropicApiKeyAccessor,
-                claudeCredentialDirectoryAccessor);
-            return;
+                // One resolver for this dispatch: either the caller's resolved result travels in, or
+                // this is the first consumer and the resolver it builds performs the single selection.
+                claudeCredentialResolver ?? new ClaudeCredentialResolver(
+                    environmentReader,
+                    defaultHomeProvider,
+                    claudeCredentialDirectoryAccessor));
         }
 
         if (provider == WorkerSandboxProvider.Grok)
         {
             SeedGrokEnvironment(startInfo, sandboxRoot, stderrPath);
+            return null;
         }
+
+        if (provider == WorkerSandboxProvider.Hermes)
+        {
+            SeedHermesEnvironment(startInfo, sandboxRoot);
+        }
+
+        return null;
     }
 
     internal static void SeedWorkerCaBundle(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath = null)
@@ -591,60 +730,50 @@ public static class DispatchProcessHost
         }
     }
 
-    private static void SeedClaudeEnvironment(
+    /// <summary>
+    /// Seeds the sandbox Claude config root from <paramref name="resolver"/>'s single resolved source
+    /// and returns that resolved result, or null in API-key mode where no source is consumed.
+    /// </summary>
+    private static ClaudeCredentialResolution? SeedClaudeEnvironment(
         ProcessStartInfo startInfo,
         string sandboxRoot,
         string? stderrPath,
         Func<string?>? anthropicApiKeyAccessor,
-        Func<string>? claudeCredentialDirectoryAccessor)
+        ClaudeCredentialResolver resolver)
     {
         var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
-        Directory.CreateDirectory(claudeConfigDir);
 
-        var apiKey = (anthropicApiKeyAccessor ?? ReadAnthropicApiKey)();
+        // Read through the resolver's own environment view so the API-key decision and the credential
+        // selection cannot be answered by two different environments.
+        var apiKey = anthropicApiKeyAccessor is not null
+            ? anthropicApiKeyAccessor()
+            : resolver.ReadEnvironment(ClaudeCredentialSource.ApiKeyEnvironmentVariable);
+
+        ClaudeCredentialResolution? seededSource = null;
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
+            // Explicit API-key precedence: subscription source validation is bypassed entirely, so
+            // an unusable CLI login must neither fail nor warn in this mode.
             startInfo.Environment["ANTHROPIC_API_KEY"] = apiKey;
         }
         else
         {
-            // Subscription auth: seed the sandbox config with the operator's persisted CLI login so
-            // the Low-IL worker authenticates without an API key. claude-cli reads credentials from
-            // the ROOT of CLAUDE_CONFIG_DIR; a Low-IL process can read the Medium-labeled copies.
-            var userClaudeDir = (claudeCredentialDirectoryAccessor ?? ResolveClaudeCredentialDirectory)();
-            var seededCredentials = false;
-            foreach (var fileName in new[] { ".credentials.json", "settings.json" })
-            {
-                var source = Path.Combine(userClaudeDir, fileName);
-                if (File.Exists(source))
-                {
-                    File.Copy(source, Path.Combine(claudeConfigDir, fileName), overwrite: true);
-                    seededCredentials = seededCredentials || fileName == ".credentials.json";
-                }
-            }
-
-            if (!seededCredentials && !string.IsNullOrWhiteSpace(stderrPath))
-            {
-                AppendDispatchStderrDiagnostic(
-                    stderrPath,
-                    "Claude worker sandbox diagnostic: ANTHROPIC_API_KEY is not set and no CLI credentials were found to seed; Claude may fail to authenticate.");
-            }
+            // Subscription auth: the resolver owns selection and validation, and seeding consumes
+            // that one resolved result. It throws WorkerSubscriptionPreflightException (with the
+            // sanitized diagnostic published to stderr first) before any destination artifact is
+            // created, so dispatch stops rather than launching against a stale destination login.
+            seededSource = ClaudeCredentialSource.SeedSubscriptionCredentials(
+                claudeConfigDir,
+                resolver,
+                string.IsNullOrWhiteSpace(stderrPath)
+                    ? null
+                    : diagnostic => AppendDispatchStderrDiagnostic(stderrPath!, diagnostic));
         }
 
-        var settingsPath = Path.Combine(claudeConfigDir, "settings.json");
-        if (!File.Exists(settingsPath))
-        {
-            File.WriteAllText(settingsPath, "{}\n");
-        }
-
+        ClaudeCredentialSource.EnsureSandboxSettings(claudeConfigDir);
         startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
+        return seededSource;
     }
-
-    private static string? ReadAnthropicApiKey() =>
-        Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-
-    private static string ResolveClaudeCredentialDirectory() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
 
     private static void AppendDispatchStderrDiagnostic(string stderrPath, string message)
     {
@@ -936,6 +1065,69 @@ public static class DispatchProcessHost
 
     internal static IWorkerIntegrityLabeler? IntegrityLabelerOverrideForTests;
 
+    internal sealed class HeartbeatWriteGuard(string destinationPath, bool durable)
+    {
+        private readonly object _gate = new();
+        private bool _terminalWritten;
+
+        internal static Action<string, string>? BeforeMoveForTests;
+
+        internal void Write(string state, string payload) =>
+            WriteCore(state, payload, terminal: false);
+
+        internal void WriteTerminal(string state, string payload) =>
+            WriteCore(state, payload, terminal: true);
+
+        private void WriteCore(string state, string payload, bool terminal)
+        {
+            string? temporaryPath = null;
+            try
+            {
+                if (!terminal && Volatile.Read(ref _terminalWritten))
+                {
+                    return;
+                }
+
+                temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+                if (durable)
+                {
+                    WriteAllTextDurable(temporaryPath, payload);
+                }
+                else
+                {
+                    File.WriteAllText(temporaryPath, payload);
+                }
+
+                BeforeMoveForTests?.Invoke(destinationPath, state);
+                lock (_gate)
+                {
+                    if (!terminal && _terminalWritten)
+                    {
+                        return;
+                    }
+
+                    File.Move(temporaryPath, destinationPath, overwrite: true);
+                    temporaryPath = null;
+                    if (terminal)
+                    {
+                        _terminalWritten = true;
+                    }
+                }
+            }
+            catch
+            {
+                // Heartbeats are best-effort; publication failures must not fail the dispatch.
+            }
+            finally
+            {
+                if (temporaryPath is not null)
+                {
+                    try { File.Delete(temporaryPath); } catch { }
+                }
+            }
+        }
+    }
+
     private static IWorkerIntegrityLabeler ResolveIntegrityLabeler() =>
         IntegrityLabelerOverrideForTests ?? IntegrityLabeler;
 
@@ -1060,7 +1252,8 @@ public static void DropToLow() {
     private static void WriteLowIntegritySetupArtifact(
         string sandboxRoot,
         string worktree,
-        WorkerSandboxPreparationResult preparation)
+        WorkerSandboxPreparationResult preparation,
+        ClaudeCredentialResolution? seededCredentialSource = null)
     {
         var artifact = new
         {
@@ -1069,7 +1262,15 @@ public static void DropToLow() {
             sandboxRecursiveRelabel = preparation.SandboxRecursiveRelabel,
             prepReceiptHit = preparation.PrepReceiptHit,
             sandboxRoot,
-            worktree
+            worktree,
+            // Source kind, directory and status only - never token, refresh-token or API-key material
+            // and never credential file contents. Null in API-key mode and for other providers.
+            credentialSource = seededCredentialSource is null ? null : new
+            {
+                directory = seededCredentialSource.Inspection.DirectoryPath,
+                isExplicitSource = seededCredentialSource.Inspection.IsExplicitSource,
+                status = seededCredentialSource.Inspection.Status.ToString()
+            }
         };
         File.WriteAllText(
             Path.Combine(sandboxRoot, LowIntegritySetupArtifactName),
@@ -1128,6 +1329,14 @@ public static void DropToLow() {
         startInfo.Environment["GROK_DISABLE_AUTOUPDATER"] = "1";
     }
 
+    internal static void SeedHermesEnvironment(ProcessStartInfo startInfo, string sandboxRoot)
+    {
+        var hermesHome = Path.Combine(sandboxRoot, $"hermes-home-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(hermesHome);
+        startInfo.Environment["HERMES_HOME"] = hermesHome;
+        startInfo.Environment["HERMES_ACP_SKIP_CONFIGURED_MCP"] = "1";
+    }
+
     private static string ResolveGrokHomeDirectory() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".grok");
 
@@ -1169,6 +1378,12 @@ public static void DropToLow() {
         var heartbeatInterval = parameters.HeartbeatIntervalMilliseconds > 0
             ? TimeSpan.FromMilliseconds(parameters.HeartbeatIntervalMilliseconds)
             : HeartbeatInterval;
+        var heartbeatWriter = string.IsNullOrWhiteSpace(parameters.HeartbeatPath)
+            ? null
+            : new HeartbeatWriteGuard(parameters.HeartbeatPath, durable: false);
+        var prepHeartbeatWriter = string.IsNullOrWhiteSpace(parameters.PrepHeartbeatPath)
+            ? null
+            : new HeartbeatWriteGuard(parameters.PrepHeartbeatPath, durable: true);
 
         void RecordFallbackDiagnostic(string diagnostic)
         {
@@ -1292,22 +1507,16 @@ public static void DropToLow() {
             }
         }
 
-        void WriteHeartbeat(string state)
+        void WriteHeartbeat(string state, bool terminal = false)
         {
-            if (string.IsNullOrWhiteSpace(parameters.HeartbeatPath))
+            if (heartbeatWriter is null)
             {
                 return;
             }
 
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
-            var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
-            var ownedProcessIdentities = heartbeatProcessIdentities.Capture(
-                Environment.ProcessId,
-                ownedPids,
-                () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true
-                    ? currentOwnedPids
-                    : null);
+            var (ownedPids, ownedProcessIdentities) = CaptureHeartbeatOwnership();
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
             var childPid = SelectHeartbeatChildPid(worker, ownedPids);
             ObserveSelectedChild(childPid);
@@ -1355,21 +1564,39 @@ public static void DropToLow() {
                 exitFileExists = File.Exists(parameters.ExitCodePath)
             };
 
-            try
+            var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
+            if (terminal)
             {
-                var tmp = parameters.HeartbeatPath + ".tmp";
-                File.WriteAllText(tmp, JsonSerializer.Serialize(payload, JsonOptions));
-                File.Move(tmp, parameters.HeartbeatPath, overwrite: true);
+                heartbeatWriter.WriteTerminal(state, serializedPayload);
             }
-            catch
+            else
             {
-                // Heartbeat is best-effort; never let it fail the dispatch.
+                heartbeatWriter.Write(state, serializedPayload);
             }
         }
 
-        void WritePrepHeartbeat(string state)
+        (IReadOnlyList<int> OwnedPids, IReadOnlyList<SpawnProcessIdentity> RecordedIdentities) CaptureHeartbeatOwnership()
         {
-            if (string.IsNullOrWhiteSpace(parameters.PrepHeartbeatPath))
+            var candidateOwnedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+            var candidateSet = candidateOwnedPids.ToHashSet();
+            var identitySnapshot = heartbeatProcessIdentities.Capture(
+                Environment.ProcessId,
+                candidateOwnedPids,
+                () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true
+                    ? currentOwnedPids
+                    : candidateOwnedPids);
+            var identityBoundOwnedPids = identitySnapshot.Current
+                .Where(identity => identity.ProcessId != Environment.ProcessId && candidateSet.Contains(identity.ProcessId))
+                .Select(identity => identity.ProcessId)
+                .Distinct()
+                .OrderBy(processId => processId)
+                .ToArray();
+            return (identityBoundOwnedPids, identitySnapshot.Recorded);
+        }
+
+        void WritePrepHeartbeat(string state, bool terminal = false)
+        {
+            if (prepHeartbeatWriter is null)
             {
                 return;
             }
@@ -1386,15 +1613,14 @@ public static void DropToLow() {
                 exitFileExists = !string.IsNullOrWhiteSpace(parameters.PrepExitCodePath) && File.Exists(parameters.PrepExitCodePath)
             };
 
-            try
+            var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
+            if (terminal)
             {
-                var tmp = parameters.PrepHeartbeatPath + ".tmp";
-                WriteAllTextDurable(tmp, JsonSerializer.Serialize(payload, JsonOptions));
-                File.Move(tmp, parameters.PrepHeartbeatPath, overwrite: true);
+                prepHeartbeatWriter.WriteTerminal(state, serializedPayload);
             }
-            catch
+            else
             {
-                // Prep heartbeat is best-effort; the exit artifact is the terminal signal.
+                prepHeartbeatWriter.Write(state, serializedPayload);
             }
         }
 
@@ -1429,7 +1655,7 @@ public static void DropToLow() {
                 }
             }
 
-            WritePrepHeartbeat(prepExitCode == 0 ? "exited" : "failed");
+            WritePrepHeartbeat(prepExitCode == 0 ? "exited" : "failed", terminal: true);
         }
 
         using var heartbeatTimer = new Timer(_ => WriteHeartbeat("running"), null, Timeout.Infinite, Timeout.Infinite);
@@ -1503,7 +1729,7 @@ public static void DropToLow() {
             var maxIdle = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_IDLE_MIN", DefaultMaxIdle);
             while (!worker.WaitForExit((int)WatchdogProbeInterval.TotalMilliseconds))
             {
-                var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+                var (ownedPids, _) = CaptureHeartbeatOwnership();
                 ObserveSelectedChild(SelectHeartbeatChildPid(worker, ownedPids));
                 var now = DateTimeOffset.UtcNow;
                 var runFor = now - startedAt;
@@ -1557,7 +1783,7 @@ public static void DropToLow() {
             CompletePrep(exitCode == 0 ? 0 : 1);
             // One final heartbeat synchronizes the selected-child handle with the childPid receipt.
             // Freeze that selection into the child record before publishing the completion signal.
-            WriteHeartbeat("exited");
+            WriteHeartbeat("exited", terminal: true);
             WriteSelectedChildExitRecord();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
@@ -1876,6 +2102,11 @@ public static void DropToLow() {
 
     internal static int? SelectHeartbeatChildPid(Process? worker, IReadOnlyList<int> ownedPids)
     {
+        if (OperatingSystem.IsWindows() && ownedPids.Count > 0)
+        {
+            var inspection = WindowsNativeProcessInspection.Read(ownedPids);
+            ownedPids = ProcessObservationRoles.CommandCandidates(ownedPids, inspection.Records);
+        }
         int? workerId = null;
         var workerRunning = false;
         if (worker is not null)

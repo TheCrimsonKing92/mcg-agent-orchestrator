@@ -422,6 +422,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(1234, restoredTask.LastDispatch.PromptCharacterCount);
     Assert.True(restoredTask.LastDispatch.UsesComplexModel);
     Assert.Equal(ProviderKind.OpenAICodexCli, restoredTask.LastDispatch.WorkerProviderKind);
+    Assert.Equal(task.AssignedAgentId!.Value, restoredTask.LastDispatch.AssignedAgentId);
     Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
 }
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_non_blocking_process_ownership")]
@@ -954,6 +955,135 @@ public sealed class DispatchExecutionTests
     Assert.Single(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult retries provider interruption three times then escalates")]
+    public void RecordDispatchExecutionResultRetriesProviderInterruptionThenEscalates()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Bound consecutive provider interruptions");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    for (var attempt = 1; attempt <= 4; attempt++)
+    {
+        var command = $"codex exec interruption {attempt}";
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            command,
+            "C:\\repo",
+            clock.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            ProviderInterruptionVerification(command, clock.UtcNow));
+
+        if (attempt <= 3)
+        {
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.Equal(GoalStatus.Active, goal.Status);
+            Assert.Null(task.LastVerification);
+            Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
+            Assert.Equal(attempt, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(attempt));
+    }
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(4, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+    Assert.Equal(3, goal.Timeline.Count(evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("ProviderInterruption", StringComparison.Ordinal)));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("ProviderInterruption", StringComparison.Ordinal) &&
+        evt.Message.Contains("4 consecutive", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("required-file-change-evidence-missing", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult retries exit-zero provider interruption")]
+    public void RecordDispatchExecutionResultRetriesExitZeroProviderInterruption()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Retry exit-zero provider interruption");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    const string command = "codex exec exit-zero interruption";
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        command,
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        ProviderInterruptionVerification(command, clock.UtcNow) with { ExitCode = 0 });
+
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Null(task.LastVerification);
+    Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskRetried &&
+        evt.Message.Contains("ProviderInterruption", StringComparison.Ordinal));
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed);
+}
+
+    [Xunit.Fact(DisplayName = "Provider interruption count resets after any completed turn")]
+    public void ProviderInterruptionCountResetsAfterCompletedTurn()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Reset consecutive provider interruptions");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec interruption",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        ProviderInterruptionVerification("codex exec interruption", clock.UtcNow));
+    Assert.Equal(1, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+
+    clock.Advance(TimeSpan.FromMinutes(1));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec completed turn",
+        "C:\\repo",
+        clock.UtcNow,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    kernel.RecordDispatchExecutionResult(
+        goal.Id,
+        task.Id,
+        new TaskVerificationRecord(
+            "codex exec completed turn",
+            "C:\\repo",
+            1,
+            "{\"type\":\"turn.failed\"}\n{\"type\":\"turn.completed\"}",
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            clock.UtcNow));
+
+    Assert.Equal(0, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+}
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_reopen_task_on_provider_authentication_failure")]
     public void RecordDispatchExecutionResultDoesNotReopenTaskOnProviderAuthenticationFailure()
 {
@@ -1334,10 +1464,13 @@ public sealed class DispatchExecutionTests
             "review-2", "C:\\repo", 0, round2, string.Empty, clock.UtcNow, WorkerResultPresent: true));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        var violation = Assert.IsType<ReviewFindingContractViolation>(
+            reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.OmittedOpenFindingViolationCode, violation.Code);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskFailed &&
-            evt.Message.Contains("verdict rejected", StringComparison.Ordinal) &&
+            evt.Message.Contains("structured findings invalid", StringComparison.Ordinal) &&
             evt.Message.Contains("F-1", StringComparison.Ordinal));
     }
 
@@ -1776,6 +1909,284 @@ public sealed class DispatchExecutionTests
         Assert.DoesNotContain("criteria attestation rejected", failure.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_authoritative_operator_criterion_defers_without_a_fake_met_verdict")]
+    public void RecordDispatchExecutionResultAuthoritativeOperatorCriterionDefersWithoutAFakeMetVerdict()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Defer operator evidence", [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Review source while retaining an operator observation",
+            ["operator observation"],
+            VerificationClass.RealWorldDependent,
+            [],
+            []) { OperatorOwnedAcceptanceCriteria = ["operator observation"] });
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+
+        var result = StructuredReviewerResult(
+            "pass",
+            "[]",
+            "none",
+            """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Awaiting a real operator observation."}]""");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Assert.Contains(goal.Timeline, item => item.Message.Contains("Deferred criterion evidence remains pending", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_defers_authoritatively_mapped_acceptance_finding_without_reopening_worker")]
+    [Xunit.InlineData(AgentRole.Tester)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void RecordDispatchExecutionResultDefersAuthoritativelyMappedAcceptanceFindingWithoutReopeningWorker(AgentRole role)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Record structured evidence", role);
+        var goal = kernel.CreateGoal("Route acceptance-owned evidence", [task]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Run the authoritative full acceptance control.",
+            ["The full acceptance control has a current-candidate receipt."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.MapCriterionEvidenceOwner(
+            goal.Id,
+            criterionIndex: 0,
+            criterionVersion: 1,
+            CriterionEvidenceOwner.Acceptance,
+            "operator@example",
+            requiredScope: CriterionEvidenceScopes.FullAcceptanceGate,
+            findingStableId: "acceptance-core-tests-not-dispositioned",
+            expectedCandidateSha: "candidate-123");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            role.ToString(), "record-evidence", "C:\\repo", clock.UtcNow));
+
+        var result = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"acceptance-core-tests-not-dispositioned","state":"open","location":{"file":"config/acceptance-manifest.json","region":"full-core"},"description":"Current candidate has no full-core receipt.","severity":"blocking","category":"acceptance-owned"}]""",
+            "Acceptance evidence is pending for the authoritative full-gate obligation.",
+            role == AgentRole.Reviewer
+                ? """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"The acceptance owner must run acceptance:full-core."}]"""
+                : "[]");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "record-evidence", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.NotNull(task.LastVerification!.MergedReviewFindings);
+        Assert.True(
+            task.Status == WorkTaskStatus.Completed,
+            string.Join(" | ", goal.Timeline.Select(item => item.Message)));
+        var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Assert.Equal("acceptance-core-tests-not-dispositioned", obligation.FindingStableId);
+        Assert.Contains(goal.Timeline, item =>
+            item.Message.Contains("Deferred acceptance-owned finding remains pending", StringComparison.Ordinal) &&
+            item.Message.Contains("acceptance-core-tests-not-dispositioned", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Criterion evidence mapping rejects an acceptance scope the conductor cannot prove")]
+    public void CriterionEvidenceMappingRejectsUnexecutableAcceptanceScope()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Reject unexecutable scope", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Require full acceptance", ["a full-gate receipt"], VerificationClass.TestVerifiable, [], []));
+
+        var error = Assert.Throws<ArgumentException>(() => kernel.MapCriterionEvidenceOwner(
+            goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance, "operator", "acceptance:partial", "finding-1", "candidate-123"));
+
+        Assert.Contains(CriterionEvidenceScopes.FullAcceptanceGate, error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Criterion evidence record binds a spec-created operator observation to its supplied candidate")]
+    public void CriterionEvidenceRecordBindsSpecCreatedOperatorObservation()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Record operator observation", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Retain an operator observation", ["native proof"], VerificationClass.RealWorldDependent, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["native proof"]
+        });
+        var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
+
+        var recorded = kernel.RecordCriterionEvidence(
+            goal.Id, obligation.Id, CriterionEvidenceOwner.Operator, "candidate-123", "native-run-1",
+            "operator observation", passed: true, "operator observed the native round trip");
+
+        Assert.Equal(CriterionEvidenceState.Satisfied, recorded.State);
+        Assert.Equal("candidate-123", recorded.CandidateSha);
+    }
+
+    [Xunit.Fact(DisplayName = "Criterion evidence mapping and receipt persist without changing unrelated obligations")]
+    public void CriterionEvidenceMappingAndReceiptPersistWithoutChangingUnrelatedObligations()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Map legacy criterion evidence", [developer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Keep criterion identities durable",
+            ["first", "second"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+
+        var mapped = kernel.MapCriterionEvidenceOwner(
+            goal.Id, 0, criterionVersion: 1, CriterionEvidenceOwner.Acceptance, "operator@example", expectedCandidateSha: "abc1234");
+        var satisfied = kernel.RecordCriterionEvidence(
+            goal.Id, mapped.Id, CriterionEvidenceOwner.Acceptance, "abc1234", "gate-1",
+            CriterionEvidenceScopes.FullAcceptanceGate, passed: true, "focused gate passed");
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock)
+            .GetGoal(goal.Id);
+
+        Assert.Equal(CriterionEvidenceState.Satisfied, satisfied.State);
+        Assert.Equal("gate-1", satisfied.ReceiptId);
+        Assert.DoesNotContain(restored.CriterionEvidenceObligations, item => item.CriterionIndex == 1);
+        var restoredEvidence = Assert.Single(restored.CriterionEvidenceObligations, item => item.CriterionIndex == 0);
+        Assert.Equal(CriterionEvidenceState.Satisfied, restoredEvidence.State);
+        Assert.Equal("abc1234", restoredEvidence.CandidateSha);
+    }
+
+    [Xunit.Fact(DisplayName = "Criterion evidence restore retains a malformed persisted obligation as actionable unknown state")]
+    public void CriterionEvidenceRestoreRetainsMalformedPersistedObligationAsActionableUnknownState()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Recover malformed evidence", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Retain malformed state for operator repair", ["native proof"], VerificationClass.RealWorldDependent, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["native proof"]
+        });
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id) with
+        {
+            CriterionEvidenceObligations =
+            [
+                new CriterionEvidenceObligation(
+                    Id: "",
+                    CriterionIndex: 0,
+                    CriterionVersion: 1,
+                    Criterion: "native proof",
+                    Owner: CriterionEvidenceOwner.Operator,
+                    State: CriterionEvidenceState.Pending,
+                    RequiredScope: "operator observation",
+                    Provenance: "corrupt persisted value",
+                    RecordedAt: clock.UtcNow)
+            ]
+        };
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock)
+            .GetGoal(goal.Id);
+
+        var obligation = Assert.Single(restored.OutstandingCriterionEvidenceObligations);
+        Assert.Equal(CriterionEvidenceOwner.Unknown, obligation.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Assert.Equal("ownership mapping required", obligation.RequiredScope);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_duplicate restored criterion ownership fails closed without throwing")]
+    public void RecordDispatchExecutionResultDuplicateRestoredCriterionOwnershipFailsClosedWithoutThrowing()
+    {
+        var clock = new FakeClock();
+        var source = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review duplicate ownership", AgentRole.Reviewer);
+        var goal = source.CreateGoal("Duplicate evidence ownership", [reviewer]);
+        source.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Require an operator observation", ["native proof"], VerificationClass.RealWorldDependent, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["native proof"]
+        });
+        source.ActivateGoal(goal.Id, DefaultAgents());
+        source.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord("codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var snapshot = source.ExportGoalSnapshot(goal.Id) with
+        {
+            CriterionEvidenceObligations =
+            [
+                .. source.ExportGoalSnapshot(goal.Id).CriterionEvidenceObligations,
+                source.ExportGoalSnapshot(goal.Id).CriterionEvidenceObligations[0] with { Id = "criterion-v1-0" }
+            ]
+        };
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock);
+        var restoredTask = kernel.GetGoal(goal.Id).FindTask(reviewer.Id);
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0,
+            StructuredReviewerResult("pass", "[]", "none",
+                """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Ownership must be repaired."}]"""),
+            string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
+        Assert.Contains(kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations,
+            item => item.Owner == CriterionEvidenceOwner.Unknown && item.RequiredScope == "ownership mapping required");
+    }
+
+    [Xunit.Fact(DisplayName = "Malformed criterion obligation repair creates an attributed pending replacement and persists history")]
+    public void MalformedCriterionObligationRepairCreatesAttributedPendingReplacementAndPersistsHistory()
+    {
+        var clock = new FakeClock();
+        var source = new AgentOrchestratorKernel(clock);
+        var goal = source.CreateGoal("Repair malformed evidence", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        source.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Retain native proof", ["native proof"], VerificationClass.RealWorldDependent, [], []));
+        var snapshot = source.ExportGoalSnapshot(goal.Id) with
+        {
+            CriterionEvidenceObligations =
+            [
+                new CriterionEvidenceObligation("malformed-persisted-0", 99, 99, "corrupt", CriterionEvidenceOwner.Unknown,
+                    CriterionEvidenceState.Pending, "ownership mapping required", "malformed persisted obligation", clock.UtcNow)
+            ]
+        };
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock);
+        var malformed = Assert.Single(kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations);
+
+        var replacement = kernel.RepairMalformedCriterionEvidenceObligation(
+            goal.Id, malformed.Id, 0, 1, CriterionEvidenceOwner.Operator, "operator@example", "restore identity",
+            "operator observation", "native-proof", "candidate-123");
+        var recorded = kernel.RecordCriterionEvidence(
+            goal.Id, replacement.Id, CriterionEvidenceOwner.Operator, "candidate-123", "native-1",
+            "operator observation", true, "native proof observed");
+        var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([kernel.ExportGoalSnapshot(goal.Id)], []), clock)
+            .GetGoal(goal.Id);
+
+        Assert.Equal(CriterionEvidenceState.Satisfied, recorded.State);
+        Assert.Contains(restored.CriterionEvidenceObligations,
+            item => item.Id == malformed.Id && item.State == CriterionEvidenceState.Repaired && item.Provenance.Contains("operator@example", StringComparison.Ordinal) && item.Provenance.Contains("restore identity", StringComparison.Ordinal));
+        Assert.Contains(restored.CriterionEvidenceObligations,
+            item => item.Id == replacement.Id && item.State == CriterionEvidenceState.Satisfied && item.ReceiptId == "native-1");
+    }
+
+    [Xunit.Fact(DisplayName = "Equivalent refinement carries explicit evidence mapping forward as a pending current obligation")]
+    public void EquivalentRefinementCarriesExplicitEvidenceMappingForwardAsPendingCurrentObligation()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Carry mapped ownership", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        var spec = new RefinedSpec("Require current full acceptance", ["full acceptance receipt"], VerificationClass.TestVerifiable, [], []);
+        kernel.SetGoalRefinedSpec(goal.Id, spec);
+        kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance, "operator@example",
+            CriterionEvidenceScopes.FullAcceptanceGate, "full-gate", "candidate-123");
+
+        kernel.RecordGoalRefinement(goal.Id, spec);
+
+        var current = Assert.Single(kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations);
+        Assert.Equal(2, current.CriterionVersion);
+        Assert.Equal(CriterionEvidenceOwner.Acceptance, current.Owner);
+        Assert.Equal(CriterionEvidenceState.Pending, current.State);
+        Assert.Equal("candidate-123", current.ExpectedCandidateSha);
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_extra_criteria_attestations")]
     public void RecordDispatchExecutionResultReviewerPassAcceptsAndRecordsExtraCriteriaAttestations()
     {
@@ -1940,7 +2351,7 @@ public sealed class DispatchExecutionTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, "same-commit");
         var moved = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"},{"stable_id":"A-2","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Second suggestion.","severity":"advisory"}]""",
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1950,7 +2361,8 @@ public sealed class DispatchExecutionTests
         Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
         Assert.Equal(
             new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
-            Assert.Single(reviewer.LastVerification.MergedReviewFindings!).Location);
+            reviewer.LastVerification.MergedReviewFindings!.Single(finding => finding.StableId == "A-1").Location);
+        Assert.Contains(reviewer.LastVerification.MergedReviewFindings, finding => finding.StableId == "A-2");
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskNote &&
@@ -1958,6 +2370,15 @@ public sealed class DispatchExecutionTests
             evt.Message.Contains("canonical_stable_id=A-1", StringComparison.Ordinal));
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskFailed);
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck canonicalized round");
+        var nextBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("OPEN_ACTIVE_RECHECK count=2", nextBrief, StringComparison.Ordinal);
+        Assert.Contains(
+            "- A-2 | severity=advisory | src/C.cs::C.Run | Second suggestion.",
+            nextBrief,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_canonicalized_identity_reentry_records_untouched_reopen")]
@@ -2139,6 +2560,15 @@ public sealed class DispatchExecutionTests
         Assert.Equal(
             ReviewFindingConvergence.IdentityMovedViolationCode,
             restoredReviewer.LastVerification.ReviewFindingContractViolation?.Code);
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck salvaged identity round");
+        var nextBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("OPEN_ACTIVE_RECHECK count=2", nextBrief, StringComparison.Ordinal);
+        Assert.Contains(
+            "- A-2 | severity=advisory | src/C.cs::C.Run | Second suggestion.",
+            nextBrief,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_canonicalized_identity_is_recorded_as_a_note")]
@@ -2854,6 +3284,17 @@ private static TaskVerificationRecord ProviderConnectivityVerification(string co
         "ERROR: Falling back from WebSockets to HTTPS transport. stream disconnected",
         completedAt,
         ProviderFailureKind: ProviderFailureKind.Connectivity);
+}
+
+private static TaskVerificationRecord ProviderInterruptionVerification(string command, DateTimeOffset completedAt)
+{
+    return new TaskVerificationRecord(
+        command,
+        "C:\\repo",
+        1,
+        "{\"type\":\"thread.started\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"provider wording\"}\n{\"type\":\"turn.failed\"}",
+        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+        completedAt);
 }
 
 private static string WorkerResultStdout(string files, string tests, string blockers)

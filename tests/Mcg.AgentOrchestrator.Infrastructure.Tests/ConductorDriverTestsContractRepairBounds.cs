@@ -272,6 +272,99 @@ public sealed class ConductorDriverTestsContractRepairBounds
         Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
     }
 
+    [Xunit.Fact(DisplayName = "Omitted open Reviewer IDs consume mechanical repair without reopening Developer")]
+    public void OmittedOpenReviewerIdsMechanicallyRetryReviewerWithoutDeveloperReopen()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        PassVerification(kernel, goal, developer);
+        PassVerification(kernel, goal, tester);
+        var open = new ReviewFinding(
+            "F-OMITTED",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
+            "Guard remains advisory.",
+            FindingSeverity.Advisory);
+        DispatchTask(kernel, goal, reviewer, "review-open");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-open",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        Assert.Contains(
+            reviewer.LastVerification!.MergedReviewFindings!,
+            finding => finding.StableId == open.StableId && finding.State == ReviewFindingState.Open);
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "confirm advisory resolution");
+        Assert.Contains(
+            reviewer.VerificationHistory,
+            verification => verification.MergedReviewFindings?.Any(
+                finding => finding.StableId == open.StableId && finding.State == ReviewFindingState.Open) == true);
+        DispatchTask(kernel, goal, reviewer, "review-omitted");
+        var omittedPass = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            "blockers: none",
+            "findings: []",
+            "touched_anchors: []",
+            "verdict: pass",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-omitted",
+            "C:\\tmp",
+            0,
+            omittedPass,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\reviewer.out.log",
+            WorkerResultPresent: true));
+
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(reviewer.LastVerification, out _, out var parseDiagnostic), parseDiagnostic);
+        Assert.True(WorkerResultBlockers.TryFindPassVerdict(reviewer.LastVerification));
+        Assert.Contains(
+            reviewer.LastVerification!.MergedReviewFindings!,
+            finding => finding.StableId == open.StableId && finding.State == ReviewFindingState.Open);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Equal(
+            ReviewFindingConvergence.OmittedOpenFindingViolationCode,
+            reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
+        TaskId? retriedTaskId = null;
+        RetryRoundKind? retryRoundKind = null;
+        string? retryMessage = null;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                retryRoundKind = roundKind;
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            writeEscalation: (_, _, message) => escalation = message);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(reviewer.Id, retriedTaskId);
+        Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Contains(ReviewFindingConvergence.OmittedOpenFindingViolationCode, retryMessage, StringComparison.Ordinal);
+        Assert.Contains("avoided_developer_reopen=1", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("stable_id: F-OMITTED", retryMessage, StringComparison.Ordinal);
+        Assert.Null(escalation);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_tester_contract_violation_mechanically_retries_the_same_tester")]
     public void ConductorDriverTesterContractViolationMechanicallyRetriesSameTester()
     {
@@ -523,7 +616,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "still missing focused evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var focusedRuns = 0;
         var retried = false;
         string? escalation = null;
@@ -571,7 +664,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "still missing focused conductor evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var focusedRuns = 0;
         var retried = false;
         string? escalation = null;
@@ -618,7 +711,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "still missing focused conductor evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var focusedRuns = 0;
         var retried = false;
         string? escalation = null;
@@ -659,13 +752,13 @@ public sealed class ConductorDriverTestsContractRepairBounds
         kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 1");
         kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 2");
         kernel.RecordReviewerEvidenceRequestReceived(goal.Id, reviewer.Id, "stale request 3");
-        FailReviewerNeedsWork(kernel, goal, reviewer, "prior round needs evidence", "Infrastructure.Tests: prior");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "prior round needs evidence", "Infrastructure.Tests: prior", implicitFindingCategory: FindingCategory.AcceptanceOwned);
 
         // Operator recover retries the reviewer task with a NON-mechanical message, starting a fresh
         // evidence round; the three stale requests above must no longer count toward the bound.
         kernel.RetryTask(goal.Id, reviewer.Id, "operator recover reset the review round", invalidateDownstream: false);
 
-        FailReviewerNeedsWork(kernel, goal, reviewer, "fresh round needs evidence", "Infrastructure.Tests: fresh");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "fresh round needs evidence", "Infrastructure.Tests: fresh", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         goal = kernel.GetGoal(goal.Id);
         var focusedRuns = 0;
         var retried = false;
@@ -703,7 +796,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             PassVerification(kernel, goal, task);
         }
 
-        FailReviewerNeedsWork(kernel, goal, reviewer, "missing full test evidence", "Infrastructure.Tests: all");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "missing full test evidence", "Infrastructure.Tests: all", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var retried = false;
         var focusedRuns = 0;
         string? escalation = null;
@@ -766,7 +859,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             goal,
             reviewer,
             "missing focused conductor evidence",
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests");
+            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", implicitFindingCategory: FindingCategory.AcceptanceOwned);
         var retried = false;
         string? escalation = null;
         var driver = MakeDriver(
@@ -805,6 +898,44 @@ public sealed class ConductorDriverTestsContractRepairBounds
             evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
             evt.Message.Contains("C:\\tmp\\failed-trx", StringComparison.Ordinal));
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_retry_warning_is_recorded_on_the_target_task")]
+    public void ConductorDriverReviewerRetryWarningIsRecordedOnTheTargetTask()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            PassVerification(kernel, goal, task);
+
+        for (var round = 1; round <= 3; round++)
+        {
+            kernel.RetryTask(goal.Id, developer.Id, $"auto-review-retry round {round}: prior reviewer finding");
+            PassVerification(kernel, goal, developer);
+        }
+
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Developer still misses the review blocker.");
+        var notes = new List<(TaskId TaskId, string Message)>();
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message),
+            recordTaskNote: (goalId, taskId, message) =>
+            {
+                notes.Add((taskId, message));
+                kernel.RecordTaskNote(goalId, taskId, message);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Contains(notes, note =>
+            note.TaskId == developer.Id &&
+            note.Message.Contains("auto-review-retry escalation-warning round 4/6", StringComparison.Ordinal));
+        Assert.Contains(goal.Timeline, item =>
+            item.TaskId == developer.Id &&
+            item.Message.Contains("auto-review-retry escalation-warning round 4/6", StringComparison.Ordinal));
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_needs_work_round_7_stops_and_escalates")]
@@ -1046,7 +1177,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             var profiles = WorkerProfileCatalog.Default();
             if (path == "ready-batch")
             {
-                var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+                var batch = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(
                     kernel,
                     workspace,
                     goal,
@@ -1056,7 +1187,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             }
             else if (path == "profile")
             {
-                GoalManagementCommandService.ProfileDispatchTask(
+                new GoalDispatchOperations().ProfileDispatchTask(
                     kernel,
                     workspace,
                     goal,
@@ -1066,7 +1197,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
             }
             else
             {
-                GoalManagementCommandService.SubscriptionDispatchTask(
+                new GoalDispatchOperations().SubscriptionDispatchTask(
                     kernel,
                     workspace,
                     goal,
@@ -1075,7 +1206,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
                     profiles);
                 if (path == "refresh")
                 {
-                    GoalManagementCommandService.RefreshPreparedDispatchBeforeStart(
+                    new GoalDispatchOperations().RefreshPreparedDispatchBeforeStart(
                         kernel,
                         workspace,
                         goal,

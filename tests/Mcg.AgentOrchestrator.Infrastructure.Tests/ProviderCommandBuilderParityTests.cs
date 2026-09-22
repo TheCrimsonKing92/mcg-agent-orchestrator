@@ -128,7 +128,32 @@ public sealed class ProviderCommandBuilderParityTests
                 Quote(legacy.PromptPath),
                 StringComparison.OrdinalIgnoreCase);
 
-            Assert.Equal(legacy.Command, routed);
+            if (providerKind == ProviderKind.AnthropicClaudeCli &&
+                !isWriteCapable &&
+                valueState == "populated")
+            {
+                Assert.Contains("--permission-mode 'dontAsk'", routed, StringComparison.Ordinal);
+                Assert.Contains("--restricted", routed, StringComparison.Ordinal);
+                Assert.Contains(
+                    "--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'",
+                    routed,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'",
+                    routed,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "--disallowed-tools 'Edit,Write,NotebookEdit'",
+                    routed,
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash,", routed, StringComparison.Ordinal);
+                Assert.DoesNotContain(",Task", routed, StringComparison.Ordinal);
+                Assert.DoesNotContain("--permission-mode 'plan'", routed, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal(legacy.Command, routed);
+            }
         }
         finally
         {
@@ -174,7 +199,7 @@ public sealed class ProviderCommandBuilderParityTests
             sessionId: "12345678-1234-1234-1234-123456789abc");
 
         Assert.Equal(
-            "claude -p --model 'claude-sonnet-4-6' --permission-mode 'plan' --session-id 12345678-1234-1234-1234-123456789abc",
+            "claude -p --model 'claude-sonnet-4-6' --permission-mode 'dontAsk' --restricted --tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite' --allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite' --disallowed-tools 'Edit,Write,NotebookEdit' --session-id 12345678-1234-1234-1234-123456789abc",
             string.Join(' ', command));
     }
 
@@ -199,7 +224,7 @@ public sealed class ProviderCommandBuilderParityTests
             });
 
         Assert.Equal(
-            $"codex exec --json --skip-git-repo-check --model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}' -c model_reasoning_effort='high' --sandbox 'read-only' --cd 'C:\\worker repo'",
+            $"codex exec --json --skip-git-repo-check --model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}' -c model_reasoning_effort='high' -c project_doc_max_bytes=65536 --sandbox 'read-only' --cd 'C:\\worker repo'",
             command);
     }
 

@@ -63,7 +63,8 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
             isProcessAlive: alivePids.Contains,
             now: () => now,
             loopProcessId: loopProcessId,
-            launcherProcessId: launcherProcessId);
+            launcherProcessId: launcherProcessId,
+            readProcessIdentity: TestProcessIdentity);
 
     private static DispatchHeartbeatStatus Heartbeat(
         TaskProcessRecord process,
@@ -85,7 +86,23 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
             TimeSpan.Zero,
             idle,
             stdoutBytes,
-            stderrBytes);
+            stderrBytes)
+        {
+            OwnedProcessIdentities = ownedPids
+                .Concat(process.ProcessId > 0 ? [process.ProcessId] : [])
+                .Distinct()
+                .Select(TestProcessIdentity)
+                .OfType<SpawnProcessIdentity>()
+                .ToArray()
+        };
+
+    private static SpawnProcessIdentity? TestProcessIdentity(int processId) =>
+        processId > 0
+            ? new SpawnProcessIdentity(
+                processId,
+                DateTimeOffset.Parse("2026-06-22T11:00:00Z"),
+                $@"C:\workers\worker-{processId}.exe")
+            : null;
 
     // ── Watch mode: continues when all held instead of breaking ──────────
 
@@ -384,7 +401,7 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
 
         var summary = new ConductorBatchLoop(
             refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal))
+                new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal))
             .Run(kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
 
         Assert.Equal(WorkTaskStatus.Completed, planner.Status);
@@ -729,7 +746,14 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
     public void ProgressEmission_TickSummaryContainsPhaseTimingLines()
     {
         var (kernel, _) = SimpleGoal("phase timing dispatch");
-        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
+        TaskSpec? dispatchedTask = null;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: goal =>
+            {
+                dispatchedTask = Assert.Single(goal.Tasks);
+                return DispatchStartOutcome.Started([dispatchedTask]);
+            });
         BatchTickSummary? capturedTick = null;
 
         new ConductorBatchLoop().Run(
@@ -743,7 +767,9 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         var lines = capturedTick!.ProgressLines!;
         Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=sweep ", StringComparison.Ordinal) && line.Contains(" ts=", StringComparison.Ordinal));
         Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=prewalk ", StringComparison.Ordinal));
-        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=dispatch-prep ", StringComparison.Ordinal) && line.Contains(" task=", StringComparison.Ordinal));
+        Assert.NotNull(dispatchedTask);
+        Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=dispatch-prep ", StringComparison.Ordinal)
+            && line.Contains($" task={dispatchedTask.Id.Value[..8]} role={dispatchedTask.RequiredRole} ", StringComparison.Ordinal));
         Assert.Contains(lines, line => line.StartsWith("PHASE_TIMING tick=1 phase=per-goal-walk ", StringComparison.Ordinal) && line.Contains("slowest=", StringComparison.Ordinal));
     }
 
@@ -847,8 +873,8 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         Assert.Contains("task=1/", line);
         Assert.Contains("elapsed=2m0s", line);
         Assert.Contains("state=working", line);
-        Assert.Contains("pid=111", line);
-        Assert.DoesNotContain("pid=222", line);
+        Assert.Contains("pid=222", line);
+        Assert.DoesNotContain("pid=111", line);
         Assert.Contains("liveness=\"alive\"", line);
         Assert.Contains("output_delta=50", line);
         Assert.Contains("last_progress_age=15s", line);
@@ -860,11 +886,43 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         Assert.Contains("(task 1/", human);
         Assert.Contains("running 2m0s", human);
         Assert.Contains("state=working", human);
-        Assert.Contains("worker pid=111 alive", human);
-        Assert.DoesNotContain("pid=222", human);
+        Assert.Contains("worker pid=222 alive", human);
+        Assert.DoesNotContain("pid=111", human);
         Assert.Contains("+42B stdout", human);
         Assert.Contains("last progress 15s ago", human);
         Assert.Contains("4 files changed (src/A.cs, src/B.cs, src/C.cs, +1 more)", human);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_does_not_display_identityless_live_pid_as_worker")]
+    public void WatchProgressDoesNotDisplayIdentitylessLivePidAsWorker()
+    {
+        var (kernel, goal) = SimpleGoal("watch identity guard");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-1), "abc123", processId: 111);
+        var reporter = new ConductorWatchProgressReporter(
+            readHeartbeat: (process, observedAt) => Heartbeat(process, observedAt, 10, 0, TimeSpan.FromSeconds(5), [222]) with
+            {
+                OwnedProcessIdentities = []
+            },
+            readChanges: (_, _) => new DispatchLiveChangeSnapshot([], [], 0),
+            isProcessAlive: _ => true,
+            now: () => now,
+            loopProcessId: 9001,
+            launcherProcessId: 9002,
+            readProcessIdentity: TestProcessIdentity);
+
+        var lines = reporter.BuildLines(
+            kernel.GetGoal(goal.Id),
+            quiet: false,
+            policy: ConductorAutonomyPolicy.Conservative,
+            watchInterval: TimeSpan.FromSeconds(1));
+
+        var machine = lines.Single(line => line.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal));
+        var human = lines.Single(line => line.StartsWith($"[{goal.Id.Value[..8]}] {task.RequiredRole}", StringComparison.Ordinal));
+        Assert.Contains("pid=unknown", machine);
+        Assert.Contains("liveness=\"NO LIVE WORKER\"", machine);
+        Assert.Contains("worker pid=unknown NO LIVE WORKER", human);
     }
 
     [Xunit.Theory(DisplayName = "WatchProgress_suppresses_conductor_process_ids")]
@@ -893,8 +951,8 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
 
         var machine = lines.Single(line => line.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal));
         var human = lines.Single(line => line.StartsWith($"[{goal.Id.Value[..8]}]", StringComparison.Ordinal));
-        Assert.Contains("pid=unknown", machine);
-        Assert.Contains("worker pid=unknown alive", human);
+        Assert.Contains("pid=333", machine);
+        Assert.Contains("worker pid=333 alive", human);
         Assert.DoesNotContain($"pid={conductorProcessId}", machine);
         Assert.DoesNotContain($"pid={conductorProcessId}", human);
     }
@@ -933,6 +991,47 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         Assert.NotEqual(working[0], stalled[0]);
     }
 
+    [Xunit.Fact]
+    public void WatchProgress_ResolvedLauncherProcessIsNotReportedAsWorker()
+    {
+        var (kernel, goal) = SimpleGoal("watch launcher exclusion");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-08-27T12:00:00Z");
+        const int loopProcessId = 9001;
+        const int launcherProcessId = 9002;
+        StartProcess(kernel, goal, task, now.AddMinutes(-1), "abc123", launcherProcessId);
+        var parentReads = 0;
+        var reporter = new ConductorWatchProgressReporter(
+            readHeartbeat: (process, observedAt) => Heartbeat(
+                process,
+                observedAt,
+                10,
+                0,
+                TimeSpan.FromSeconds(5),
+                [launcherProcessId]),
+            readChanges: (_, _) => new DispatchLiveChangeSnapshot([], [], 0),
+            isProcessAlive: _ => true,
+            now: () => now,
+            loopProcessId: loopProcessId,
+            readProcessIdentity: TestProcessIdentity,
+            readParentProcessId: processId =>
+            {
+                parentReads++;
+                Assert.Equal(loopProcessId, processId);
+                return launcherProcessId;
+            });
+
+        var lines = reporter.BuildLines(
+            kernel.GetGoal(goal.Id),
+            quiet: false,
+            policy: ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(1, parentReads);
+        Assert.Contains(lines, line =>
+            line.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal) &&
+            line.Contains("pid=unknown", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "WatchProgress_throttles_until_output_or_file_count_changes")]
     public void WatchProgressThrottlesUntilOutputOrFileCountChanges()
     {
@@ -951,7 +1050,8 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
             },
             readChanges: (_, _) => new DispatchLiveChangeSnapshot(["src/A.cs"], ["src/A.cs"], 0),
             isProcessAlive: pid => pid == 111,
-            now: () => start.AddSeconds(nowCalls++ * 10));
+            now: () => start.AddSeconds(nowCalls++ * 10),
+            readProcessIdentity: TestProcessIdentity);
         var ticks = new List<BatchTickSummary>();
 
         new ConductorBatchLoop(watchProgressReporter: reporter).Run(

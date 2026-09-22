@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Rendering;
 
-internal static class DashboardDisplayNames
+public static class DashboardDisplayNames
 {
     public static string Display(GoalStatus status) => status switch
     {
@@ -59,6 +59,7 @@ internal static class DashboardDisplayNames
         ProgressKind.ReviewerEvidenceRunRecorded => "Reviewer evidence run recorded",
         ProgressKind.FindingEvidenceRequestRecorded => "Finding evidence request recorded",
         ProgressKind.FindingEvidenceRunRecorded => "Finding evidence run recorded",
+        ProgressKind.FindingEvidenceSuppressed => "Finding evidence suppressed",
         ProgressKind.GoalCancelled => "Goal cancelled",
         ProgressKind.GoalSuperseded => "Goal superseded",
         ProgressKind.GoalPolicyDecision => "Autonomy policy",

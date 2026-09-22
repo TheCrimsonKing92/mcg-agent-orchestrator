@@ -70,6 +70,222 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.DoesNotContain("Low-IL Claude subscription dispatch is refused before worker start", findings);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_names_the_rejected_claude_login_source_and_reason")]
+    public void WorkerProfileDispatcherPreflightNamesTheRejectedClaudeLoginSourceAndReason()
+{
+    var root = CreateSeededDispatchRepository();
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude auth preflight diagnostics", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var rejectedSource = Path.Combine(root, "operator-config-missing");
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: false,
+        CredentialArtifactPath: null,
+        SelectedSourceDirectory: rejectedSource,
+        IsExplicitSource: true,
+        UnavailableReason: "sole candidate explicit CLAUDE_CONFIG_DIR login source '" + rejectedSource + "' was rejected because the directory does not exist");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-09-12T16:00:00Z"),
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    var authFinding = preflight.Findings.Single(finding =>
+        finding.StartsWith("auth: Claude CLI Low-IL auth preflight found no", StringComparison.Ordinal));
+
+    // The finding must name WHICH source was attempted and WHY it was rejected. "found no credential
+    // artifact" alone is what let preflight and seeding disagree without anyone noticing.
+    Assert.Contains(rejectedSource, authFinding);
+    Assert.Contains("CLAUDE_CONFIG_DIR", authFinding);
+    Assert.Contains("the directory does not exist", authFinding);
+
+    // Admission policy is frozen: this stays an `auth:` observation. The hard stop for an unusable
+    // login is the pre-launch seeding failure, not a `blocked:` admission finding.
+    Assert.DoesNotContain("blocked:", authFinding);
+    Assert.DoesNotContain("sk-ant-", authFinding);
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_records_the_preflight_selected_claude_login_for_dispatch_start")]
+    public void WorkerProfileDispatcherRecordsThePreflightSelectedClaudeLoginForDispatchStart()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+
+    // Synthetic fixture logins outside the repository: the operator-set CLAUDE_CONFIG_DIR source, and a
+    // different usable source at the simulated default profile that must never be selected or recorded.
+    // Both tokens are knowingly invalid; this exercises source selection, never authentication.
+    var credentialRoot = CreateTempDirectory();
+    var explicitDir = Path.Combine(credentialRoot, "operator-config");
+    Directory.CreateDirectory(explicitDir);
+    File.WriteAllText(
+        Path.Combine(explicitDir, ".credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}");
+    var defaultHome = Path.Combine(credentialRoot, "default-home");
+    Directory.CreateDirectory(Path.Combine(defaultHome, ".claude"));
+    File.WriteAllText(
+        Path.Combine(defaultHome, ".claude", ".credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-WRONG-PROFILE-SENTINEL\"}}");
+
+    var configDirectoryReads = 0;
+    Func<string, string?> environmentReader = name =>
+    {
+        if (!string.Equals(name, "CLAUDE_CONFIG_DIR", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        configDirectoryReads++;
+        return explicitDir;
+    };
+
+    // ONE resolver for this preparation, exactly as the production default probe provides.
+    var resolver = new ClaudeCredentialResolver(environmentReader, () => defaultHome);
+    var authProbe = () => ClaudeCliAuthProbe.From(resolver);
+
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify Claude credential source handoff", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var dispatchedAt = DateTimeOffset.Parse("2026-09-12T16:00:00Z");
+
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        dispatchedAt,
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        dispatchedAt,
+        claudeAuthProbe: authProbe,
+        sandboxOptions: sandbox);
+
+    // The source the auth finding an operator reads names, and the source carried out of preflight, are
+    // one resolution - not two computations that happen to agree on this machine.
+    var authFinding = preflight.Findings.Single(finding =>
+        finding.StartsWith("ok: Claude CLI Low-IL auth preflight will seed", StringComparison.Ordinal));
+    Assert.Contains(Path.GetFullPath(explicitDir), authFinding);
+    Assert.Equal(Path.GetFullPath(explicitDir), preflight.ClaudeCredentialSelection!.DirectoryPath);
+    Assert.True(preflight.ClaudeCredentialSelection.IsExplicitSource);
+
+    // Recorded on the dispatch, because the dispatch start boundary can be a later tick - or a later
+    // process, after a conductor restart - that cannot share an object with this preparation. The
+    // snapshot round trip is that boundary.
+    var reloaded = AgentOrchestratorKernel
+        .FromSnapshot(kernel.ExportSnapshot())
+        .GetTask(goal.Id, task.Id)
+        .LastDispatch;
+    Assert.NotNull(reloaded);
+    Assert.Equal(preflight.ClaudeCredentialSelection.DirectoryPath, reloaded!.ClaudeCredentialSourceDirectory);
+    Assert.True(reloaded.ClaudeCredentialSourceIsExplicit);
+
+    // And dispatch start transports exactly that, without consulting an environment of its own - which
+    // here would resolve to the other login.
+    Assert.Equal(
+        preflight.ClaudeCredentialSelection,
+        DispatchProcessHost.TransportedClaudeCredentialSelection(
+            reloaded.ClaudeCredentialSourceDirectory,
+            reloaded.ClaudeCredentialSourceIsExplicit,
+            WorkerSandboxProvider.Claude,
+            sandboxLowIntegrity: true,
+            environmentReader: _ => throw new InvalidOperationException("selection input was read")));
+
+    // One resolution served model-lane selection, the auth finding, and the recorded selection across
+    // both the preflight and the preparation call.
+    Assert.Equal(1, resolver.ResolutionCount);
+    Assert.Equal(1, configDirectoryReads);
+    Assert.DoesNotContain("WRONG-PROFILE-SENTINEL", string.Join("\n", preflight.Findings));
+    Assert.Null(task.LastProcess);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_records_the_preflight_selected_claude_login")]
+    public void WorkerProfileDispatcherReadyBatchRecordsThePreflightSelectedClaudeLogin()
+{
+    // The conductor's own preparation path. Its dispatches are the ones a worker is launched from, so
+    // the recorded credential source has to travel from here, not from whatever the start boundary's
+    // environment happens to resolve later.
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var credentialRoot = CreateTempDirectory();
+    var selectedDir = Path.Combine(credentialRoot, "operator-config");
+    Directory.CreateDirectory(selectedDir);
+    File.WriteAllText(
+        Path.Combine(selectedDir, ".credentials.json"),
+        "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}");
+
+    var resolver = new ClaudeCredentialResolver(
+        name => string.Equals(name, "CLAUDE_CONFIG_DIR", StringComparison.Ordinal) ? selectedDir : null,
+        () => Path.Combine(credentialRoot, "unused-home"));
+    var authProbe = () => ClaudeCliAuthProbe.From(resolver);
+
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Verify ready batch credential handoff", [new TaskSpec(TaskId.New(), "Test the implementation.", AgentRole.Tester)]);
+    var agent = new AgentDefinition(
+        new AgentId("tester"),
+        "Tester",
+        AgentRole.Tester,
+        new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+        kernel,
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        worktree,
+        DateTimeOffset.Parse("2026-09-12T16:00:00Z"),
+        sandboxOptions: sandbox,
+        claudeAuthProbe: authProbe);
+
+    Assert.Single(batch.Dispatches);
+    var dispatch = task.LastDispatch!;
+    Assert.Equal(Path.GetFullPath(selectedDir), dispatch.ClaudeCredentialSourceDirectory);
+    Assert.True(dispatch.ClaudeCredentialSourceIsExplicit);
+    Assert.Equal(1, resolver.ResolutionCount);
+    Assert.Null(task.LastProcess);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_light_role_claude_auth_via_sandbox_credential_seeding")]
     public void WorkerProfileDispatcherPreflightAllowsLightRoleClaudeAuthViaSandboxCredentialSeeding()
 {
@@ -753,8 +969,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         evt.Message.Contains("provenance=orchestrator", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_claude_plan_mode")]
-    public void WorkerProfileDispatcherResearcherDispatchUsesClaudePlanMode()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_researcher_dispatch_uses_claude_read_only_tool_policy")]
+    public void WorkerProfileDispatcherResearcherDispatchUsesClaudeReadOnlyToolPolicy()
 {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
@@ -778,7 +994,14 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
     Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
-    Assert.Contains("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'dontAsk'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--restricted", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash,", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(",Task", researcher.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--permission-mode 'plan'", researcher.LastDispatch.Command, StringComparison.Ordinal);
     Assert.True(!researcher.LastDispatch.Command.Contains("workspace-write", StringComparison.Ordinal));
 }
 
@@ -897,8 +1120,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
             WorkerSandboxProvider.Codex));
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_plan_for_reviewer_and_bypassPermissions_for_developer")]
-    public void WorkerProfileDispatcherClaudeResolvesPlanForReviewerAndBypassPermissionsForDeveloper()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_resolves_read_only_tool_policy_for_reviewer_and_bypassPermissions_for_developer")]
+    public void WorkerProfileDispatcherClaudeResolvesReadOnlyToolPolicyForReviewerAndBypassPermissionsForDeveloper()
 {
     var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
@@ -934,7 +1157,74 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
 
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
-    Assert.Contains("--permission-mode 'plan'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--permission-mode 'dontAsk'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--restricted", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(",Task", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--permission-mode 'plan'", reviewerTask.LastDispatch.Command, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_claude_read_only_dispatch_denies_edit_tools_and_developer_dispatch_does_not")]
+    public void WorkerProfileDispatcherClaudeReadOnlyDispatchDeniesEditToolsAndDeveloperDispatchDoesNot()
+{
+    var root = CreateSeededDispatchRepository();
+    var promptRoot = Path.Combine(root, "prompts");
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var researcherGoal = kernel.CreateGoal("Research the change", [new TaskSpec(TaskId.New(), "Inspect the implementation.", AgentRole.Researcher)]);
+    var developerGoal = kernel.CreateGoal("Implement the change", [new TaskSpec(TaskId.New(), "Add the feature.", AgentRole.Developer)]);
+    var researcherWorkingDirectory = GoalWorktrees.Ensure(root, researcherGoal.Id);
+    var developerWorkingDirectory = GoalWorktrees.Ensure(root, developerGoal.Id);
+    var researcherAgent = new AgentDefinition(
+        new AgentId("anthropic-researcher"),
+        "Anthropic researcher",
+        AgentRole.Researcher,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    var developerAgent = new AgentDefinition(
+        new AgentId("anthropic-developer"),
+        "Anthropic developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-sonnet-4-20250514", ModelCapability.Text, SubscriptionMode.ApiKey, MaxOutputTokens: AgentCatalog.RoutineApiMaxOutputTokens),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"));
+    kernel.ActivateGoal(researcherGoal.Id, [researcherAgent]);
+    kernel.ActivateGoal(developerGoal.Id, [developerAgent]);
+    var researcherTask = researcherGoal.Tasks.Single();
+    var developerTask = developerGoal.Tasks.Single();
+    var authProbe = () => new ClaudeCliAuthState(
+        HasAnthropicApiKey: true,
+        HasCliCredentialArtifact: false,
+        CredentialArtifactPath: null);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, researcherGoal, researcherTask, [researcherAgent], WorkerProfileCatalog.Default(), promptRoot, researcherWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, developerWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+
+    Assert.Contains("--permission-mode 'dontAsk'", researcherTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains("--restricted", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--tools 'Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--allowed-tools 'Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--disallowed-tools 'Edit,Write,NotebookEdit'", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools 'Read,Glob,Grep,Bash,", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain(",Task", researcherTask.LastDispatch.Command, StringComparison.Ordinal);
+    var allowedTools = researcherTask.LastDispatch.Command
+        .Split("--allowed-tools '", 2, StringSplitOptions.None)[1]
+        .Split('\'', 2)[0]
+        .Split(',');
+    Assert.DoesNotContain(
+        allowedTools,
+        tool => tool.Equals("Bash", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git commit ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git push ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git checkout ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git reset ", StringComparison.Ordinal) ||
+            tool.StartsWith("Bash(git worktree ", StringComparison.Ordinal));
+    Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--restricted", developerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--allowed-tools", developerTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("--disallowed-tools", developerTask.LastDispatch.Command, StringComparison.Ordinal);
 }
 
 }

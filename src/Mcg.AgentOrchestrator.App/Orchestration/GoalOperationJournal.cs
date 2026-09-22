@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum GoalOperationStatus
+public enum GoalOperationStatus
 {
     Begin,
     Completed,
@@ -17,7 +17,7 @@ internal enum GoalOperationStatus
     Aborted
 }
 
-internal sealed record GoalOperationJournalEntry(
+public sealed record GoalOperationJournalEntry(
     string IdempotencyKey,
     GoalId GoalId,
     string Operation,
@@ -46,7 +46,10 @@ internal sealed record GoalOperationJournalEntry(
     string? PriorGateMainSha = null,
     string? CurrentHeadMainSha = null,
     int? OperatorRegateCount = null,
-    IReadOnlyList<string>? FailedCheckNames = null)
+    IReadOnlyList<string>? FailedCheckNames = null,
+    string? OperationInstanceId = null,
+    string? LeaseRecovery = null,
+    DateTimeOffset? OwnerProcessStartedAtUtc = null)
 {
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
@@ -77,7 +80,7 @@ internal sealed record AcceptanceRetryAuditPayload(
     int OperatorRegateCount,
     DateTimeOffset AcceptanceFailureOccurredAt);
 
-internal sealed record GoalOperationJournalSummary(
+public sealed record GoalOperationJournalSummary(
     string Path,
     IReadOnlyList<GoalOperationJournalEntry> Entries,
     IReadOnlyList<GoalOperationJournalEntry> LatestByOperation,
@@ -101,7 +104,9 @@ internal enum GoalTerminalDispositionSource
 internal sealed record GoalTerminalDisposition(
     GoalTerminalDispositionKind Kind,
     string Detail,
-    GoalTerminalDispositionSource Source = GoalTerminalDispositionSource.General);
+    GoalTerminalDispositionSource Source = GoalTerminalDispositionSource.General,
+    string? IntegrateSha = null,
+    TerminalGoalSweepReconciliationReceipt? Reconciliation = null);
 
 internal sealed record GoalLandingIntent(
     string GoalId,
@@ -109,7 +114,9 @@ internal sealed record GoalLandingIntent(
     string IntegrationBranch,
     string MergeCommitSha,
     DateTimeOffset RecordedAt,
-    string Source);
+    string Source,
+    string? BoundMainRevision = null,
+    string? PreviousIntegrationRevision = null);
 
 internal sealed record GoalLifecycleJournalEntry(
     string IdempotencyKey,
@@ -123,6 +130,8 @@ internal static class GoalOperationJournal
     internal const string AcceptanceRetryAuditOutboxKind = "acceptance-retry-audit";
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
     public const string LandingIntentOperation = "conductor:landing-intent";
+    public const string AcceptanceApparatusRegateOperation = "conductor:acceptance-apparatus-regate";
+    public const string ApparatusRegateAcceptanceOutcome = "apparatus-regate";
     internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
     internal static Action? BeforeAcceptanceRetryAppend { get; set; }
     private static readonly ConcurrentDictionary<string, Lazy<SqliteRunEventStore>> RunEventStores =
@@ -217,7 +226,10 @@ internal static class GoalOperationJournal
         Goal goal,
         string operation,
         string? detail = null,
-        string? mainHeadSha = null) =>
+        string? mainHeadSha = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null,
+        DateTimeOffset? ownerProcessStartedAtUtc = null) =>
         Append(
             executionDirectory,
             goal.Id,
@@ -227,14 +239,19 @@ internal static class GoalOperationJournal
             detail,
             branchHeadSha: null,
             mainHeadSha: NormalizeSha(mainHeadSha),
-            acceptanceOutcome: null);
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery,
+            ownerProcessStartedAtUtc: ownerProcessStartedAtUtc);
 
     public static void Completed(
         string executionDirectory,
         Goal goal,
         string operation,
         string? detail = null,
-        string? mainHeadSha = null) =>
+        string? mainHeadSha = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null) =>
         Append(
             executionDirectory,
             goal.Id,
@@ -244,14 +261,18 @@ internal static class GoalOperationJournal
             detail,
             branchHeadSha: null,
             mainHeadSha: NormalizeSha(mainHeadSha),
-            acceptanceOutcome: null);
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery);
 
     public static void Failed(
         string executionDirectory,
         Goal goal,
         string operation,
         string? detail = null,
-        string? mainHeadSha = null) =>
+        string? mainHeadSha = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null) =>
         Append(
             executionDirectory,
             goal.Id,
@@ -261,7 +282,29 @@ internal static class GoalOperationJournal
             detail,
             branchHeadSha: null,
             mainHeadSha: NormalizeSha(mainHeadSha),
-            acceptanceOutcome: null);
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery);
+
+    public static void Aborted(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? detail = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            Key(goal.Id, operation),
+            operation,
+            GoalOperationStatus.Aborted,
+            detail,
+            branchHeadSha: null,
+            mainHeadSha: null,
+            acceptanceOutcome: null,
+            operationInstanceId: operationInstanceId,
+            leaseRecovery: leaseRecovery);
 
     public static void RecordLandingIntent(
         string executionDirectory,
@@ -270,7 +313,9 @@ internal static class GoalOperationJournal
         string integrationBranch,
         string mergeCommitSha,
         string source,
-        DateTimeOffset? recordedAt = null)
+        DateTimeOffset? recordedAt = null,
+        string? boundMainRevision = null,
+        string? previousIntegrationRevision = null)
     {
         var intent = new GoalLandingIntent(
             goal.Id.Value,
@@ -278,7 +323,9 @@ internal static class GoalOperationJournal
             integrationBranch,
             mergeCommitSha,
             recordedAt ?? DateTimeOffset.UtcNow,
-            source);
+            source,
+            NormalizeSha(boundMainRevision),
+            NormalizeSha(previousIntegrationRevision));
         BeforeLandingIntentAppend?.Invoke(intent);
         Append(
             executionDirectory,
@@ -352,6 +399,33 @@ internal static class GoalOperationJournal
         DateTimeOffset? attemptStartedAt = null,
         GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
         AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Aborted, "aborted:state-guard", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null);
+
+    /// <summary>
+    /// One record per apparatus re-gate, naming the classification, the failing tests and the evidence
+    /// used. The ordinal is part of the idempotency key so each re-gate of the same candidate is its
+    /// own record rather than a silent overwrite.
+    /// </summary>
+    public static void AcceptanceApparatusRegated(
+        string executionDirectory,
+        Goal goal,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string evidenceKind,
+        IReadOnlyList<string> failingTestIdentities,
+        IReadOnlyList<string> failedCheckNames,
+        int regateOrdinal) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            $"{CandidateKey(goal.Id, AcceptanceApparatusRegateOperation, branchHeadSha, mainHeadSha)}:{regateOrdinal}",
+            AcceptanceApparatusRegateOperation,
+            GoalOperationStatus.Completed,
+            $"classification=apparatus; evidence={evidenceKind}; re-gate={regateOrdinal}; " +
+            $"failing-tests={string.Join(", ", failingTestIdentities)}",
+            NormalizeSha(branchHeadSha),
+            NormalizeSha(mainHeadSha),
+            acceptanceOutcome: ApparatusRegateAcceptanceOutcome,
+            failedCheckNames: failedCheckNames);
 
     public static void AcceptanceRetried(
         string executionDirectory,
@@ -580,14 +654,34 @@ internal static class GoalOperationJournal
         Completed(executionDirectory, goal, TerminalDispositionOperation, JsonSerializer.Serialize(disposition, JsonOptions));
         Completed(executionDirectory, goal, "conductor:land", disposition.Detail);
         Completed(executionDirectory, goal, "conductor:record", disposition.Detail);
-        Completed(executionDirectory, goal, "conductor:cleanup", disposition.Detail);
     }
 
+    public static void RecordCleanupCompleted(string executionDirectory, Goal goal, string detail) =>
+        Completed(executionDirectory, goal, "conductor:cleanup", detail);
+
     public static GoalOperationJournalSummary Read(string executionDirectory, GoalId goalId)
+        => Read(executionDirectory, goalId, includeArchive: true, rejectMalformedEntries: false);
+
+    internal static GoalOperationJournalSummary ReadStrict(string executionDirectory, GoalId goalId)
+        => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: true);
+
+    public static GoalOperationJournalSummary ReadActive(string executionDirectory, GoalId goalId)
+        => Read(executionDirectory, goalId, includeArchive: false, rejectMalformedEntries: false);
+
+    private static GoalOperationJournalSummary Read(
+        string executionDirectory,
+        GoalId goalId,
+        bool includeArchive,
+        bool rejectMalformedEntries)
     {
         var path = PathFor(executionDirectory, goalId);
         if (!File.Exists(path))
         {
+            if (!includeArchive)
+            {
+                return new GoalOperationJournalSummary(path, [], [], []);
+            }
+
             var archivePath = ArchivePathFor(executionDirectory, goalId);
             if (!File.Exists(archivePath))
             {
@@ -597,9 +691,22 @@ internal static class GoalOperationJournal
             path = archivePath;
         }
 
-        var entries = ReadEntries(path);
+        var entries = ReadEntries(path, rejectMalformedEntries);
         return BuildSummary(path, entries);
     }
+
+    internal static string? ResolveReadPath(string executionDirectory, GoalId goalId)
+    {
+        var path = PathFor(executionDirectory, goalId);
+        if (File.Exists(path))
+        {
+            return path;
+        }
+
+        var archivePath = ArchivePathFor(executionDirectory, goalId);
+        return File.Exists(archivePath) ? archivePath : null;
+    }
+
 
     public static bool HasCompletedLandingEvidence(GoalOperationJournalSummary journal) =>
         HasRetiredTerminalDisposition(journal) ||
@@ -640,6 +747,21 @@ internal static class GoalOperationJournal
             Kind: GoalTerminalDispositionKind.Landed,
             Source: GoalTerminalDispositionSource.MergeEvidence
         };
+
+    public static bool HasMergeEvidenceTerminalDisposition(
+        GoalOperationJournalSummary journal,
+        string integrateSha)
+    {
+        var disposition = TryGetLatestTerminalDisposition(journal);
+        return disposition is
+            {
+                Kind: GoalTerminalDispositionKind.Landed,
+                Source: GoalTerminalDispositionSource.MergeEvidence
+            } &&
+            (string.Equals(disposition.IntegrateSha, integrateSha, StringComparison.OrdinalIgnoreCase) ||
+             (disposition.IntegrateSha is null &&
+              disposition.Detail.Contains(integrateSha, StringComparison.OrdinalIgnoreCase)));
+    }
 
     public static bool HasDurableLandingIntent(GoalOperationJournalSummary journal)
     {
@@ -717,6 +839,65 @@ internal static class GoalOperationJournal
         return summaries;
     }
 
+    public static IReadOnlyList<CleanTestBaselineEvidence> ReadAcceptanceEvidenceForMain(
+        string executionDirectory,
+        string mainSha)
+    {
+        var normalizedMainSha = mainSha.Trim();
+        if (normalizedMainSha.Length == 0)
+        {
+            return [];
+        }
+
+        var root = System.IO.Path.Combine(
+            System.IO.Path.GetFullPath(executionDirectory),
+            ".orchestrator",
+            "goal-operations");
+        if (!Directory.Exists(root))
+        {
+            return [];
+        }
+
+        var evidence = new List<CleanTestBaselineEvidence>();
+        foreach (var path in Directory.EnumerateFiles(root, "*.jsonl", SearchOption.AllDirectories))
+        {
+            if (IsArchivedPath(root, path))
+            {
+                continue;
+            }
+
+            var fileName = System.IO.Path.GetFileNameWithoutExtension(path);
+            if (fileName.Equals("lifecycle-index", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var goalId = new GoalId(fileName);
+            foreach (var line in SharedJsonlFile.ReadLines(path))
+            {
+                var entry = TryDeserializeAcceptanceEvidence(line);
+                if (entry is null ||
+                    !string.Equals(entry.MainHeadSha?.Trim(), normalizedMainSha, StringComparison.OrdinalIgnoreCase) ||
+                    entry.AcceptanceOutcome is null ||
+                    (!entry.AcceptanceOutcome.Equals("passed", StringComparison.OrdinalIgnoreCase) &&
+                     !entry.AcceptanceOutcome.Equals("failed", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                evidence.Add(new CleanTestBaselineEvidence(
+                    goalId,
+                    entry.At,
+                    entry.MainHeadSha,
+                    entry.AcceptanceOutcome,
+                    entry.FailedCheckNames,
+                    entry.BranchHeadSha));
+            }
+        }
+
+        return evidence;
+    }
+
     private static bool IsArchivedPath(string journalRoot, string path)
     {
         var archiveRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(journalRoot, "archive")) +
@@ -724,13 +905,50 @@ internal static class GoalOperationJournal
         return System.IO.Path.GetFullPath(path).StartsWith(archiveRoot, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static GoalOperationJournalEntry[] ReadEntries(string path) =>
-        SharedJsonlFile.ReadAllLines(path)
-            .Select(TryDeserialize)
-            .Where(entry => entry is not null)
-            .Select(entry => entry!)
+    private static AcceptanceEvidenceLine? TryDeserializeAcceptanceEvidence(string line)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<AcceptanceEvidenceLine>(line, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static GoalOperationJournalEntry[] ReadEntries(
+        string path,
+        bool rejectMalformedEntries = false)
+    {
+        var entries = new List<GoalOperationJournalEntry>();
+        foreach (var line in SharedJsonlFile.ReadAllLines(path))
+        {
+            var entry = TryDeserialize(line);
+            if (entry is null)
+            {
+                if (rejectMalformedEntries)
+                {
+                    throw new FormatException($"Malformed goal operation journal entry in '{path}'.");
+                }
+
+                continue;
+            }
+
+            entries.Add(entry);
+        }
+
+        return entries
             .OrderBy(entry => entry.At)
             .ToArray();
+    }
+
+    private sealed record AcceptanceEvidenceLine(
+        DateTimeOffset At,
+        string? MainHeadSha,
+        string? AcceptanceOutcome,
+        IReadOnlyList<string>? FailedCheckNames,
+        string? BranchHeadSha = null);
 
     private static GoalOperationJournalSummary BuildSummary(string path, GoalOperationJournalEntry[] entries)
     {
@@ -873,7 +1091,10 @@ internal static class GoalOperationJournal
         string? priorGateMainSha = null,
         string? currentHeadMainSha = null,
         int? operatorRegateCount = null,
-        IReadOnlyList<string>? failedCheckNames = null)
+        IReadOnlyList<string>? failedCheckNames = null,
+        string? operationInstanceId = null,
+        string? leaseRecovery = null,
+        DateTimeOffset? ownerProcessStartedAtUtc = null)
     {
         var path = PathFor(executionDirectory, goalId);
         var directory = System.IO.Path.GetDirectoryName(path);
@@ -902,7 +1123,10 @@ internal static class GoalOperationJournal
             PriorGateMainSha: priorGateMainSha,
             CurrentHeadMainSha: currentHeadMainSha,
             OperatorRegateCount: operatorRegateCount,
-            FailedCheckNames: failedCheckNames);
+            FailedCheckNames: failedCheckNames,
+            OperationInstanceId: operationInstanceId,
+            LeaseRecovery: leaseRecovery,
+            OwnerProcessStartedAtUtc: ownerProcessStartedAtUtc);
         SharedJsonlFile.AppendLine(path, JsonSerializer.Serialize(entry, JsonOptions));
         TryAppendRunEvent(executionDirectory, entry);
     }

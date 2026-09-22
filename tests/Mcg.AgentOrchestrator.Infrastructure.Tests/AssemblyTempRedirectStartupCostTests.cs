@@ -4,6 +4,61 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper output)
 {
     [Fact]
+    public void StartupSweepUsesOneSelectionBatchAndOneBoundaryBatch()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"startup-batch-{Guid.NewGuid():N}");
+        var selectedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, Environment.ProcessId);
+        var firstPid = 0x1010;
+        var secondPid = 0x2020;
+        var firstRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, firstPid);
+        var secondRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, secondPid);
+        var reads = new List<int[]>();
+        var deleted = new List<string>();
+        Directory.CreateDirectory(selectedRoot);
+        Directory.CreateDirectory(firstRoot);
+        Directory.CreateDirectory(secondRoot);
+        File.WriteAllText(AssemblyTempRedirect.RootLeasePath(firstRoot), "exited-owner");
+        File.WriteAllText(AssemblyTempRedirect.RootLeasePath(secondRoot), "live-owner");
+        try
+        {
+            AssemblyTempRedirect.ReapOrphanedRoots(
+                selectedRoot,
+                new TempRootStartupTimings(),
+                ids =>
+                {
+                    var requested = ids!.Order().ToArray();
+                    reads.Add(requested);
+                    return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                        requested.ToDictionary(
+                            processId => processId,
+                            processId => reads.Count == 1 || processId == firstPid
+                                ? ExitedProcess(processId)
+                                : AvailableProcess(processId)));
+                },
+                path =>
+                {
+                    deleted.Add(path);
+                    return TempRootDeleteOutcome.Deleted(path, readOnlyAttributesCleared: 0);
+                },
+                writeReceipt: null);
+
+            Assert.Equal(2, reads.Count);
+            Assert.Equal([firstPid, secondPid], reads[0]);
+            Assert.Equal([firstPid, secondPid], reads[1]);
+            Assert.Equal([firstRoot], deleted, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
     public void CurrentHostPublishesInitializerTimingReceipt()
     {
         if (!OperatingSystem.IsWindows())
@@ -38,12 +93,12 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
             "labelSetExitCode=not-run labelSetSucceeded=not-run labelSetFailure=not-run " +
             "probeWriteMs=0 probeCleanupMs=0 reap=not-run reapEnumerateMs=not-run " +
             "reapSiblingCount=not-run reapPidSnapshotMs=not-run reapOrphanSelectMs=not-run " +
-            "reapAgeSelectMs=not-run reapBoundSelectMs=not-run reapOverlap=not-run " +
+            "reapBoundSelectMs=not-run " +
             "deleteAttempted=not-run deleteSucceeded=not-run deleteMs=not-run " +
-            "deleteDeleted=not-run deleteAlreadyAbsent=not-run deleteFailed=not-run " +
+            "deleteDeleted=not-run deleteAlreadyAbsent=not-run deleteRetainedLiveOwner=not-run " +
+            "deleteFailed=not-run " +
             "deleteFailureKinds=not-run deleteFirstFailure=not-run " +
-            "reapRetentionSelectMs=not-run reapRetentionReserve=not-run " +
-            "reapOverflowCount=not-run deleteReadOnlyCleared=not-run",
+            "deleteReadOnlyCleared=not-run",
             diagnostic);
     }
 
@@ -58,10 +113,11 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         };
         var nextStatus = 0;
         var timings = new TempRootStartupTimings { ReapRan = true };
+        var receipts = new List<string>();
 
         var outcomes = AssemblyTempRedirect.ReapBoundedRoots(
             "shared",
-            ["p1", "p2", "p3"],
+            [Revalidated("p1"), Revalidated("p2"), Revalidated("p3")],
             path =>
             {
                 var status = statuses[nextStatus++];
@@ -70,7 +126,9 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
                     status,
                     status == TempRootDeleteStatus.Failed ? "InjectedFailure" : null);
             },
-            timings);
+            _ => new MemoryStream(),
+            timings,
+            receipts.Add);
 
         Assert.Equal(statuses, outcomes.Select(outcome => outcome.Status));
         Assert.Equal(3, timings.ReapDeleteAttempted);
@@ -80,6 +138,228 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         Assert.Equal(
             timings.ReapDeleteAttempted,
             timings.ReapDeleteDeleted + timings.ReapDeleteAlreadyAbsent + timings.ReapDeleteFailed);
+        Assert.Equal(3, receipts.Count);
+        Assert.Contains($"actorPid={Environment.ProcessId}", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("candidatePid=1", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("observedStatus=Exited", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=Deleted", receipts[0], StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=AlreadyAbsent", receipts[1], StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=Failed", receipts[2], StringComparison.Ordinal);
+        Assert.Contains("exceptionType=InjectedFailure", receipts[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BoundedReapRecordsTypedReceiptOnlyWhenOwnedParentDisappears()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-parent-loss-{Guid.NewGuid():N}");
+        var candidateRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x1010);
+        var firstLiveRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2020);
+        var secondLiveRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x3030);
+        var liveOwners = new[]
+        {
+            new TempRootApparatusDestroyedOwner(
+                0x2020,
+                DateTimeOffset.Parse("2026-09-03T12:00:00Z"),
+                firstLiveRoot),
+            new TempRootApparatusDestroyedOwner(
+                0x3030,
+                DateTimeOffset.Parse("2026-09-03T12:00:01Z"),
+                secondLiveRoot)
+        };
+        var typedReceipts = new List<(string SharedRoot, TempRootApparatusDestroyedOwner[] Owners)>();
+        Directory.CreateDirectory(candidateRoot);
+        Directory.CreateDirectory(firstLiveRoot);
+        Directory.CreateDirectory(secondLiveRoot);
+
+        try
+        {
+            _ = AssemblyTempRedirect.ReapBoundedRoots(
+                sharedRoot,
+                [Revalidated(Path.GetFileName(candidateRoot))],
+                path =>
+                {
+                    _ = TempRootJanitor.DeleteTree(sharedRoot);
+                    return TempRootDeleteOutcome.Deleted(path, readOnlyAttributesCleared: 0);
+                },
+                _ => new MemoryStream(),
+                new TempRootStartupTimings { ReapRan = true },
+                writeReceipt: null,
+                liveOwners,
+                (root, owners) => typedReceipts.Add((root, owners.ToArray())));
+
+            var receipt = Assert.Single(typedReceipts);
+            Assert.Equal(sharedRoot, receipt.SharedRoot, StringComparer.OrdinalIgnoreCase);
+            Assert.Equal(liveOwners, receipt.Owners);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
+    public void BoundedReapDoesNotRecordTypedReceiptForRoutineOwnedRootDeletion()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-routine-reap-{Guid.NewGuid():N}");
+        var candidateRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x1010);
+        var liveOwners = new[]
+        {
+            new TempRootApparatusDestroyedOwner(0x2020, DateTimeOffset.UtcNow, AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2020)),
+            new TempRootApparatusDestroyedOwner(0x3030, DateTimeOffset.UtcNow, AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x3030))
+        };
+        var typedReceiptCount = 0;
+        Directory.CreateDirectory(candidateRoot);
+
+        try
+        {
+            _ = AssemblyTempRedirect.ReapBoundedRoots(
+                sharedRoot,
+                [Revalidated(Path.GetFileName(candidateRoot))],
+                AssemblyTempRedirect.DeleteTree,
+                _ => new MemoryStream(),
+                new TempRootStartupTimings { ReapRan = true },
+                writeReceipt: null,
+                liveOwners,
+                (_, _) => typedReceiptCount++);
+
+            Assert.Equal(0, typedReceiptCount);
+            Assert.True(Directory.Exists(sharedRoot));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
+    public void BoundedReapRequiresExclusiveOwnerLeaseBeforeDeletingSiblingRoot()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-reap-lease-{Guid.NewGuid():N}");
+        var siblingRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2a);
+        var leasePath = AssemblyTempRedirect.RootLeasePath(siblingRoot);
+        Directory.CreateDirectory(siblingRoot);
+        File.WriteAllText(Path.Combine(siblingRoot, "repository.marker"), "owned");
+        var deleteCalls = 0;
+        var retainedTimings = new TempRootStartupTimings { ReapRan = true };
+        var retainedReceipts = new List<string>();
+        try
+        {
+            using (var ownerLease = new FileStream(
+                       leasePath,
+                       FileMode.OpenOrCreate,
+                       FileAccess.ReadWrite,
+                       FileShare.Read))
+            {
+                var retained = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
+                    sharedRoot,
+                    [Revalidated(Path.GetFileName(siblingRoot))],
+                    path =>
+                    {
+                        deleteCalls++;
+                        return AssemblyTempRedirect.DeleteTree(path);
+                    },
+                    AssemblyTempRedirect.TryAcquireDeletionLease,
+                    retainedTimings,
+                    retainedReceipts.Add));
+
+                Assert.Equal(TempRootDeleteStatus.RetainedLiveOwner, retained.Status);
+                Assert.Equal(0, deleteCalls);
+                Assert.Equal(0, retainedTimings.ReapDeleteAttempted);
+                Assert.Equal(1, retainedTimings.ReapDeleteRetainedLiveOwner);
+                Assert.Contains(
+                    "deleteStatus=RetainedLiveOwner",
+                    Assert.Single(retainedReceipts),
+                    StringComparison.Ordinal);
+                Assert.True(File.Exists(Path.Combine(siblingRoot, "repository.marker")));
+            }
+
+            var deleted = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
+                sharedRoot,
+                [Revalidated(Path.GetFileName(siblingRoot))],
+                path =>
+                {
+                    deleteCalls++;
+                    return AssemblyTempRedirect.DeleteTree(path);
+                },
+                AssemblyTempRedirect.TryAcquireDeletionLease,
+                new TempRootStartupTimings { ReapRan = true },
+                writeReceipt: null));
+
+            Assert.Equal(TempRootDeleteStatus.Deleted, deleted.Status);
+            Assert.Equal(1, deleteCalls);
+            Assert.False(Directory.Exists(siblingRoot));
+            Assert.False(File.Exists(leasePath));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
+    public void BoundedReapClaimsAndDeletesExitedRootWithoutLeaseFile()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-reap-missing-lease-{Guid.NewGuid():N}");
+        var siblingRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2b);
+        var leasePath = AssemblyTempRedirect.RootLeasePath(siblingRoot);
+        Directory.CreateDirectory(siblingRoot);
+        File.WriteAllText(Path.Combine(siblingRoot, "repository.marker"), "abandoned-before-lease");
+        try
+        {
+            Assert.False(File.Exists(leasePath));
+
+            var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
+                sharedRoot,
+                [Revalidated(Path.GetFileName(siblingRoot))],
+                AssemblyTempRedirect.DeleteTree,
+                AssemblyTempRedirect.TryAcquireDeletionLease,
+                new TempRootStartupTimings { ReapRan = true },
+                writeReceipt: null));
+
+            Assert.Equal(TempRootDeleteStatus.Deleted, outcome.Status);
+            Assert.False(Directory.Exists(siblingRoot));
+            Assert.False(File.Exists(leasePath));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Fact]
+    public void OwnedRootLeaseAcquisitionFailsClosedWithoutThrowing()
+    {
+        using var lease = AssemblyTempRedirect.TryAcquireOwnedRootLease("\0invalid-root");
+
+        Assert.Null(lease);
+    }
+
+    [Fact]
+    public void OrphanLeaseSweepDeletesOnlyExactLeaseWithoutRoot()
+    {
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"mcg-reap-orphan-leases-{Guid.NewGuid():N}");
+        var retainedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2c);
+        var orphanRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x2d);
+        var retainedLease = AssemblyTempRedirect.RootLeasePath(retainedRoot);
+        var orphanLease = AssemblyTempRedirect.RootLeasePath(orphanRoot);
+        var unrelated = Path.Combine(sharedRoot, ".not-a-process.owner.lock");
+        Directory.CreateDirectory(retainedRoot);
+        File.WriteAllText(retainedLease, "retained");
+        File.WriteAllText(orphanLease, "orphaned");
+        File.WriteAllText(unrelated, "unrelated");
+        try
+        {
+            var deleted = AssemblyTempRedirect.SweepOrphanedRootLeases(sharedRoot, writeReceipt: null);
+
+            Assert.Equal(1, deleted);
+            Assert.True(File.Exists(retainedLease));
+            Assert.False(File.Exists(orphanLease));
+            Assert.True(File.Exists(unrelated));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
     }
 
     [Fact]
@@ -90,9 +370,11 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
 
         var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
             sharedRoot,
-            ["p1"],
+            [Revalidated("p1")],
             AssemblyTempRedirect.DeleteTree,
-            timings));
+            _ => new MemoryStream(),
+            timings,
+            writeReceipt: null));
         var diagnostic = AssemblyTempRedirect.FormatTimingDiagnostic(timings);
 
         Assert.Equal(TempRootDeleteStatus.AlreadyAbsent, outcome.Status);
@@ -117,6 +399,7 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         File.WriteAllText(readOnlyFile, "fixture");
         File.SetAttributes(readOnlyFile, File.GetAttributes(readOnlyFile) | FileAttributes.ReadOnly);
         var timings = new TempRootStartupTimings { ReapRan = true };
+        var receipts = new List<string>();
 
         try
         {
@@ -124,15 +407,22 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
 
             var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
                 sharedRoot,
-                [Path.GetFileName(root)],
+                [Revalidated(Path.GetFileName(root))],
                 AssemblyTempRedirect.DeleteTree,
-                timings));
+                _ => new MemoryStream(),
+                timings,
+                receipts.Add));
 
             Assert.Equal(TempRootDeleteStatus.Deleted, outcome.Status);
             Assert.False(Directory.Exists(root));
             Assert.Equal(1, timings.ReapDeleteDeleted);
             Assert.Equal(0, timings.ReapDeleteFailed);
             Assert.True(timings.DeleteReadOnlyAttributesCleared > 0);
+            var receipt = Assert.Single(receipts);
+            Assert.Contains(
+                $"readOnlyCleared={outcome.ReadOnlyAttributesCleared}",
+                receipt,
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -147,9 +437,11 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
 
         var outcome = Assert.Single(AssemblyTempRedirect.ReapBoundedRoots(
             "shared",
-            ["p2"],
+            [Revalidated("p2")],
             _ => throw new UnauthorizedAccessException("denied"),
-            timings));
+            _ => new MemoryStream(),
+            timings,
+            writeReceipt: null));
         var diagnostic = AssemblyTempRedirect.FormatTimingDiagnostic(timings);
 
         Assert.Equal(TempRootDeleteStatus.Failed, outcome.Status);
@@ -171,17 +463,20 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         var selectedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, Environment.ProcessId);
         var abandonedRoot = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, int.MaxValue);
         Directory.CreateDirectory(abandonedRoot);
+        File.WriteAllText(AssemblyTempRedirect.RootLeasePath(abandonedRoot), "exited-owner");
         var timings = new TempRootStartupTimings();
         var completed = false;
-        string? receipt = null;
+        string? timingReceipt = null;
+        var reapReceipts = new List<string>();
 
         try
         {
-            receipt = AssemblyTempRedirect.RunStartupHousekeeping(
+            timingReceipt = AssemblyTempRedirect.RunStartupHousekeeping(
                 selectedRoot,
                 timings,
                 System.Diagnostics.Stopwatch.StartNew(),
-                _ => throw new UnauthorizedAccessException("denied"));
+                _ => throw new UnauthorizedAccessException("denied"),
+                reapReceipts.Add);
             completed = true;
         }
         finally
@@ -190,13 +485,51 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         }
 
         Assert.True(completed, "Startup housekeeping did not return after the delete seam threw.");
-        Assert.NotNull(receipt);
-        Assert.StartsWith("assembly-temp-redirect-timing ", receipt, StringComparison.Ordinal);
-        Assert.Contains("deleteFailed=1", receipt, StringComparison.Ordinal);
+        Assert.NotNull(timingReceipt);
+        Assert.StartsWith("assembly-temp-redirect-timing ", timingReceipt, StringComparison.Ordinal);
+        Assert.Contains("deleteFailed=1", timingReceipt, StringComparison.Ordinal);
+        var reapReceipt = Assert.Single(reapReceipts);
+        Assert.Contains("candidatePid=2147483647", reapReceipt, StringComparison.Ordinal);
+        Assert.Contains("observedStatus=Exited", reapReceipt, StringComparison.Ordinal);
+        Assert.Contains("deleteStatus=Failed", reapReceipt, StringComparison.Ordinal);
+        Assert.Contains("exceptionType=UnauthorizedAccessException", reapReceipt, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void BoundedReapSelectionUnionsOverlappingRulesAndKeepsOldestRoots()
+    public void ReapReceiptPinsEveryDiagnosticFieldAndEscaping()
+    {
+        var observation = new ProcessInspectionRecord(
+            ProcessId: 42,
+            ParentProcessId: 7,
+            Name: "former host",
+            ExecutablePath: "C:\\Program Files\\test\"host.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: null,
+            ProcessInspectionStatus.Exited);
+
+        var receipt = AssemblyTempRedirect.FormatReapReceipt(
+            actorProcessId: 11,
+            candidateProcessId: 42,
+            path: "C:\\temp root\\p2a\"",
+            observation: observation,
+            deleteStatus: "Failed",
+            exceptionType: "Injected Failure",
+            failurePath: "C:\\temp root\\leaf \"x\"",
+            readOnlyAttributesCleared: 3);
+
+        Assert.Equal(
+            "assembly-temp-reaper actorPid=11 candidatePid=42 " +
+            "path=\"C:\\temp root\\p2a\\\"\" " +
+            "observedPid=42 observedStatus=Exited observedName=\"former host\" " +
+            "observedStartedAt=\"2026-08-30T12:00:00.0000000+00:00\" " +
+            "observedExecutablePath=\"C:\\Program Files\\test\\\"host.exe\" " +
+            "deleteStatus=Failed exceptionType=Injected_Failure " +
+            "failurePath=\"C:\\temp root\\leaf \\\"x\\\"\" readOnlyCleared=3",
+            receipt);
+    }
+
+    [Fact]
+    public void BoundedReapSelectionDeduplicatesAndKeepsOldestRoots()
     {
         var writes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase)
         {
@@ -206,13 +539,38 @@ public sealed class AssemblyTempRedirectStartupCostTests(ITestOutputHelper outpu
         };
 
         var selected = AssemblyTempRedirect.SelectBoundedReapRoots(
-            ["p10", "p20"],
-            ["p20", "p30"],
+            ["p10", "p20", "p20", "p30"],
             name => writes[name],
             limit: 2);
 
         Assert.Equal(["p30", "p20"], selected);
         Assert.Equal(2, selected.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    private static ProcessInspectionRecord ExitedProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 0,
+            Name: string.Empty,
+            ExecutablePath: null,
+            StartedAt: null,
+            CommandLine: null,
+            ProcessInspectionStatus.Exited);
+
+    private static ProcessInspectionRecord AvailableProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 100,
+            Name: "testhost",
+            ExecutablePath: @"C:\host\testhost.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: "testhost startup-batch-control",
+            ProcessInspectionStatus.Available);
+
+    private static RevalidatedTempRoot Revalidated(string name)
+    {
+        var processId = Convert.ToInt32(name[1..], 16);
+        return new RevalidatedTempRoot(name, processId, ExitedProcess(processId));
     }
 
     [Fact]

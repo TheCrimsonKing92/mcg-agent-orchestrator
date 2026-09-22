@@ -2,13 +2,13 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum ScopeCollisionKind
+public enum ScopeCollisionKind
 {
     ExactFile,
     DirectoryPrefix
 }
 
-internal enum ScopeEvidenceGap
+public enum ScopeEvidenceGap
 {
     ProposedScopesMissing,
     ProposedExplicitScopesMissing,
@@ -19,7 +19,7 @@ internal enum ScopeEvidenceGap
     TextTruncated
 }
 
-internal enum ScopeCollisionVerdict
+public enum ScopeCollisionVerdict
 {
     NoOverlapDetected,
     OverlapDetected,
@@ -27,14 +27,14 @@ internal enum ScopeCollisionVerdict
     InsufficientEvidence
 }
 
-internal sealed record GoalScopeLifecycleObservation(
+public sealed record GoalScopeLifecycleObservation(
     GoalLifecycleState? State,
     string? UnavailableReason = null)
 {
     public bool IsAvailable => State.HasValue;
 }
 
-internal sealed record ScopeCollision(
+public sealed record ScopeCollision(
     string GoalId,
     string GoalPrefix,
     string GoalStatus,
@@ -44,7 +44,7 @@ internal sealed record ScopeCollision(
     string ConflictingPath,
     FileScopeProvenance ConflictingProvenance);
 
-internal sealed record ScopeEvidenceGapNote(string? GoalId, ScopeEvidenceGap Gap, string Message);
+public sealed record ScopeEvidenceGapNote(string? GoalId, ScopeEvidenceGap Gap, string Message);
 
 internal sealed record SliceBatchScope(string NodeId, IReadOnlyList<string> Paths);
 
@@ -57,7 +57,7 @@ internal sealed record SliceBatchScopeCollision(
 
 internal sealed record SiblingScopeCollisionDecision(bool HasCollision, string? Evidence);
 
-internal sealed record GoalScopeCollisionReport(
+public sealed record GoalScopeCollisionReport(
     IReadOnlyList<DeclaredFileScope> ProposedScopes,
     int InputGoalCount,
     int EligibleGoalCount,

@@ -34,32 +34,25 @@ public static partial class WorkerCommandTemplate
             }
             lines.Add(string.Empty);
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var contextOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(
-                priorTask.LastVerification,
-                identity);
-            lines.Add(contextOutput.IsAuthoritative
-                ? "### Authoritative Verification Evidence"
-                : "### Legacy Verification Context (non-authoritative)");
-            if (!contextOutput.IsAuthoritative)
-            {
-                lines.Add($"Unavailable reason: {contextOutput.UnavailableReason}");
-            }
-
-            var authoritativeBytes = Encoding.UTF8.GetBytes(contextOutput.Content);
+            var projection = WorkerVerificationEvidence.ProjectStandardOutputForContextWithValidation(
+                priorTask,
+                priorTask.LastVerification);
+            var projectedBytes = Encoding.UTF8.GetBytes(projection.Content);
             var materializationPath = $".orchestrator-context/legacy-handoff/{priorTask.Id.Value}/verification-output.bin";
             var absoluteMaterializationPath = Path.Combine(
                 workingDirectory,
                 materializationPath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(absoluteMaterializationPath)!);
-            File.WriteAllBytes(absoluteMaterializationPath, authoritativeBytes);
+            File.WriteAllBytes(absoluteMaterializationPath, projectedBytes);
             var pointer = LegacyHandoffCompatibilityResolver.CreateV1Pointer(
                 identity,
-                authoritativeBytes,
+                projectedBytes,
                 materializationPath);
             lines.Add($"Compatibility pointer (v1, hash-bound; resolve from authoritative task evidence): {pointer}");
             lines.Add(
-                $"MANDATORY READ: path={materializationPath}; identity={identity.Value}; " +
-                $"sha256={WorkerContextArtifact.Hash(authoritativeBytes)}; contract=v1.");
+                $"PROJECTED RECEIPT: path={materializationPath}; identity={identity.Value}; " +
+                $"purpose=prior-worker-output; bytes={projectedBytes.Length}; sha256={WorkerContextArtifact.Hash(projectedBytes)}; contract=v1; projection_validation={projection.ValidationReceiptValue}. " +
+                "The complete captured output remains available through the source_handle in this projection; do not reproduce either body on the happy path.");
             lines.Add(string.Empty);
             lines.Add("---");
         }
@@ -91,7 +84,12 @@ public static partial class WorkerCommandTemplate
         var stamp = (dispatchedAt ?? DateTimeOffset.UtcNow).UtcDateTime.ToString("yyyyMMddHHmmssfffffff");
         var nonce = Guid.NewGuid().ToString("N")[..8];
         var promptPath = Path.Combine(promptRoot, $"{brief.GoalId.Value[..8]}-{brief.TaskId.Value[..8]}-{stamp}-{nonce}-{Sanitize(workerName)}.md");
-        var command = commandTemplate
+        // Elide the whole effort segment before any variable substitution: a blank variable renders as
+        // string.Empty below, which would otherwise leave a dangling `--effort` with no operand and put
+        // this path out of parity with ProviderCommandBuilder. An absent key and an unset value are
+        // deliberately indistinguishable - both mean "no configured effort".
+        var command = ClaudeCliEffortPolicy
+            .ElideUnsetEffortSegment(commandTemplate, ResolveReasoningEffortVariable(variables))
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{goalId}", brief.GoalId.Value, StringComparison.OrdinalIgnoreCase)
             .Replace("{taskId}", brief.TaskId.Value, StringComparison.OrdinalIgnoreCase)
@@ -114,6 +112,14 @@ public static partial class WorkerCommandTemplate
 
         return new WorkerDispatchPreparation(promptPath, command, brief.Content.Length);
     }
+
+    // Matches the case-insensitive substitution below, so an effort supplied under different casing is
+    // still seen as configured rather than silently eliding the flag.
+    private static string? ResolveReasoningEffortVariable(IReadOnlyDictionary<string, string?>? variables) =>
+        variables?
+            .Where(entry => entry.Key.Equals("subscriptionReasoningEffort", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.Value)
+            .FirstOrDefault();
 
     private static void ThrowIfUnresolvedTemplateVariables(string workerName, string command)
     {

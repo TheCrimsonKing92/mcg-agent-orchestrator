@@ -3,14 +3,14 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum FileScopeProvenance
+public enum FileScopeProvenance
 {
     Explicit,
     Derived,
     Inferred
 }
 
-internal sealed record DeclaredFileScope(string Path, FileScopeProvenance Provenance)
+public sealed record DeclaredFileScope(string Path, FileScopeProvenance Provenance)
 {
     public bool IsTrusted => Provenance is FileScopeProvenance.Explicit or FileScopeProvenance.Derived;
 }

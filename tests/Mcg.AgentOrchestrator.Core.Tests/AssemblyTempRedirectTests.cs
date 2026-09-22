@@ -1,6 +1,24 @@
 public sealed class AssemblyTempRedirectTests
 {
     [Fact]
+    public void CandidateRootsAreProcessOwnedAndNeverSelectSharedParent()
+    {
+        var candidates = AssemblyTempRedirect.EnumerateCandidateRoots().ToArray();
+
+        Assert.NotEmpty(candidates);
+        Assert.All(
+            candidates,
+            candidate =>
+            {
+                Assert.Equal($"p{Environment.ProcessId:x}", Path.GetFileName(candidate.Path));
+                Assert.NotEqual("mcg-tests", Path.GetFileName(candidate.Path));
+                Assert.NotEqual(".test-tmp", Path.GetFileName(candidate.Path));
+            });
+        Assert.Contains(candidates, candidate => candidate.Path.Contains("mcg-tests", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(candidates, candidate => candidate.Path.Contains(".test-tmp", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void SkipsCandidateThatCannotCreateFiles()
     {
         var fileSystem = new RecordingTempRootFileSystem(failWrites: ["existing-but-denied"]);

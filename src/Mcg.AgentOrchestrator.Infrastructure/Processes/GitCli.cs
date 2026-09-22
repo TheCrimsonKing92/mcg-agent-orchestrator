@@ -11,14 +11,16 @@ internal static class GitCli
     // helper (fsmonitor/maintenance/gc) can inherit the output pipe and hold it open after git
     // exits; a synchronous ReadToEnd would then block forever and DEFEAT the timeout below (observed:
     // an inherited-pipe git wedged the conductor for 34 minutes while holding index.lock).
-    private const int DrainTimeoutMilliseconds = 5_000;
+    private const int DrainTimeoutMilliseconds = PipeDrain.DefaultTimeoutMilliseconds;
 
     // Applied to every invocation so git fails fast and never wedges:
     //  - core.fsmonitor=false / gc.auto=0 / maintenance.auto=false: never spawn a background daemon
     //    that could inherit the output pipe or keep a lock alive after git returns.
+    //  - core.longpaths=true: keep revision/path arguments usable from deeply nested fixture worktrees.
     private static readonly string[] HardeningConfig =
     [
         "-c", "core.fsmonitor=false",
+        "-c", "core.longpaths=true",
         "-c", "gc.auto=0",
         "-c", "maintenance.auto=false",
     ];
@@ -85,30 +87,43 @@ internal static class GitCli
                 return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
             processStarted = true;
 
-            // Drain asynchronously so WaitForExit's timeout is real: a synchronous ReadToEnd would
-            // block on an inherited pipe even after git exits, and the timeout would never fire.
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
+            // Drain on dedicated threads, never the thread pool. Under parallel test load the pool can be
+            // fully blocked; a pool-dependent async read then never starts inside the drain window and
+            // the output already sitting in the pipe is discarded as "" next to a real exit code — the
+            // "git exits 0 with no output" flake family (proven by GitCliThreadPoolSaturationTests).
+            // Dedicated threads also keep WaitForExit's timeout real: a synchronous ReadToEnd on this
+            // thread would block on an inherited pipe after git exits.
+            var outputDrain = PipeDrain.Start(process.StandardOutput, "git-stdout-drain");
+            var errorDrain = PipeDrain.Start(process.StandardError, "git-stderr-drain");
 
             if (!process.WaitForExit(timeoutMilliseconds))
             {
                 TryKillTree(process);
-                return new GitResult(-1, string.Empty, $"git {string.Join(' ', args)} timed out after {timeoutMilliseconds}ms");
+                return new GitResult(-1, outputDrain.Text, $"git {string.Join(' ', args)} timed out after {timeoutMilliseconds}ms");
             }
 
             // git has exited; bound the drain so a detached grandchild holding the pipe can't keep us
             // here. With the hardening config above this should complete immediately.
-            if (!Task.WaitAll([outputTask, errorTask], DrainTimeoutMilliseconds))
+            var drainDeadline = Environment.TickCount64 + DrainTimeoutMilliseconds;
+            var outputDrained = outputDrain.Join(drainDeadline);
+            var errorDrained = errorDrain.Join(drainDeadline);
+            if (!outputDrained || !errorDrained)
             {
                 TryKillTree(process);
-                var timedOutOutput = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
-                var timedOutError = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
-                return new GitResult(process.ExitCode, timedOutOutput, timedOutError, DrainTimedOut: true);
+                var drainDiagnostic = PipeDrain.DescribeTimeout(
+                    "git",
+                    DrainTimeoutMilliseconds,
+                    outputDrain,
+                    errorDrain);
+                var timedOutError = errorDrain.Text;
+                return new GitResult(
+                    process.ExitCode,
+                    outputDrain.Text,
+                    string.IsNullOrEmpty(timedOutError) ? drainDiagnostic : timedOutError + Environment.NewLine + drainDiagnostic,
+                    DrainTimedOut: true);
             }
 
-            var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
-            var error = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
-            return new GitResult(process.ExitCode, output, error);
+            return new GitResult(process.ExitCode, outputDrain.Text, errorDrain.Text);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {

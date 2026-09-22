@@ -262,7 +262,7 @@ public static partial class DashboardRenderer
         }
 
         html.AppendLine("<li>Verify no dashboard app process remains: <code>Get-Process Mcg.AgentOrchestrator.App -ErrorAction SilentlyContinue</code>.</li>");
-        html.AppendLine("<li>Run <code>.\\scripts\\Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln --verbosity minimal</code>.</li>");
+        html.AppendLine("<li>Run <code>.\\scripts\\Invoke-TestSummary.ps1 -Target .\\Mcg.AgentOrchestrator.sln</code>.</li>");
         html.AppendLine($"<li>Restart with <code>{Encode(workspace.DashboardRestartCommand)}</code>.</li>");
         html.AppendLine("</ol>");
         html.AppendLine("</details>");
@@ -296,11 +296,11 @@ public static partial class DashboardRenderer
             html.AppendLine("<td>");
             if (run.HasOutputLog)
             {
-                html.AppendLine($"<a href=\"{Encode(DashboardEndpoints.BuildTestLogFileUrl(run.OutputLogPath))}\" target=\"_blank\" rel=\"noreferrer\">output</a>");
+                html.AppendLine($"<a href=\"{Encode(BuildTestLogFileUrl(run.OutputLogPath))}\" target=\"_blank\" rel=\"noreferrer\">output</a>");
             }
             if (run.HasErrorLog)
             {
-                html.AppendLine($" <a href=\"{Encode(DashboardEndpoints.BuildTestLogFileUrl(run.ErrorLogPath))}\" target=\"_blank\" rel=\"noreferrer\">error</a>");
+                html.AppendLine($" <a href=\"{Encode(BuildTestLogFileUrl(run.ErrorLogPath))}\" target=\"_blank\" rel=\"noreferrer\">error</a>");
             }
             html.AppendLine($"<br><code>{Encode(run.OutputLogPath)}</code>");
             html.AppendLine("</td>");
@@ -325,6 +325,9 @@ public static partial class DashboardRenderer
         html.AppendLine("</tbody></table>");
         html.AppendLine("</details>");
     }
+
+    private static string BuildTestLogFileUrl(string path) =>
+        "/api/system/build-test-runs/log?path=" + Uri.EscapeDataString(path);
 
     private static string ExtractDashboardUrl(DashboardWorkspaceContext workspace)
     {

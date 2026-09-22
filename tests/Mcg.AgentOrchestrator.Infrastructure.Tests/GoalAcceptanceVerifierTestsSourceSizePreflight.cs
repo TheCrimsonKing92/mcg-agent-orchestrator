@@ -18,12 +18,18 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
 
         try
         {
-            using var progress = GoalAcceptanceVerifier.PushGateProgressSink(item => phases.Add(item.Phase));
-            var result = await verifier.RunAsync(root);
+            var result = await verifier.RunOwnedAsync(
+                root,
+                goalId: null,
+                changedFiles: null,
+                stableSlotIndex: null,
+                stableSlotLease: null,
+                CancellationToken.None,
+                new AcceptanceRunExecutionOptions(ProgressSink: item => phases.Add(item.Phase)));
 
             Assert.False(result.Passed);
             Assert.Empty(calls);
-            Assert.DoesNotContain(AcceptanceGatePhaseNames.BuildServerShutdown, phases);
+            Assert.DoesNotContain(AcceptanceGatePhaseNames.PlanConstruction, phases);
             Assert.Contains("guarded.cs", result.OutputTail, StringComparison.Ordinal);
             Assert.Contains("3 lines", result.OutputTail, StringComparison.Ordinal);
             Assert.Contains("recorded ceiling of 2", result.OutputTail, StringComparison.Ordinal);
@@ -74,7 +80,7 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
     }
 
     [Xunit.Fact]
-    public async Task CompliantAuthority_ProceedsToBuildServerShutdown()
+    public async Task CompliantAuthorityProceedsWithoutSessionWideBuildServerShutdown()
     {
         var root = CreateManifestWorkspace(EmptyManifest);
         WriteAuthority(root, maximumLineCount: 3, actualLineCount: 3);
@@ -90,8 +96,7 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.NotEmpty(calls);
-            Assert.Equal(["dotnet", "build-server", "shutdown"], calls[0]);
+            Assert.Empty(calls);
         }
         finally
         {

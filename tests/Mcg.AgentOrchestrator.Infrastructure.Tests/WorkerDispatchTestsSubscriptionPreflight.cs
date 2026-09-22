@@ -977,7 +977,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 
     var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
     var item = plan.Items.Single();
-    var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+    var parallelPlan = DispatchReadinessRules.BuildReadyTaskParallelPlan(goal, agents);
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -1041,7 +1041,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 
     var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, now: retryAttemptAt);
     var item = plan.Items.Single();
-    var parallelPlan = GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents);
+    var parallelPlan = DispatchReadinessRules.BuildReadyTaskParallelPlan(goal, agents);
     var expiredRetryAfter = task.SubscriptionRetryAfter;
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
@@ -1830,5 +1830,363 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     Assert.Null(task.LastDispatch);
     Assert.Null(task.LastProcess);
 }
+
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_allows_authorized_retry_feedback_supersession_or_clear")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void WorkerProfileDispatcherPreflightAllowsAuthorizedRetryFeedbackSupersessionOrClear(bool clearFeedback)
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-31T10:00:00Z")));
+        var task = new TaskSpec(TaskId.New(), "Implement the retry correction.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Prepare an authorized retry feedback transition", [task]);
+        var agent = SubscriptionSolDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            task.Id,
+            "Accepted operator correction.",
+            RetryCause.NewTestFinding);
+
+        if (clearFeedback)
+        {
+            kernel.ClearCriterionRetryFeedback(goal.Id, task.Id);
+        }
+        else
+        {
+            kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["New automatic retry evidence."]);
+        }
+
+        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            DispatchTestProfiles(),
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
+            sandboxOptions: DisabledSandbox);
+
+        Assert.Null(task.AcceptedRetryFeedback);
+        Assert.NotNull(task.LastDispatch);
+        Assert.Null(task.LastProcess);
+        Assert.Equal(task.Id, prepared.Task.Id);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_records_authoritative_retry_feedback_prompt_receipt")]
+    public void WorkerProfileDispatcherPreflightRecordsAuthoritativeRetryFeedbackPromptReceipt()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-31T10:00:00Z")));
+        var task = new TaskSpec(TaskId.New(), "Implement the retry correction.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Record authoritative retry feedback delivery", [task]);
+        var agent = SubscriptionSolDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            task.Id,
+            "Accepted operator correction.",
+            RetryCause.NewTestFinding);
+
+        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            DispatchTestProfiles(),
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
+            sandboxOptions: DisabledSandbox);
+
+        var receipt = Assert.IsType<WorkerContextPackageReceipt>(prepared.Task.LastDispatch!.ContextPackageReceipt);
+        var retryReceipt = Assert.IsType<WorkerRetryFeedbackPromptReceipt>(receipt.RetryFeedbackPromptReceipt);
+        var retryArtifact = WorkerContextArtifact.Create(
+            new LogicalArtifactIdentity("task/criterion-retry-feedback.json"),
+            ContextArtifactKind.AcceptanceCriteria,
+            JsonSerializer.SerializeToUtf8Bytes(task.CriterionRetryFeedback),
+            [AgentRole.Developer],
+            ContextDeliveryMode.InlineFull,
+            ContextContractVersion.V1);
+        var retrySection = Assert.Single(
+            receipt.Sections,
+            section => section.LogicalIdentity == "task/criterion-retry-feedback.json");
+        var renderedProjection = WorkerContextPackageBuilder.RenderArtifact(retryArtifact);
+        Assert.Equal(task.Id.Value, retryReceipt.AcceptedRetryTaskId);
+        Assert.Equal("task/criterion-retry-feedback.json", retryReceipt.LogicalIdentity);
+        Assert.Equal(
+            WorkerContextArtifact.Hash(System.Text.Encoding.UTF8.GetBytes("Accepted operator correction.")),
+            retryReceipt.AcceptedFeedbackSha256);
+        Assert.Equal(retryArtifact.ContentHash, retrySection.ContentHash);
+        Assert.Equal(retrySection.ContentHash, retryReceipt.TypedArtifactSha256);
+        Assert.Equal(
+            WorkerContextArtifact.Hash(System.Text.Encoding.UTF8.GetBytes(renderedProjection)),
+            retryReceipt.RenderedProjectionSha256);
+        Assert.Equal(
+            WorkerContextArtifact.Hash(File.ReadAllBytes(prepared.PromptPath!)),
+            retryReceipt.GeneratedPromptSha256);
+        Assert.Contains("Accepted operator correction.", File.ReadAllText(prepared.PromptPath!), StringComparison.Ordinal);
+        Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_unrelated_feedback_while_accepted_note_is_current")]
+    public void WorkerProfileDispatcherPreflightBlocksUnrelatedFeedbackWhileAcceptedNoteIsCurrent()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-08-31T10:00:00Z")));
+        var task = new TaskSpec(TaskId.New(), "Implement the retry correction.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Block stale retry feedback before paid dispatch", [task]);
+        var agent = SubscriptionSolDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        kernel.RetryTaskWithAuthoritativeFeedback(
+            goal.Id,
+            task.Id,
+            "Accepted operator correction.",
+            RetryCause.NewTestFinding);
+        var taskId = task.Id;
+        var snapshot = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(goalSnapshot => goalSnapshot.Id == goal.Id.Value
+                    ? goalSnapshot with
+                    {
+                        Tasks = goalSnapshot.Tasks
+                            .Select(taskSnapshot => taskSnapshot.Id == taskId.Value
+                                ? taskSnapshot with { CriterionRetryFeedback = ["Unrelated stale feedback."] }
+                                : taskSnapshot)
+                            .ToArray()
+                    }
+                    : goalSnapshot)
+                .ToArray()
+        });
+        goal = kernel.GetGoal(goal.Id);
+        task = goal.Tasks.Single(candidate => candidate.Id == taskId);
+
+        var error = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            WorkerProfileDispatcher.PrepareSubscriptionTask(
+                kernel,
+                goal,
+                task,
+                [agent],
+                DispatchTestProfiles(),
+                promptRoot,
+                worktree,
+                DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
+                sandboxOptions: DisabledSandbox));
+
+        Assert.Equal(WorkerRetryFeedbackPromptGuard.ErrorCode, error.ErrorCode);
+        Assert.Contains("authoritative current-round feedback does not match", error.Message, StringComparison.Ordinal);
+        Assert.Null(task.LastDispatch);
+        Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_dispatch_command_carries_configured_claude_effort_without_starting_worker")]
+    public void WorkerProfileDispatcherDispatchCommandCarriesConfiguredClaudeEffortWithoutStartingWorker()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Update src/example.txt.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Materialize Claude reasoning effort", [task]);
+        var agent = SubscriptionClaudeDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var effortOverride = new DispatchModelOverride("claude-cli", "claude-opus-5", "high");
+
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+            goal,
+            task,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            worktree,
+            DateTimeOffset.Parse("2026-09-13T12:00:00Z"),
+            effortOverride,
+            allowGitReference: true,
+            sandboxOptions: DisabledSandbox,
+            commandExists: RealClaudeLauncherExists);
+        WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-09-13T12:00:00Z"),
+            effortOverride,
+            allowGitReference: true,
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: true,
+                HasCliCredentialArtifact: false,
+                CredentialArtifactPath: null),
+            sandboxOptions: DisabledSandbox,
+            commandExists: RealClaudeLauncherExists);
+
+        var findings = string.Join("\n", preflight.Findings);
+        Assert.True(preflight.Allowed, findings);
+        Assert.Contains("ok: worker profile 'claude-cli' materializes reasoning effort 'high' as --effort", findings, StringComparison.Ordinal);
+
+        // The fully constructed invocation, asserted without spawning a process or starting a paid worker.
+        var command = task.LastDispatch!.Command;
+        Assert.Contains("--effort 'high'", command, StringComparison.Ordinal);
+        Assert.Contains("--model 'claude-opus-5'", command, StringComparison.Ordinal);
+        Assert.Contains("--permission-mode ", command, StringComparison.Ordinal);
+        Assert.Equal(1, CountEffortTokens(command));
+        Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_refuses_unsupported_claude_effort_before_any_worker_start")]
+    public void WorkerProfileDispatcherPreflightRefusesUnsupportedClaudeEffortBeforeAnyWorkerStart()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Update src/example.txt.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Refuse an unsupported Claude reasoning effort", [task]);
+        var agent = SubscriptionClaudeDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var effortOverride = new DispatchModelOverride("claude-cli", "claude-opus-5", "ultra");
+
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+            goal,
+            task,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            worktree,
+            DateTimeOffset.Parse("2026-09-13T12:00:00Z"),
+            effortOverride,
+            allowGitReference: true,
+            sandboxOptions: DisabledSandbox,
+            commandExists: RealClaudeLauncherExists);
+        var refusal = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
+            WorkerProfileDispatcher.PrepareSubscriptionTask(
+                kernel,
+                goal,
+                task,
+                [agent],
+                WorkerProfileCatalog.Default(),
+                promptRoot,
+                worktree,
+                DateTimeOffset.Parse("2026-09-13T12:00:00Z"),
+                effortOverride,
+                allowGitReference: true,
+                sandboxOptions: DisabledSandbox,
+                commandExists: RealClaudeLauncherExists));
+
+        var findings = string.Join("\n", preflight.Findings);
+        Assert.False(preflight.Allowed);
+        Assert.Equal(WorkerProfileDispatcher.UnsupportedClaudeReasoningEffortErrorCode, preflight.ErrorCode);
+        Assert.Contains("worker profile 'claude-cli' configured reasoning effort 'ultra' is not supported", findings, StringComparison.Ordinal);
+        Assert.Contains("supported values: low, medium, high, xhigh, max", findings, StringComparison.Ordinal);
+        // Refused before any process start, so no paid start is charged; and never clamped or remapped.
+        Assert.Equal(WorkerProfileDispatcher.UnsupportedClaudeReasoningEffortErrorCode, refusal.ErrorCode);
+        Assert.Null(task.LastDispatch);
+        Assert.Null(task.LastProcess);
+        Assert.False(Directory.Exists(promptRoot));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_warns_but_allows_custom_claude_template_without_effort_variable")]
+    public void WorkerProfileDispatcherPreflightWarnsButAllowsCustomClaudeTemplateWithoutEffortVariable()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Update src/example.txt.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve a custom Claude command template", [task]);
+        var agent = SubscriptionClaudeDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        const string customTemplate =
+            "claude -p --model {subscriptionModelName} --permission-mode {permissionMode} --verbose";
+        var profiles = WorkerProfileCatalog.Default().Upsert(new WorkerProfile("claude-cli", customTemplate));
+        var effortOverride = new DispatchModelOverride("claude-cli", "claude-opus-5", "high");
+
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+            goal,
+            task,
+            [agent],
+            profiles,
+            worktree,
+            DateTimeOffset.Parse("2026-09-13T12:00:00Z"),
+            effortOverride,
+            allowGitReference: true,
+            sandboxOptions: DisabledSandbox,
+            commandExists: RealClaudeLauncherExists);
+        WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            profiles,
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-09-13T12:00:00Z"),
+            effortOverride,
+            allowGitReference: true,
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: true,
+                HasCliCredentialArtifact: false,
+                CredentialArtifactPath: null),
+            sandboxOptions: DisabledSandbox,
+            commandExists: RealClaudeLauncherExists);
+
+        var findings = string.Join("\n", preflight.Findings);
+        // Proceeds - a preserved custom template must not turn a configured effort into a refused dispatch.
+        Assert.True(preflight.Allowed, findings);
+        Assert.Contains(
+            "warn: worker profile 'claude-cli' has no {subscriptionReasoningEffort} template variable; configured reasoning effort 'high' was not materialized",
+            findings,
+            StringComparison.Ordinal);
+        var command = task.LastDispatch!.Command;
+        Assert.Contains("--verbose", command, StringComparison.Ordinal);
+        Assert.Equal(0, CountEffortTokens(command));
+        Assert.Null(task.LastProcess);
+    }
+
+    private static AgentDefinition SubscriptionClaudeDeveloperAgent() => new(
+        new AgentId("claude-developer"),
+        "Claude Developer",
+        AgentRole.Developer,
+        new ModelProfile("Anthropic", "claude-opus-5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-opus-5", "high"));
+
+    private static int CountEffortTokens(string command)
+    {
+        var count = 0;
+        var index = command.IndexOf("--effort", StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            count++;
+            index = command.IndexOf("--effort", index + "--effort".Length, StringComparison.Ordinal);
+        }
+
+        return count;
+    }
+
+    private static AgentDefinition SubscriptionSolDeveloperAgent() => new(
+        new AgentId("sol-developer"),
+        "Sol Developer",
+        AgentRole.Developer,
+        new ModelProfile(
+            "OpenAI",
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            ModelCapability.Text,
+            SubscriptionMode.ApiKey,
+            "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile(
+            "codex-cli",
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            "low"));
 
 }

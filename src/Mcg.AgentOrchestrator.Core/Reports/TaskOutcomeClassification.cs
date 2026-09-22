@@ -29,6 +29,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule PreflightFailure = new("preflight-failure", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderAuthentication = new("provider-authentication", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderConnectivity = new("provider-connectivity", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderInterruption = new("provider-interruption", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderNeutralProgressStall = new("provider-neutral-progress-stall", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderModelRejection = new("provider-model-rejection", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderRateLimit = new("provider-rate-limit", TaskOutcomeClass.Environmental);
@@ -42,6 +43,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule SandboxCommitBlocked = new("sandbox-commit-blocked", TaskOutcomeClass.ManufacturedFixed);
 
     public static readonly TaskOutcomeRule SucceededWorkerResultFailingTests = new("succeeded-worker-result-failing-tests", TaskOutcomeClass.RealFailure);
+    public static readonly TaskOutcomeRule IncompleteScopeDeclaration = new("incomplete-scope-declaration", TaskOutcomeClass.RealFailure);
     public static readonly TaskOutcomeRule TesterWorkerResultBlocker = new("tester-worker-result-blocker", TaskOutcomeClass.RealFailure);
     public static readonly TaskOutcomeRule RealFailure = new("real-failure", TaskOutcomeClass.RealFailure);
 
@@ -71,6 +73,7 @@ internal static class TaskOutcomeRules
         PreflightFailure,
         ProviderAuthentication,
         ProviderConnectivity,
+        ProviderInterruption,
         ProviderNeutralProgressStall,
         ProviderModelRejection,
         ProviderRateLimit,
@@ -81,6 +84,7 @@ internal static class TaskOutcomeRules
         RetryRoundProducedNoCommitAndNoDeferral,
         SandboxCommitBlocked,
         SucceededWorkerResultFailingTests,
+        IncompleteScopeDeclaration,
         TesterWorkerResultBlocker,
         RealFailure,
         ProviderUnknown,
@@ -109,6 +113,9 @@ public static class TaskOutcomeClassifier
     private const string ClassifierPrefix = "CLASSIFIER ";
     private const string RulePrefix = "rule=";
     private const string OutcomeClassPrefix = "outcome_class=";
+
+    public static bool IsIncompleteScopeDeclaration(string? rule) =>
+        string.Equals(rule, TaskOutcomeRules.IncompleteScopeDeclaration.Token, StringComparison.OrdinalIgnoreCase);
 
     public static TaskOutcomeClassification Classify(WorkTaskStatus outcome, string? rule)
     {

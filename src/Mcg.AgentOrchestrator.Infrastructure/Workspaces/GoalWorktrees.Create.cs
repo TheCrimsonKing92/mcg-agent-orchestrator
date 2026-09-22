@@ -47,7 +47,7 @@ public static partial class GoalWorktrees
         GoalId goalId,
         GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
-        cleanupHooks ??= GoalWorktreeCleanupHooks.Default;
+        cleanupHooks ??= new GoalWorktreeCleanupHooks();
         var existing = TryResolve(executionDirectory, goalId);
         if (existing is not null)
         {

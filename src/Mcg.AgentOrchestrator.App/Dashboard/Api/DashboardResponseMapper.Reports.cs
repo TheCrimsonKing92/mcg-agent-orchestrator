@@ -291,6 +291,7 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     AgentOrchestratorKernel kernel,
     Goal goal,
     WorkerProfileCatalog workerProfiles,
+    ProcessCommandLineSnapshot processSnapshot,
     IReadOnlyList<AgentDefinition>? agents = null,
     DashboardHostInfoDto? host = null,
     string? executionDirectory = null,
@@ -302,7 +303,12 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
     var testImpact = BuildGoalTestImpactDto(goal, executionDirectory, changedFiles);
-    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, monitor.PendingHumanInputCount, gate.IsSatisfied, executionDirectory);
+    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
+        goal,
+        monitor.PendingHumanInputCount,
+        gate.IsSatisfied,
+        executionDirectory,
+        processSnapshot);
     var lifecycle = ResolveLifecycle(goal, executionDirectory);
 
     return new GoalWorkSummaryDto(
@@ -313,12 +319,12 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
         ToGoalOperatorDispositionDto(goal, disposition),
-        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents),
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents, processSnapshot),
         host,
         ToGoalBuildEnvironmentDto(goal),
-        goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task)).ToList(),
+        goal.Tasks.Select(task => ToTaskWorkSummaryDto(goal, task, processSnapshot)).ToList(),
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
-        ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
+        ToParallelExecutionPlanDto(DispatchReadinessRules.BuildReadyTaskParallelPlan(goal, agents)),
         testImpact,
         operatorIntents?.Select(ToOperatorIntentDto).ToList(),
         ReadProgressiveReviewGlanceGuards(goal, executionDirectory))
@@ -432,10 +438,10 @@ private static GoalLifecycleState? ResolveLifecycle(Goal goal, string? execution
     }
 
     var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
-    var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-    var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
-    var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
-    var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
+    var journal = DashboardApplicationServices.ReadOperationJournal(executionDirectory, goal.Id);
+    var isMerged = DashboardApplicationServices.HasCompletedLandingEvidence(journal);
+    var isRecorded = DashboardApplicationServices.HasCompletedRecordEvidence(journal);
+    var isCleanedUp = DashboardApplicationServices.HasCompletedCleanupEvidence(journal);
 
     return GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(workspaceExists, IsMerged: isMerged, IsRecorded: isRecorded, IsCleanedUp: isCleanedUp));
 }
@@ -445,22 +451,20 @@ private static GoalTestImpactDto BuildGoalTestImpactDto(
     string? executionDirectory,
     IReadOnlyList<string>? changedFiles)
 {
-    changedFiles ??= TryGetGoalChangedFiles(goal, executionDirectory);
-    var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+    var worktree = string.IsNullOrWhiteSpace(executionDirectory)
+        ? null
+        : GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+    changedFiles ??= worktree is null
+        ? []
+        : DashboardApplicationServices.GetChangedFiles(worktree);
+    var plan = worktree is null
+        ? RepositoryTestImpactPlanner.Plan(changedFiles)
+        : RepositoryTestImpactPlanner.Plan(changedFiles, worktree);
     return new GoalTestImpactDto(
         plan.RequiresBuild,
         plan.RequiresBroadVerification,
         plan.Summary,
         plan.Checks.Select(check => new GoalTestImpactCheckDto(check.Name, check.CommandLine, check.Reason)).ToList());
-}
-
-private static IReadOnlyList<string> TryGetGoalChangedFiles(Goal goal, string? executionDirectory)
-{
-    if (string.IsNullOrWhiteSpace(executionDirectory))
-        return [];
-
-    var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-    return worktree is null ? [] : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree);
 }
 
 private static GoalBuildEnvironmentDto ToGoalBuildEnvironmentDto(Goal goal)
@@ -487,6 +491,7 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
     var monitor = kernel.BuildMonitor(goal.Id);
     var gate = kernel.BuildVerificationGate(goal.Id);
     var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
+    var processSnapshot = ProcessInspectionSnapshots.SnapshotOperation();
 
     return new TaskWorkContextDto(
         goal.Id.Value,
@@ -495,14 +500,17 @@ public static TaskWorkContextDto ToTaskWorkContextDto(
         goal.Tasks.Count,
         monitor.PendingHumanInputCount,
         gate.IsSatisfied,
-        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents),
-        ToTaskWorkSummaryDto(goal, task),
+        nextAction is null ? null : ToNextActionDto(goal, nextAction, 1, workerProfiles, agents, processSnapshot),
+        ToTaskWorkSummaryDto(goal, task, processSnapshot),
         host);
 }
 
-public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
+public static TaskWorkSummaryDto ToTaskWorkSummaryDto(
+    Goal goal,
+    TaskSpec task,
+    ProcessCommandLineSnapshot? processSnapshot = null)
 {
-    var dispatchState = ToDispatchAuthoritativeStateDto(TryEvaluateDispatchState(goal, task));
+    var dispatchState = ToDispatchAuthoritativeStateDto(TryEvaluateDispatchState(goal, task, processSnapshot));
     return new TaskWorkSummaryDto(
         ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
         task.Id.Value,
@@ -681,16 +689,29 @@ public static NextActionsDto ToNextActionsDto(
     GoalNextActions actions,
     WorkerProfileCatalog workerProfiles,
     IReadOnlyList<AgentDefinition>? agents = null,
-    GoalOperatorDisposition? conductorDisposition = null)
+    GoalOperatorDisposition? conductorDisposition = null,
+    Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
 {
+    var processInspection = new ProcessInspectionSnapshotScope(
+        processSnapshotFactory ?? ProcessInspectionSnapshots.SnapshotOperation);
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
-    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied);
+    var disposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
+        goal,
+        pendingHumanInputCount: 0,
+        verificationSatisfied,
+        commandLineSnapshot: processInspection.Get());
     return new NextActionsDto(
         actions.GoalId.Value,
         SummaryText(actions.Objective),
         actions.Status,
         ToGoalOperatorDispositionDto(goal, disposition),
-        actions.Items.Select((item, index) => ToNextActionDto(goal, item, index + 1, workerProfiles, agents)).ToList());
+        actions.Items.Select((item, index) => ToNextActionDto(
+            goal,
+            item,
+            index + 1,
+            workerProfiles,
+            agents,
+            processInspection.Get())).ToList());
 }
 
 public static NextActionDto ToNextActionDto(
@@ -698,10 +719,31 @@ public static NextActionDto ToNextActionDto(
     NextActionItem item,
     int priority,
     WorkerProfileCatalog workerProfiles,
-    IReadOnlyList<AgentDefinition>? agents = null)
+    IReadOnlyList<AgentDefinition>? agents = null,
+    ProcessCommandLineSnapshot? processSnapshot = null) =>
+    ToNextActionDtoWithEvaluatedState(
+        goal,
+        item,
+        priority,
+        workerProfiles,
+        agents,
+        DispatchRecoveryView.EvaluateState(goal, item, processSnapshot));
+
+/// <summary>
+/// Renders a next action against a dispatch state that was already evaluated by the caller. The
+/// advancement adapter uses this so the response describes the action as it stood before the
+/// application operation mutated the goal, which is where this DTO used to be built.
+/// </summary>
+internal static NextActionDto ToNextActionDtoWithEvaluatedState(
+    Goal goal,
+    NextActionItem item,
+    int priority,
+    WorkerProfileCatalog workerProfiles,
+    IReadOnlyList<AgentDefinition>? agents,
+    DispatchAuthoritativeState? evaluatedDispatchState)
 {
     int? taskNumber = item.TaskId is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, item.TaskId);
-    var dispatchState = ToDispatchAuthoritativeStateDto(DispatchRecoveryView.EvaluateState(goal, item));
+    var dispatchState = ToDispatchAuthoritativeStateDto(evaluatedDispatchState);
     return new NextActionDto(
         priority,
         item.Kind,
@@ -725,14 +767,17 @@ private static DispatchRecoveryDecisionDto? ToDispatchRecoveryDecisionDto(Dispat
             decision.Reason,
             decision.Blocker);
 
-private static DispatchAuthoritativeState? TryEvaluateDispatchState(Goal goal, TaskSpec task)
+private static DispatchAuthoritativeState? TryEvaluateDispatchState(
+    Goal goal,
+    TaskSpec task,
+    ProcessCommandLineSnapshot? processSnapshot = null)
 {
     if (task.LastDispatch is null && task.LastProcess is null)
     {
         return null;
     }
 
-    return new DispatchStateSurface().Evaluate(goal.Id, task);
+    return new DispatchStateSurface().Evaluate(goal.Id, task, processSnapshot);
 }
 
 internal static DispatchAuthoritativeStateDto? ToDispatchAuthoritativeStateDto(DispatchAuthoritativeState? state) =>

@@ -40,6 +40,26 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("startup sweep interrupted worker", decision.Reason, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_synthetic_exit_with_unavailable_heartbeat_holds_before_preservation")]
+    public void DispatchRecoveryPolicySyntheticExitWithUnavailableHeartbeatHoldsBeforePreservation()
+    {
+        var process = CreateProcess();
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), "{not-json");
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+
+        var decision = CreatePolicy().Evaluate(
+            process,
+            hasLiveProcess: false,
+            worktreeInspection: DispatchWorktreeInspectionStatus.Available(
+                hasDirtyEvidence: true,
+                process.WorkingDirectory));
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, decision.Action);
+        Xunit.Assert.Equal("heartbeat-invalid", decision.Blocker);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciles_synthetic_artifact_as_terminal_interrupted_failure")]
     public void BackgroundDispatchRunnerReconcilesSyntheticArtifactAsTerminalInterruptedFailure()
     {
@@ -562,6 +582,66 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("is not alive", finding.Finding, StringComparison.Ordinal);
         Xunit.Assert.Equal("refresh-dispatch 1", finding.SuggestedCommand);
         Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, finding.RecoveryDecision!.Action);
+    }
+
+    [Xunit.Fact]
+    public void GoalRecoveryPlanner_MultipleTasks_ReusesProcessSnapshot()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal(
+            "Plan two dispatch recoveries",
+            [
+                new TaskSpec(TaskId.New(), "Inspect first", AgentRole.Researcher),
+                new TaskSpec(TaskId.New(), "Inspect second", AgentRole.Reviewer)
+            ]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var records = new Dictionary<int, ProcessInspectionRecord>();
+        for (var index = 0; index < goal.Tasks.Count; index++)
+        {
+            var task = goal.Tasks[index];
+            var processId = 999_990 + index;
+            var process = new TaskProcessRecord(
+                processId,
+                "codex exec prompt",
+                root,
+                Path.Combine(root, $"out-{index}.log"),
+                Path.Combine(root, $"err-{index}.log"),
+                Path.Combine(root, $"worker-{index}.exit.txt"),
+                Now.AddMinutes(-20),
+                null,
+                null);
+            File.WriteAllText(process.StandardOutputPath, string.Empty);
+            File.WriteAllText(process.StandardErrorPath, string.Empty);
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord("codex-cli", process.Command, root, process.StartedAt));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+            records[processId] = new ProcessInspectionRecord(
+                processId,
+                1,
+                "codex",
+                null,
+                null,
+                null,
+                ProcessInspectionStatus.Exited);
+        }
+
+        var snapshotCalls = 0;
+        var report = GoalRecoveryPlanner.Build(
+            kernel,
+            goal,
+            root,
+            includeCleanupBackoff: false,
+            processSnapshotFactory: () =>
+            {
+                snapshotCalls++;
+                return new ProcessCommandLineSnapshot(records);
+            });
+
+        Assert.Equal(1, snapshotCalls);
+        Assert.Equal(2, report.TaskFindings.Count);
     }
 
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));

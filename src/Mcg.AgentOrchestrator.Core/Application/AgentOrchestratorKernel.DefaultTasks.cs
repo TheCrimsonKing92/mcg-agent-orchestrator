@@ -73,6 +73,42 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
+    public bool RecordOperatorIntentApplied(
+        GoalId goalId,
+        string intentId,
+        string verb,
+        string? taskId,
+        string actor,
+        string channel,
+        string? authenticationAssurance,
+        string message)
+    {
+        var goal = GetGoal(goalId);
+        var payload = new OperatorIntentAppliedPayload(
+            intentId,
+            verb,
+            taskId,
+            actor,
+            channel,
+            authenticationAssurance);
+        if (!string.IsNullOrEmpty(intentId) &&
+            goal.Timeline.Any(evt => evt.OperatorIntentApplied?.IntentId == intentId))
+        {
+            return false;
+        }
+
+        var progressEvent = new ProgressEvent(
+            goalId,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            message,
+            _clock.UtcNow,
+            OperatorIntentApplied: payload);
+        goal.Append(progressEvent);
+        _eventWriter.AppendTimelineEvent(progressEvent);
+        return true;
+    }
+
     public void ConcludeInterruptedDispatchRecovery(
         GoalId goalId,
         TaskId taskId,

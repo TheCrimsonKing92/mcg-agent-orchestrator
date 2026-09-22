@@ -1,6 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.Extensions.Configuration;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -8,27 +8,46 @@ internal static class WorktreeCleanupConfiguration
 {
     public static GoalWorktreeCleanupOptions Load(string basePath)
     {
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(basePath)
-            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
-            .AddEnvironmentVariables()
-            .Build();
-        return Read(configuration.GetSection("WorktreeCleanup"));
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var path = Path.Combine(basePath, "appsettings.json");
+        if (File.Exists(path))
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (document.RootElement.TryGetProperty("WorktreeCleanup", out var section))
+            {
+                foreach (var property in section.EnumerateObject())
+                    values[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                        ? property.Value.GetString()
+                        : property.Value.ToString();
+            }
+        }
+
+        OverlayEnvironment(values, "SweepInterval");
+        OverlayEnvironment(values, "EscalationThreshold");
+        OverlayEnvironment(values, "EscalatedRetryInterval");
+        return Read(values);
     }
 
-    internal static GoalWorktreeCleanupOptions Read(IConfiguration section)
+    internal static GoalWorktreeCleanupOptions Read(IReadOnlyDictionary<string, string?> values)
     {
         var defaults = GoalWorktreeCleanupOptions.Default;
         return new GoalWorktreeCleanupOptions(
-            ReadTimeSpan(section, "SweepInterval", defaults.SweepInterval),
-            ReadInt(section, "EscalationThreshold", defaults.EscalationThreshold),
-            ReadTimeSpan(section, "EscalatedRetryInterval", defaults.EscalatedRetryInterval))
+            ReadTimeSpan(values, "SweepInterval", defaults.SweepInterval),
+            ReadInt(values, "EscalationThreshold", defaults.EscalationThreshold),
+            ReadTimeSpan(values, "EscalatedRetryInterval", defaults.EscalatedRetryInterval))
             .Validate();
     }
 
-    private static int ReadInt(IConfiguration section, string key, int fallback)
+    private static void OverlayEnvironment(IDictionary<string, string?> values, string key)
     {
-        var value = section[key];
+        var value = Environment.GetEnvironmentVariable($"WorktreeCleanup__{key}");
+        if (value is not null)
+            values[key] = value;
+    }
+
+    private static int ReadInt(IReadOnlyDictionary<string, string?> values, string key, int fallback)
+    {
+        values.TryGetValue(key, out var value);
         if (string.IsNullOrWhiteSpace(value))
         {
             return fallback;
@@ -39,9 +58,9 @@ internal static class WorktreeCleanupConfiguration
             : throw new InvalidOperationException($"WorktreeCleanup:{key} must be an integer.");
     }
 
-    private static TimeSpan ReadTimeSpan(IConfiguration section, string key, TimeSpan fallback)
+    private static TimeSpan ReadTimeSpan(IReadOnlyDictionary<string, string?> values, string key, TimeSpan fallback)
     {
-        var value = section[key];
+        values.TryGetValue(key, out var value);
         if (string.IsNullOrWhiteSpace(value))
         {
             return fallback;

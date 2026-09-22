@@ -93,9 +93,14 @@ public sealed record DashboardSiblingProcessContext(
 
 public static partial class DashboardRenderer
 {
-    public static string Render(AgentOrchestratorKernel kernel, DashboardRenderOptions? options = null)
+    public static string Render(
+        AgentOrchestratorKernel kernel,
+        DashboardRenderOptions? options = null,
+        Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
     {
         options ??= new DashboardRenderOptions();
+        var processInspection = new ProcessInspectionSnapshotScope(
+            processSnapshotFactory ?? ProcessInspectionSnapshots.SnapshotOperation);
         var goals = kernel.Goals
             .OrderByDescending(goal => goal.Timeline.LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
             .ToList();
@@ -173,10 +178,10 @@ public static partial class DashboardRenderer
                 RenderSystemView(html, options);
                 break;
             case DashboardView.Goal:
-                RenderGoalDetailView(html, kernel, goals, displayedGoals, options);
+                RenderGoalDetailView(html, kernel, goals, displayedGoals, options, processInspection);
                 break;
             default:
-                RenderOpsView(html, kernel, goals, displayedGoals, options);
+                RenderOpsView(html, kernel, goals, displayedGoals, options, processInspection);
                 break;
         }
 
@@ -274,7 +279,8 @@ public static partial class DashboardRenderer
         AgentOrchestratorKernel kernel,
         List<Goal> goals,
         List<Goal> displayedGoals,
-        DashboardRenderOptions options)
+        DashboardRenderOptions options,
+        ProcessInspectionSnapshotScope processInspection)
     {
         if (options.EnableOperatorControls)
         {
@@ -310,7 +316,7 @@ public static partial class DashboardRenderer
             RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
             RenderOperatorDisposition(
                 html,
-                ResolveOperatorDisposition(goal, monitor, verificationGate, options));
+                ResolveOperatorDisposition(goal, monitor, verificationGate, options, processInspection));
 
             // Attention items — always visible in ops
             if (monitor.AttentionItems.Count > 0)
@@ -396,7 +402,8 @@ public static partial class DashboardRenderer
         AgentOrchestratorKernel kernel,
         IReadOnlyList<Goal> goals,
         IReadOnlyList<Goal> displayedGoals,
-        DashboardRenderOptions options)
+        DashboardRenderOptions options,
+        ProcessInspectionSnapshotScope processInspection)
     {
         var goal = !string.IsNullOrWhiteSpace(options.FocusGoalPrefix)
             ? goals.FirstOrDefault(g => g.Id.Value.StartsWith(options.FocusGoalPrefix, StringComparison.OrdinalIgnoreCase))
@@ -418,7 +425,7 @@ public static partial class DashboardRenderer
         RenderGoalHeader(html, goal, monitor, verificationGate, evidence, options);
         RenderOperatorDisposition(
             html,
-            ResolveOperatorDisposition(goal, monitor, verificationGate, options));
+            ResolveOperatorDisposition(goal, monitor, verificationGate, options, processInspection));
 
         // Attention items and next steps — open
         html.AppendLine("<div class=\"goal-panel\">");
@@ -496,7 +503,7 @@ public static partial class DashboardRenderer
         // Operator controls
         if (options.EnableOperatorControls)
         {
-            RenderGoalOperatorControls(html, kernel, goal, options);
+            RenderGoalOperatorControls(html, kernel, goal, options, processInspection);
         }
 
         RenderSubscriptionRetryQueue(html, goal);
@@ -974,7 +981,8 @@ public static partial class DashboardRenderer
         Goal goal,
         GoalMonitor monitor,
         GoalVerificationGate verificationGate,
-        DashboardRenderOptions options)
+        DashboardRenderOptions options,
+        ProcessInspectionSnapshotScope processInspection)
     {
         var runEventStorePath = options.Workspace?.SqliteStatePath is { Length: > 0 } statePath
             ? Path.Combine(Path.GetDirectoryName(statePath) ?? string.Empty, "run-events.db")
@@ -986,7 +994,8 @@ public static partial class DashboardRenderer
                     goal,
                     monitor.PendingHumanInputCount,
                     verificationGate.IsSatisfied,
-                    options.Workspace?.ExecutionDirectory);
+                    options.Workspace?.ExecutionDirectory,
+                    processInspection.Get());
     }
 
 }

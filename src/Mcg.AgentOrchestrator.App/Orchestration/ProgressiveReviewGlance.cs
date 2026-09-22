@@ -21,6 +21,17 @@ internal enum ProgressiveReviewGlanceVerdict
     Invalid
 }
 
+internal enum ProgressiveReviewGlanceFailureCause
+{
+    None,
+    OutputContract,
+    ModelVerdict,
+    RunnerFailure,
+    Timeout,
+    RunnerException,
+    AdmissionUnavailable
+}
+
 internal enum ProgressiveReviewGlanceReasonCode
 {
     ScopeDeviation,
@@ -53,12 +64,19 @@ internal sealed record ProgressiveReviewGlanceOptions(
     int TranscriptTailByteLimit = ProgressiveReviewGlanceLimits.DefaultTranscriptTailByteLimit,
     int TaskBriefCharacterLimit = 4000,
     int OperatorContextCharacterLimit = 4000,
-    TimeSpan? DispatchTimeout = null)
+    TimeSpan? DispatchTimeout = null,
+    TimeSpan? CircuitProbeLease = null,
+    int PerDispatchInputTokenBudget = 40000,
+    int PerDispatchGlanceBudget = 8,
+    TimeSpan? MaterialUnchangedEscapeInterval = null,
+    int TranscriptGrowthBucketBytes = 4096)
 {
     public TimeSpan EffectiveFirstElapsedThreshold => FirstElapsedThreshold ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveElapsedInterval => ElapsedInterval ?? TimeSpan.FromMinutes(15);
     public TimeSpan EffectiveSmallRoundSuppressionThreshold => SmallRoundSuppressionThreshold ?? TimeSpan.FromMinutes(10);
     public TimeSpan EffectiveDispatchTimeout => DispatchTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
+    public TimeSpan EffectiveCircuitProbeLease => CircuitProbeLease ?? EffectiveDispatchTimeout + TimeSpan.FromMinutes(1);
+    public TimeSpan EffectiveMaterialUnchangedEscapeInterval => MaterialUnchangedEscapeInterval ?? TimeSpan.FromMinutes(45);
 }
 
 internal sealed record ProgressiveReviewGlanceInputs(
@@ -99,7 +117,8 @@ internal sealed record ProgressiveReviewGlanceDispatchResult(
     string? Model = null,
     string? Profile = null,
     ProgressiveReviewGlanceReasonCode? ReasonCode = null,
-    IReadOnlyList<ProgressiveReviewGlanceFinding>? Findings = null);
+    IReadOnlyList<ProgressiveReviewGlanceFinding>? Findings = null,
+    ProgressiveReviewGlanceFailureCause FailureCause = ProgressiveReviewGlanceFailureCause.None);
 
 internal sealed record ProgressiveReviewGlanceGuardEvaluation(
     ProgressiveReviewGlanceDispatchResult Result,
@@ -107,6 +126,14 @@ internal sealed record ProgressiveReviewGlanceGuardEvaluation(
 
 internal interface IProgressiveReviewGlanceRunner
 {
+    ProgressiveReviewGlanceContractIdentity GetContractIdentity() => new(
+        "controlled",
+        GetType().Name,
+        "controlled",
+        "controlled",
+        "plain-json",
+        ProgressiveReviewGlanceCoordinator.ParserContractVersion);
+
     Task<ProgressiveReviewGlanceDispatchResult> RunAsync(
         ProgressiveReviewGlanceInputs inputs,
         CancellationToken cancellationToken = default);
@@ -118,6 +145,7 @@ internal sealed record ProgressiveReviewGlanceObservationResult(
 
 internal sealed class ProgressiveReviewGlanceCoordinator
 {
+    internal const string ParserContractVersion = "progressive-review-glance-v2";
     private const string CriteriaCorrectionLabel = "criteria correction(s)";
     private const string ChangedFileLabel = "changed file(s)";
     private const int UntrackedDiffFileLimit = 20;
@@ -128,13 +156,18 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     private readonly IGoalLifecycleEventWriter _eventWriter;
     private readonly ICollaborationItemStore _collaborationStore;
     private readonly IProgressiveReviewSteeringStore? _steeringStore;
+    private readonly IProgressiveReviewGlanceCircuitStore _circuitStore;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?, string?, DispatchLiveChangeSnapshot> _liveChanges;
     private readonly Func<string, string?, string> _diffReader;
     private readonly Func<TaskProcessRecord?, string> _transcriptReader;
     private readonly Dictionary<string, RoundState> _rounds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DispatchState> _dispatches = new(StringComparer.Ordinal);
     private readonly List<RunningGlance> _running = [];
     private readonly Dictionary<string, GoalSummary> _summaries = new(StringComparer.Ordinal);
+    private readonly InMemoryProgressiveReviewGlanceCircuitStore _fallbackSuppressionStore = new();
+    private readonly HashSet<string> _fallbackSuppressionWindows = new(StringComparer.Ordinal);
+    private bool _circuitDrainFailureReported;
 
     internal static Func<string, string[], GitCli.GitResult> RunGit { get; set; } =
         (dir, args) => GitCli.Run(dir, args);
@@ -148,17 +181,25 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         Func<string?, string?, DispatchLiveChangeSnapshot>? liveChanges = null,
         Func<string, string?, string>? diffReader = null,
         Func<TaskProcessRecord?, string>? transcriptReader = null,
-        IProgressiveReviewSteeringStore? steeringStore = null)
+        IProgressiveReviewSteeringStore? steeringStore = null,
+        IProgressiveReviewGlanceCircuitStore? circuitStore = null)
     {
         _runner = runner;
         _eventWriter = eventWriter;
         _collaborationStore = collaborationStore;
         _options = options ?? new ProgressiveReviewGlanceOptions();
+        if (_options.PerDispatchInputTokenBudget <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "Per-dispatch input token budget must be positive.");
+        if (_options.PerDispatchGlanceBudget <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "Per-dispatch glance budget must be positive.");
+        if (_options.TranscriptGrowthBucketBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(options), "Transcript growth bucket must be positive.");
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _liveChanges = liveChanges ?? ((worktree, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktree, baseCommit, displayLimit: _options.ChangedFilePromptLimit));
         _diffReader = diffReader ?? ReadDiff;
         _transcriptReader = transcriptReader ?? (process => ReadTranscriptTail(process, _options.TranscriptTailByteLimit));
         _steeringStore = steeringStore;
+        _circuitStore = circuitStore ?? new InMemoryProgressiveReviewGlanceCircuitStore();
     }
 
     public static ProgressiveReviewGlanceCoordinator CreateDefault(
@@ -171,7 +212,8 @@ internal sealed class ProgressiveReviewGlanceCoordinator
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             options,
-            steeringStore: SqliteProgressiveReviewSteeringStore.ForDirectory(workspace.OrchestratorDirectory));
+            steeringStore: SqliteProgressiveReviewSteeringStore.ForDirectory(workspace.OrchestratorDirectory),
+            circuitStore: SqliteProgressiveReviewGlanceCircuitStore.ForDirectory(workspace.OrchestratorDirectory));
     }
 
     public ProgressiveReviewGlanceObservationResult Observe(
@@ -201,6 +243,12 @@ internal sealed class ProgressiveReviewGlanceCoordinator
         var lines = new List<string>();
         var mutated = HarvestCompleted(lines);
         mutated |= SurfaceQueuedConcernsOnFailure(kernel);
+        var activeRoundKeys = kernel.Goals
+            .SelectMany(goal => goal.Tasks
+                .Where(IsRunningDeveloperDispatch)
+                .Select(task => RoundKey(goal, task)))
+            .ToHashSet(StringComparer.Ordinal);
+        FlushInactiveCircuitSuppressions(activeRoundKeys, lines);
 
         if (_running.Count >= _options.GlobalConcurrentCap)
         {
@@ -293,15 +341,47 @@ Transcript tail:
 
     internal static ProgressiveReviewGlanceDispatchResult ParseResult(
         string output,
+        int? estimatedInputTokens = null) =>
+        ParseProviderOutput(
+            output,
+            new ProgressiveReviewGlanceContractIdentity(
+                "plain", "plain", "plain", "plain", "plain-json", ParserContractVersion),
+            estimatedInputTokens);
+
+    internal static ProgressiveReviewGlanceDispatchResult ParseProviderOutput(
+        string output,
+        ProgressiveReviewGlanceContractIdentity contract,
         int? estimatedInputTokens = null)
     {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(contract);
+        var candidate = output.Trim();
+        int? providerInputTokens = null;
+        int? providerOutputTokens = null;
+        if (contract.OutputFormat.Equals("codex-jsonl", StringComparison.Ordinal))
+        {
+            var jsonl = CodexJsonlUsageParser.Parse(output);
+            if (jsonl.MalformedLineCount > 0)
+                return Invalid($"codex-jsonl-malformed-lines:{jsonl.MalformedLineCount}", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
+
+            var messages = jsonl.AgentMessages ?? [];
+            if (messages.Count != 1)
+                return Invalid($"codex-jsonl-agent-message-count:{messages.Count}", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
+
+            candidate = messages[0].Trim();
+            providerInputTokens = BoundProviderTokenCount(jsonl.Usage?.InputTokens);
+            providerOutputTokens = BoundProviderTokenCount(jsonl.Usage?.OutputTokens);
+        }
+
+        if (candidate.Length == 0)
+            return Invalid("empty glance output", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
+
         try
         {
-            var json = ExtractJson(output);
-            var dto = JsonSerializer.Deserialize<GlanceVerdictDto>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            var dto = JsonSerializer.Deserialize<GlanceVerdictDto>(candidate, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             if (dto is null)
             {
-                return Invalid("empty glance verdict", estimatedInputTokens);
+                return Invalid("empty glance verdict", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
             }
 
             var verdict = NormalizeVerdict(dto.Verdict);
@@ -309,15 +389,18 @@ Transcript tail:
             var evidence = BoundReceiptField(dto.EvidenceLine);
             if (verdict == ProgressiveReviewGlanceVerdict.Invalid)
             {
-                return Invalid("unrecognized glance verdict", estimatedInputTokens);
+                var cause = string.IsNullOrWhiteSpace(dto.Verdict)
+                    ? ProgressiveReviewGlanceFailureCause.OutputContract
+                    : ProgressiveReviewGlanceFailureCause.ModelVerdict;
+                return Invalid("unrecognized glance verdict", estimatedInputTokens, cause);
             }
 
             return new ProgressiveReviewGlanceDispatchResult(
                 verdict,
                 string.IsNullOrWhiteSpace(note) ? verdict.ToString() : note,
                 string.IsNullOrWhiteSpace(evidence) ? note : evidence,
-                dto.InputTokens ?? estimatedInputTokens,
-                dto.OutputTokens,
+                providerInputTokens ?? estimatedInputTokens,
+                providerOutputTokens,
                 dto.Model,
                 dto.Profile,
                 NormalizeReasonCode(dto.ReasonCode),
@@ -328,9 +411,17 @@ Transcript tail:
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
-            return Invalid($"invalid glance output: {ex.Message}", estimatedInputTokens);
+            return Invalid($"invalid glance output: {ex.Message}", estimatedInputTokens, ProgressiveReviewGlanceFailureCause.OutputContract);
         }
     }
+
+    private static int? BoundProviderTokenCount(long? value) => value switch
+    {
+        null => null,
+        <= 0 => null,
+        >= int.MaxValue => int.MaxValue,
+        _ => (int)value.Value
+    };
 
     private void TryStartGlance(
         AgentOrchestratorKernel kernel,
@@ -342,8 +433,22 @@ Transcript tail:
     {
         var roundKey = RoundKey(goal, task);
         var state = GetRoundState(roundKey);
-        if (state.FiredCount >= _options.PerRoundBudget || IsSmallRound(goal, task, durationStats))
+        if (IsSmallRound(goal, task, durationStats))
         {
+            if (!state.SmallRoundSuppressionRecorded)
+            {
+                state.SmallRoundSuppressionRecorded = true;
+                AccumulateBudgetSuppression(
+                    roundKey,
+                    goal.Id,
+                    task.Id,
+                    ProgressiveReviewGlanceTriggerKind.Elapsed,
+                    "SmallRoundEstimate",
+                    0,
+                    lines);
+                lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=SmallRoundEstimate");
+            }
+
             return;
         }
 
@@ -367,6 +472,11 @@ Transcript tail:
             trigger = ProgressiveReviewGlanceTriggerKind.ChangedFiles;
             triggerDetail = $"changed_files={snapshot.Files.Count} threshold={_options.ChangedFileThreshold}";
             state.FileCountTriggered = true;
+            var nextElapsedThreshold = elapsed + _options.EffectiveElapsedInterval;
+            if (nextElapsedThreshold > state.NextElapsedThreshold)
+            {
+                state.NextElapsedThreshold = nextElapsedThreshold;
+            }
         }
         else
         {
@@ -383,8 +493,48 @@ Transcript tail:
             return;
         }
 
+        var dispatchState = GetDispatchState(goal.Id, task.Id);
+        if (!string.Equals(dispatchState.CurrentRoundKey, roundKey, StringComparison.Ordinal))
+        {
+            dispatchState.CurrentRoundKey = roundKey;
+            dispatchState.AdmittedCallCount = 0;
+            dispatchState.AdmittedInputTokens = 0;
+            dispatchState.LastEstimatedInputTokens = 0;
+            dispatchState.LastReviewedMaterialHash = null;
+            dispatchState.LastReviewedAt = null;
+        }
+
+        if (state.FiredCount >= _options.PerRoundBudget)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "PerRoundBudgetExhausted",
+                dispatchState.LastEstimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=PerRoundBudgetExhausted avoided_input_tokens={dispatchState.LastEstimatedInputTokens}");
+            return;
+        }
+
+        if (dispatchState.AdmittedCallCount >= _options.PerDispatchGlanceBudget)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "PerDispatchCallBudgetExhausted",
+                dispatchState.LastEstimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=PerDispatchCallBudgetExhausted avoided_input_tokens={dispatchState.LastEstimatedInputTokens}");
+            return;
+        }
+
         var scope = GoalFileScopeInference.ForScheduling(goal, task);
         var operatorContext = BuildOperatorRecords(kernel, goal, _options.OperatorContextCharacterLimit);
+        var transcriptTail = _transcriptReader(task.LastProcess);
         var inputs = new ProgressiveReviewGlanceInputs(
             goal.Id.Value,
             task.Id.Value,
@@ -399,12 +549,97 @@ Transcript tail:
                 _options.CriteriaCorrectionOverlayCharacterLimit,
                 CriteriaCorrectionLabel),
             BoundChangedFiles(snapshot),
-            _diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit),
-            BoundTail(_transcriptReader(task.LastProcess), _options.TranscriptCharacterLimit),
+            BoundBlock(
+                _diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit),
+                _options.DiffCharacterLimit),
+            BoundTail(transcriptTail, _options.TranscriptCharacterLimit),
             scope.Includes,
             scope.Confidence,
             operatorContext.Records,
             operatorContext.Truncated);
+        var prompt = BuildPrompt(inputs);
+        var estimatedInputTokens = EstimateTokens(prompt);
+        var materialHash = HashMaterialEvidence(
+            inputs,
+            Encoding.UTF8.GetByteCount(transcriptTail) / _options.TranscriptGrowthBucketBytes);
+        if (dispatchState.LastReviewedMaterialHash == materialHash &&
+            dispatchState.LastReviewedAt is { } lastReviewedAt &&
+            now - lastReviewedAt < _options.EffectiveMaterialUnchangedEscapeInterval)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "UnchangedMaterialEvidence",
+                estimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=UnchangedMaterialEvidence materialHash={materialHash} avoided_input_tokens={estimatedInputTokens}");
+            return;
+        }
+
+        if (dispatchState.AdmittedInputTokens + estimatedInputTokens > _options.PerDispatchInputTokenBudget)
+        {
+            AccumulateBudgetSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                "PerDispatchTokenBudgetExhausted",
+                estimatedInputTokens,
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=PerDispatchTokenBudgetExhausted avoided_input_tokens={estimatedInputTokens}");
+            return;
+        }
+
+        var admissionStopwatch = Stopwatch.StartNew();
+        ProgressiveReviewGlanceContractIdentity? contract = null;
+        ProgressiveReviewGlanceCircuitAdmission? admission = null;
+        try
+        {
+            contract = _runner.GetContractIdentity();
+            admission = _circuitStore.TryAcquireProbe(contract, now, _options.EffectiveCircuitProbeLease);
+        }
+        catch (Exception ex)
+        {
+            admissionStopwatch.Stop();
+            AccumulateCircuitSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                contract?.CircuitIdentity ?? "unavailable",
+                ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
+                ProgressiveReviewGlanceFailureCause.AdmissionUnavailable.ToString(),
+                BoundSingleLine(ex.Message, 300),
+                estimatedInputTokens,
+                (long)admissionStopwatch.Elapsed.TotalMilliseconds,
+                "admission-unavailable",
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause=AdmissionUnavailable");
+            return;
+        }
+
+        admissionStopwatch.Stop();
+        if (admission.Kind != ProgressiveReviewGlanceCircuitAdmissionKind.ProbeAcquired)
+        {
+            AccumulateCircuitSuppression(
+                roundKey,
+                goal.Id,
+                task.Id,
+                trigger.Value,
+                admission.CircuitIdentity,
+                admission.Kind.ToString(),
+                admission.OpeningCause ?? admission.Kind.ToString(),
+                BoundSingleLine(admission.OpeningReason, 300),
+                estimatedInputTokens,
+                (long)admissionStopwatch.Elapsed.TotalMilliseconds,
+                "suppressed",
+                lines);
+            lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=suppressed cause={admission.Kind} avoided_input_tokens={estimatedInputTokens}");
+            return;
+        }
+
         var inputHash = HashInputs(inputs);
         var stopwatch = Stopwatch.StartNew();
         Task<ProgressiveReviewGlanceDispatchResult> run;
@@ -417,7 +652,8 @@ Transcript tail:
             run = Task.FromResult(new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
                 $"glance runner failed: {BoundSingleLine(ex.Message, 300)}",
-                BoundSingleLine(ex.Message, 300)));
+                BoundSingleLine(ex.Message, 300),
+                FailureCause: ProgressiveReviewGlanceFailureCause.RunnerException));
         }
 
         _running.Add(new RunningGlance(
@@ -428,9 +664,16 @@ Transcript tail:
             task.LastDispatch.WorkingDirectory,
             task.LastDispatch.ProviderSessionId,
             inputHash,
+            materialHash,
+            estimatedInputTokens,
             inputs,
             run,
-            stopwatch));
+            stopwatch,
+            contract,
+            admission.ProbeLeaseId!));
+        dispatchState.AdmittedCallCount++;
+        dispatchState.AdmittedInputTokens += estimatedInputTokens;
+        dispatchState.LastEstimatedInputTokens = estimatedInputTokens;
         state.FiredCount++;
         lines.Add($"GLANCE goal={Short(goal.Id.Value)} task={Short(task.Id.Value)} result=started trigger={trigger.Value} inputHash={inputHash}");
     }
@@ -448,7 +691,8 @@ Transcript tail:
             return new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
                 $"glance runner timed out after {(int)Math.Ceiling(_options.EffectiveDispatchTimeout.TotalSeconds)}s",
-                "glance runner timeout");
+                "glance runner timeout",
+                FailureCause: ProgressiveReviewGlanceFailureCause.Timeout);
         }
     }
 
@@ -465,14 +709,73 @@ Transcript tail:
 
             _running.RemoveAt(index);
             running.Stopwatch.Stop();
-            var evaluation = EvaluateUnsupportedScopeVerdict(running.Inputs, Complete(running));
+            var completed = Complete(running);
+            try
+            {
+                _circuitStore.CompleteProbe(
+                    running.ContractIdentity,
+                    running.ProbeLeaseId,
+                    completed.FailureCause == ProgressiveReviewGlanceFailureCause.OutputContract,
+                    completed.Verdict != ProgressiveReviewGlanceVerdict.Invalid,
+                    completed.FailureCause.ToString(),
+                    completed.Note,
+                    _utcNow());
+            }
+            catch (Exception ex)
+            {
+                lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=circuit-completion-failed error={BoundSingleLine(ex.Message, 300)}");
+            }
+
+            var evaluation = EvaluateUnsupportedScopeVerdict(running.Inputs, completed);
             var result = evaluation.Result;
             var inputTokens = result.InputTokens ?? EstimateTokens(BuildPrompt(running.Inputs));
             var outputTokens = result.OutputTokens ?? EstimateTokens(result.Note + result.EvidenceLine);
             var totalTokens = inputTokens + outputTokens;
 
+            if (result.FailureCause == ProgressiveReviewGlanceFailureCause.OutputContract)
+            {
+                TryAppendCircuitReceipt(
+                    running.GoalId,
+                    running.TaskId,
+                    new ProgressiveReviewGlanceCircuitReceipt(
+                        running.ContractIdentity.CircuitIdentity,
+                        "ProbeCompleted",
+                        result.FailureCause.ToString(),
+                        result.Note,
+                        totalTokens,
+                        0,
+                        0,
+                        0,
+                        null,
+                        0,
+                        0,
+                        0,
+                        "opened"),
+                    lines);
+            }
+
             TryAppendReceipt(running, result, inputTokens, outputTokens, totalTokens, lines);
             TryAppendGuardReceipt(running, evaluation.Receipt, lines);
+
+            var dispatchState = GetDispatchState(running.GoalId, running.TaskId);
+            if (string.Equals(dispatchState.CurrentRoundKey, running.RoundKey, StringComparison.Ordinal))
+            {
+                var reconciledInputTokens =
+                    (long)dispatchState.AdmittedInputTokens - running.EstimatedInputTokens + inputTokens;
+                dispatchState.AdmittedInputTokens = (int)Math.Clamp(reconciledInputTokens, 0, int.MaxValue);
+                dispatchState.LastEstimatedInputTokens = inputTokens;
+            }
+
+            if (result.Verdict is ProgressiveReviewGlanceVerdict.OnTrack or
+                ProgressiveReviewGlanceVerdict.Concern or
+                ProgressiveReviewGlanceVerdict.FundamentalMisdirection)
+            {
+                if (string.Equals(dispatchState.CurrentRoundKey, running.RoundKey, StringComparison.Ordinal))
+                {
+                    dispatchState.LastReviewedMaterialHash = running.MaterialHash;
+                    dispatchState.LastReviewedAt = _utcNow();
+                }
+            }
 
             UpdateSummary(running, result, totalTokens);
             var summary = _summaries[running.GoalId.Value];
@@ -516,6 +819,22 @@ Transcript tail:
             $"scope_confidence={receipt.ScopeConfidence} comparison={receipt.StructuralComparison} " +
             $"legacy_hint={receipt.LegacyPhraseHintMatched.ToString().ToLowerInvariant()} downgraded={receipt.Downgraded.ToString().ToLowerInvariant()} " +
             $"reason={BoundToken(receipt.DowngradeReason, 240)}");
+    }
+
+    private void TryAppendCircuitReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceCircuitReceipt receipt,
+        List<string> lines)
+    {
+        try
+        {
+            _eventWriter.AppendProgressiveReviewGlanceCircuitReceipt(goalId, taskId, receipt);
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"GLANCE goal={Short(goalId.Value)} task={Short(taskId.Value)} result=circuit-receipt-write-failed error={BoundSingleLine(ex.Message, 300)}");
+        }
     }
 
     private void TryAppendReceipt(
@@ -612,7 +931,8 @@ Transcript tail:
             return new ProgressiveReviewGlanceDispatchResult(
                 ProgressiveReviewGlanceVerdict.Invalid,
                 $"glance runner failed: {BoundSingleLine(ex.Message, 300)}",
-                BoundSingleLine(ex.Message, 300));
+                BoundSingleLine(ex.Message, 300),
+                FailureCause: ProgressiveReviewGlanceFailureCause.RunnerException);
         }
     }
 
@@ -954,6 +1274,19 @@ Corrective direction:
         return state;
     }
 
+    private DispatchState GetDispatchState(GoalId goalId, TaskId taskId)
+    {
+        var key = $"{goalId.Value}|{taskId.Value}";
+        if (_dispatches.TryGetValue(key, out var state))
+        {
+            return state;
+        }
+
+        state = new DispatchState();
+        _dispatches[key] = state;
+        return state;
+    }
+
     private void UpdateSummary(
         RunningGlance running,
         ProgressiveReviewGlanceDispatchResult result,
@@ -1076,6 +1409,27 @@ Corrective direction:
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
     }
 
+    private static string HashMaterialEvidence(
+        ProgressiveReviewGlanceInputs inputs,
+        int transcriptGrowthBucket)
+    {
+        var materialInputs = new ProgressiveReviewMaterialHashInputs(
+            inputs.GoalObjective,
+            inputs.TaskBrief,
+            inputs.AcceptanceSection,
+            inputs.CriteriaCorrectionOverlay,
+            inputs.ChangedFiles,
+            inputs.DiffExcerpt,
+            inputs.TrustedScopePaths,
+            inputs.ScopeConfidence,
+            inputs.EffectiveOperatorRecords,
+            inputs.OperatorContextTruncated,
+            inputs.TranscriptTail,
+            transcriptGrowthBucket);
+        var text = JsonSerializer.Serialize(materialInputs, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()[..16];
+    }
+
     private static string BuildSteeringInputsHash(
         RunningGlance running,
         DateTimeOffset verdictTimestamp,
@@ -1167,7 +1521,7 @@ Corrective direction:
         var clarifications = kernel.HumanInputRequests
             .Where(request =>
                 request.GoalId == goal.Id &&
-                (request.Kind == HumanWaitKind.SpecClarification || request.OperatorGates.Count > 0) &&
+                (HumanWaitPolicyDefaults.IsSpecClarificationClass(request.Kind) || request.OperatorGates.Count > 0) &&
                 request.IsCompleted &&
                 !request.WasDismissed &&
                 !request.IsSyntheticParkedHumanWaitCompletion &&
@@ -1251,7 +1605,8 @@ Corrective direction:
         var working = RunGit(workingDirectory, ["diff", "--"]).Output;
         var staged = RunGit(workingDirectory, ["diff", "--cached", "--"]).Output;
         var untracked = ReadUntrackedDiff(workingDirectory);
-        var combined = string.Join(Environment.NewLine, new[] { committed, staged, working, untracked }.Where(text => !string.IsNullOrWhiteSpace(text)));
+        // Prefix-bounded review prompts must preserve live dispatch work before older committed history.
+        var combined = string.Join(Environment.NewLine, new[] { working, staged, untracked, committed }.Where(text => !string.IsNullOrWhiteSpace(text)));
         return string.IsNullOrWhiteSpace(combined) ? "(no diff content available)" : combined;
     }
 
@@ -1482,18 +1837,6 @@ Corrective direction:
     private static int EstimateTokens(string text) =>
         Math.Max(1, (int)Math.Ceiling((text?.Length ?? 0) / 4.0));
 
-    private static string ExtractJson(string output)
-    {
-        var start = output.IndexOf('{');
-        var end = output.LastIndexOf('}');
-        if (start < 0 || end <= start)
-        {
-            throw new InvalidOperationException("missing JSON object");
-        }
-
-        return output[start..(end + 1)];
-    }
-
     private static ProgressiveReviewGlanceVerdict NormalizeVerdict(string? value)
     {
         var normalized = (value ?? string.Empty).Trim().Replace("_", "-", StringComparison.Ordinal).ToLowerInvariant();
@@ -1522,13 +1865,159 @@ Corrective direction:
         };
     }
 
-    private static ProgressiveReviewGlanceDispatchResult Invalid(string note, int? estimatedInputTokens) =>
+    private static ProgressiveReviewGlanceDispatchResult Invalid(
+        string note,
+        int? estimatedInputTokens,
+        ProgressiveReviewGlanceFailureCause cause) =>
         new(
             ProgressiveReviewGlanceVerdict.Invalid,
             BoundSingleLine(note, 500),
             BoundSingleLine(note, 300),
             estimatedInputTokens,
-            null);
+            null,
+            FailureCause: cause);
+
+    private void AccumulateCircuitSuppression(
+        string roundKey,
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceTriggerKind trigger,
+        string circuitIdentity,
+        string admissionOutcome,
+        string openingCause,
+        string originalReason,
+        int avoidedInputTokens,
+        long admissionLatencyMilliseconds,
+        string probeOutcome,
+        List<string> lines)
+    {
+        var observation = new ProgressiveReviewGlanceSuppressionObservation(
+            roundKey,
+            goalId.Value,
+            taskId.Value,
+            circuitIdentity,
+            admissionOutcome,
+            openingCause,
+            originalReason,
+            trigger == ProgressiveReviewGlanceTriggerKind.ChangedFiles,
+            avoidedInputTokens,
+            admissionLatencyMilliseconds,
+            probeOutcome);
+        try
+        {
+            _circuitStore.AccumulateSuppression(observation);
+        }
+        catch (Exception ex)
+        {
+            _fallbackSuppressionStore.AccumulateSuppression(observation with
+            {
+                OriginalReason = "suppression-persistence-unavailable"
+            });
+            if (_fallbackSuppressionWindows.Add(FallbackSuppressionKey(
+                observation.RoundKey,
+                observation.CircuitIdentity,
+                observation.AdmissionOutcome,
+                observation.ProbeOutcome)))
+            {
+                lines.Add($"GLANCE goal={Short(goalId.Value)} task={Short(taskId.Value)} result=suppression-persistence-failed fallback=round-local error={BoundSingleLine(ex.Message, 300)}");
+            }
+        }
+    }
+
+    private void AccumulateBudgetSuppression(
+        string roundKey,
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceTriggerKind trigger,
+        string admissionOutcome,
+        int avoidedInputTokens,
+        List<string> lines)
+    {
+        string circuitIdentity;
+        try
+        {
+            circuitIdentity = _runner.GetContractIdentity().CircuitIdentity;
+        }
+        catch
+        {
+            circuitIdentity = "unavailable";
+        }
+
+        AccumulateCircuitSuppression(
+            roundKey,
+            goalId,
+            taskId,
+            trigger,
+            circuitIdentity,
+            admissionOutcome,
+            admissionOutcome,
+            admissionOutcome,
+            Math.Max(0, avoidedInputTokens),
+            0,
+            "glance-budget",
+            lines);
+    }
+
+    private void FlushInactiveCircuitSuppressions(IReadOnlySet<string> activeRoundKeys, List<string> lines)
+    {
+        try
+        {
+            foreach (var aggregate in _circuitStore.DrainInactiveSuppressions(activeRoundKeys))
+            {
+                TryAppendCircuitReceipt(
+                    new GoalId(aggregate.GoalId),
+                    new TaskId(aggregate.TaskId),
+                    SuppressionReceipt(aggregate),
+                    lines);
+            }
+            _circuitDrainFailureReported = false;
+        }
+        catch (Exception ex)
+        {
+            if (!_circuitDrainFailureReported)
+            {
+                lines.Add($"GLANCE result=suppression-drain-failed fallback=round-local error={BoundSingleLine(ex.Message, 300)}");
+                _circuitDrainFailureReported = true;
+            }
+        }
+
+        foreach (var aggregate in _fallbackSuppressionStore.DrainInactiveSuppressions(activeRoundKeys))
+        {
+            TryAppendCircuitReceipt(
+                new GoalId(aggregate.GoalId),
+                new TaskId(aggregate.TaskId),
+                SuppressionReceipt(aggregate),
+                lines);
+            _fallbackSuppressionWindows.Remove(FallbackSuppressionKey(
+                aggregate.RoundKey,
+                aggregate.CircuitIdentity,
+                aggregate.AdmissionOutcome,
+                aggregate.ProbeOutcome));
+        }
+    }
+
+    private static string FallbackSuppressionKey(
+        string roundKey,
+        string circuitIdentity,
+        string admissionOutcome,
+        string probeOutcome) =>
+        string.Join("\n", roundKey, circuitIdentity, admissionOutcome, probeOutcome);
+
+    private static ProgressiveReviewGlanceCircuitReceipt SuppressionReceipt(
+        ProgressiveReviewGlanceSuppressionAggregate aggregate) => new(
+            aggregate.CircuitIdentity,
+            aggregate.AdmissionOutcome,
+            aggregate.OpeningCause,
+            aggregate.OriginalReason,
+            0,
+            aggregate.AvoidedCallCount,
+            aggregate.AvoidedInputTokens,
+            null,
+            "provider-output-not-produced",
+            aggregate.AdmissionLatencyMilliseconds,
+            aggregate.ChangedFilesTriggerCount,
+            aggregate.ElapsedTriggerCount,
+            aggregate.ProbeOutcome);
 
     private static string Short(string value) => value.Length <= 8 ? value : value[..8];
 
@@ -1540,9 +2029,13 @@ Corrective direction:
         string WorkingDirectory,
         string? ProviderSessionId,
         string InputHash,
+        string MaterialHash,
+        int EstimatedInputTokens,
         ProgressiveReviewGlanceInputs Inputs,
         Task<ProgressiveReviewGlanceDispatchResult> Task,
-        Stopwatch Stopwatch);
+        Stopwatch Stopwatch,
+        ProgressiveReviewGlanceContractIdentity ContractIdentity,
+        string ProbeLeaseId);
 
     private sealed record OperatorContextBuildResult(
         IReadOnlyList<ProgressiveReviewOperatorRecord> Records,
@@ -1564,16 +2057,41 @@ Corrective direction:
         string AcceptanceCriteriaVersionHash,
         string CriteriaCorrectionOverlayVersionHash);
 
+    private sealed record ProgressiveReviewMaterialHashInputs(
+        string GoalObjective,
+        string TaskBrief,
+        string AcceptanceSection,
+        IReadOnlyList<string> CriteriaCorrectionOverlay,
+        IReadOnlyList<string> ChangedFiles,
+        string DiffExcerpt,
+        IReadOnlyList<string> TrustedScopePaths,
+        RepositoryScopeConfidence ScopeConfidence,
+        IReadOnlyList<ProgressiveReviewOperatorRecord> OperatorRecords,
+        bool OperatorContextTruncated,
+        string TranscriptTail,
+        int TranscriptGrowthBucket);
+
     private sealed class RoundState
     {
         public RoundState(TimeSpan firstElapsedThreshold) => NextElapsedThreshold = firstElapsedThreshold;
 
         public int FiredCount { get; set; }
         public bool FileCountTriggered { get; set; }
+        public bool SmallRoundSuppressionRecorded { get; set; }
         public TimeSpan NextElapsedThreshold { get; set; }
         public DateTimeOffset? LastChangeProbeAt { get; set; }
         public bool ConcernsSurfaced { get; set; }
         public List<string> QueuedConcerns { get; } = [];
+    }
+
+    private sealed class DispatchState
+    {
+        public string? CurrentRoundKey { get; set; }
+        public int AdmittedCallCount { get; set; }
+        public int AdmittedInputTokens { get; set; }
+        public int LastEstimatedInputTokens { get; set; }
+        public string? LastReviewedMaterialHash { get; set; }
+        public DateTimeOffset? LastReviewedAt { get; set; }
     }
 
     private sealed class GoalSummary
@@ -1592,8 +2110,6 @@ Corrective direction:
         public string? Note { get; set; }
         public string? EvidenceLine { get; set; }
         public string? ReasonCode { get; set; }
-        public int? InputTokens { get; set; }
-        public int? OutputTokens { get; set; }
         public string? Model { get; set; }
         public string? Profile { get; set; }
         public IReadOnlyList<GlanceFindingDto>? Findings { get; set; }
@@ -1609,14 +2125,14 @@ Corrective direction:
 internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiveReviewGlanceRunner
 {
     private readonly WorkerProfileCatalog _profiles;
-    private readonly Func<SubscriptionCliCompleter, string, CancellationToken, Task<string>> _complete;
+    private readonly Func<SubscriptionCliCompleter, string, CancellationToken, Task<SubscriptionCliCompletionResult>> _complete;
 
     public SubscriptionCliProgressiveReviewGlanceRunner(
         WorkerProfileCatalog profiles,
-        Func<SubscriptionCliCompleter, string, CancellationToken, Task<string>>? complete = null)
+        Func<SubscriptionCliCompleter, string, CancellationToken, Task<SubscriptionCliCompletionResult>>? complete = null)
     {
         _profiles = profiles;
-        _complete = complete ?? ((completer, prompt, ct) => completer.CompleteAsync(prompt, "progressive-review-glance.md", ct));
+        _complete = complete ?? ((completer, prompt, ct) => completer.CompleteWithResultAsync(prompt, "progressive-review-glance.md", ct));
     }
 
     public async Task<ProgressiveReviewGlanceDispatchResult> RunAsync(
@@ -1630,13 +2146,52 @@ internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiv
             selection.ModelAlias,
             AgentCatalog.RoutineSubscriptionReasoningEffort);
         var prompt = ProgressiveReviewGlanceCoordinator.BuildPrompt(inputs);
-        var stdout = await _complete(completer, prompt, cancellationToken).ConfigureAwait(false);
-        var parsed = ProgressiveReviewGlanceCoordinator.ParseResult(stdout, EstimateTokens(prompt));
+        var completion = await _complete(completer, prompt, cancellationToken).ConfigureAwait(false);
+        if (!completion.Succeeded)
+        {
+            return new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.Invalid,
+                completion.FailureReason ?? $"subscription-cli-exit:{completion.ExitCode}",
+                completion.FailureReason ?? "subscription cli failed",
+                EstimateTokens(prompt),
+                Model: selection.ModelAlias,
+                Profile: selection.ProfileName,
+                FailureCause: ProgressiveReviewGlanceFailureCause.RunnerFailure);
+        }
+
+        var parsed = ProgressiveReviewGlanceCoordinator.ParseProviderOutput(completion.StandardOutput, GetContractIdentity(), EstimateTokens(prompt));
         return parsed with
         {
             Model = parsed.Model ?? selection.ModelAlias,
             Profile = parsed.Profile ?? selection.ProfileName
         };
+    }
+
+    public ProgressiveReviewGlanceContractIdentity GetContractIdentity()
+    {
+        var selection = SelectProfile(_profiles);
+        var profile = _profiles.GetRequired(selection.ProfileName);
+        var outputFormat = profile.CommandTemplate.Contains("--json", StringComparison.OrdinalIgnoreCase)
+            ? "codex-jsonl"
+            : "plain-json";
+        var provider = selection.ProfileName.Equals(
+            WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
+            StringComparison.OrdinalIgnoreCase)
+            ? ProviderKind.OpenAICodexSpark.ToString()
+            : ProviderKind.OpenAICodexCli.ToString();
+        var commandContract = string.Join(
+            "\n",
+            profile.CommandTemplate,
+            selection.ModelAlias,
+            AgentCatalog.RoutineSubscriptionReasoningEffort);
+        var commandFingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(commandContract)));
+        return new ProgressiveReviewGlanceContractIdentity(
+            provider,
+            selection.ProfileName,
+            selection.ModelAlias,
+            commandFingerprint,
+            outputFormat,
+            ProgressiveReviewGlanceCoordinator.ParserContractVersion);
     }
 
     internal static GlanceProfileSelection SelectProfile(WorkerProfileCatalog profiles)

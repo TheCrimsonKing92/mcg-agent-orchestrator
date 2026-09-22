@@ -7,14 +7,198 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using static DotnetBuildEnvironmentManagerTests;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures
+[Xunit.Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
+public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures : DotnetBuildEnvironmentManagerRootedTestBase
 {
+    public static bool RestartManagerAvailable =>
+        OperatingSystem.IsWindows() && CanStartRestartManagerForTests();
+
+    [Xunit.Fact]
+    public void LockAttributionProcessFallbackCreatesOneOperationSnapshot()
+    {
+        var snapshotCalls = 0;
+        var snapshotStartedAt = DateTimeOffset.Parse("2026-09-01T12:00:00Z");
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+        {
+            snapshotCalls++;
+            return new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [Environment.ProcessId] = new(
+                        Environment.ProcessId,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [101] = new(
+                        101,
+                        1,
+                        "dotnet",
+                        "C:\\Program Files\\dotnet\\dotnet.exe",
+                        snapshotStartedAt,
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [202] = new(
+                        202,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\.orchestrator-worktrees\\unrelated-goal",
+                        ProcessInspectionStatus.Available)
+                });
+        };
+
+        try
+        {
+            var attribution = LockAttribution.Attribute("C:\\repo\\locked.dll");
+
+            Assert.Equal("process-snapshot", attribution.Source);
+            Assert.Equal(1, snapshotCalls);
+            Assert.Equal(2, attribution.Holders.Count);
+            Assert.Contains(attribution.Holders, holder => holder.ProcessId == Environment.ProcessId);
+            var snapshotHolder = Assert.Single(attribution.Holders, holder => holder.ProcessId == 101);
+            Assert.Equal("dotnet", snapshotHolder.ProcessName);
+            Assert.Equal(snapshotStartedAt, snapshotHolder.ProcessStartTime);
+            Assert.DoesNotContain(attribution.Holders, holder => holder.ProcessId == 202);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
+    [Xunit.Fact]
+    public void ProcessFallbackPartialIdentityKeepsUnavailableCandidateFailClosed()
+    {
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [101] = new(
+                        101,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [202] = new(
+                        202,
+                        1,
+                        "dotnet",
+                        "C:\\Program Files\\dotnet\\dotnet.exe",
+                        DateTimeOffset.Parse("2026-09-01T12:00:00Z"),
+                        "dotnet test C:\\repo\\locked.dll C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.AccessDenied)
+                });
+
+        try
+        {
+            var holder = Assert.Single(LockAttribution.Attribute("C:\\repo\\locked.dll").Holders);
+
+            Assert.Equal(101, holder.ProcessId);
+            Assert.Equal("dotnet", holder.ProcessName);
+            Assert.Null(holder.ProcessStartTime);
+            Assert.True(holder.IsOrchestratorOwned);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
+    [Xunit.Fact]
+    public void LockAttributionProcessFallbackUsesArtifactRootHintOnlyForDescendantLock()
+    {
+        const string artifactsRoot = "C:\\isolated\\artifacts";
+        const string lockedPath = "C:\\isolated\\artifacts\\bin\\Core.dll";
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>
+                {
+                    [101] = new(
+                        101,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test --artifacts-path C:\\isolated\\artifacts C:\\repo\\.orchestrator-worktrees\\goal",
+                        ProcessInspectionStatus.Available),
+                    [202] = new(
+                        202,
+                        1,
+                        "dotnet",
+                        null,
+                        null,
+                        "dotnet test C:\\repo\\.orchestrator-worktrees\\unrelated-goal",
+                        ProcessInspectionStatus.Available)
+                });
+
+        try
+        {
+            var attribution = LockAttribution.Attribute(lockedPath, artifactsRoot);
+
+            var holder = Assert.Single(attribution.Holders);
+            Assert.Equal(101, holder.ProcessId);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
+    [Xunit.Fact]
+    public void LockAttributionProcessFallbackEnumerationFailureIsExplicitAndConservative()
+    {
+        LockAttribution.DisableRestartManagerForTests = true;
+        LockAttribution.HandleExecutableForTests = Path.Combine(Path.GetTempPath(), $"missing-handle-{Guid.NewGuid():N}.exe");
+        LockAttribution.ProcessCommandLineSnapshotForTests = () =>
+            new ProcessCommandLineSnapshot(
+                new Dictionary<int, ProcessInspectionRecord>(),
+                new ProcessInspectionFailure(
+                    ProcessInspectionStatus.NativeFailure,
+                    24,
+                    "CreateToolhelp32Snapshot"));
+
+        try
+        {
+            var attribution = LockAttribution.Attribute("C:\\repo\\locked.dll");
+
+            Assert.Equal("process-snapshot-unavailable", attribution.Source);
+            var holder = Assert.Single(attribution.Holders);
+            Assert.Null(holder.ProcessId);
+            Assert.False(holder.IsOrchestratorOwned);
+            Assert.Equal(
+                "process-inspection-unavailable-NativeFailure-24-CreateToolhelp32Snapshot",
+                holder.ProcessName);
+        }
+        finally
+        {
+            LockAttribution.ProcessCommandLineSnapshotForTests = null;
+            LockAttribution.HandleExecutableForTests = null;
+            LockAttribution.DisableRestartManagerForTests = false;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]
     public void DotnetBuildEnvironmentManagerOwnedArtifactHolderIsReapedAndRetried()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var prepareAttempts = 0;
         var killedPids = new List<int>();
@@ -61,8 +245,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_no_holder_artifact_prep_lock_retries_and_acquires")]
     public void DotnetBuildEnvironmentManagerNoHolderArtifactPrepLockRetriesAndAcquires()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.Core.dll");
         var fakeTimeProvider = new RecordingTimeProvider();
         var startedAt = fakeTimeProvider.GetUtcNow();
@@ -322,45 +505,54 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         }
     }
 
-    [Xunit.Fact(DisplayName = "LockAttribution_restart_manager_names_file_holder")]
+    [Xunit.Fact(
+        DisplayName = "LockAttribution_restart_manager_names_file_holder",
+        Skip = "Requires Windows Restart Manager.",
+        SkipUnless = nameof(RestartManagerAvailable))]
     public void LockAttributionRestartManagerNamesFileHolder()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        if (!CanStartRestartManagerForTests())
-        {
-            return;
-        }
-
         using var currentProcess = Process.GetCurrentProcess();
-        var lockedPath = currentProcess.MainModule?.FileName;
-        Assert.True(File.Exists(lockedPath), $"Current test host path does not exist: {lockedPath}");
+        var currentProcessPath = currentProcess.MainModule?.FileName;
+        Assert.True(File.Exists(currentProcessPath), $"Current test host path does not exist: {currentProcessPath}");
+        var root = Path.Combine(Path.GetTempPath(), "mcg-rm-attribution-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        var lockedPath = Path.Combine(root, "held.bin");
+        File.WriteAllText(lockedPath, "held");
 
-        var attribution = LockAttribution.Attribute(
-            lockedPath!,
-            null,
-            "artifact-prep",
-            "prepare-artifacts");
+        try
+        {
+            using var heldFile = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            var attribution = LockAttribution.Attribute(
+                lockedPath,
+                null,
+                "artifact-prep",
+                "prepare-artifacts");
 
-        Assert.Equal("restart-manager", attribution.Source);
+            Assert.Equal("restart-manager", attribution.Source);
 
-        var holder = Assert.Single(attribution.Holders.Where(holder => holder.ProcessId == currentProcess.Id));
-        var expectedStartTime = new DateTimeOffset(currentProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
-        Assert.False(string.IsNullOrWhiteSpace(holder.ProcessName));
-        Assert.Equal(currentProcess.ProcessName, holder.ProcessName);
-        Assert.True(holder.ProcessStartTime.HasValue);
-        Assert.True(
-            (holder.ProcessStartTime.Value - expectedStartTime).Duration() < TimeSpan.FromSeconds(2),
-            $"Expected RM start time near {expectedStartTime:O}, got {holder.ProcessStartTime:O}.");
+            var holder = Assert.Single(attribution.Holders.Where(holder => holder.ProcessId == currentProcess.Id));
+            var expectedStartTime = new DateTimeOffset(currentProcess.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            var expectedProcessName = FileVersionInfo.GetVersionInfo(currentProcessPath!).FileDescription;
+            if (string.IsNullOrWhiteSpace(expectedProcessName))
+            {
+                expectedProcessName = currentProcess.ProcessName;
+            }
+
+            Assert.Equal(expectedProcessName, holder.ProcessName);
+            Assert.True(holder.ProcessStartTime.HasValue);
+            Assert.True(
+                (holder.ProcessStartTime.Value - expectedStartTime).Duration() < TimeSpan.FromSeconds(2),
+                $"Expected RM start time near {expectedStartTime:O}, got {holder.ProcessStartTime:O}.");
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_artifact_prep_lock_returns_build_lock_blocked")]
     public void DotnetBuildEnvironmentManagerFirstAvailableArtifactPrepLockReturnsBuildLockBlocked()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var lockedPathByLeaseId = new Dictionary<string, string>(StringComparer.Ordinal);
         var shutdownCount = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -381,7 +573,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         {
             DotnetBuildLeaseAcquisition? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(TimeSpan.Zero));
+                result = RootedDotnetBuildEnvironmentManager.TryAcquireFirstAvailableStableSlotExecutionLock(StorageRoot, TimeSpan.Zero));
 
             var blocked = Assert.IsType<DotnetBuildLeaseAcquisition.BuildLockBlocked>(result);
             Assert.True(lockedPathByLeaseId.TryGetValue(blocked.WantedBy, out var lockedPath), $"Unexpected lease id {blocked.WantedBy}.");
@@ -410,8 +602,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unowned_artifact_holder_blocks_without_reaper")]
     public void DotnetBuildEnvironmentManagerUnownedArtifactHolderBlocksWithoutReaper()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var lockedPath = Path.Combine(environment.ArtifactsPath, "Mcg.AgentOrchestrator.App.dll");
         var killAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -457,8 +648,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_self_held_artifact_lock_is_not_build_lock_blocked")]
     public void DotnetBuildEnvironmentManagerSelfHeldArtifactLockIsNotBuildLockBlocked()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         Directory.CreateDirectory(Path.Combine(environment.ArtifactsPath, "bin", "Mcg.AgentOrchestrator.Core", "debug"));
         var lockedPath = Path.Combine(
             environment.ArtifactsPath,
@@ -506,8 +696,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_self_held_landing_fixture_lock_is_not_build_lock_blocked")]
     public void DotnetBuildEnvironmentManagerSelfHeldLandingFixtureLockIsNotBuildLockBlocked()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         var fakeTimeProvider = new RecordingTimeProvider();
         var startedAt = fakeTimeProvider.GetUtcNow();
@@ -558,8 +747,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_marked_landing_fixture_from_other_process_is_transient")]
     public void DotnetBuildEnvironmentManagerMarkedLandingFixtureFromOtherProcessIsTransient()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         var readyPath = Path.Combine(fixtureRoot, "holder-ready.txt");
@@ -621,8 +809,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_persistent_marked_landing_fixture_lock_returns_slots_busy_bounded")]
     public void DotnetBuildEnvironmentManagerPersistentMarkedLandingFixtureLockReturnsSlotsBusyBounded()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         var readyPath = Path.Combine(fixtureRoot, "holder-ready.txt");
@@ -671,8 +858,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_landing_fixture_marker_is_debris_not_blocker")]
     public void DotnetBuildEnvironmentManagerStaleLandingFixtureMarkerIsDebrisNotBlocker()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
@@ -713,8 +899,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_stale_landing_fixture_marker_with_live_holder_blocks_bounded")]
     public void DotnetBuildEnvironmentManagerStaleLandingFixtureMarkerWithLiveHolderBlocksBounded()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(
@@ -761,8 +946,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_landing_fixture_creation_path_registers_root")]
     public void DotnetBuildEnvironmentManagerLandingFixtureCreationPathRegistersRoot()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var fixtureRoot = LandingExecutorTests.CreateGitRepository();
         var lockedPath = CreateLandingFixtureLockPath(fixtureRoot);
         var prepareAttempts = 0;
@@ -800,8 +984,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_foreign_landing_fixture_holder_blocks")]
     public void DotnetBuildEnvironmentManagerForeignLandingFixtureHolderBlocks()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (_, lockedPath) = CreateLandingFixtureLockPath();
         var killAttempts = 0;
         var originalKill = WorkerProcessJobs.TryKillPidTree;
@@ -848,8 +1031,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_recently_created_unregistered_landing_fixture_lock_blocks")]
     public void DotnetBuildEnvironmentManagerRecentlyCreatedUnregisteredLandingFixtureLockBlocks()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (fixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         Directory.SetCreationTimeUtc(fixtureRoot, DateTime.UtcNow);
@@ -885,8 +1067,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_unknown_landing_fixture_lock_under_different_run_blocks")]
     public void DotnetBuildEnvironmentManagerUnknownLandingFixtureLockUnderDifferentRunBlocks()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var (currentFixtureRoot, currentLockedPath) = CreateLandingFixtureLockPath();
         var (otherFixtureRoot, lockedPath) = CreateLandingFixtureLockPath();
         Directory.CreateDirectory(Path.GetDirectoryName(currentLockedPath)!);
@@ -926,8 +1107,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_lease_lock_contention_returns_slots_busy_without_reaper")]
     public void DotnetBuildEnvironmentManagerLeaseLockContentionReturnsSlotsBusyWithoutReaper()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var heldLease = new FileStream(
             environment.ExecutionLockPath,
             FileMode.OpenOrCreate,
@@ -976,11 +1156,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_detects_stale_locks_and_rotates_goal_lease")]
     public void DotnetBuildEnvironmentManagerDetectsStaleLocksAndRotatesGoalLease()
     {
-        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("decafbaddecafbaddecafbaddecafbad");
         try
         {
-            var first = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "test");
+            var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "test");
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first))
             {
             }
@@ -991,7 +1170,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
 
             DotnetBuildEnvironment? second = null;
             var creationOutput = AsyncLocalConsoleRouter.Capture(() =>
-                second = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "retry"));
+                second = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "retry"));
             Assert.NotNull(second);
             Assert.DoesNotContain("decision=", creationOutput, StringComparison.Ordinal);
             var acquisitionOutput = AsyncLocalConsoleRouter.Capture(() =>
@@ -1018,31 +1197,30 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                 Assert.Equal(999999, journal.RootElement.GetProperty("reclaimedProcessId").GetInt32());
             }
 
-            Assert.True(DotnetBuildEnvironmentManager.TryRotateGoalLease(goalId, "corrupt-cache"));
-            var third = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "after-rotate");
+            Assert.True(RootedDotnetBuildEnvironmentManager.TryRotateGoalLease(StorageRoot, goalId, "corrupt-cache"));
+            var third = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "after-rotate");
             Assert.False(third.ReusedGoalLease);
             Assert.Equal(first.LeaseId, third.LeaseId);
             Assert.True(Directory.Exists(Path.Combine(third.RootPath, "rotated-leases")));
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_inspects_and_cleans_orphaned_goal_lease")]
     public void DotnetBuildEnvironmentManagerInspectsAndCleansOrphanedGoalLease()
     {
-        using var envScope = EnvVarScope.ForIsolatedDotnetRoot();
         var goalId = new GoalId("0badcafe0badcafe0badcafe0badcafe");
         try
         {
-            var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "test");
-            var active = DotnetBuildEnvironmentManager.InspectGoalLease(goalId);
+            var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "test");
+            var active = RootedDotnetBuildEnvironmentManager.InspectGoalLease(StorageRoot, goalId);
             Assert.Equal(environment.LeaseId, active.LeaseId);
             Assert.True(active.OwnerProcessAlive);
             Assert.False(active.CanCleanup);
-            Assert.False(DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(goalId, out _, out var activeDetail));
+            Assert.False(RootedDotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(StorageRoot, goalId, out _, out var activeDetail));
             Assert.True(activeDetail.Contains("Refusing to delete active build lease", StringComparison.Ordinal));
 
             using (var metadata = JsonDocument.Parse(File.ReadAllText(environment.LeaseMetadataPath!)))
@@ -1054,17 +1232,17 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
                 File.WriteAllText(environment.LeaseMetadataPath!, orphanedJson);
             }
 
-            var orphaned = DotnetBuildEnvironmentManager.InspectGoalLease(goalId);
+            var orphaned = RootedDotnetBuildEnvironmentManager.InspectGoalLease(StorageRoot, goalId);
             Assert.False(orphaned.OwnerProcessAlive);
             Assert.True(orphaned.CanCleanup);
             Assert.True(orphaned.Detail.Contains("orphaned", StringComparison.Ordinal));
-            Assert.True(DotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(goalId, out _, out var cleanupDetail));
+            Assert.True(RootedDotnetBuildEnvironmentManager.TryCleanupOrphanedGoalLease(StorageRoot, goalId, out _, out var cleanupDetail));
             Assert.True(cleanupDetail.Contains("Deleted orphaned build lease", StringComparison.Ordinal));
             Assert.False(Directory.Exists(environment.RootPath));
         }
         finally
         {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            RootedDotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(StorageRoot, goalId);
         }
     }
 

@@ -3,6 +3,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal sealed record SubscriptionCliCompletionResult(
+    string StandardOutput,
+    int ExitCode,
+    string? FailureReason = null)
+{
+    public bool Succeeded => ExitCode == 0;
+}
+
 // Runs a single subscription-CLI text completion using a worker profile without dispatching a
 // tracked task. Used only for orchestrator-internal advisory functions.
 internal sealed class SubscriptionCliCompleter
@@ -13,7 +21,7 @@ internal sealed class SubscriptionCliCompleter
     private readonly string _profileName;
     private readonly string _modelAlias;
     private readonly string? _reasoningEffort;
-    private readonly Func<string, string, string?, CancellationToken, Task<string>> _runner;
+    private readonly Func<string, string, string?, CancellationToken, Task<SubscriptionCliCompletionResult>> _runner;
 
     public SubscriptionCliCompleter(
         WorkerProfileCatalog profiles,
@@ -26,7 +34,7 @@ internal sealed class SubscriptionCliCompleter
             modelAlias,
             reasoningEffort,
             (command, workingDirectory, standardInput, cancellationToken) =>
-                RunCommandAsync(command, workingDirectory, standardInput, cancellationToken))
+                RunCommandWithResultAsync(command, workingDirectory, standardInput, cancellationToken))
     {
     }
 
@@ -46,6 +54,24 @@ internal sealed class SubscriptionCliCompleter
         string modelAlias,
         string? reasoningEffort,
         Func<string, string, string?, CancellationToken, Task<string>> runner)
+        : this(
+            commandTemplate,
+            profileName,
+            modelAlias,
+            reasoningEffort,
+            async (command, workingDirectory, standardInput, cancellationToken) =>
+                new SubscriptionCliCompletionResult(
+                    await runner(command, workingDirectory, standardInput, cancellationToken).ConfigureAwait(false),
+                    0))
+    {
+    }
+
+    internal SubscriptionCliCompleter(
+        string commandTemplate,
+        string profileName,
+        string modelAlias,
+        string? reasoningEffort,
+        Func<string, string, string?, CancellationToken, Task<SubscriptionCliCompletionResult>> runner)
     {
         _commandTemplate = commandTemplate;
         _profileName = profileName;
@@ -57,6 +83,12 @@ internal sealed class SubscriptionCliCompleter
     public string Name => $"sub:{_profileName}:{_modelAlias}";
 
     public async Task<string> CompleteAsync(
+        string prompt,
+        string promptFileName,
+        CancellationToken cancellationToken) =>
+        (await CompleteWithResultAsync(prompt, promptFileName, cancellationToken).ConfigureAwait(false)).StandardOutput;
+
+    internal async Task<SubscriptionCliCompletionResult> CompleteWithResultAsync(
         string prompt,
         string promptFileName,
         CancellationToken cancellationToken)
@@ -85,17 +117,93 @@ internal sealed class SubscriptionCliCompleter
         string promptPath,
         string modelAlias,
         string? reasoningEffort,
-        string workingDirectory)
+        string workingDirectory,
+        Action<string>? diagnosticSink = null)
     {
         var provider = WorkerProviderCatalog.Default().ResolveProfile(profileName);
         var permissionMode = provider.Identity.Kind == ProviderKind.AnthropicClaudeCli ? "default" : "plan";
-        return template
+        var resolvedTemplate = provider.Identity.Kind == ProviderKind.AnthropicClaudeCli
+            ? ResolveClaudeEffortSegment(template, profileName, reasoningEffort, diagnosticSink)
+            : template;
+        return resolvedTemplate
             .Replace("{promptPath}", Quote(promptPath), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionModelName}", Quote(modelAlias), StringComparison.OrdinalIgnoreCase)
             .Replace("{subscriptionReasoningEffort}", Quote(string.IsNullOrWhiteSpace(reasoningEffort) ? AgentCatalog.ComplexReasoningEffort : reasoningEffort), StringComparison.OrdinalIgnoreCase)
             .Replace("{sandboxMode}", Quote("read-only"), StringComparison.OrdinalIgnoreCase)
             .Replace("{permissionMode}", Quote(permissionMode), StringComparison.OrdinalIgnoreCase)
             .Replace("{workingDirectory}", Quote(workingDirectory), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Resolves the Claude effort segment for the orchestrator-internal path, which has no dispatch
+    /// preflight to refuse at. A configured value the CLI does not accept elides the flag and names
+    /// itself in a diagnostic rather than hard-failing: refinement, review glance, and acceptance
+    /// evaluation must keep running, and criterion 7 forbids turning this into a failed invocation.
+    /// A custom template with no effort segment is left byte-for-byte alone and only warned about.
+    /// </summary>
+    private static string ResolveClaudeEffortSegment(
+        string template,
+        string profileName,
+        string? reasoningEffort,
+        Action<string>? diagnosticSink)
+    {
+        if (string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            // No configured policy: emit no flag so user-level Claude settings govern unchanged.
+            return ClaudeCliEffortPolicy.ElideEffortSegment(template);
+        }
+
+        if (!ClaudeCliEffortPolicy.IsSupported(reasoningEffort))
+        {
+            Warn(
+                diagnosticSink,
+                $"unsupported:{profileName}:{reasoningEffort}",
+                $"[SubscriptionCliCompleter] WARNING: worker profile '{profileName}' configured reasoning effort " +
+                $"'{reasoningEffort}' is not supported by the Claude CLI; supported values: " +
+                $"{ClaudeCliEffortPolicy.SupportedValuesDisplay}. The {ClaudeCliEffortPolicy.EffortFlag} argument was omitted " +
+                "and the value was neither clamped nor remapped.");
+            return ClaudeCliEffortPolicy.ElideEffortSegment(template);
+        }
+
+        // Invocation-time, in-memory repair of a superseded built-in: this call renders from the current
+        // built-in so the configured policy reaches the CLI. The profile store is untouched - this completer
+        // never writes profiles - so persisting the repair stays a separate explicit operator migration.
+        var resolved = ClaudeCliEffortPolicy.ResolveInvocationCommandTemplate(profileName, template, diagnosticSink);
+        if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(resolved))
+        {
+            Warn(
+                diagnosticSink,
+                $"unmaterialized:{profileName}:{reasoningEffort}",
+                $"[SubscriptionCliCompleter] WARNING: worker profile '{profileName}' has no " +
+                $"{ClaudeCliEffortPolicy.EffortPlaceholder} template variable; configured reasoning effort " +
+                $"'{reasoningEffort}' was not materialized. The saved command template was left unchanged.");
+        }
+
+        return resolved;
+    }
+
+    // The completer runs on every refinement, glance, and acceptance pass; without the guard a single
+    // misconfigured profile would repeat the same line on every invocation. A supplied sink bypasses the
+    // guard so a caller observing diagnostics never depends on which invocation happened to be first.
+    private static readonly HashSet<string> _emittedWarnings = new(StringComparer.Ordinal);
+
+    private static void Warn(Action<string>? diagnosticSink, string key, string message)
+    {
+        if (diagnosticSink is not null)
+        {
+            diagnosticSink(message);
+            return;
+        }
+
+        lock (_emittedWarnings)
+        {
+            if (!_emittedWarnings.Add(key))
+            {
+                return;
+            }
+        }
+
+        Console.Error.WriteLine(message);
     }
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
@@ -118,9 +226,26 @@ internal sealed class SubscriptionCliCompleter
         string? standardInput,
         CancellationToken cancellationToken)
     {
+        var result = await RunCommandWithResultAsync(
+            command,
+            workingDirectory,
+            standardInput,
+            cancellationToken).ConfigureAwait(false);
+        return result.StandardOutput;
+    }
+
+    internal static async Task<SubscriptionCliCompletionResult> RunCommandWithResultAsync(
+        string command,
+        string workingDirectory,
+        string? standardInput,
+        CancellationToken cancellationToken)
+    {
         var result = await WorkerProcessRunner.RunBufferedAsync(
             new WorkerProcessRunRequest(command, workingDirectory, StandardInput: standardInput),
             cancellationToken).ConfigureAwait(false);
-        return result.StandardOutput.Trim();
+        return new SubscriptionCliCompletionResult(
+            result.StandardOutput.Trim(),
+            result.ExitCode,
+            result.ExitCode == 0 ? null : $"subscription-cli-exit:{result.ExitCode}");
     }
 }

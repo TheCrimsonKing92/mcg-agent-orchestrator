@@ -40,7 +40,9 @@ public sealed record GateHeartbeatSnapshot(
     string? CommandLine = null,
     int? ExitCode = null,
     string? StdoutPath = null,
-    string? StderrPath = null);
+    string? StderrPath = null,
+    string? RetainedStderrPath = null,
+    string? RetainedStderrSha256 = null);
 
 public sealed record GateHeartbeatStatus(
     int SlotIndex,
@@ -65,10 +67,19 @@ public static class GateHeartbeatArtifacts
     public static string GetStableSlotPath(int slotIndex) =>
         DotnetBuildEnvironmentManager.BuildSlotHeartbeatPath(slotIndex);
 
+    public static string GetStableSlotPath(int slotIndex, DotnetBuildStorageRoot storageRoot) =>
+        DotnetBuildEnvironmentManager.BuildSlotHeartbeatPath(slotIndex, storageRoot);
+
     public static string GetRunScopedStableSlotPath(int slotIndex, string runIdentity)
+        => GetRunScopedStableSlotPath(slotIndex, runIdentity, DotnetBuildEnvironmentManager.CaptureStorageRoot());
+
+    public static string GetRunScopedStableSlotPath(
+        int slotIndex,
+        string runIdentity,
+        DotnetBuildStorageRoot storageRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(runIdentity);
-        var stablePath = GetStableSlotPath(slotIndex);
+        var stablePath = GetStableSlotPath(slotIndex, storageRoot);
         var directory = Path.GetDirectoryName(stablePath) ?? ".";
         var fileName = Path.GetFileNameWithoutExtension(stablePath);
         var extension = Path.GetExtension(stablePath);
@@ -81,18 +92,23 @@ public static class GateHeartbeatArtifacts
         Path.Combine(worktreePath, ".orchestrator", FileName);
 
     public static IReadOnlyList<GateHeartbeatStatus> ReadStableSlots(DateTimeOffset? observedAt = null)
+        => ReadStableSlots(DotnetBuildEnvironmentManager.CaptureStorageRoot(), observedAt);
+
+    public static IReadOnlyList<GateHeartbeatStatus> ReadStableSlots(
+        DotnetBuildStorageRoot storageRoot,
+        DateTimeOffset? observedAt = null)
     {
         var now = observedAt ?? DateTimeOffset.UtcNow;
         var statuses = new List<GateHeartbeatStatus>(DotnetBuildEnvironmentManager.StableSlotCount);
         for (var slot = 0; slot < DotnetBuildEnvironmentManager.StableSlotCount; slot++)
         {
-            var runStatuses = EnumerateRunScopedStableSlotPaths(slot)
+            var runStatuses = EnumerateRunScopedStableSlotPaths(slot, storageRoot)
                 .Select(path => Read(slot, path, now))
                 .Where(status => IsLiveRunScopedHeartbeat(status, now))
                 .ToArray();
             if (runStatuses.Length == 0)
             {
-                statuses.Add(ReadStableSlot(slot, now));
+                statuses.Add(ReadStableSlot(slot, storageRoot, now));
                 continue;
             }
 
@@ -103,8 +119,14 @@ public static class GateHeartbeatArtifacts
     }
 
     public static GateHeartbeatStatus ReadStableSlot(int slotIndex, DateTimeOffset? observedAt = null)
+        => ReadStableSlot(slotIndex, DotnetBuildEnvironmentManager.CaptureStorageRoot(), observedAt);
+
+    public static GateHeartbeatStatus ReadStableSlot(
+        int slotIndex,
+        DotnetBuildStorageRoot storageRoot,
+        DateTimeOffset? observedAt = null)
     {
-        var path = GetStableSlotPath(slotIndex);
+        var path = GetStableSlotPath(slotIndex, storageRoot);
         var now = observedAt ?? DateTimeOffset.UtcNow;
         return Read(slotIndex, path, now);
     }
@@ -118,6 +140,42 @@ public static class GateHeartbeatArtifacts
         catch
         {
             // Heartbeats are observability artifacts; they must never decide acceptance.
+        }
+    }
+
+    internal static void AttachRetainedStderr(string heartbeatPath, AcceptanceRetainedDiagnostic diagnostic)
+    {
+        try
+        {
+            if (!File.Exists(heartbeatPath))
+            {
+                throw new IOException($"Retry-driving heartbeat is missing: {heartbeatPath}");
+            }
+
+            var snapshot = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(heartbeatPath),
+                JsonOptions) ?? throw new IOException($"Retry-driving heartbeat is unreadable: {heartbeatPath}");
+            TryWrite(
+                heartbeatPath,
+                snapshot with
+                {
+                    RetainedStderrPath = diagnostic.Path,
+                    RetainedStderrSha256 = diagnostic.Sha256
+                });
+            var retained = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
+                File.ReadAllText(heartbeatPath),
+                JsonOptions);
+            if (retained?.RetainedStderrPath != diagnostic.Path ||
+                retained.RetainedStderrSha256 != diagnostic.Sha256)
+            {
+                throw new IOException($"Retry-driving heartbeat did not retain diagnostic metadata: {heartbeatPath}");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            throw new IOException(
+                $"Failed to attach retained retry diagnostic to heartbeat '{heartbeatPath}'. The retry was not launched.",
+                ex);
         }
     }
 
@@ -184,9 +242,11 @@ public static class GateHeartbeatArtifacts
         }
     }
 
-    private static IReadOnlyList<string> EnumerateRunScopedStableSlotPaths(int slotIndex)
+    private static IReadOnlyList<string> EnumerateRunScopedStableSlotPaths(
+        int slotIndex,
+        DotnetBuildStorageRoot storageRoot)
     {
-        var stablePath = GetStableSlotPath(slotIndex);
+        var stablePath = GetStableSlotPath(slotIndex, storageRoot);
         var directory = Path.GetDirectoryName(stablePath) ?? ".";
         if (!Directory.Exists(directory))
         {

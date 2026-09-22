@@ -9,8 +9,18 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-public abstract class CliCommandTestBase
+public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 {
+    private protected static WorktreeCleanupContext CreateIsolatedCleanupContext(
+        OrchestratorWorkspace workspace,
+        GoalWorktreeCleanupHooks? hooks = null)
+    {
+        var root = new DotnetBuildStorageRoot(Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "test-dotnet"));
+        return hooks is null
+            ? WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory, buildStorageRoot: root)
+            : new WorktreeCleanupContext(hooks with { BuildStorageRoot = root });
+    }
+
     private protected static OrchestratorWorkspace CreateRefinedWorkspace(string root)
     {
         SeedLocalSkillCatalog(root);
@@ -70,6 +80,29 @@ public abstract class CliCommandTestBase
             ref currentGoal,
             standardInput: standardInput,
             isStandardInputRedirected: isStandardInputRedirected));
+    }
+
+    private protected static (string Output, bool Changed, Goal? CurrentGoal) ExecuteCliAndCaptureResult(
+        IReadOnlyList<string> parts,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var changed = false;
+
+        var output = CaptureConsole(() => changed = CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        return (output, changed, currentGoal);
     }
 
     private protected static void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)
@@ -322,6 +355,36 @@ public abstract class CliCommandTestBase
             new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
     }
 
+    private protected static void WriteIdentityBoundHeartbeat(TaskProcessRecord process, int processId)
+    {
+        var identity = DispatchProcessIdentityEvidence.ReadCurrent(processId)
+            ?? throw new InvalidOperationException($"Could not read process identity for PID {processId}.");
+        var observedAt = DateTimeOffset.UtcNow;
+        File.WriteAllText(
+            BackgroundDispatchRunner.GetHeartbeatPath(process),
+            JsonSerializer.Serialize(new
+            {
+                pid = processId,
+                childPid = (int?)null,
+                ownedPids = new[] { processId },
+                ownedProcessIdentities = new[]
+                {
+                    new
+                    {
+                        processId = identity.ProcessId,
+                        startedAt = identity.StartedAt,
+                        imagePath = identity.ImagePath
+                    }
+                },
+                state = "running",
+                lastObservedAt = observedAt,
+                lastProgressAt = observedAt,
+                stdoutBytes = 0,
+                stderrBytes = 0,
+                ownedCpuMs = 0
+            }));
+    }
+
     private protected static AgentOrchestratorKernel WithGoalStatus(
         AgentOrchestratorKernel kernel,
         GoalId goalId,
@@ -394,7 +457,7 @@ public abstract class CliCommandTestBase
         {
             if (Directory.Exists(root))
             {
-                _ = GoalWorktrees.DeleteDirectory(root);
+                _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
             }
         }
         catch
@@ -577,6 +640,11 @@ public abstract class CliCommandTestBase
 
         public int LastSavedGoalStateHumanInputCount { get; private set; }
 
+        public IReadOnlyCollection<GoalSnapshotSaveRequest>? LastGoalSnapshotSaveRequests { get; private set; }
+
+        public Func<IReadOnlyCollection<GoalSnapshotSaveRequest>, IReadOnlyList<GoalSnapshotSaveResult>>?
+            GoalSnapshotSaveResultFactory { get; set; }
+
         public List<string> LoadedGoalIds { get; } = [];
 
         public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
@@ -675,6 +743,10 @@ public abstract class CliCommandTestBase
             IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
             CancellationToken cancellationToken = default)
         {
+            LastGoalSnapshotSaveRequests = goals.ToArray();
+            if (GoalSnapshotSaveResultFactory is not null)
+                return GoalSnapshotSaveResultFactory(goals);
+
             var snapshots = goals.Select(goal => goal.Current).ToArray();
             await SaveGoalSnapshotsAsync(snapshots, cancellationToken);
             return snapshots
@@ -1025,13 +1097,13 @@ public abstract class CliCommandTestBase
 
         public int? LastStableSlotIndex { get; private set; }
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             RunCount++;
             LastStableSlotIndex = stableSlotIndex;
@@ -1051,14 +1123,14 @@ public abstract class CliCommandTestBase
                 Checks: [new AcceptanceCheckResult("probe verifier", true, 0, "Passed.", DurationMilliseconds: 7)]));
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             Task.FromResult(new FocusedEvidenceRunResult(
                 request,
                 Accepted: true,

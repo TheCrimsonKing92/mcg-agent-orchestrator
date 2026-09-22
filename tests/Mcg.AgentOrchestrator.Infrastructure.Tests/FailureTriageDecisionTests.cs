@@ -250,6 +250,25 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         }
     }
 
+    [Xunit.Fact(DisplayName = "AutomaticWorkerRetryCause maps structured provider interruption to typed cause")]
+    public void AutomaticWorkerRetryCauseMapsStructuredProviderInterruption()
+    {
+        var (kernel, goal, task, _) = CreateActiveGoal("Typed provider interruption cause");
+        var verification = new TaskVerificationRecord(
+            "codex exec",
+            "C:\\repo",
+            1,
+            "{\"type\":\"error\",\"message\":\"provider-specific wording\"}\n{\"type\":\"turn.failed\"}",
+            string.Empty,
+            DateTimeOffset.UtcNow);
+        kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Assert.Equal(DispatchOutcomeKind.ProviderInterruption, outcome.Kind);
+        Assert.Equal(RetryCause.ProviderInterruption, AutomaticWorkerRetryCause.Resolve(task, outcome));
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, IReadOnlyList<AgentDefinition> Agents)
         CreateActiveGoal(string objective, AgentRole role = AgentRole.Developer)
     {

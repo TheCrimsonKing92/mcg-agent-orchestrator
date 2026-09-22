@@ -43,12 +43,16 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
             .OrderBy(type => type.Name, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(11, buildSlotFragments.Length);
+        Assert.Equal(13, buildSlotFragments.Length);
         Assert.All(
             buildSlotFragments,
             fragment => Assert.Equal(TestCollections.JobAccounting, CollectionName(fragment)));
         Assert.Equal(TestCollections.JobAccounting, CollectionName(typeof(RealProcessShardAlphaSmokeTests)));
         Assert.Equal(TestCollections.JobAccounting, CollectionName(typeof(RealProcessShardBetaSmokeTests)));
+        Assert.Equal(
+            TestCollections.DotnetBuildEnvironmentManagerStaticHooks,
+            CollectionName(typeof(LocalProcessVerifierStaticHookTests)));
+        Assert.True(CollectionDisablesParallelization(typeof(DotnetBuildEnvironmentManagerStaticHooksCollection)));
 
         Assert.Equal(
             TestCollections.GoalAcceptanceVerifier,
@@ -140,6 +144,9 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
             .ConstructorArguments
             .Single()
             .Value as string;
+
+    private static bool CollectionDisablesParallelization(Type type) =>
+        type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>()?.DisableParallelization == true;
 
     private static string SourceDirectory(
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "") =>

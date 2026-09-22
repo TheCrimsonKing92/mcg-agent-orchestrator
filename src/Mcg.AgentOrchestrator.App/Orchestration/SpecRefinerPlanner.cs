@@ -27,18 +27,28 @@ internal sealed record ResolvedSpecClarification(
     string? ForkKind = null,
     string? Criterion = null);
 
+internal sealed record SpecRefinementCriterionOwnership(
+    string Text,
+    string Owner,
+    int? DeclaredIndex);
+
 internal sealed record SpecRefinementOutput(
     string BehavioralContract,
     IReadOnlyList<string> AcceptanceCriteria,
+    IReadOnlyList<string> AcceptanceGateOwnedAcceptanceCriteria,
+    IReadOnlyList<string> OperatorOwnedAcceptanceCriteria,
     VerificationClass VerificationClass,
     IReadOnlyList<RefinedSpecDecision> Decisions,
     IReadOnlyList<SpecRefinementFork> Forks,
     IReadOnlyList<string> ValidationErrors)
 {
+    public IReadOnlyList<string> ParseDiagnostics { get; init; } = [];
+    public IReadOnlyList<SpecRefinementCriterionOwnership> CriterionOwnerships { get; init; } = [];
+
     public bool IsValid => ValidationErrors.Count == 0;
 
     public static SpecRefinementOutput Invalid(string error) =>
-        new(string.Empty, [], VerificationClass.TestVerifiable, [], [], [error]);
+        new(string.Empty, [], [], [], VerificationClass.TestVerifiable, [], [], [error]);
 }
 
 internal static class SpecRefinerPlanner
@@ -76,7 +86,9 @@ internal static class SpecRefinerPlanner
 
         OUTPUT ONLY a fenced JSON object (```json ... ```) with these fields:
         - "behavioralContract": string — one paragraph: WHAT the system does, observable from the outside
-        - "acceptanceCriteria": string array — concrete, testable outcomes
+        - "acceptanceCriteria": array — each entry is either a string (worker-owned) or {"text": string, "declared_index": integer, "evidence_owner": "worker" | "acceptance-gate" | "operator"}; when the OBJECTIVE declares numbered criteria, include its 1-based declared_index and echo its declared text
+        - Use evidence_owner "acceptance-gate" when evidence is a test execution or gate receipt that no worker may run under docs/role-capability-matrix.md. Use "operator" when evidence needs a real host, a human, or post-landing observation. Missing means "worker".
+        - Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.
         - "verificationClass": "TestVerifiable" | "RealWorldDependent"
         - "decisions": array of {question, choice, rationale} — forks you resolved yourself
         - "forks": array of {kind, topicKey, refinerConfidence, blastRadius, question, choice, rationale} — ALL forks
@@ -92,7 +104,7 @@ internal static class SpecRefinerPlanner
         ```json
         {
           "behavioralContract": "The API exposes goal status as a JSON object over HTTP.",
-          "acceptanceCriteria": ["GET /goals/{id} returns 200 with status field", "404 for unknown id"],
+          "acceptanceCriteria": [{"text": "GET /goals/{id} returns 200 with status field", "declared_index": 1, "evidence_owner": "acceptance-gate"}, {"text": "404 for unknown id", "declared_index": 2}],
           "verificationClass": "TestVerifiable",
           "decisions": [{"question": "HTTP method?", "choice": "GET", "rationale": "Read-only; idempotent."}],
           "forks": [{"kind": "observable-behavior", "topicKey": "http-method", "refinerConfidence": "high", "blastRadius": "low", "question": "HTTP method?", "choice": "GET", "rationale": "Read-only; idempotent."}]
@@ -101,7 +113,7 @@ internal static class SpecRefinerPlanner
         """;
     }
 
-    public static SpecRefinementOutput Parse(string modelOutput)
+    public static SpecRefinementOutput Parse(string modelOutput, int? declaredCriteriaCount = null)
     {
         if (string.IsNullOrWhiteSpace(modelOutput))
             return SpecRefinementOutput.Invalid("Spec refiner produced no output.");
@@ -129,7 +141,7 @@ internal static class SpecRefinerPlanner
             if (string.IsNullOrWhiteSpace(contract))
                 return SpecRefinementOutput.Invalid("Missing 'behavioralContract' field.");
 
-            var criteria = ReadStringArray(root, "acceptanceCriteria");
+            var criteria = ReadAcceptanceCriteria(root, declaredCriteriaCount);
             var vc = string.Equals(ReadString(root, "verificationClass"), "RealWorldDependent", StringComparison.Ordinal)
                 ? VerificationClass.RealWorldDependent
                 : VerificationClass.TestVerifiable;
@@ -137,7 +149,19 @@ internal static class SpecRefinerPlanner
             var decisions = ReadDecisions(root);
             var forks = ReadForks(root);
 
-            return new SpecRefinementOutput(contract, criteria, vc, decisions, forks, []);
+            return new SpecRefinementOutput(
+                contract,
+                criteria.Criteria,
+                criteria.AcceptanceGateOwned,
+                criteria.OperatorOwned,
+                vc,
+                decisions,
+                forks,
+                [])
+            {
+                ParseDiagnostics = criteria.Diagnostics,
+                CriterionOwnerships = criteria.Ownerships
+            };
         }
         catch (JsonException ex)
         {
@@ -207,19 +231,114 @@ internal static class SpecRefinerPlanner
             ? v.GetString() ?? string.Empty
             : string.Empty;
 
-    private static IReadOnlyList<string> ReadStringArray(JsonElement root, string property)
+    private static ParsedAcceptanceCriteria ReadAcceptanceCriteria(
+        JsonElement root,
+        int? declaredCriteriaCount)
     {
-        if (!root.TryGetProperty(property, out var arr) || arr.ValueKind != JsonValueKind.Array)
-            return [];
-        var result = new List<string>();
+        if (!root.TryGetProperty("acceptanceCriteria", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return new([], [], [], [], []);
+        var criteria = new List<string>();
+        var acceptanceGateOwned = new List<string>();
+        var operatorOwned = new List<string>();
+        var ownerships = new List<SpecRefinementCriterionOwnership>();
+        var ownershipSourceIndexes = new List<int>();
+        var diagnostics = new List<string>();
+        var index = 0;
         foreach (var item in arr.EnumerateArray())
         {
-            var s = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
-            if (!string.IsNullOrWhiteSpace(s))
-                result.Add(s!);
+            var criterion = item.ValueKind switch
+            {
+                JsonValueKind.String => item.GetString(),
+                JsonValueKind.Object => FirstNonEmpty(ReadString(item, "text"), ReadString(item, "criterion")),
+                _ => null
+            };
+            if (string.IsNullOrWhiteSpace(criterion))
+            {
+                index++;
+                continue;
+            }
+
+            criterion = criterion.Trim();
+            criteria.Add(criterion);
+            var ownerToken = item.ValueKind == JsonValueKind.Object
+                ? ReadString(item, "evidence_owner")
+                : string.Empty;
+            var owner = NormalizeEvidenceOwner(ownerToken);
+            switch (owner)
+            {
+                case "acceptance gate":
+                    acceptanceGateOwned.Add(criterion);
+                    break;
+                case "operator":
+                    operatorOwned.Add(criterion);
+                    break;
+                case "worker":
+                    break;
+                default:
+                    diagnostics.Add(
+                        $"acceptanceCriteria[{index}] has unrecognized evidence_owner '{ownerToken.Trim()}'; treated as worker.");
+                    owner = "worker";
+                    break;
+            }
+            ownerships.Add(new SpecRefinementCriterionOwnership(
+                criterion,
+                owner == "acceptance gate" ? "acceptance-gate" : owner,
+                ReadDeclaredIndex(item, index, diagnostics)));
+            ownershipSourceIndexes.Add(index);
+            index++;
         }
-        return result;
+
+        var maximumDeclaredIndex = declaredCriteriaCount ?? criteria.Count;
+        for (var ownershipIndex = 0; ownershipIndex < ownerships.Count; ownershipIndex++)
+        {
+            var ownership = ownerships[ownershipIndex];
+            if (ownership.DeclaredIndex is not { } declaredIndex ||
+                declaredIndex >= 1 && declaredIndex <= maximumDeclaredIndex)
+            {
+                continue;
+            }
+
+            diagnostics.Add(
+                $"acceptanceCriteria[{ownershipSourceIndexes[ownershipIndex]}] has out-of-range declared_index '{declaredIndex}'; expected 1..{maximumDeclaredIndex}; ignored.");
+            ownerships[ownershipIndex] = ownership with { DeclaredIndex = null };
+        }
+
+        return new(criteria, acceptanceGateOwned, operatorOwned, ownerships, diagnostics);
     }
+
+    private static int? ReadDeclaredIndex(
+        JsonElement item,
+        int criterionIndex,
+        List<string> diagnostics)
+    {
+        if (item.ValueKind != JsonValueKind.Object ||
+            !item.TryGetProperty("declared_index", out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var declaredIndex))
+            return declaredIndex;
+
+        diagnostics.Add(
+            $"acceptanceCriteria[{criterionIndex}] has non-integer declared_index {value.GetRawText()}; ignored.");
+        return null;
+    }
+
+    private static string NormalizeEvidenceOwner(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "worker";
+        return string.Join(' ', value.Trim().Replace('-', ' ').Replace('_', ' ')
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
+    }
+
+    private sealed record ParsedAcceptanceCriteria(
+        IReadOnlyList<string> Criteria,
+        IReadOnlyList<string> AcceptanceGateOwned,
+        IReadOnlyList<string> OperatorOwned,
+        IReadOnlyList<SpecRefinementCriterionOwnership> Ownerships,
+        IReadOnlyList<string> Diagnostics);
 
     private static IReadOnlyList<RefinedSpecDecision> ReadDecisions(JsonElement root)
     {

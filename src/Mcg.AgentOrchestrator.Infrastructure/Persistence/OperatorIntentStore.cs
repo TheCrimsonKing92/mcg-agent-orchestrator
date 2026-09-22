@@ -19,10 +19,8 @@ public sealed record ProgressOperatorIntentPayload(
 public sealed record RetryOperatorIntentPayload(
     string Message,
     RetryRoundKind? RetryRoundKind,
-    string AutonomyPolicy = "supervised-auto");
-
-public sealed record ManualVerificationOperatorIntentPayload(
-    TaskVerificationRecord Verification);
+    string AutonomyPolicy = "supervised-auto",
+    RetryCause? RetryCause = null);
 
 public sealed record OperatorIntentRecord(
     string Id,

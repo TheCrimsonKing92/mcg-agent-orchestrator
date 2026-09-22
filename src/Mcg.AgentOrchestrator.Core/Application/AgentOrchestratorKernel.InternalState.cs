@@ -19,7 +19,10 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (_humanInputRequests.Values.Any(candidate => candidate.GoalId == goal.Id && !candidate.IsCompleted))
+        if (_humanInputRequests.Values.Any(candidate =>
+                candidate.GoalId == goal.Id &&
+                !candidate.IsCompleted &&
+                HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
         {
             goal.SetStatus(GoalStatus.WaitingForHuman);
             return;
@@ -82,7 +85,10 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.OutputTokenLimit);
         }
 
-        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, task.LastVerification, out var testerBlocker))
+        var onlyAuthoritativelyDeferredEvidence = task.Status == WorkTaskStatus.Completed &&
+            task.LastVerification is { } verified && HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verified);
+        if (!onlyAuthoritativelyDeferredEvidence &&
+            WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, task.LastVerification, out var testerBlocker))
         {
             return new TaskVerificationGate(
                 task.Id,
@@ -94,7 +100,7 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.TesterWorkerResultBlocker);
         }
 
-        if (task.RequiredRole == AgentRole.Reviewer &&
+        if (!onlyAuthoritativelyDeferredEvidence && task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, task.LastVerification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out var reviewerBlocker) &&
             TryGetUnsuppressedReviewerBlocker(goal, reviewerBlocker, out var effectiveReviewerBlocker))
@@ -255,6 +261,27 @@ public sealed partial class AgentOrchestratorKernel
 
     private static (ProcessBatchItemStatus Status, string Reason) GetStartDispatchReadiness(TaskSpec task)
     {
+        if (task.RetryAdmissionHoldRoute is { } holdRoute &&
+            holdRoute != RetryAdmissionRoute.ReservationLease)
+        {
+            return (ProcessBatchItemStatus.Skipped, $"Retry admission is held for route {holdRoute}.");
+        }
+
+        if (task.RetryAdmissionHoldRoute == RetryAdmissionRoute.ReservationLease &&
+            task.RetryAdmissionHistory.LastOrDefault(receipt =>
+                receipt.Route == RetryAdmissionRoute.ReservationLease &&
+                receipt.ReservationLeaseExpiresAt is not null) is { } reservation &&
+            reservation.ReservationLeaseExpiresAt is { } leaseExpiresAt &&
+            DateTimeOffset.UtcNow < leaseExpiresAt)
+        {
+            return (ProcessBatchItemStatus.Skipped, $"Prepared retry reservation is owned until {leaseExpiresAt:u}.");
+        }
+
+        if (task.RetryAdmissionHoldRoute == RetryAdmissionRoute.ReservationLease)
+        {
+            return (ProcessBatchItemStatus.Skipped, $"Retry admission is held for route {RetryAdmissionRoute.ReservationLease}.");
+        }
+
         if (task.Status != WorkTaskStatus.Running)
         {
             return (ProcessBatchItemStatus.Skipped, $"Task status is {task.Status}; only running dispatched tasks can be started.");

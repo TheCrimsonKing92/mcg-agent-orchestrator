@@ -15,7 +15,8 @@ internal sealed record GoalScopedTaskMutationCommand(
     TaskVerificationRecord? ManualVerification,
     RetryRoundKind? RetryRoundKind,
     AutonomyPolicy RetryPolicy,
-    IReadOnlyList<string>? GatedDeliverableIds = null)
+    IReadOnlyList<string>? GatedDeliverableIds = null,
+    RetryCause? RetryCause = null)
 {
     internal string? SuppliedGoalSelector { get; init; }
 }
@@ -89,12 +90,18 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
             return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, manualTarget.Task, GoalScopedTaskMutationRenderKind.Task);
 
         case "retry":
-            var retryUsage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+            var retryUsage = CliCommandHelp.RetryUsage;
             var retryTarget = ResolveCommandTaskTarget(command.Parts, context, retryUsage);
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, command.RetryPolicy, AutonomyAction.Retry, "retry");
             var retryMessage = command.Text ?? throw new InvalidOperationException("Prepared retry command is missing text.");
-            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage, retryRoundKind: command.RetryRoundKind);
+            context.Kernel.RetryTask(
+                context.CurrentGoal!.Id,
+                retryTask.Id,
+                retryMessage,
+                retryCause: command.RetryCause ?? throw new InvalidOperationException("Prepared retry command is missing an explicit retry cause."),
+                retryRoundKind: command.RetryRoundKind,
+                invalidateDownstream: true);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
                 context.CurrentGoal.Id,
@@ -209,12 +216,13 @@ private static GoalScopedTaskMutationCommand PrepareManualVerificationMutation(
 
 private static GoalScopedTaskMutationCommand PrepareRetryMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
 {
-    var usage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+    var usage = "retry <task-number> <message> [--cause <cause>] [--mechanical]|retry <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry <task-number> --text-file <path> [--cause <cause>] [--mechanical]";
     var retryPolicy = ResolveCliAutonomyPolicy(parts);
+    var retryCause = ParseRequiredRetryCause(parts, usage);
     var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
         ? RetryRoundKind.Mechanical
         : (RetryRoundKind?)null;
-    var retryParts = RemoveStandaloneFlag(parts, "--mechanical");
+    var retryParts = RemoveFlagWithValue(RemoveStandaloneFlag(parts, "--mechanical"), "--cause");
     var taskIndex = ResolveGoalScopedTaskArgumentIndex(retryParts, hasInlineGoalPrefix, usage);
     var messageIndex = taskIndex + 1;
     RequireRemainingArgument(retryParts, messageIndex, usage);
@@ -225,7 +233,24 @@ private static GoalScopedTaskMutationCommand PrepareRetryMutation(IReadOnlyList<
         ProgressStatus: null,
         ManualVerification: null,
         retryRoundKind,
-        retryPolicy);
+        retryPolicy,
+        RetryCause: retryCause);
+}
+
+private static RetryCause ParseRequiredRetryCause(IReadOnlyList<string> parts, string usage)
+{
+    var value = GetFlagValue(parts, "--cause");
+    if (value is null)
+        return RetryCause.Unknown;
+
+    if (!Enum.TryParse<RetryCause>(value, ignoreCase: true, out var cause) ||
+        !Enum.IsDefined(cause))
+    {
+        throw new ArgumentException(
+            $"Retry --cause must be one of <{string.Join('|', Enum.GetNames<RetryCause>())}>; Usage: {usage}");
+    }
+
+    return cause;
 }
 
 private static GoalScopedTaskMutationCommand PrepareVerificationPlanMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
@@ -412,17 +437,24 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "retry":
             var retryPolicy = ResolveCliAutonomyPolicy(parts);
-            var retryUsage = "retry <task-number> <message> [--mechanical]|retry <goal-prefix> <task-number> <message> [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--mechanical]|retry <task-number> --text-file <path> [--mechanical]";
+            var retryUsage = "retry <task-number> <message> [--cause <cause>] [--mechanical]|retry <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry --goal <goal-prefix> <task-number> <message> [--cause <cause>] [--mechanical]|retry <task-number> --text-file <path> [--cause <cause>] [--mechanical]";
+            var retryCause = ParseRequiredRetryCause(parts, retryUsage);
             var retryRoundKind = HasCliConfirmation(parts, "--mechanical")
                 ? RetryRoundKind.Mechanical
                 : (RetryRoundKind?)null;
-            var retryParts = RemoveStandaloneFlag(parts, "--mechanical");
+            var retryParts = RemoveFlagWithValue(RemoveStandaloneFlag(parts, "--mechanical"), "--cause");
             var retryTarget = ResolveCommandTaskTarget(retryParts, context, retryUsage);
             RequireRemainingArgument(retryParts, retryTarget.NextIndex, retryUsage);
             var retryTask = retryTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, retryPolicy, AutonomyAction.Retry, "retry");
             var retryMessage = ResolveTextArgument(retryParts, retryTarget.NextIndex, retryUsage, "--text-file");
-            context.Kernel.RetryTask(context.CurrentGoal!.Id, retryTask.Id, retryMessage, retryRoundKind: retryRoundKind);
+            context.Kernel.RetryTask(
+                context.CurrentGoal!.Id,
+                retryTask.Id,
+                retryMessage,
+                retryCause: retryCause,
+                retryRoundKind: retryRoundKind,
+                invalidateDownstream: true);
             GoalLifecycleCommands.RecordCapabilityWarnings(
                 context.Kernel,
                 context.CurrentGoal.Id,
@@ -438,11 +470,37 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var targetAgent = new AgentCatalog(context.Agents).FindById(targetAgentId);
             if (targetAgent is null)
             {
-                Console.Error.WriteLine($"ERROR: agent id '{targetAgentId}' was not found.");
+                Console.Error.WriteLine($"ERROR: AGENT_REASSIGNMENT_HOLD code=AgentNotFound agent_id='{targetAgentId}'.");
                 return false;
             }
 
+            if (targetAgent.Role != reassignTarget.Task.RequiredRole)
+            {
+                Console.Error.WriteLine(
+                    $"ERROR: AGENT_REASSIGNMENT_HOLD code=RoleMismatch agent_id='{targetAgent.Id.Value}' " +
+                    $"agent_role={targetAgent.Role} required_role={reassignTarget.Task.RequiredRole}.");
+                return false;
+            }
+
+            if (targetAgent.Status != AgentStatus.Available)
+            {
+                Console.Error.WriteLine(
+                    $"ERROR: AGENT_REASSIGNMENT_HOLD code=AgentUnavailable agent_id='{targetAgent.Id.Value}' " +
+                    $"agent_status={targetAgent.Status}.");
+                return false;
+            }
+
+            var routingEffect = reassignTarget.Task.Status == WorkTaskStatus.Running &&
+                reassignTarget.Task.LastProcess is not null
+                ? "next-attempt"
+                : reassignTarget.Task.Status == WorkTaskStatus.Running &&
+                  reassignTarget.Task.LastDispatch is not null
+                    ? "rebuild-before-start"
+                    : "next-dispatch";
             context.Kernel.ReassignTaskAgent(context.CurrentGoal!.Id, reassignTarget.Task.Id, targetAgent);
+            Console.WriteLine(
+                $"AGENT_REASSIGNMENT_ACKNOWLEDGED task={reassignTarget.Task.Id.Value} " +
+                $"agent={targetAgent.Id.Value} harness={targetAgent.Subscription?.WorkerProfileName ?? "api"} effect={routingEffect}");
             ConsoleViews.PrintTask(context.CurrentGoal!, reassignTarget.Task);
             return true;
 
@@ -600,6 +658,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                     supersedeGoal.AuthoritativeBrief.Version).GetAwaiter().GetResult();
                 authoritativeText = updated.AuthoritativeAnswer?.Text ?? updated.Resolution!;
                 supersededId = ClarificationId(updated, identityUniverse);
+                RefreshSpecRefinerPrecedentSnapshot(context.Workspace, updated);
             }
             context.CurrentGoal = supersedeGoal;
             Console.WriteLine(
@@ -636,6 +695,42 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         default:
             return null;
+    }
+}
+
+private static void RefreshSpecRefinerPrecedentSnapshot(
+    OrchestratorWorkspace workspace,
+    CollaborationItem clarification)
+{
+    var topicKey = clarification.CorrelationKey is null
+        ? null
+        : GoalRefinementService.ExtractTopicKey(clarification.CorrelationKey);
+    var authoritativeAnswer = clarification.AuthoritativeAnswer;
+    if (string.IsNullOrWhiteSpace(topicKey) ||
+        authoritativeAnswer is null ||
+        string.IsNullOrWhiteSpace(clarification.GoalId))
+    {
+        return;
+    }
+
+    try
+    {
+        new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath)
+            .RecordPrecedentAsync(
+                topicKey,
+                authoritativeAnswer.Text,
+                "Operator clarification answer.",
+                originItemId: clarification.Id,
+                originGoalId: clarification.GoalId,
+                originAnswerId: authoritativeAnswer.Id,
+                originBriefVersion: authoritativeAnswer.BriefVersion)
+            .GetAwaiter()
+            .GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(
+            $"Warning: authoritative answer was superseded, but its reusable precedent snapshot could not be refreshed: {ex.Message}");
     }
 }
 

@@ -4,6 +4,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static class ProviderCommandBuilder
 {
+    public const string ClaudeReadOnlyPermissionMode = "dontAsk";
+    public const string ClaudeReadOnlyTools = "Read,Glob,Grep,Bash,WebFetch,WebSearch,TodoWrite";
+    public const string ClaudeReadOnlyAllowedTools = "Read,Glob,Grep,Bash(git log *),Bash(git diff *),Bash(git show *),Bash(git status *),Bash(git merge-base *),Bash(git rev-parse *),Bash(git blame *),Bash(git ls-files *),Bash(git branch *),Bash(git cat-file *),Bash(rg *),WebFetch,WebSearch,TodoWrite";
+    public const string ClaudeReadOnlyDisallowedTools = "Edit,Write,NotebookEdit";
+
     public static IReadOnlyList<string> Build(
         ProviderKind providerKind,
         string modelAlias,
@@ -14,7 +19,8 @@ public static class ProviderCommandBuilder
         string? sessionId = null,
         string? openaiBaseUrl = null,
         string? openaiApiKey = null,
-        string? approvalMode = null)
+        string? approvalMode = null,
+        int repositoryPolicyMaxBytes = 0)
     {
         return providerKind switch
         {
@@ -22,18 +28,21 @@ public static class ProviderCommandBuilder
                 modelAlias,
                 reasoningEffort,
                 resolvedSandboxMode,
-                workingDirectory),
+                workingDirectory,
+                repositoryPolicyMaxBytes),
             ProviderKind.OpenAICodexSpark => BuildCodex(
                 modelAlias,
                 reasoningEffort,
                 resolvedSandboxMode,
-                workingDirectory),
+                workingDirectory,
+                repositoryPolicyMaxBytes),
             ProviderKind.OpenAICodexOssCli => BuildCodexOss(
                 modelAlias,
                 resolvedSandboxMode,
                 workingDirectory),
             ProviderKind.AnthropicClaudeCli => BuildClaude(
                 modelAlias,
+                reasoningEffort,
                 resolvedPermissionMode,
                 sessionId),
             ProviderKind.OllamaQwenCodeCli => BuildQwen(modelAlias, workingDirectory, openaiBaseUrl, openaiApiKey, approvalMode),
@@ -55,7 +64,8 @@ public static class ProviderCommandBuilder
         string modelAlias,
         string? reasoningEffort,
         string resolvedSandboxMode,
-        string? workingDirectory)
+        string? workingDirectory,
+        int repositoryPolicyMaxBytes)
     {
         var command = new List<string>
         {
@@ -68,6 +78,11 @@ public static class ProviderCommandBuilder
         };
         command.Add("-c");
         command.Add($"model_reasoning_effort={Expand(reasoningEffort)}");
+        if (repositoryPolicyMaxBytes > 0)
+        {
+            command.Add("-c");
+            command.Add($"project_doc_max_bytes={repositoryPolicyMaxBytes}");
+        }
         command.Add("--sandbox");
         command.Add(Expand(resolvedSandboxMode));
         AddWorkingDirectory(command, workingDirectory);
@@ -98,9 +113,11 @@ public static class ProviderCommandBuilder
 
     private static IReadOnlyList<string> BuildClaude(
         string modelAlias,
+        string? reasoningEffort,
         string resolvedPermissionMode,
         string? sessionId)
     {
+        var isReadOnly = string.Equals(resolvedPermissionMode, "plan", StringComparison.Ordinal);
         var command = new List<string>
         {
             "claude",
@@ -108,8 +125,26 @@ public static class ProviderCommandBuilder
             "--model",
             Expand(modelAlias),
             "--permission-mode",
-            Expand(resolvedPermissionMode)
+            Expand(isReadOnly ? ClaudeReadOnlyPermissionMode : resolvedPermissionMode)
         };
+        // Same position the built-in template puts it in, so this stays byte-identical to the legacy
+        // substitution path. An unset effort adds no tokens at all - never an empty operand.
+        if (!string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            command.Add(ClaudeCliEffortPolicy.EffortFlag);
+            command.Add(Expand(reasoningEffort));
+        }
+
+        if (isReadOnly)
+        {
+            command.Add("--restricted");
+            command.Add("--tools");
+            command.Add(Expand(ClaudeReadOnlyTools));
+            command.Add("--allowed-tools");
+            command.Add(Expand(ClaudeReadOnlyAllowedTools));
+            command.Add("--disallowed-tools");
+            command.Add(Expand(ClaudeReadOnlyDisallowedTools));
+        }
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             command.Add("--session-id");

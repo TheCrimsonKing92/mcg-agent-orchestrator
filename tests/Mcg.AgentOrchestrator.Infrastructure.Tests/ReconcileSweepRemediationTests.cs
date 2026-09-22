@@ -2,7 +2,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Configuration;
 using System.Text.Json.Nodes;
 
 public sealed class ReconcileSweepRemediationTests
@@ -264,6 +263,108 @@ public sealed class ReconcileSweepRemediationTests
         Xunit.Assert.NotNull(afterRelease);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("goal-evidence:v1:conductor:workspace-create:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:dispatch:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:dispatch-start:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:developer-branch-integration:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:conductor:future-operation:42:held-instance")]
+    [Xunit.InlineData("goal-evidence:v1:malformed")]
+    public void JournalBackedGoalEvidenceOwnersAreNeverReclaimedByAgeAlone(string heldOwner)
+    {
+        var dbPath = NewDatabasePath();
+        var store = new ReconcileSweepRemediationStore(dbPath);
+        const string contender = "goal-evidence:v1:conductor:developer-branch-integration:42:new-instance";
+        Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", heldOwner, TimeSpan.FromMinutes(30)));
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            connection.Open();
+            using var age = connection.CreateCommand();
+            age.CommandText = "UPDATE reconcile_acceptance_leases SET acquired_at = $at WHERE goal_id = $goal";
+            age.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.AddHours(-1).ToString("O"));
+            age.Parameters.AddWithValue("$goal", "goal-1");
+            age.ExecuteNonQuery();
+        }
+
+        var acquired = store.TryClaimAcceptanceLease("goal-1", contender, TimeSpan.FromMinutes(30));
+
+        Xunit.Assert.False(acquired);
+        Xunit.Assert.Equal(heldOwner, store.TryGetAcceptanceLeaseOwner("goal-1"));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("legacy-owner")]
+    [Xunit.InlineData("goal-replace:operator:42")]
+    [Xunit.InlineData("reconcile-sweep:conductor:42")]
+    [Xunit.InlineData("goal-evidence:conductor:developer-branch-integration:32972:a3b675d01a2349aaa8aee97aff86f334")]
+    [Xunit.InlineData("goal-evidence:malformed")]
+    [Xunit.InlineData("GOAL-EVIDENCE:conductor:workspace-create:42:held-instance")]
+    public void LegacyAndUnrelatedOwnersRemainEligibleForAgeReclamation(string heldOwner)
+    {
+        var dbPath = NewDatabasePath();
+        var store = new ReconcileSweepRemediationStore(dbPath);
+        const string contender = "goal-evidence:v1:conductor:developer-branch-integration:42:new-instance";
+        Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", heldOwner, TimeSpan.FromMinutes(30)));
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            connection.Open();
+            using var age = connection.CreateCommand();
+            age.CommandText = "UPDATE reconcile_acceptance_leases SET acquired_at = $at WHERE goal_id = $goal";
+            age.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.AddHours(-1).ToString("O"));
+            age.Parameters.AddWithValue("$goal", "goal-1");
+            age.ExecuteNonQuery();
+        }
+
+        var acquired = store.TryClaimAcceptanceLease("goal-1", contender, TimeSpan.FromMinutes(30));
+
+        Xunit.Assert.True(acquired);
+        Xunit.Assert.Equal(contender, store.TryGetAcceptanceLeaseOwner("goal-1"));
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceLeaseReplacementIsAtomicAndExpectedOwnerQualified()
+    {
+        var store = new ReconcileSweepRemediationStore(NewDatabasePath());
+        Xunit.Assert.True(store.TryClaimAcceptanceLease("goal-1", "owner-1", TimeSpan.FromMinutes(30)));
+
+        Xunit.Assert.False(store.TryReplaceAcceptanceLease("goal-1", "foreign-owner", "owner-2"));
+        Xunit.Assert.Equal("owner-1", store.TryGetAcceptanceLeaseOwner("goal-1"));
+        Xunit.Assert.True(store.TryReplaceAcceptanceLease("goal-1", "owner-1", "owner-2"));
+        Xunit.Assert.Equal("owner-2", store.TryGetAcceptanceLeaseOwner("goal-1"));
+    }
+
+    [Xunit.Fact]
+    public void HeldAcceptanceLeaseRenewsBeyondItsOriginalStaleWindow()
+    {
+        var staleAfter = TimeSpan.FromMinutes(30);
+        var clock = new ImmediateLeaseRenewalTimeProvider(
+            new DateTimeOffset(2026, 9, 3, 12, 0, 0, TimeSpan.Zero));
+        var store = new ReconcileSweepRemediationStore(
+            NewDatabasePath(),
+            busyTimeoutSeconds: 5,
+            busyRetryDelay: null,
+            writeTelemetryOptions: null,
+            timeProvider: clock);
+
+        using var held = store.TryAcquireAcceptanceLease("goal-renew", "owner-1", staleAfter);
+        var renewed = store.TryGetAcceptanceLease("goal-renew", staleAfter);
+        clock.Advance(TimeSpan.FromMinutes(23));
+        var overlapping = store.TryAcquireAcceptanceLease("goal-renew", "owner-2", staleAfter);
+
+        Xunit.Assert.NotNull(held);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(7.5), clock.DueTime);
+        Xunit.Assert.Equal(clock.DueTime, clock.Period);
+        Xunit.Assert.NotNull(renewed);
+        Xunit.Assert.Equal(
+            new DateTimeOffset(2026, 9, 3, 12, 7, 30, TimeSpan.Zero),
+            renewed.AcquiredAtUtc);
+        Xunit.Assert.Null(overlapping);
+
+        held.Dispose();
+        using var afterRelease = store.TryAcquireAcceptanceLease("goal-renew", "owner-2", staleAfter);
+        Xunit.Assert.NotNull(afterRelease);
+    }
+
     [Xunit.Fact]
     public void StoreAndReleasedAcceptanceLeaseDoNotRetainDatabaseFileHandles()
     {
@@ -429,13 +530,11 @@ public sealed class ReconcileSweepRemediationTests
     {
         var values = new Dictionary<string, string?>
         {
-            ["ReconcileSweep:AutoRemediationAllowlist:0"] = string.Empty,
-            ["ReconcileSweep:MaximumAttempts"] = "2",
-            ["ReconcileSweep:HeartbeatInterval"] = "00:10:00"
+            ["MaximumAttempts"] = "2",
+            ["HeartbeatInterval"] = "00:10:00"
         };
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
-        var options = ReconcileSweepConfiguration.Read(configuration.GetSection("ReconcileSweep"));
+        var options = ReconcileSweepConfiguration.Read(values, allowlistConfigured: true);
 
         Xunit.Assert.Empty(options.AutoRemediationAllowlist);
         Xunit.Assert.Equal(2, options.MaximumAttempts);
@@ -511,4 +610,43 @@ public sealed class ReconcileSweepRemediationTests
 
     private static JsonObject ReadLastReceipt(string path) =>
         JsonNode.Parse(File.ReadLines(path).Last())!.AsObject();
+
+    private sealed class ImmediateLeaseRenewalTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public TimeSpan DueTime { get; private set; }
+
+        public TimeSpan Period { get; private set; }
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration) => _utcNow += duration;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            DueTime = dueTime;
+            Period = period;
+            Advance(dueTime);
+            callback(state);
+            return InertTimer.Instance;
+        }
+
+        private sealed class InertTimer : ITimer
+        {
+            public static InertTimer Instance { get; } = new();
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
 }

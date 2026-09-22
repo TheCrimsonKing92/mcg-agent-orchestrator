@@ -1,11 +1,20 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
+/// <summary>
+/// Dashboard transport adapter for single-task operations. It validates the operation name, parses
+/// the request body, delegates the mutation to <see cref="GoalTaskCommandOperations"/> or
+/// <see cref="GoalAdvancementOperations"/>, and maps the result to a dashboard DTO.
+/// </summary>
 internal static partial class GoalManagementCommandService
 {
+internal const string DashboardOperatorIntentChannel = "dashboard";
+internal const string DashboardOperatorIntentAuthenticationAssurance = "dashboard-operator-control";
+
 internal static bool IsInboxBackedTaskAction(string operation) =>
     operation.Equals(OperatorIntentVerbs.Retry, StringComparison.OrdinalIgnoreCase) ||
     operation.Equals(OperatorIntentVerbs.Progress, StringComparison.OrdinalIgnoreCase) ||
@@ -21,100 +30,94 @@ public static async Task<object?> ApplyTaskActionAsync(
     string operation,
     string body)
 {
+    var commands = new GoalTaskCommandOperations();
     switch (operation.ToLowerInvariant())
     {
         case "run":
-            return await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
+            return ToStepResult(
+                goal,
+                await new GoalAdvancementOperations().RunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id));
 
         case "api-run":
-            return await AdvanceApiRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id);
+            return DashboardResponseMapper.ToTaskDetailDto(
+                goal,
+                await new GoalAdvancementOperations().ApiRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, task.Id));
 
         case "dispatch":
-            if (task.RequiredRole != AgentRole.Researcher || goal.RefinedSpec is not null)
-                EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+            // Deliberate ordering change from the pre-move adapter: the refinement guard now runs
+            // inside GoalTaskCommandOperations.RecordDispatch, so a malformed body fails parsing
+            // first and no longer launches refinement as a side effect of an invalid request. The
+            // only observable difference is which error a caller gets when the body is malformed
+            // and refinement is pending at the same time; the success path is unchanged.
             var dispatch = DashboardRequestParser.ParseDispatchSubmission(body);
-            kernel.RecordTaskDispatch(
-                goal.Id,
-                task.Id,
-                new TaskDispatchRecord(dispatch.WorkerName, dispatch.Command, workspace.ResolveExecutionDirectory(goal.Id), DateTimeOffset.UtcNow));
+            commands.RecordDispatch(kernel, workspace, providers, goal, task, dispatch.WorkerName, dispatch.Command);
             return null;
 
         case "profile-dispatch":
             var submission = DashboardRequestParser.ParseProfileDispatchReadySubmission(body);
             var profile = WorkerProfileStore.Load(workspace.WorkerProfilePath).GetRequired(submission.ProfileName);
-            var profileDispatch = ProfileDispatchTask(kernel, workspace, goal, task, profile, agents, providers);
+            var profileDispatch = commands.ProfileDispatch(kernel, workspace, goal, task, profile, agents, providers);
             return DashboardResponseMapper.ToProfileDispatchDto(goal, profileDispatch);
 
         case "subscription-dispatch":
             var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-            ApplySubscriptionLimitReviewAcknowledgement(kernel, goal, task, body);
-            var subscriptionDispatch = SubscriptionDispatchTask(kernel, workspace, goal, task, agents, profiles, providers: providers);
+            var subscriptionDispatch = commands.SubscriptionDispatch(
+                kernel,
+                workspace,
+                goal,
+                task,
+                agents,
+                profiles,
+                providers,
+                DashboardRequestParser.ParseLimitReviewSubmission(body)?.Note);
             return DashboardResponseMapper.ToProfileDispatchDto(goal, subscriptionDispatch);
 
         case "start":
-            RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers);
-            var startResult = new BackgroundDispatchRunner().TryStartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
-            if (startResult.RecoveryAction is { } recoveryAction)
-            {
-                throw new InvalidOperationException(recoveryAction.Reason);
-            }
-
-            if (startResult.RequeueSkipped)
-            {
-                throw new InvalidOperationException("Dispatch start was skipped after interrupted-dispatch state changed.");
-            }
-
-            if (startResult.FailureReason is { } failureReason)
-            {
-                return new DispatchProcessStartFailureDto(goal.Id.Value, task.Id.Value, failureReason);
-            }
-
-            return null;
+            var startFailure = commands.PrepareAndStartDispatch(
+                kernel,
+                workspace,
+                goal,
+                task,
+                agents,
+                WorkerProfileStore.Load(workspace.WorkerProfilePath),
+                providers);
+            return ToDispatchProcessStartFailureDto(goal, startFailure);
 
         case "refresh":
-            new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
+            commands.RefreshProcess(kernel, goal, task);
             return null;
 
         case "cancel":
-            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            commands.CancelProcess(kernel, goal, task);
             return null;
 
         case "verify":
             var verify = DashboardRequestParser.ParseVerifySubmission(body);
-            var verification = await new LocalProcessVerifier().RunAsync(verify.Command, workspace.ResolveExecutionDirectory(goal.Id), goal.Id, task.Id);
-            kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+            await commands.VerifyAsync(kernel, workspace, goal, task, verify.Command);
             return null;
 
         case "verify-manual":
             var manual = DashboardRequestParser.ParseManualVerifySubmission(body);
-            var manualVerification = ManualVerificationRecorder.Create(
-                manual.Passed,
-                manual.Note,
-                workspace.ExecutionDirectory,
-                DateTimeOffset.UtcNow);
-            return await EnqueueOperatorIntentAsync(
+            return await EnqueueOperatorIntentDtoAsync(
+                commands,
                 workspace,
                 goal,
                 task,
                 OperatorIntentVerbs.VerifyManual,
-                new ManualVerificationOperatorIntentPayload(manualVerification),
+                new ManualVerificationOperatorIntentPayload(Request: new ManualVerificationRequest(
+                    manual.Passed, manual.Note, workspace.ExecutionDirectory)),
                 manual.IdempotencyKey);
 
         case "complete-verify":
             var complete = DashboardRequestParser.ParseManualVerifySubmission(body);
-            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, complete.Note);
-            var completeVerification = ManualVerificationRecorder.Create(
-                true,
-                complete.Note,
-                workspace.ExecutionDirectory,
-                DateTimeOffset.UtcNow);
-            kernel.RecordTaskVerification(goal.Id, task.Id, completeVerification);
+            commands.CompleteVerify(kernel, workspace, goal, task, complete.Note);
             return null;
 
         case "progress":
             var progress = DashboardRequestParser.ParseProgressSubmission(body);
-            var progressStatus = CliArgumentParser.ParseReportableStatus(progress.Status);
-            return await EnqueueOperatorIntentAsync(
+            var progressStatus = DashboardApplicationServices.ParseReportableStatus(progress.Status);
+            return await EnqueueOperatorIntentDtoAsync(
+                commands,
                 workspace,
                 goal,
                 task,
@@ -124,24 +127,26 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "retry":
             var retry = DashboardRequestParser.ParseRetrySubmission(body);
-            return await EnqueueOperatorIntentAsync(
+            return await EnqueueOperatorIntentDtoAsync(
+                commands,
                 workspace,
                 goal,
                 task,
                 OperatorIntentVerbs.Retry,
                 new RetryOperatorIntentPayload(
                     retry.Message,
-                    retry.Mechanical ? RetryRoundKind.Mechanical : null),
+                    retry.Mechanical ? RetryRoundKind.Mechanical : null,
+                    RetryCause: Enum.Parse<RetryCause>(retry.Cause, ignoreCase: true)),
                 retry.IdempotencyKey);
 
         case "verification-plan":
             var verificationPlan = DashboardRequestParser.ParseVerificationPlanSubmission(body);
-            kernel.SetTaskVerificationPlan(goal.Id, task.Id, verificationPlan.Plan);
+            commands.SetVerificationPlan(kernel, goal, task, verificationPlan.Plan);
             return DashboardResponseMapper.ToTaskVerificationPlanDto(goal, task);
 
         case "ask":
             var ask = DashboardRequestParser.ParseAskSubmission(body);
-            var request = kernel.RequestHumanInput(goal.Id, task.Id, ask.Question);
+            var request = commands.RequestHumanInput(kernel, goal, task, ask.Question);
             return DashboardResponseMapper.ToHumanInputDto(kernel, request);
 
         default:
@@ -149,7 +154,8 @@ public static async Task<object?> ApplyTaskActionAsync(
     }
 }
 
-private static async Task<OperatorIntentDto> EnqueueOperatorIntentAsync(
+private static async Task<OperatorIntentDto> EnqueueOperatorIntentDtoAsync(
+    GoalTaskCommandOperations commands,
     OrchestratorWorkspace workspace,
     Goal goal,
     TaskSpec task,
@@ -157,58 +163,15 @@ private static async Task<OperatorIntentDto> EnqueueOperatorIntentAsync(
     object payload,
     string? idempotencyKey)
 {
-    var intentId = Guid.NewGuid().ToString("N");
-    var intent = new OperatorIntentRecord(
-        intentId,
-        string.IsNullOrWhiteSpace(idempotencyKey) ? intentId : idempotencyKey,
+    var (persisted, warning) = await commands.EnqueueOperatorIntentAsync(
+        workspace,
+        goal,
+        task,
         verb,
-        goal.Id.Value,
-        task.Id.Value,
-        System.Text.Json.JsonSerializer.Serialize(payload, payload.GetType(), OperatorIntentJson.Options),
-        [],
-        Actor: "operator",
-        Channel: "dashboard",
-        AuthenticationAssurance: "dashboard-operator-control",
-        CreatedAt: DateTimeOffset.UtcNow);
-    var persisted = await SqliteOperatorIntentStore
-        .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
-        .EnqueueAsync(intent);
-    var warning = ConductorLoopLease.IsActive(workspace.OrchestratorDirectory)
-        ? null
-        : ConductorLoopLease.InactiveWarning;
+        payload,
+        idempotencyKey,
+        DashboardOperatorIntentChannel,
+        DashboardOperatorIntentAuthenticationAssurance);
     return DashboardResponseMapper.ToOperatorIntentDto(persisted) with { Warning = warning };
-}
-
-private static void ApplySubscriptionLimitReviewAcknowledgement(
-    AgentOrchestratorKernel kernel,
-    Goal goal,
-    TaskSpec task,
-    string body)
-{
-    var review = DashboardRequestParser.ParseLimitReviewSubmission(body);
-    if (review is not null)
-    {
-        if (DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task) < DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold)
-        {
-            throw new ArgumentException("Subscription limit review acknowledgement requires repeated recoverable subscription usage-limit failures.");
-        }
-
-        kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id, review.Note);
-        return;
-    }
-
-    if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out var retryAfter))
-    {
-        throw new ArgumentException($"Task '{task.Id}' hit a recoverable subscription usage limit; retry after {retryAfter:u}.");
-    }
-
-    if (!DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
-    {
-        return;
-    }
-
-    var failures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
-    throw new ArgumentException(
-        $"Task '{task.Id}' hit a recoverable subscription usage limit {failures} time(s); POST subscription-dispatch with confirmLimitReview=true and a non-empty note before redispatch.");
 }
 }

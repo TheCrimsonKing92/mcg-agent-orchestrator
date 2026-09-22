@@ -22,6 +22,11 @@ internal sealed record OwnedChildStartMetadata(
     IReadOnlyList<string> ArgumentList,
     string WorkingDirectory);
 
+internal sealed record WorkerProcessJobReleaseEvidence(
+    bool RegistrationFound,
+    bool TerminationRequested,
+    bool JobExitConfirmed);
+
 internal sealed class RegisteredJob
 {
     internal RegisteredJob(
@@ -29,6 +34,7 @@ internal sealed class RegisteredJob
         SafeFileHandle? DuplicateAccountingHandle,
         WorkerProcessJobAccounting? RegistrationSnapshot,
         SpawnProcessIdentity? Identity = null,
+        int IdentityReadAttempts = 0,
         bool RequiresDurableDetach = false,
         object? LifecycleAuthority = null)
     {
@@ -36,6 +42,7 @@ internal sealed class RegisteredJob
         this.DuplicateAccountingHandle = DuplicateAccountingHandle;
         this.RegistrationSnapshot = RegistrationSnapshot;
         this.Identity = Identity;
+        this.IdentityReadAttempts = IdentityReadAttempts;
         this.RequiresDurableDetach = RequiresDurableDetach;
         this.LifecycleAuthority = LifecycleAuthority;
     }
@@ -44,6 +51,7 @@ internal sealed class RegisteredJob
     internal SafeFileHandle? DuplicateAccountingHandle { get; }
     internal WorkerProcessJobAccounting? RegistrationSnapshot { get; }
     internal SpawnProcessIdentity? Identity { get; }
+    internal int IdentityReadAttempts { get; }
     internal bool RequiresDurableDetach { get; }
     internal object? LifecycleAuthority { get; }
     internal bool RequiresOwnedRelease => LifecycleAuthority is not null;
@@ -60,6 +68,9 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     private readonly object _lifecycleAuthority;
     private Process? _process;
     private SafeFileHandle? _processHandle;
+    private StreamWriter? _standardInput;
+    private StreamReader? _standardOutput;
+    private StreamReader? _standardError;
     private int _registrationReleased;
 
     internal RegisteredOwnedProcess(
@@ -87,10 +98,31 @@ internal sealed class RegisteredOwnedProcess : IDisposable
             startInfo.WorkingDirectory);
     }
 
+    internal RegisteredOwnedProcess(
+        OwnedProcessGroup.RedirectedOwnedProcessStart transfer,
+        ProcessStartInfo startInfo,
+        RegisteredJob registration,
+        object lifecycleAuthority)
+        : this(
+            transfer.Process,
+            transfer.ProcessHandle,
+            startInfo,
+            registration,
+            lifecycleAuthority)
+    {
+        _standardInput = transfer.StandardInput;
+        _standardOutput = transfer.StandardOutput;
+        _standardError = transfer.StandardError;
+    }
+
     internal int Id => Process.Id;
-    internal StreamReader StandardOutput => Process.StandardOutput;
-    internal StreamReader StandardError => Process.StandardError;
+    internal StreamReader StandardOutput => _standardOutput ?? Process.StandardOutput;
+    internal StreamReader StandardError => _standardError ?? Process.StandardError;
     internal OwnedChildStartMetadata StartMetadata { get; }
+    internal SpawnProcessIdentity? Identity => _registration.Identity;
+    internal int IdentityReadAttempts => _registration.IdentityReadAttempts;
+    internal SpawnProcessIdentity? TryReadDirectChildIdentity() =>
+        WorkerProcessJobs.TryReadDirectChildIdentity(_processId, _registration.Group);
     internal bool HasOpenNativeHandle =>
         _processHandle is { IsClosed: false, IsInvalid: false };
     internal bool IsDisposed => _process is null;
@@ -113,6 +145,21 @@ internal sealed class RegisteredOwnedProcess : IDisposable
             }
 
             return unchecked((int)exitCode);
+        }
+    }
+
+    internal void CompleteInput()
+    {
+        if (_standardInput is not null)
+        {
+            _standardInput.Dispose();
+            _standardInput = null;
+            return;
+        }
+
+        if (Process.StartInfo.RedirectStandardInput)
+        {
+            Process.StandardInput.Dispose();
         }
     }
 
@@ -198,6 +245,12 @@ internal sealed class RegisteredOwnedProcess : IDisposable
         }
         finally
         {
+            _standardInput?.Dispose();
+            _standardInput = null;
+            _standardOutput?.Dispose();
+            _standardOutput = null;
+            _standardError?.Dispose();
+            _standardError = null;
             _processHandle?.Dispose();
             _processHandle = null;
             _process?.Dispose();
@@ -548,9 +601,9 @@ public static class WorkerProcessJobs
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         var lifecycleAuthority = new object();
-        var identityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
         if (!OperatingSystem.IsWindows())
         {
+            var identityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
             var process = StartAndRegisterNonWindows(
                 startInfo,
                 ownerId,
@@ -569,8 +622,56 @@ public static class WorkerProcessJobs
             () => OwnedProcessGroup.StartSuspended(startInfo),
             startInfo,
             lifecycleAuthority,
-            identityReader,
+            registrationIdentityReader,
             ownerId);
+    }
+
+    internal static RegisteredOwnedProcess StartRegisteredOwnedRedirectedOrThrow(
+        ProcessStartInfo startInfo,
+        string? ownerId = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            return StartRegisteredOwnedOrThrow(startInfo, ownerId);
+        }
+
+        OwnedProcessGroup.SuspendedRedirectedProcessStart launch;
+        try
+        {
+            launch = OwnedProcessGroup.StartSuspendedContainedRedirected(startInfo);
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            throw new InvalidOperationException(
+                $"worker-process-start-failed: stage=owned-process-group-launch; cleanup=owned-job-termination-requested; {BuildExceptionEvidence(ex)}",
+                ex);
+        }
+
+        using (launch)
+        {
+            var lifecycleAuthority = new object();
+            var victimIdentityReader = BuildSuspendedRegistrationIdentityReader(launch.ReadLifecycleIdentity);
+            if (!TryRegisterCore(
+                    launch.Process,
+                    ownerId,
+                    victimIdentityReader,
+                    ProductionRegistrationIdentityReader,
+                    out var registrationFailure,
+                    launch.Group,
+                    launch.Resume,
+                    lifecycleAuthority: lifecycleAuthority))
+            {
+                throw new InvalidOperationException(registrationFailure);
+            }
+
+            var registration = GetRegisteredJobOrThrow(launch.Process.Id, lifecycleAuthority);
+            return new RegisteredOwnedProcess(
+                launch.TransferOwnership(),
+                startInfo,
+                registration,
+                lifecycleAuthority);
+        }
     }
 
     internal static RegisteredOwnedProcess AdoptRegisteredOwnedOrThrow(
@@ -594,11 +695,16 @@ public static class WorkerProcessJobs
             lifecycleAuthority);
     }
 
+    /// <param name="inheritableWindowObserver">
+    /// Invoked while this launch's inheritable capture duplicates exist, immediately before
+    /// CreateProcessW. Per-launch; production callers leave it null.
+    /// </param>
     internal static Process StartRegisteredWithFileCaptureOrThrow(
         ProcessStartInfo startInfo,
         string stdoutPath,
         string stderrPath,
-        string? ownerId = null)
+        string? ownerId = null,
+        Action? inheritableWindowObserver = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
@@ -607,7 +713,11 @@ public static class WorkerProcessJobs
         }
 
         return StartRegisteredWindows(
-            () => OwnedProcessGroup.StartSuspendedWithFileCapture(startInfo, stdoutPath, stderrPath),
+            () => OwnedProcessGroup.StartSuspendedWithFileCapture(
+                startInfo,
+                stdoutPath,
+                stderrPath,
+                inheritableWindowObserver),
             ownerId);
     }
 
@@ -629,10 +739,11 @@ public static class WorkerProcessJobs
 
         using (launch)
         {
+            var victimIdentityReader = BuildSuspendedRegistrationIdentityReader(launch.ReadLifecycleIdentity);
             if (!TryRegisterCore(
                     launch.Process,
                     ownerId,
-                    ProductionRegistrationIdentityReader,
+                    victimIdentityReader,
                     ProductionRegistrationIdentityReader,
                     out var registrationFailure,
                     launch.Group,
@@ -649,7 +760,7 @@ public static class WorkerProcessJobs
         Func<OwnedProcessGroup.SuspendedProcessStart> start,
         ProcessStartInfo startInfo,
         object lifecycleAuthority,
-        Func<Process, SpawnProcessIdentityReadResult> registrationIdentityReader,
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader,
         string? ownerId)
     {
         OwnedProcessGroup.SuspendedProcessStart launch;
@@ -666,11 +777,14 @@ public static class WorkerProcessJobs
 
         using (launch)
         {
+            var victimIdentityReader = registrationIdentityReader ??
+                BuildSuspendedRegistrationIdentityReader(launch.ReadLifecycleIdentity);
+            var ownerIdentityReader = registrationIdentityReader ?? ProductionRegistrationIdentityReader;
             if (!TryRegisterCore(
                     launch.Process,
                     ownerId,
-                    registrationIdentityReader,
-                    registrationIdentityReader,
+                    victimIdentityReader,
+                    ownerIdentityReader,
                     out var registrationFailure,
                     launch.Group,
                     launch.Resume,
@@ -834,12 +948,15 @@ public static class WorkerProcessJobs
         // publication that has not reached the durable registry yet, or a recycled PID behind a
         // stale in-memory entry. None is safe to accept as success without a registration state
         // machine, so fail closed and terminate the candidate rather than bypassing ownership.
-        if (Jobs.ContainsKey(process.Id))
+        if (Jobs.TryGetValue(process.Id, out var conflictingRegistration))
         {
+            var observedIdentity = ObserveRegistrationCandidateIdentity(process);
             registrationFailure = BuildRegistrationFailure(
                 process.Id,
                 "duplicate-or-recycled-pid",
-                "process-tree-termination-requested");
+                "process-tree-termination-requested",
+                conflictingRegistration.Identity,
+                observedIdentity);
             TryTerminateUnregisteredProcess(process);
             return false;
         }
@@ -852,6 +969,7 @@ public static class WorkerProcessJobs
         {
             group ??= (attachProcess ?? OwnedProcessGroup.Attach)(process);
             SpawnProcessIdentity? victimIdentity = null;
+            var victimIdentityReadAttempts = 0;
             SpawnProcessIdentity? ownerIdentity = null;
             var durableRegistrationAvailable = registry is not null;
             if (registry is not null)
@@ -859,6 +977,7 @@ public static class WorkerProcessJobs
                 failureStage = "victim-identity-read";
                 var victimRead = readVictimIdentity(process);
                 victimIdentity = victimRead.Identity;
+                victimIdentityReadAttempts = victimRead.Attempts;
                 if (victimIdentity is null)
                 {
                     registrationFailure = BuildRegistrationDegradation(
@@ -896,6 +1015,7 @@ public static class WorkerProcessJobs
                 duplicate,
                 snapshot,
                 victimIdentity,
+                victimIdentityReadAttempts,
                 RequiresDurableDetach: registry is not null && durableRegistrationAvailable,
                 LifecycleAuthority: lifecycleAuthority);
             if (Jobs.TryAdd(process.Id, registeredJob))
@@ -969,10 +1089,16 @@ public static class WorkerProcessJobs
                 return false;
             }
 
+            _ = Jobs.TryGetValue(process.Id, out conflictingRegistration);
+            var observedIdentity = victimIdentity is null
+                ? ObserveRegistrationCandidateIdentity(process)
+                : new RegistrationIdentityObservation(victimIdentity, "ok");
             registrationFailure = BuildRegistrationFailure(
                 process.Id,
                 "duplicate-or-recycled-pid",
-                "attached-process-tree-termination-requested");
+                "attached-process-tree-termination-requested",
+                conflictingRegistration?.Identity,
+                observedIdentity);
             ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
             group = null;
             duplicate?.Dispose();
@@ -1042,6 +1168,83 @@ public static class WorkerProcessJobs
 
     private static string BuildRegistrationFailure(int processId, string stage, string cleanup) =>
         $"worker-process-registration-failed: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; cleanup={cleanup}";
+
+    private static string BuildRegistrationFailure(
+        int processId,
+        string stage,
+        string cleanup,
+        SpawnProcessIdentity? recordedIdentity,
+        RegistrationIdentityObservation observedIdentity)
+    {
+        var mismatch = DescribeIdentityMismatch(recordedIdentity, observedIdentity);
+        var conflict = mismatch switch
+        {
+            "none" => "duplicate-registration",
+            "start-time" or "image" or "start-time,image" => "recycled-pid",
+            _ => "indeterminate"
+        };
+        return BuildRegistrationFailure(processId, stage, cleanup) +
+            $"; conflict={conflict}" +
+            $"; recorded_started_at={FormatStartedAt(recordedIdentity)}" +
+            $"; recorded_image={FormatImageName(recordedIdentity)}" +
+            $"; observed_started_at={FormatStartedAt(observedIdentity.Identity)}" +
+            $"; observed_image={FormatImageName(observedIdentity.Identity)}" +
+            $"; mismatch={mismatch}";
+    }
+
+    private static RegistrationIdentityObservation ObserveRegistrationCandidateIdentity(Process process)
+    {
+        try
+        {
+            var identity = ReadIdentityOnce(process);
+            return new RegistrationIdentityObservation(identity, identity is null ? "unavailable" : "ok");
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return new RegistrationIdentityObservation(null, "unreadable");
+        }
+    }
+
+    private static string DescribeIdentityMismatch(
+        SpawnProcessIdentity? recordedIdentity,
+        RegistrationIdentityObservation observedIdentity)
+    {
+        if (recordedIdentity is null)
+        {
+            return "recorded-identity-unavailable";
+        }
+
+        if (observedIdentity.Identity is null)
+        {
+            return observedIdentity.ReadStatus == "unreadable"
+                ? "observed-identity-unreadable"
+                : "observed-identity-unavailable";
+        }
+
+        var startTimeMismatch = recordedIdentity.StartedAt != observedIdentity.Identity.StartedAt;
+        var imageMismatch = !recordedIdentity.ImagePath.Equals(
+            observedIdentity.Identity.ImagePath,
+            StringComparison.OrdinalIgnoreCase);
+        return (startTimeMismatch, imageMismatch) switch
+        {
+            (false, false) => "none",
+            (true, false) => "start-time",
+            (false, true) => "image",
+            (true, true) => "start-time,image"
+        };
+    }
+
+    private static string FormatStartedAt(SpawnProcessIdentity? identity) =>
+        identity?.StartedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable";
+
+    private static string FormatImageName(SpawnProcessIdentity? identity) =>
+        identity is null || string.IsNullOrWhiteSpace(identity.ImagePath)
+            ? "unavailable"
+            : Path.GetFileName(identity.ImagePath);
+
+    private sealed record RegistrationIdentityObservation(
+        SpawnProcessIdentity? Identity,
+        string ReadStatus);
 
     private static string BuildRegistrationDegradation(int processId, string stage, string readEvidence) =>
         $"worker-process-registration-degraded: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; {readEvidence}; outcome=durable-registration-skipped-process-preserved";
@@ -1123,6 +1326,26 @@ public static class WorkerProcessJobs
                 process.Id,
                 new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero),
                 imagePath);
+    }
+
+    private static Func<Process, SpawnProcessIdentityReadResult> BuildSuspendedRegistrationIdentityReader(
+        Func<int, WindowsNativeProcessInspection.ProcessLifecycleIdentityReadResult> readLifecycleIdentity)
+    {
+        ArgumentNullException.ThrowIfNull(readLifecycleIdentity);
+        return process =>
+        {
+            var read = readLifecycleIdentity(process.Id);
+            var evidence = $"status={read.Status.ToString().ToLowerInvariant()} attempts=1 " +
+                $"source={read.Operation} native_error_code={read.NativeError.ToString(CultureInfo.InvariantCulture)}";
+            return read.Status == ProcessInspectionStatus.Available &&
+                   read.StartedAt is { } startedAt &&
+                   !string.IsNullOrWhiteSpace(read.ExecutablePath)
+                ? new SpawnProcessIdentityReadResult(
+                    new SpawnProcessIdentity(process.Id, startedAt, read.ExecutablePath),
+                    1,
+                    evidence)
+                : new SpawnProcessIdentityReadResult(null, 1, evidence);
+        };
     }
 
     internal static string BuildExceptionEvidence(Exception exception)
@@ -1232,11 +1455,13 @@ public static class WorkerProcessJobs
             }
         }
 
-        var fallbackOwnedTempRoots = TempRootJanitor.SnapshotOwnedRoots([processId]);
+        var fallbackOwnedTempRoots = TempRootJanitor.SnapshotOwnedRoots([processId])
+            .Select(root => root with { CaptureSource = "worker-process-jobs/fallback-kill" })
+            .ToArray();
         var fallbackKilled = TryKillPidTree(processId);
         if (fallbackKilled)
         {
-            _ = ReapOwnedTempRoots(fallbackOwnedTempRoots);
+            EmitTempRootReapResults(ReapOwnedTempRoots(fallbackOwnedTempRoots));
         }
         if (fallbackKilled && markRegistryReleased)
         {
@@ -1303,6 +1528,52 @@ public static class WorkerProcessJobs
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
     }
 
+    /// <summary>
+    /// Releases a registration and reports what was actually proven about its termination, so a caller
+    /// that must decide whether it still owns anything can say so instead of assuming it.
+    /// </summary>
+    internal static WorkerProcessJobReleaseEvidence ReleaseWithCompletionEvidence(
+        int processId,
+        out WorkerProcessJobAccounting? accounting)
+    {
+        accounting = null;
+        var removal = TryRemoveStaticRegistration(processId, out var job);
+        if (removal != StaticRegistrationRemoval.Removed)
+        {
+            if (removal == StaticRegistrationRemoval.Missing)
+            {
+                Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+            }
+
+            return new WorkerProcessJobReleaseEvidence(
+                RegistrationFound: false,
+                TerminationRequested: false,
+                JobExitConfirmed: false);
+        }
+
+        WorkerProcessJobReleaseEvidence evidence;
+        try
+        {
+            Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+        }
+        finally
+        {
+            var terminationRequested = ReadAccountingAndDispose(
+                job,
+                kill: true,
+                captureAccounting: true,
+                preferDuplicate: false,
+                out accounting,
+                out var jobExitConfirmed);
+            evidence = new WorkerProcessJobReleaseEvidence(
+                RegistrationFound: true,
+                TerminationRequested: terminationRequested,
+                JobExitConfirmed: jobExitConfirmed);
+        }
+
+        return evidence;
+    }
+
     internal static RegisteredJob GetRegisteredJobOrThrow(int processId, object lifecycleAuthority)
     {
         if (Jobs.TryGetValue(processId, out var job) &&
@@ -1313,6 +1584,13 @@ public static class WorkerProcessJobs
 
         throw new InvalidOperationException(
             $"worker-process-registration-missing: pid={processId}; stage=owned-child-transfer");
+    }
+
+    internal static bool TryGetActiveProcessIds(int processId, out IReadOnlyList<int> processIds)
+    {
+        processIds = [];
+        return Jobs.TryGetValue(processId, out var job) &&
+            job.Group.TryGetActiveProcessIds(out processIds);
     }
 
     internal static void ReleaseOwned(
@@ -1495,7 +1773,7 @@ public static class WorkerProcessJobs
 
         try
         {
-            var ownedTempRoots = SnapshotOwnedTempRoots(job.Group);
+            var ownedTempRoots = SnapshotOwnedTempRoots(job.Group, "worker-process-jobs/reap");
             try
             {
                 job.Group.Kill();
@@ -1510,7 +1788,7 @@ public static class WorkerProcessJobs
             {
                 OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
             }
-            _ = ReapOwnedTempRoots(ownedTempRoots);
+            EmitTempRootReapResults(ReapOwnedTempRoots(ownedTempRoots));
 
             if (job.DuplicateAccountingHandle is not null &&
                 OwnedProcessGroup.TryReadAccounting(job.DuplicateAccountingHandle, out var duplicateAccounting))
@@ -1537,13 +1815,33 @@ public static class WorkerProcessJobs
         bool preferDuplicate,
         out WorkerProcessJobAccounting? accounting)
     {
+        return ReadAccountingAndDispose(
+            job,
+            kill,
+            captureAccounting,
+            preferDuplicate,
+            out accounting,
+            out _);
+    }
+
+    private static bool ReadAccountingAndDispose(
+        RegisteredJob? job,
+        bool kill,
+        bool captureAccounting,
+        bool preferDuplicate,
+        out WorkerProcessJobAccounting? accounting,
+        out bool jobExitConfirmed)
+    {
         accounting = null;
+        jobExitConfirmed = false;
         if (job is null)
         {
             return !kill;
         }
 
-        var ownedTempRoots = kill ? SnapshotOwnedTempRoots(job.Group) : [];
+        var ownedTempRoots = kill
+            ? SnapshotOwnedTempRoots(job.Group, "worker-process-jobs/accounting-dispose")
+            : [];
 
         try
         {
@@ -1585,10 +1883,12 @@ public static class WorkerProcessJobs
                 job.Group.Kill();
                 if (job.DuplicateAccountingHandle is not null)
                 {
-                    OwnedProcessGroup.WaitForJobExit(job.DuplicateAccountingHandle, TimeSpan.FromSeconds(5));
+                    jobExitConfirmed = OwnedProcessGroup.WaitForJobExit(
+                        job.DuplicateAccountingHandle,
+                        TimeSpan.FromSeconds(5));
                 }
 
-                _ = ReapOwnedTempRoots(ownedTempRoots);
+                EmitTempRootReapResults(ReapOwnedTempRoots(ownedTempRoots));
             }
 
             killed = true;
@@ -1622,19 +1922,88 @@ public static class WorkerProcessJobs
     }
 
     private static IReadOnlyList<TempRootJanitorOwnedRoot> SnapshotOwnedTempRoots(
-        OwnedProcessGroup group) =>
-        TempRootJanitor.SnapshotOwnedRoots(SnapshotOwnedProcessIds(group));
+        OwnedProcessGroup group,
+        string captureSource) =>
+        TempRootJanitor.SnapshotOwnedRoots(SnapshotOwnedProcessIds(group))
+            .Select(root => root with { CaptureSource = captureSource })
+            .ToArray();
 
-    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
+    internal static IReadOnlyList<TempRootJanitorReapResult> ReapOwnedTempRoots(
         IEnumerable<int> processIds,
         IEnumerable<string>? sharedRoots = null) =>
         sharedRoots is null
             ? TempRootJanitor.ReapOwnedRoots(processIds)
             : TempRootJanitor.ReapOwnedRoots(processIds, sharedRoots);
 
-    internal static IReadOnlyList<TempRootJanitorDeleteResult> ReapOwnedTempRoots(
+    internal static IReadOnlyList<TempRootJanitorReapResult> ReapOwnedTempRoots(
         IEnumerable<TempRootJanitorOwnedRoot> ownedRoots) =>
         TempRootJanitor.ReapOwnedRoots(ownedRoots);
+
+    internal static void EmitTempRootReapResults(
+        IEnumerable<TempRootJanitorReapResult> results,
+        Action<string>? emit = null)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        foreach (var result in results)
+        {
+            var diagnostic = TempRootJanitor.FormatDiagnostic(result);
+            try
+            {
+                if (emit is null)
+                {
+                    Console.Error.WriteLine(diagnostic);
+                }
+                else
+                {
+                    emit(diagnostic);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(
+                    $"[WorkerProcessJobs] Failed to emit temp-root reap receipt: {ex.GetType().Name}");
+            }
+        }
+
+    }
+
+    internal static SpawnProcessIdentity? TryReadDirectChildIdentity(
+        int parentProcessId,
+        OwnedProcessGroup group)
+    {
+        try
+        {
+            var ownedProcessIds = SnapshotOwnedProcessIds(group);
+            if (ownedProcessIds.Count == 0)
+            {
+                return null;
+            }
+
+            var inspection = WindowsNativeProcessInspection.Read(ownedProcessIds);
+            if (inspection.Failure is not null)
+            {
+                return null;
+            }
+
+            var child = inspection.Records.Values
+                .Where(record =>
+                    record.ParentProcessId == parentProcessId &&
+                    record.Status == ProcessInspectionStatus.Available &&
+                    record.StartedAt is not null &&
+                    !string.IsNullOrWhiteSpace(record.ExecutablePath) &&
+                    !ProcessObservationRoles.IsWindowsConsoleInfrastructure(record.ExecutablePath))
+                .OrderBy(record => record.StartedAt)
+                .ThenBy(record => record.ProcessId)
+                .FirstOrDefault();
+            return child is null
+                ? null
+                : new SpawnProcessIdentity(child.ProcessId, child.StartedAt!.Value, child.ExecutablePath!);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private static bool TryDetachAndDispose(RegisteredJob job)
     {
@@ -1706,48 +2075,16 @@ public static class WorkerProcessJobs
 
     public static IReadOnlyList<int> ListLiveDescendantProcessIds(int ancestorProcessId)
     {
-        if (ancestorProcessId <= 0 || !OperatingSystem.IsWindows())
-        {
-            return [];
-        }
+        return WindowsNativeProcessInspection.ListIdentityBoundDescendantProcessIds(ancestorProcessId);
+    }
 
-        var parentByProcessId = new Dictionary<int, int>();
-        var snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
-        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
-        {
-            return [];
-        }
-
-        try
-        {
-            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
-            if (!Process32First(snapshot, ref entry))
-            {
-                return [];
-            }
-
-            do
-            {
-                var processId = (int)entry.th32ProcessID;
-                var parentProcessId = (int)entry.th32ParentProcessID;
-                if (processId > 0 && parentProcessId > 0)
-                {
-                    parentByProcessId[processId] = parentProcessId;
-                }
-            }
-            while (Process32Next(snapshot, ref entry));
-        }
-        finally
-        {
-            CloseHandle(snapshot);
-        }
-
-        return parentByProcessId.Keys
-            .Where(processId => processId != ancestorProcessId)
-            .Where(processId => IsDescendantOf(processId, ancestorProcessId, parentByProcessId))
-            .Where(IsProcessRunning)
-            .OrderBy(processId => processId)
-            .ToArray();
+    public static IReadOnlyList<int> ListConservativeDescendantProcessIdsForRefusal(
+        int ancestorProcessId,
+        DateTimeOffset recordedAncestorStartedAt)
+    {
+        return WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            ancestorProcessId,
+            recordedAncestorStartedAt);
     }
 
     private static bool RegisterDurable(
@@ -1865,13 +2202,35 @@ public static class WorkerProcessJobs
         }
     }
 
+    // Parent pid plus start time for one process. Windows keeps a dead parent's pid in its children's
+    // Toolhelp32 records and recycles pids, so a parent pid alone does not establish ancestry.
+    internal readonly record struct ProcessAncestryFacts(int ParentProcessId, DateTime StartTimeUtc);
+
+    internal delegate bool ProcessAncestryLookup(int processId, out ProcessAncestryFacts facts);
+
     private static bool IsProtectedProcessOrAncestor(int processId)
     {
-        return IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId);
+        return TryGetProtectedPid(out var protectedPid) &&
+            IsProtectedProcessOrAncestor(processId, protectedPid, ReadProcessAncestryFacts);
+    }
+
+    internal static bool IsProtectedProcessOrAncestor(
+        int processId,
+        int protectedProcessId,
+        ProcessAncestryLookup readAncestryFacts)
+    {
+        return processId == protectedProcessId ||
+            IsDescendantOf(protectedProcessId, processId, readAncestryFacts);
     }
 
     private static bool CanKillProcess(int processId, bool allowProtectedDescendant)
     {
+        if (processId == Environment.ProcessId ||
+            IsDescendantOf(Environment.ProcessId, processId))
+        {
+            return false;
+        }
+
         if (IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId))
         {
             return false;
@@ -1925,15 +2284,39 @@ public static class WorkerProcessJobs
 
     private static bool IsDescendantOf(int processId, int ancestorProcessId)
     {
-        if (!OperatingSystem.IsWindows())
+        return OperatingSystem.IsWindows() &&
+            IsDescendantOf(processId, ancestorProcessId, ReadProcessAncestryFacts);
+    }
+
+    // Walks parent pids from processId looking for ancestorProcessId. A hop is credited only when the
+    // parent pid still names a live process that started earlier than the child it claims; anything
+    // that cannot be verified ends the walk as "not an ancestor". Without that check a pid Windows has
+    // just handed to a freshly spawned child is indistinguishable from a long-dead ancestor whose pid
+    // still sits in its children's parent-pid records.
+    internal static bool IsDescendantOf(
+        int processId,
+        int ancestorProcessId,
+        ProcessAncestryLookup readAncestryFacts)
+    {
+        ArgumentNullException.ThrowIfNull(readAncestryFacts);
+        if (processId <= 0 ||
+            ancestorProcessId <= 0 ||
+            !readAncestryFacts(processId, out var child))
         {
             return false;
         }
 
-        var current = processId;
+        var childProcessId = processId;
         for (var i = 0; i < 64; i++)
         {
-            if (!TryGetParentProcessId(current, out var parentProcessId))
+            var parentProcessId = child.ParentProcessId;
+            if (parentProcessId <= 0 || parentProcessId == childProcessId)
+            {
+                return false;
+            }
+
+            if (!readAncestryFacts(parentProcessId, out var parent) ||
+                parent.StartTimeUtc >= child.StartTimeUtc)
             {
                 return false;
             }
@@ -1943,31 +2326,55 @@ public static class WorkerProcessJobs
                 return true;
             }
 
-            current = parentProcessId;
+            childProcessId = parentProcessId;
+            child = parent;
         }
 
         return false;
     }
 
-    private static bool IsDescendantOf(int processId, int ancestorProcessId, IReadOnlyDictionary<int, int> parentByProcessId)
+    // The production lookup: Toolhelp32 for the parent pid, Process.StartTime for liveness plus ordering.
+    internal static ProcessAncestryLookup ReadProcessAncestryFactsForTests => ReadProcessAncestryFacts;
+
+    private static bool ReadProcessAncestryFacts(int processId, out ProcessAncestryFacts facts)
     {
-        var current = processId;
-        for (var i = 0; i < 64; i++)
+        facts = default;
+        if (!TryGetParentProcessId(processId, out var parentProcessId) ||
+            !TryGetProcessStartTimeUtc(processId, out var startTimeUtc))
         {
-            if (!parentByProcessId.TryGetValue(current, out var parentProcessId))
+            return false;
+        }
+
+        facts = new ProcessAncestryFacts(parentProcessId, startTimeUtc);
+        return true;
+    }
+
+    private static bool TryGetProcessStartTimeUtc(int processId, out DateTime startTimeUtc)
+    {
+        startTimeUtc = default;
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (process.HasExited)
             {
                 return false;
             }
 
-            if (parentProcessId == ancestorProcessId)
-            {
-                return true;
-            }
-
-            current = parentProcessId;
+            startTimeUtc = process.StartTime.ToUniversalTime();
+            return true;
         }
-
-        return false;
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static bool TryGetParentProcessId(int processId, out int parentProcessId)

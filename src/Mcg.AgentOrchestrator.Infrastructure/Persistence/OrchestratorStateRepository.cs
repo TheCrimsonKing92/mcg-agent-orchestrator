@@ -2,13 +2,18 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public interface IOrchestratorStateRepository
+public interface IOrchestratorStateQueries
 {
-    Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default);
-
     Task<AgentOrchestratorKernel> LoadGoalsAsync(
         IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
+}
+
+public interface IOrchestratorStateRepository : IOrchestratorStateQueries
+{
+    Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default);
 
     Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default);
 
@@ -17,8 +22,6 @@ public interface IOrchestratorStateRepository
         AgentOrchestratorKernel kernel,
         CancellationToken cancellationToken = default) =>
         SaveAsync(kernel, cancellationToken);
-
-    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
 
@@ -33,6 +36,30 @@ public interface IOrchestratorStateRepository
         CancellationToken cancellationToken = default);
 
     Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default);
+}
+
+internal static class ConductLoopGoalStatus
+{
+    private static readonly string[] TerminalStatusNames =
+    [
+        GoalStatus.Completed.ToString(),
+        GoalStatus.Failed.ToString(),
+        GoalStatus.Cancelled.ToString(),
+        GoalStatus.Superseded.ToString(),
+        "Retired",
+        "CleanedUp"
+    ];
+
+    internal static bool IsTerminal(string status) =>
+        TerminalStatusNames.Contains(status, StringComparer.OrdinalIgnoreCase);
+
+    internal static string SqlTerminalPredicate(string columnName) =>
+        $"{columnName} COLLATE NOCASE IN ({SqlTerminalStatusList})";
+
+    internal static string SqlNonTerminalPredicate(string columnName) =>
+        $"{columnName} COLLATE NOCASE NOT IN ({SqlTerminalStatusList})";
+
+    private static string SqlTerminalStatusList => string.Join(", ", TerminalStatusNames.Select(status => $"'{status}'"));
 }
 
 public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateRepository
@@ -135,6 +162,8 @@ public sealed record GoalStateSnapshot(
     GoalSnapshot Goal,
     IReadOnlyList<HumanInputRequestSnapshot> HumanInputRequests);
 
+public sealed class GoalTransactionConflictException(string message) : InvalidOperationException(message);
+
 public sealed record OrchestratorStateOutboxMessage(
     string Id,
     string Kind,
@@ -223,13 +252,15 @@ public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestrator
 public sealed record GoalSnapshotSaveRequest(
     GoalSnapshot Baseline,
     GoalSnapshot Current,
-    IReadOnlyList<HumanInputRequestSnapshot>? HumanInputRequests = null);
+    IReadOnlyList<HumanInputRequestSnapshot>? HumanInputRequests = null,
+    bool RejectConflict = false);
 
 public sealed record GoalSnapshotSaveResult(
     string GoalId,
     GoalSnapshotSaveDisposition Disposition,
     GoalSnapshot? PersistedSnapshot,
-    string Message);
+    string Message,
+    IReadOnlyList<HumanInputRequestSnapshot>? PersistedHumanInputRequests = null);
 
 public enum GoalSnapshotSaveDisposition
 {

@@ -191,30 +191,6 @@ public sealed class GoalWorktreeTestsCreationResolution : GoalWorktreeTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalWorktrees_ParseWmicListOutput_extracts_pid_and_command_line")]
-    public void GoalWorktreesParseWmicListOutputExtractsPidAndCommandLine()
-    {
-        const string wmicOutput = """
-
-            CommandLine=dotnet test MyProject.dll
-            ProcessId=1234
-
-            CommandLine=VBCSCompiler.exe -pipename:xyz
-            ProcessId=5678
-
-            CommandLine=
-            ProcessId=9999
-
-            """;
-
-        var result = GoalWorktrees.ParseWmicListOutput(wmicOutput);
-
-        Assert.Equal(2, result.Count);
-        Assert.Equal("dotnet test MyProject.dll", result[1234]);
-        Assert.Equal("VBCSCompiler.exe -pipename:xyz", result[5678]);
-        Assert.False(result.ContainsKey(9999));
-    }
-
     [Xunit.Fact(DisplayName = "GoalWorktrees_commit_on_behalf_after_worker_commit_leaves_worktree_clean")]
     public void GoalWorktreesCommitOnBehalfAfterWorkerCommitLeavesWorktreeClean()
     {

@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Cli_start_dispatch_interactive_and_one_shot_multi_flags_match")]
@@ -312,6 +312,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var profiles = WorkerProfileCatalog.Default();
         kernel.ActivateGoal(goal.Id, agents);
         RecordRunningProcess(kernel, goal, task, root, Environment.ProcessId);
+        WriteIdentityBoundHeartbeat(
+            kernel.GetGoal(goal.Id)!.Tasks.Single().LastProcess!,
+            Environment.ProcessId);
         Goal? currentGoal = kernel.GetGoal(goal.Id);
 
         var output = CaptureConsole(() =>
@@ -2208,6 +2211,16 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Initial failure.");
 
         CliCommandDispatcher.ExecuteCommand(["retry", "1", "--text-file", retryPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        Xunit.Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
+        CliCommandDispatcher.ExecuteCommand(
+            ["retry", "1", "Retry with explicit unavailable classification.", "--cause", "Unknown"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+        Xunit.Assert.Equal(RetryCause.Unknown, task.PendingRetryCause);
         CliCommandDispatcher.ExecuteCommand(["note", "1", "--text-file", notePath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["progress", "1", "running", "--text-file", progressPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["verify-manual", "1", "passed", "--text-file", verifyPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
@@ -2216,6 +2229,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         CliCommandDispatcher.ExecuteCommand(["answer", request.Id.Value[..8], "--text-file", answerPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.Message == retryText);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.Message == "Retry with explicit unavailable classification.");
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.OperatorTaskNote && evt.Message == noteText);
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == progressText);
         Xunit.Assert.Equal(verifyText, task.LastVerification!.StandardOutput);
@@ -2242,7 +2256,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Initial failure.");
 
         var ex = Xunit.Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand($"retry 1 Inline feedback --text-file {path}"),
+            CliArgumentParser.SplitCommand($"retry 1 Inline feedback --text-file {path} --cause ContractClarification"),
             kernel,
             workspace,
             ref agents,
@@ -2342,7 +2356,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ref currentGoal);
         var statusAfterNote = task.Status;
         var retryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand("retry 1 Retry remains available."),
+            CliArgumentParser.SplitCommand("retry 1 Retry remains available. --cause ContractClarification"),
             kernel,
             workspace,
             ref agents,
@@ -2529,7 +2543,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         // All-numeric prefix: the collision case that previously misparsed as task display number.
         var numericRetryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand("retry 97184249 1 Retry numeric prefix goal."),
+            CliArgumentParser.SplitCommand("retry 97184249 1 Retry numeric prefix goal. --cause ContractClarification"),
             kernel,
             workspace,
             ref agents,
@@ -2538,7 +2552,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ref currentGoal);
         // Letters prefix: the original passing case.
         var lettersRetryChanged = CliCommandDispatcher.ExecuteCommand(
-            CliArgumentParser.SplitCommand("retry abcdef12 1 Retry letters prefix goal. --mechanical"),
+            CliArgumentParser.SplitCommand("retry abcdef12 1 Retry letters prefix goal. --cause ContractClarification --mechanical"),
             kernel,
             workspace,
             ref agents,

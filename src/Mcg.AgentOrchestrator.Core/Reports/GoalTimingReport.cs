@@ -763,6 +763,7 @@ public static class GoalTimingReport
 
     private static bool IsEnvironmentalWaste(DispatchOutcomeKind kind) =>
         kind is DispatchOutcomeKind.ProviderConnectivity
+            or DispatchOutcomeKind.ProviderInterruption
             or DispatchOutcomeKind.ProviderAuthentication
             or DispatchOutcomeKind.ProviderModelRejection
             or DispatchOutcomeKind.PreflightFailure

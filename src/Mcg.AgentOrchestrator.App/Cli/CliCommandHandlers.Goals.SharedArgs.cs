@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
@@ -61,6 +60,53 @@ private static IReadOnlyList<string> GetFlagValues(IReadOnlyList<string> parts, 
         if (parts[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
             results.Add(parts[i + 1]);
     }
+    return results;
+}
+
+private static IReadOnlyList<CriterionDispositionRequest> ParseCriterionDispositions(IReadOnlyList<string> parts)
+{
+    var results = new List<CriterionDispositionRequest>();
+    foreach (var (flag, fromFile) in new[]
+             {
+                 ("--disposition", false),
+                 ("--disposition-file", true)
+             })
+    {
+        for (var index = 1; index < parts.Count; index++)
+        {
+            if (!parts[index].Equals(flag, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 >= parts.Count || parts[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"{flag} requires <criterion-reference>=<{(fromFile ? "path" : "prose")}>.");
+            }
+
+            var value = parts[++index];
+            var separator = value.IndexOf('=');
+            if (separator <= 0 || separator == value.Length - 1)
+            {
+                throw new ArgumentException($"{flag} requires <criterion-reference>=<{(fromFile ? "path" : "prose")}>.");
+            }
+
+            var criterionReference = value[..separator].Trim();
+            var dispositionValue = value[(separator + 1)..].Trim();
+            if (fromFile)
+            {
+                if (!File.Exists(dispositionValue))
+                {
+                    throw new InvalidOperationException($"--disposition-file not found: {dispositionValue}");
+                }
+
+                dispositionValue = File.ReadAllText(dispositionValue, System.Text.Encoding.UTF8);
+            }
+
+            results.Add(new CriterionDispositionRequest(criterionReference, dispositionValue));
+        }
+    }
+
     return results;
 }
 

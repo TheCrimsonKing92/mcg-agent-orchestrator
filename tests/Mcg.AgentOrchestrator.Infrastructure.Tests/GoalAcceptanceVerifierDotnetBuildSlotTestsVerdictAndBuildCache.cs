@@ -18,12 +18,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var remainderRuns = 0;
-        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) && args.Contains(remainderLaneFilter))
@@ -31,20 +30,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     remainderRuns++;
                     return Task.FromResult(remainderRuns < 3
                         ? new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")
-                        : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                        : CreatePassingVstestResult(args, "RemainderPartition.Passes"));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, ".orchestrator", "attempt-one"));
-            var first = await verifier.RunAsync(root, goalId);
+            var first = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-one");
             Assert.False(first.Passed);
             Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
             Assert.False(File.Exists(Path.Combine(root, ".orchestrator", "acceptance-partition-verdicts.json")));
@@ -54,10 +48,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 entry.Operation == "acceptance:partition-verdict" &&
                 entry.PartitionId == "cli");
 
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, ".orchestrator", "attempt-two"));
-            var second = await verifier.RunAsync(root, goalId);
+            var second = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-two");
             Assert.False(second.Passed);
             Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 1, CountInfrastructurePartitionTestCalls(calls));
             var secondReceipt = Assert.Single(second.Checks!, check => check.Name == "infrastructure partition verdict cache");
@@ -66,10 +57,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("aggregate_verdict=RED", secondReceipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("verifying_commit_sha=commit-a", secondReceipt.ResultSummary, StringComparison.Ordinal);
 
-            Environment.SetEnvironmentVariable(
-                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(root, ".orchestrator", "attempt-three"));
-            var third = await verifier.RunAsync(root, goalId);
+            var third = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-three");
             Assert.True(third.Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 2,
@@ -82,8 +70,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -97,10 +84,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
@@ -111,11 +98,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
@@ -129,7 +114,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -143,11 +128,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var cliRuns = 0;
+        var attemptPrefix = Path.Combine(root, ".orchestrator", "attempt-flaky");
         SetPartitionVerdictKeyHooks("tree-b", "main-b", "commit-b");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
@@ -155,26 +141,45 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                 {
                     cliRuns++;
                     // Intermittent flake: fail the first run, pass the within-attempt re-run.
+                    if (cliRuns == 2)
+                    {
+                        WriteVstestTrx(args, "CliPartition.Passes");
+                    }
+
                     return Task.FromResult(cliRuns < 2
-                        ? new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.")
+                        ? CreateFailedResultWithHeartbeat(
+                            goalId,
+                            root,
+                            "infrastructure tests: Cli",
+                            "retry-driving stderr from the original Cli partition",
+                            attemptPrefix)
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args, "UnrelatedPartition.Passes")
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
-            var result = await verifier.RunAsync(root, goalId);
+            var result = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-flaky");
 
-            Assert.True(result.Passed);
+            Assert.True(
+                result.Passed,
+                DescribeFailedChecks(result));
+            Assert.True(result.Retried);
             Assert.Equal(2, cliRuns);
+            var unrelatedPartitionCommands = calls
+                .Where(IsInfrastructurePartitionTestCall)
+                .Where(arguments => !arguments.Contains(cliLaneFilter))
+                .Select(arguments => string.Join('\u001f', arguments))
+                .ToArray();
+            Assert.Equal(
+                unrelatedPartitionCommands.Length,
+                unrelatedPartitionCommands.Distinct(StringComparer.Ordinal).Count());
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -195,11 +200,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("dddddddddddddddddddddddddddddddd");
         var calls = new List<string[]>();
         var mtpRuns = 0;
+        var attemptPrefix = Path.Combine(root, ".orchestrator", "attempt-mtp");
         SetPartitionVerdictKeyHooks("tree-mtp", "main-mtp", "commit-mtp");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
@@ -207,19 +213,26 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     mtpRuns++;
                     if (mtpRuns == 1)
                     {
-                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
+                        return Task.FromResult(CreateFailedResultWithHeartbeat(
+                            goalId,
+                            root,
+                            "infrastructure tests: Cli",
+                            "retry-driving stderr from the original MTP Cli partition",
+                            attemptPrefix));
                     }
 
-                    WriteMtpTrx(args);
+                    WriteMtpTrx(args, 1, ["CliPartition.Passes"]);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
             });
 
-            var result = await verifier.RunAsync(root, goalId);
+            var result = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-mtp");
 
-            Assert.True(result.Passed);
+            Assert.True(
+                result.Passed,
+                DescribeFailedChecks(result));
             Assert.True(result.Retried);
             Assert.Equal(2, mtpRuns);
             var partition = Assert.Single(
@@ -235,9 +248,44 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_exit_zero_cleanup_retains_retry_diagnostic_bytes")]
+    public async Task GoalAcceptanceVerifierExitZeroCleanupRetainsRetryDiagnosticBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-retry-diagnostic", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var result = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                ["powershell", "-NoProfile", "-Command", "[Console]::Error.Write('retry-driving stderr')"],
+                root,
+                TimeSpan.FromSeconds(30));
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.False(File.Exists(result.StderrPath));
+            Assert.Equal("retry-driving stderr", result.Stderr);
+
+            var retained = AcceptanceAttemptArtifactCustody.RetainRetryDiagnostic(
+                Path.Combine(root, "attempt", "acceptance"),
+                fallbackArtifactsPath: null,
+                "exit-zero-run-0",
+                result.StderrPath,
+                result.Stderr,
+                "{\"fallback\":true}");
+            Assert.True(File.Exists(retained.Path));
+            Assert.Equal("retry-driving stderr", File.ReadAllText(retained.Path));
+            Assert.Equal(
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(retained.Path))),
+                retained.Sha256);
+        }
+        finally
+        {
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -258,10 +306,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.Length > 1 && args[0] == "git" && args[1] == "diff")
@@ -269,11 +317,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "unrelated failure"));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             var result = await verifier.RunAsync(root, goalId);
@@ -287,7 +333,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -300,37 +346,39 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            Task<GoalAcceptanceVerifier.CommandResult> Runner(string[] args, string _, CancellationToken __)
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
-            });
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
+            }
 
-            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+
+            Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-a-main-a")).Passed);
             Assert.Equal(AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count, CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-a", "commit-b");
-            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+            Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-b-main-a")).Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 2,
                 CountInfrastructurePartitionTestCalls(calls));
 
             SetPartitionVerdictKeyHooks("tree-b", "main-b", "commit-c");
-            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            verifier = new GoalAcceptanceVerifier(TestOverrides, Runner);
+            Assert.True((await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-tree-b-main-b")).Passed);
             Assert.Equal(
                 AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count * 3,
                 CountInfrastructurePartitionTestCalls(calls));
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -343,17 +391,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -373,7 +419,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -386,17 +432,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -413,7 +457,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -432,10 +476,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         manifest["engine"]!["partitionVerdictFullRerunEveryN"] = 2;
         File.WriteAllText(manifestPath, manifest.ToJsonString());
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (failFirstPartitionOnForcedRerun &&
@@ -447,11 +491,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                         "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
                 }
 
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    0,
-                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
-                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
-                        : ""));
+                return Task.FromResult(IsVstestCall(args)
+                    ? CreatePassingVstestResult(args)
+                    : new GoalAcceptanceVerifier.CommandResult(0, ""));
             });
 
             Assert.True((await verifier.RunAsync(root, goalId)).Passed);
@@ -476,7 +518,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -511,11 +553,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
 
         cache.Publish(mainSha, seedArtifacts, restoredProjects);
-        GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
+        TestOverrides.BaseBuildCacheForTests = cache;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -537,9 +579,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -556,7 +602,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     .GetResult());
 
             Assert.NotNull(result);
-            Assert.True(result!.Passed);
+            Assert.True(
+                result!.Passed,
+                DescribeFailedChecks(result));
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
@@ -582,8 +630,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = null;
-            GoalAcceptanceVerifier.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildMainShaForTests = null;
+            TestOverrides.BaseBuildCacheForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -612,11 +660,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
 
         cache.Publish(mainSha, seedArtifacts, restoredProjects);
-        GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
+        TestOverrides.BaseBuildCacheForTests = cache;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -635,9 +683,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -654,7 +706,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     .GetResult());
 
             Assert.NotNull(result);
-            Assert.True(result!.Passed);
+            Assert.True(
+                result!.Passed,
+                DescribeFailedChecks(result));
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
@@ -686,8 +740,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = null;
-            GoalAcceptanceVerifier.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildMainShaForTests = null;
+            TestOverrides.BaseBuildCacheForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -717,11 +771,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
         ];
 
-        GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
+        TestOverrides.BaseBuildCacheForTests = cache;
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
@@ -750,9 +804,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
                 if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                    return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -840,11 +898,104 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = null;
-            GoalAcceptanceVerifier.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildMainShaForTests = null;
+            TestOverrides.BaseBuildCacheForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
     }
 
+    private static void WriteVstestTrx(string[] arguments, string testName)
+    {
+        var resultsDirectoryIndex = Array.IndexOf(arguments, "--results-directory");
+        var loggerIndex = Array.IndexOf(arguments, "--logger");
+        Assert.True(resultsDirectoryIndex >= 0 && resultsDirectoryIndex + 1 < arguments.Length);
+        Assert.True(loggerIndex >= 0 && loggerIndex + 1 < arguments.Length);
+        const string prefix = "trx;LogFileName=";
+        Assert.StartsWith(prefix, arguments[loggerIndex + 1], StringComparison.OrdinalIgnoreCase);
+        var resultsDirectory = arguments[resultsDirectoryIndex + 1];
+        Directory.CreateDirectory(resultsDirectory);
+        File.WriteAllText(
+            Path.Combine(resultsDirectory, arguments[loggerIndex + 1][prefix.Length..]),
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"CliPartition\" name=\"Passes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results><ResultSummary outcome=\"Completed\"><Counters total=\"1\" executed=\"1\" passed=\"1\" failed=\"0\" notExecuted=\"0\" /></ResultSummary></TestRun>");
+    }
+
+    private static bool IsVstestCall(string[] arguments) =>
+        arguments.Length > 1 &&
+        arguments[0] == "dotnet" &&
+        arguments[1] == "test";
+
+    private static GoalAcceptanceVerifier.CommandResult CreatePassingVstestResult(
+        string[] arguments,
+        string testName = "GreenPartition.Passes")
+    {
+        WriteVstestTrx(arguments, testName);
+        return new GoalAcceptanceVerifier.CommandResult(
+            0,
+            "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.");
+    }
+
+    private static GoalAcceptanceVerifier.CommandResult CreateFailedResultWithHeartbeat(
+        GoalId goalId,
+        string worktreePath,
+        string checkName,
+        string stderr,
+        string attemptResultsPrefix)
+    {
+        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            checkName,
+            worktreePath,
+            invocationOrdinal: 0,
+            attemptResultsPrefix: attemptResultsPrefix);
+        var now = DateTimeOffset.UtcNow;
+        GateHeartbeatArtifacts.Write(
+            heartbeatPath,
+            new GateHeartbeatSnapshot(
+                goalId.Value,
+                "verification-check",
+                checkName,
+                null,
+                Environment.ProcessId,
+                null,
+                "completed",
+                now,
+                now,
+                now,
+                0,
+                Encoding.UTF8.GetByteCount(stderr),
+                Encoding.UTF8.GetByteCount(stderr),
+                "test command",
+                1,
+                StderrPath: null));
+        return new GoalAcceptanceVerifier.CommandResult(
+            1,
+            "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
+            Stderr: stderr);
+    }
+
+    private static Task<AcceptanceVerificationResult> RunOwnedAttemptAsync(
+        GoalAcceptanceVerifier verifier,
+        string worktreePath,
+        GoalId goalId,
+        string attemptId) =>
+        verifier.RunOwnedAsync(
+            worktreePath,
+            goalId,
+            changedFiles: null,
+            stableSlotIndex: null,
+            stableSlotLease: null,
+            cancellationToken: default,
+            executionOptions: new AcceptanceRunExecutionOptions(
+                RunId: attemptId,
+                ResultsPrefix: Path.Combine(worktreePath, ".orchestrator", attemptId)));
+
+    private static string DescribeFailedChecks(AcceptanceVerificationResult result) =>
+        string.Join(
+            Environment.NewLine,
+            result.Checks
+                .Where(static check => !check.Passed)
+                .Select(check =>
+                    $"{check.Name}: predicate={check.CompletionDecision?.FailedPredicate}; " +
+                    $"classification={check.FailureClassification}; heartbeat={check.GateHeartbeatPath}; " +
+                    $"heartbeat_exists={File.Exists(check.GateHeartbeatPath)}; output={check.OutputTail}"));
 }

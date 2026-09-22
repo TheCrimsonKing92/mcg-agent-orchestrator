@@ -353,8 +353,24 @@ internal sealed class WorkerDispatchCompletionClassifier
 
     internal bool AllowsNoChangeCompletion(TaskSpec task, string standardOutput, string standardError)
     {
-        return task.RequiredRole != AgentRole.Developer &&
-            HasExplicitNoChangeRationale(standardOutput, standardError);
+        if (task.RequiredRole != AgentRole.Developer)
+        {
+            return HasExplicitNoChangeRationale(standardOutput, standardError);
+        }
+
+        var receipt = task.LastDispatch?.ContextPackageReceipt;
+        if (!HasExplicitNoChangeRationale(standardOutput, standardError) ||
+            (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0) ||
+            receipt is null ||
+            !receipt.HasEarlyConvergenceEvidenceFor(task.LastDispatch?.BaseCommit))
+        {
+            return false;
+        }
+
+        return (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
+                WorkerResultParser.TryParseResult(standardError, out result, out _)) &&
+            result.BlockersStatus == WorkerResultParser.BlockersStatus.None &&
+            result.TestsStatus == WorkerResultParser.TestsStatus.Pass;
     }
 
     internal string? ClassifyReconciliationOriginRule(
@@ -404,7 +420,13 @@ internal sealed class WorkerDispatchCompletionClassifier
             ChildExitCode: childExitRecord.ExitCode,
             ObservedRootExitCode: observedRootExitCode,
             FullStandardOutput: standardOutput,
-            FullStandardError: diagnosticStandardError);
+            FullStandardError: diagnosticStandardError,
+            AssignedScopeComplete: WorkerResultBlockers.TryGetAssignedScopeComplete(
+                standardOutput,
+                out var assignedScopeComplete,
+                out _)
+                ? assignedScopeComplete
+                : null);
         var origin = DispatchFailureClassifier.Classify(
             task,
             verification,

@@ -579,12 +579,12 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.True(agent.Subscription is not null);
         var subscription = agent.Subscription!;
         Assert.Equal("codex-cli", subscription.WorkerProfileName);
-        Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, subscription.ModelAlias);
-        Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, subscription.ReasoningEffort);
+        Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, subscription.ModelAlias);
+        Assert.Equal("medium", subscription.ReasoningEffort);
         Assert.True(agent.ComplexModel is not null);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
         Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName); // Deliberate paid API complex-model name from the seeded catalog, independent of the subscription alias.
-        Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel.ReasoningEffort);
+        Assert.Equal(agent.Role == AgentRole.Tester ? "medium" : AgentCatalog.ComplexReasoningEffort, agent.ComplexModel.ReasoningEffort);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
 

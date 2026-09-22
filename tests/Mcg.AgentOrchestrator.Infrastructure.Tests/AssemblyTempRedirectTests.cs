@@ -8,6 +8,65 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AssemblyTempRedirectTests
 {
     [Fact]
+    public void AssemblyFixtureCleanupRejectsFailedDeletionAndRetainsCause()
+    {
+        var failure = TempRootDeleteOutcome.Failure(
+            "owned-root",
+            "IOException",
+            "owned-root/locked.file",
+            readOnlyAttributesCleared: 0);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => AssemblyTempRootCleanupFixture.EnsureSuccessful(failure));
+
+        Assert.Contains("IOException", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("locked.file", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AssemblyFixtureCleanupAcceptsDeletedOrUnownedRoot()
+    {
+        AssemblyTempRootCleanupFixture.EnsureSuccessful(null);
+        AssemblyTempRootCleanupFixture.EnsureSuccessful(TempRootDeleteOutcome.Deleted("owned-root"));
+    }
+
+    [Fact]
+    public void RevalidateExitedRootsRetainsReplacementAndAmbiguousProcessInstances()
+    {
+        var exitedPid = 0x2a;
+        var replacementPid = 0x2b;
+        var inaccessiblePid = 0x2c;
+        var calls = 0;
+
+        var revalidated = AssemblyTempRedirect.RevalidateExitedRoots(
+            [$"p{exitedPid:x}", $"p{replacementPid:x}", $"p{inaccessiblePid:x}"],
+            requested =>
+            {
+                calls++;
+                Assert.Equal(
+                    [exitedPid, replacementPid, inaccessiblePid],
+                    requested!.OrderBy(pid => pid).ToArray());
+                return WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+                    new Dictionary<int, ProcessInspectionRecord>
+                    {
+                        [exitedPid] = new(
+                            exitedPid, 0, string.Empty, null, null, null, ProcessInspectionStatus.Exited),
+                        [replacementPid] = new(
+                            replacementPid, 1, "testhost", @"C:\host\testhost.exe",
+                            DateTimeOffset.Parse("2026-08-30T12:00:00Z"), "testhost", ProcessInspectionStatus.Available),
+                        [inaccessiblePid] = new(
+                            inaccessiblePid, 0, string.Empty, null, null, null, ProcessInspectionStatus.AccessDenied)
+                    });
+            });
+
+        Assert.Equal(1, calls);
+        var exited = Assert.Single(revalidated);
+        Assert.Equal($"p{exitedPid:x}", exited.Name);
+        Assert.Equal(exitedPid, exited.ProcessId);
+        Assert.Equal(ProcessInspectionStatus.Exited, exited.Observation.Status);
+    }
+
+    [Fact]
     public void ProcessRootDerivation_DistinctPidsProduceDistinctPaths()
     {
         var sharedRoot = Path.Combine("shared", "mcg-tests");
@@ -20,6 +79,27 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal(Path.Combine(sharedRoot, "p1a2c"), second, ignoreCase: true);
     }
 
+    [Fact]
+    public void ManagedMtpProbeLaunchSpecificationRejectsNativeTestApphost()
+    {
+        var hostFileName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        var directory = Path.Combine("probe", "output");
+        var testAssembly = Path.Combine(directory, "Mcg.AgentOrchestrator.Infrastructure.Tests.dll");
+        var nativeApphost = Path.Combine(directory, "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+
+        Assert.True(IsManagedMtpProbeLaunch(Path.Combine(directory, hostFileName), testAssembly));
+        var exception = Record.Exception(() => BuildMtpProbeStartInfo(
+            nativeApphost,
+            testAssembly,
+            Path.Combine(directory, "temp"),
+            Path.Combine(directory, "receipt.json"),
+            "ready",
+            "release"));
+
+        Assert.NotNull(exception);
+        Assert.Contains("Refusing unsafe MTP probe launch", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task SingleTestHostUsesDerivedRootAndWritesOwnershipReceipt()
     {
@@ -29,11 +109,10 @@ public sealed class AssemblyTempRedirectTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-host-{Guid.NewGuid():N}");
-        var executable = Path.Combine(
-            AppContext.BaseDirectory,
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
         Directory.CreateDirectory(root);
-        Assert.True(File.Exists(executable), $"Missing independently launchable MTP apphost '{executable}'.");
+        Assert.True(File.Exists(testAssembly), $"Missing MTP test assembly '{testAssembly}'.");
 
         var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
         var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
@@ -44,6 +123,7 @@ public sealed class AssemblyTempRedirectTests
         {
             process = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "receipt.json"),
                 readyName,
@@ -73,6 +153,81 @@ public sealed class AssemblyTempRedirectTests
                 $"assembly-temp-redirect selected={receipt.TempRoot}",
                 result.Stderr,
                 StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                "assembly-temp-cleanup owner=assembly-fixture phase=completed-before-runner-return",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "[FATAL ERROR] Foreground threads were left running",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.False(
+                Directory.Exists(receipt.TempRoot),
+                $"The completed MTP host retained its owned temp root '{receipt.TempRoot}'.");
+        }
+        finally
+        {
+            release.Set();
+            if (process is not null)
+            {
+                await process.DisposeAsync();
+            }
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task FailedTestHostStillCompletesAssemblyFixtureCleanup()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-failed-host-{Guid.NewGuid():N}");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
+        Directory.CreateDirectory(root);
+        var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
+        var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+        MtpProbeProcess? process = null;
+        try
+        {
+            process = StartMtpProbe(
+                executable,
+                testAssembly,
+                root,
+                Path.Combine(root, "receipt.json"),
+                readyName,
+                releaseName,
+                forceTestFailure: true);
+            var receipt = await WaitForProbeReceiptAsync(
+                "failed-test",
+                process,
+                ready,
+                TestContext.Current.CancellationToken);
+
+            release.Set();
+            var result = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Contains(
+                "intentional temp-root cleanup probe failure",
+                result.Stdout + result.Stderr,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "assembly-temp-cleanup owner=assembly-fixture phase=completed-before-runner-return",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "[FATAL ERROR] Foreground threads were left running",
+                result.Stderr,
+                StringComparison.Ordinal);
+            Assert.False(
+                Directory.Exists(receipt.TempRoot),
+                $"The failed MTP host retained its owned temp root '{receipt.TempRoot}'.");
         }
         finally
         {
@@ -94,10 +249,10 @@ public sealed class AssemblyTempRedirectTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-kill-{Guid.NewGuid():N}");
-        var executable = Path.Combine(
-            AppContext.BaseDirectory,
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
         Directory.CreateDirectory(root);
+        Assert.True(File.Exists(testAssembly), $"Missing MTP test assembly '{testAssembly}'.");
         var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
         var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
@@ -107,6 +262,7 @@ public sealed class AssemblyTempRedirectTests
         {
             process = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "receipt.json"),
                 readyName,
@@ -117,6 +273,13 @@ public sealed class AssemblyTempRedirectTests
                 ready,
                 TestContext.Current.CancellationToken);
             Assert.True(Directory.Exists(receipt.TempRoot));
+            var capturedInspection = WindowsNativeProcessInspection.Read([receipt.ProcessId]);
+            Assert.Null(capturedInspection.Failure);
+            var capturedRoot = new TempRootJanitorOwnedRoot(
+                receipt.ProcessId,
+                Path.GetDirectoryName(receipt.TempRoot)!,
+                Assert.Contains(receipt.ProcessId, capturedInspection.Records),
+                "assembly-temp-probe");
 
             process.Process.Kill(entireProcessTree: true);
             _ = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
@@ -125,10 +288,9 @@ public sealed class AssemblyTempRedirectTests
                 "The kill unexpectedly ran ProcessExit, so the supervisor-cleanup seam was not exercised.");
 
             var outcome = Assert.Single(WorkerProcessJobs.ReapOwnedTempRoots(
-                [receipt.ProcessId],
-                [Path.GetDirectoryName(receipt.TempRoot)!]));
+                [capturedRoot]));
 
-            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, outcome.Status);
+            Assert.Equal(TempRootJanitorReapDisposition.Deleted, outcome.Disposition);
             Assert.False(Directory.Exists(receipt.TempRoot));
         }
         finally
@@ -151,15 +313,14 @@ public sealed class AssemblyTempRedirectTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-hosts-{Guid.NewGuid():N}");
-        var executable = Path.Combine(
-            AppContext.BaseDirectory,
-            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        var executable = ResolveDotnetHostPath();
+        var testAssembly = typeof(AssemblyTempRedirectTests).Assembly.Location;
         Directory.CreateDirectory(root);
         var syntheticLocalLow = Path.Combine(root, "LocalLow");
         Assert.False(
             Directory.Exists(syntheticLocalLow),
             $"The synthetic LocalLow precondition was not clean: '{syntheticLocalLow}'.");
-        Assert.True(File.Exists(executable), $"Missing independently launchable MTP apphost '{executable}'.");
+        Assert.True(File.Exists(testAssembly), $"Missing MTP test assembly '{testAssembly}'.");
 
         var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
         var firstReadyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
@@ -173,12 +334,14 @@ public sealed class AssemblyTempRedirectTests
         {
             firstProcess = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "first-receipt.json"),
                 firstReadyName,
                 releaseName);
             secondProcess = StartMtpProbe(
                 executable,
+                testAssembly,
                 root,
                 Path.Combine(root, "second-receipt.json"),
                 secondReadyName,
@@ -254,68 +417,44 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal(["pdead1", "pbeef", "p7fffffff"], reapable);
     }
 
-    [Fact(DisplayName = "Retention sweep bounds a doubled recent-root population")]
-    public void RetentionSweepBoundsRecentHighThroughputPopulation()
+    [Fact(DisplayName = "Bounded sweep does not trade live-root safety for a population bound")]
+    public void BoundedSweepPreservesLiveRootsBeyondPopulationBound()
     {
         const int reserve = 4;
-        var now = new DateTime(2026, 8, 22, 12, 0, 0, DateTimeKind.Utc);
         var names = Enumerable.Range(1, reserve * 2).Select(index => $"p{index:x}").ToArray();
-        var writes = names
-            .Select((name, index) => (name, written: now.AddSeconds(index)))
-            .ToDictionary(item => item.name, item => item.written, StringComparer.Ordinal);
-
-        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
-            names,
-            currentProcessId: 0x30,
-            isProcessAlive: _ => true,
-            processStartTimeUtc: _ => now.AddMinutes(1),
-            lastWriteUtc: name => writes[name],
-            retainedRoots: reserve);
         var reapable = AssemblyTempRedirect.SelectReapableRoots(
             names,
             currentProcessId: 0x30,
             isProcessAlive: _ => true);
         var selected = AssemblyTempRedirect.SelectBoundedReapRoots(
             reapable,
-            overflow,
-            name => writes[name],
+            _ => throw new InvalidOperationException("A live root must not reach timestamp ordering."),
             limit: names.Length);
 
-        Assert.Equal(reserve, overflow.Count);
-        Assert.Equal(["p1", "p2", "p3", "p4"], overflow);
         Assert.Empty(reapable);
-        Assert.Equal(overflow, selected);
-        Assert.Equal(reserve, names.Except(selected, StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Empty(selected);
     }
 
-    [Fact(DisplayName = "Retention sweep never removes the current process root")]
-    public void RetentionSweepNeverRemovesCurrentProcessRoot()
+    [Fact(DisplayName = "Bounded sweep never reads or removes roots owned by other live processes")]
+    public void BoundedSweepNeverReadsOrRemovesOtherLiveProcessRoots()
     {
-        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
-            ["p30", "p31"],
-            currentProcessId: 0x30,
-            isProcessAlive: _ => false,
-            processStartTimeUtc: _ => null,
-            lastWriteUtc: _ => DateTime.UnixEpoch,
-            retainedRoots: 0);
-
-        Assert.Equal(["p31"], overflow);
-    }
-
-    [Fact(DisplayName = "Retention sweep never removes roots owned by other live processes")]
-    public void RetentionSweepNeverRemovesOtherLiveProcessRoots()
-    {
-        var overflow = AssemblyTempRedirect.SelectRootsBeyondRetention(
+        var timestampReads = new List<string>();
+        var reapable = AssemblyTempRedirect.SelectReapableRoots(
             ["p30", "p31", "p32"],
             currentProcessId: 0x30,
-            isProcessAlive: processId => processId == 0x31,
-            processStartTimeUtc: processId => processId == 0x31
-                ? DateTime.UnixEpoch.AddSeconds(-1)
-                : null,
-            lastWriteUtc: name => name == "p31" ? DateTime.UnixEpoch : DateTime.UnixEpoch.AddSeconds(1),
-            retainedRoots: 0);
+            isProcessAlive: processId => processId == 0x31);
+        var selected = AssemblyTempRedirect.SelectBoundedReapRoots(
+            reapable,
+            name =>
+            {
+                timestampReads.Add(name);
+                return DateTime.UnixEpoch;
+            },
+            limit: 32);
 
-        Assert.Equal(["p32"], overflow);
+        Assert.Equal(["p32"], reapable);
+        Assert.Equal(["p32"], selected);
+        Assert.Equal(["p32"], timestampReads);
     }
 
     [Fact(DisplayName = "Reaper never removes the current process root even if reported dead")]
@@ -553,13 +692,57 @@ public sealed class AssemblyTempRedirectTests
     private static TempRootCandidate Candidate(string path, bool requiresLowLabel = false) =>
         new(path, requiresLowLabel);
 
-    private static MtpProbeProcess StartMtpProbe(
+    internal static MtpProbeProcess StartMtpProbe(
         string executable,
+        string testAssembly,
         string root,
         string receiptPath,
         string readyEventName,
-        string releaseEventName)
+        string releaseEventName,
+        string? gateInvocationId = null,
+        string? apparatusReceiptPath = null,
+        string? apparatusParentPath = null,
+        string? apparatusDeletionEventName = null,
+        bool forceTestFailure = false)
     {
+        var startInfo = BuildMtpProbeStartInfo(
+            executable,
+            testAssembly,
+            root,
+            receiptPath,
+            readyEventName,
+            releaseEventName,
+            gateInvocationId,
+            apparatusReceiptPath,
+            apparatusParentPath,
+            apparatusDeletionEventName,
+            forceTestFailure);
+        var process = new Process { StartInfo = startInfo };
+        Assert.True(process.Start(), $"Failed to start MTP assembly '{testAssembly}' with '{executable}'.");
+        process.StandardInput.Close();
+        return new MtpProbeProcess(
+            process,
+            receiptPath,
+            process.StandardOutput.ReadToEndAsync(),
+            process.StandardError.ReadToEndAsync());
+    }
+
+    private static ProcessStartInfo BuildMtpProbeStartInfo(
+        string executable,
+        string testAssembly,
+        string root,
+        string receiptPath,
+        string readyEventName,
+        string releaseEventName,
+        string? gateInvocationId = null,
+        string? apparatusReceiptPath = null,
+        string? apparatusParentPath = null,
+        string? apparatusDeletionEventName = null,
+        bool forceTestFailure = false)
+    {
+        Assert.True(
+            IsManagedMtpProbeLaunch(executable, testAssembly),
+            $"Refusing unsafe MTP probe launch host='{executable}' assembly='{testAssembly}'.");
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -576,18 +759,34 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ReleaseEventVariable] = releaseEventName;
         startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ParentProcessIdVariable] =
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(gateInvocationId) && !string.IsNullOrWhiteSpace(apparatusReceiptPath))
+        {
+            startInfo.Environment[TempRootApparatusLossReceiptStore.GateInvocationIdVariable] = gateInvocationId;
+            startInfo.Environment[TempRootApparatusLossReceiptStore.ReceiptPathVariable] = apparatusReceiptPath;
+        }
+        if (!string.IsNullOrWhiteSpace(apparatusParentPath) &&
+            !string.IsNullOrWhiteSpace(apparatusDeletionEventName))
+        {
+            startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ApparatusParentPathVariable] = apparatusParentPath;
+            startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ApparatusDeletionEventVariable] =
+                apparatusDeletionEventName;
+        }
+        if (forceTestFailure)
+        {
+            startInfo.Environment[AssemblyTempRedirectChildSmokeTests.ForceFailureVariable] = "1";
+        }
+        startInfo.ArgumentList.Add(testAssembly);
         startInfo.ArgumentList.Add("--filter-class");
         startInfo.ArgumentList.Add("*AssemblyTempRedirectChildSmokeTests*");
-
-        var process = new Process { StartInfo = startInfo };
-        Assert.True(process.Start(), $"Failed to start MTP apphost '{executable}'.");
-        process.StandardInput.Close();
-        return new MtpProbeProcess(
-            process,
-            receiptPath,
-            process.StandardOutput.ReadToEndAsync(),
-            process.StandardError.ReadToEndAsync());
+        return startInfo;
     }
+
+    private static bool IsManagedMtpProbeLaunch(string executable, string testAssembly) =>
+        string.Equals(
+            Path.GetFileName(executable),
+            OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet",
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(Path.GetExtension(testAssembly), ".dll", StringComparison.OrdinalIgnoreCase);
 
     private static void UseHermeticEnvironment(ProcessStartInfo startInfo, string root)
     {
@@ -616,7 +815,7 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment["TMP"] = Path.Combine(root, "inherited-temp");
     }
 
-    private static async Task<TempRootProbeReceipt> WaitForProbeReceiptAsync(
+    internal static async Task<TempRootProbeReceipt> WaitForProbeReceiptAsync(
         string label,
         MtpProbeProcess process,
         WaitHandle ready,
@@ -711,7 +910,7 @@ public sealed class AssemblyTempRedirectTests
             FormatProcessFailure(label, result));
     }
 
-    private static void DeleteDirectory(string path)
+    internal static void DeleteDirectory(string path)
     {
         try
         {
@@ -864,12 +1063,22 @@ public sealed class AssemblyTempRedirectChildSmokeTests
     internal const string ReadyEventVariable = "MCG_MTP_TEMP_ROOT_READY_EVENT";
     internal const string ReleaseEventVariable = "MCG_MTP_TEMP_ROOT_RELEASE_EVENT";
     internal const string ParentProcessIdVariable = "MCG_MTP_TEMP_ROOT_PARENT_PROCESS_ID";
+    internal const string ApparatusParentPathVariable = "MCG_MTP_APPARATUS_PARENT_PATH";
+    internal const string ApparatusDeletionEventVariable = "MCG_MTP_APPARATUS_DELETION_EVENT";
+    internal const string ForceFailureVariable = "MCG_MTP_TEMP_ROOT_FORCE_FAILURE";
 
     [Fact]
     public async Task ProcessTempRootSupportsAnExclusiveMutableFixtureRepository()
     {
         if (!OperatingSystem.IsWindows())
         {
+            return;
+        }
+
+        var apparatusParentPath = Environment.GetEnvironmentVariable(ApparatusParentPathVariable);
+        if (!string.IsNullOrWhiteSpace(apparatusParentPath))
+        {
+            await RunApparatusVictimAsync(apparatusParentPath);
             return;
         }
 
@@ -951,6 +1160,71 @@ public sealed class AssemblyTempRedirectChildSmokeTests
                 // Parent assertions report child output and the retained receipt on failure.
             }
         }
+
+        if (string.Equals(
+                Environment.GetEnvironmentVariable(ForceFailureVariable),
+                "1",
+                StringComparison.Ordinal))
+        {
+            Assert.Fail("intentional temp-root cleanup probe failure");
+        }
+    }
+
+    private static async Task RunApparatusVictimAsync(string apparatusParentPath)
+    {
+        var receiptPath = Environment.GetEnvironmentVariable(ReceiptPathVariable);
+        var readyEventName = Environment.GetEnvironmentVariable(ReadyEventVariable);
+        var deletionEventName = Environment.GetEnvironmentVariable(ApparatusDeletionEventVariable);
+        Assert.False(string.IsNullOrWhiteSpace(receiptPath));
+        Assert.False(string.IsNullOrWhiteSpace(readyEventName));
+        Assert.False(string.IsNullOrWhiteSpace(deletionEventName));
+
+        var ownedRoot = TempRootJanitor.BuildOwnedRootPath(apparatusParentPath, Environment.ProcessId);
+        var repositoryPath = Path.Combine(ownedRoot, "seeded-repository");
+        var headCommit = SeedRepository(repositoryPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+        File.WriteAllText(
+            receiptPath,
+            JsonSerializer.Serialize(new TempRootProbeReceipt(
+                Environment.ProcessId,
+                Environment.ProcessPath ?? string.Empty,
+                ownedRoot,
+                repositoryPath,
+                Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
+                headCommit)));
+
+        using var ready = EventWaitHandle.OpenExisting(readyEventName);
+        using var deleted = EventWaitHandle.OpenExisting(deletionEventName);
+        ready.Set();
+        await AssemblyTempRedirectTests.WaitForSignalAsync(deleted, TestContext.Current.CancellationToken);
+
+        Assert.True(
+            Directory.Exists(repositoryPath),
+            $"Seeded repository sentinel lost: RepositoryMissing path='{repositoryPath}' head='{headCommit}'.");
+    }
+
+    private static string SeedRepository(string repositoryPath)
+    {
+        Directory.CreateDirectory(repositoryPath);
+        AssertGitSucceeded(repositoryPath, ["init", "--initial-branch=main"]);
+        File.WriteAllText(Path.Combine(repositoryPath, "seed.txt"), "seeded apparatus victim");
+        AssertGitSucceeded(repositoryPath, ["add", "seed.txt"]);
+        AssertGitSucceeded(
+            repositoryPath,
+            [
+                "-c", "user.name=apparatus-control",
+                "-c", "user.email=apparatus-control@example.invalid",
+                "commit", "-m", "seed"
+            ]);
+        var head = InfrastructureTestSupport.RunGitProbe(repositoryPath, ["rev-parse", "HEAD"]);
+        Assert.True(head.Succeeded, head.ToString());
+        return head.StandardOutput.Trim();
+    }
+
+    private static void AssertGitSucceeded(string repositoryPath, IReadOnlyList<string> arguments)
+    {
+        var result = InfrastructureTestSupport.RunGitProbe(repositoryPath, arguments);
+        Assert.True(result.Succeeded, result.ToString());
     }
 
     private static async Task WaitForReleaseOrParentExitAsync(WaitHandle release, Process parentProcess)
@@ -978,7 +1252,8 @@ internal sealed record TempRootProbeReceipt(
     string ProcessPath,
     string TempRoot,
     string FixtureRepositoryPath,
-    string OwnerContents);
+    string OwnerContents,
+    string? HeadCommit = null);
 
 internal sealed class MtpProbeProcess(
     Process process,

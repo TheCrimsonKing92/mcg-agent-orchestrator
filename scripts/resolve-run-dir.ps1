@@ -1,32 +1,32 @@
-# Resolves (and lazily populates) a per-build ISOLATED copy of the orchestrator binary, and writes its
-# directory to stdout. The launcher runs `dotnet <run-dir>\App.dll` so a live run holds its own copy
-# instead of the in-tree output -- leaving the in-tree binary free to rebuild while something runs, so
-# builds and real runs stop interfering. Content-addressed by the complete app output: identical builds reuse
-# one copy, while any changed dependency/config/head marker gets a fresh one. Copies unused for 7 days are pruned (a live copy's dll is locked, so
-# it survives the prune). The copy is valid only when the native SQLite asset is present too; otherwise the
-# launcher fails before running an orchestrator command that would later hit DllNotFoundException.
+# Resolves (and lazily populates) an immutable, content-addressed copy of the orchestrator
+# application closure. A launcher never observes a directory while it is being copied: each
+# caller copies into its own sibling staging directory, verifies the complete payload, writes a
+# seal, and atomically renames the directory into the published namespace.
 param([Parameter(Mandatory = $true)][string]$Dll)
 
 $ErrorActionPreference = 'Stop'
+$script:RunCacheSchemaVersion = 2
+$script:RunCacheMarkerName = '.mcg-run-closure.json'
+$script:SourceSnapshotAttempts = 3
 
 function Test-NativeSqliteAssetPresent {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    if (-not (Test-Path -LiteralPath $Path)) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
         return $false
     }
 
-    $rootAsset = Get-ChildItem -LiteralPath $Path -File -Filter 'e_sqlite3.*' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $rootAsset = Get-ChildItem -LiteralPath $Path -Force -File -Filter 'e_sqlite3.*' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -ne $rootAsset) {
         return $true
     }
 
     $runtimePath = Join-Path $Path 'runtimes'
-    if (-not (Test-Path -LiteralPath $runtimePath)) {
+    if (-not (Test-Path -LiteralPath $runtimePath -PathType Container)) {
         return $false
     }
 
-    $runtimeAsset = Get-ChildItem -LiteralPath $runtimePath -Recurse -File -Filter 'e_sqlite3.*' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $runtimeAsset = Get-ChildItem -LiteralPath $runtimePath -Force -Recurse -File -Filter 'e_sqlite3.*' -ErrorAction SilentlyContinue | Select-Object -First 1
     return $null -ne $runtimeAsset
 }
 
@@ -43,26 +43,32 @@ function Assert-NativeSqliteAssetPresent {
     throw "Native SQLite asset e_sqlite3 is missing from $Context ($Path). Rebuild the app with 'dotnet build src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj' and retry; if it is still missing, restore packages and inspect Microsoft.Data.Sqlite runtime assets."
 }
 
-function Get-OutputContentHashPrefix {
-    param([Parameter(Mandatory = $true)][string]$Path)
+function Get-OutputContentSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$ExcludeRunCacheMarker
+    )
 
     $payload = [System.Text.StringBuilder]::new()
     $rootPath = [System.IO.Path]::GetFullPath($Path)
     if (-not $rootPath.EndsWith([System.IO.Path]::DirectorySeparatorChar.ToString(), [System.StringComparison]::Ordinal)) {
         $rootPath += [System.IO.Path]::DirectorySeparatorChar
     }
-    foreach ($file in (Get-ChildItem -LiteralPath $Path -Recurse -File | Sort-Object FullName)) {
+
+    $fileCount = 0
+    foreach ($file in (Get-ChildItem -LiteralPath $Path -Force -Recurse -File | Sort-Object FullName)) {
+        if ($ExcludeRunCacheMarker -and $file.Name.Equals($script:RunCacheMarkerName, [System.StringComparison]::Ordinal)) {
+            continue
+        }
         if (-not $file.FullName.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Cannot hash file outside output directory: $($file.FullName)"
         }
-        # Windows PowerShell runs on .NET Framework, which does not expose Path.GetRelativePath.
+
         $relativePath = $file.FullName.Substring($rootPath.Length).Replace('\', '/')
-        # Use the framework crypto API because the supported Windows PowerShell host does not
-        # consistently expose Get-FileHash.
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
         $stream = $null
         try {
-            $stream = [System.IO.File]::OpenRead($file.FullName)
+            $stream = [System.IO.File]::Open($file.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
             $fileHash = [System.BitConverter]::ToString($sha256.ComputeHash($stream)) -replace '-', ''
         }
         finally {
@@ -71,50 +77,150 @@ function Get-OutputContentHashPrefix {
             }
             $sha256.Dispose()
         }
+
         [void]$payload.Append($relativePath)
         [void]$payload.Append(':')
         [void]$payload.Append($fileHash)
         [void]$payload.Append("`n")
+        $fileCount++
     }
 
-    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    $sha256Payload = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $hashBytes = $sha1.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload.ToString()))
-        return ([System.BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16)
+        $hashBytes = $sha256Payload.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($payload.ToString()))
+        $digest = [System.BitConverter]::ToString($hashBytes) -replace '-', ''
     }
     finally {
-        $sha1.Dispose()
+        $sha256Payload.Dispose()
+    }
+
+    return [pscustomobject]@{
+        Digest = $digest
+        FileCount = $fileCount
     }
 }
 
-$out  = Split-Path $Dll
-$leaf = Split-Path $Dll -Leaf
-$hash = Get-OutputContentHashPrefix -Path $out
-$base = Join-Path $env:TEMP 'mcg-run'
-$run  = Join-Path $base $hash
+function Test-PublishedRunDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedDigest,
+        [Parameter(Mandatory = $true)][string]$AppLeaf
+    )
 
-Assert-NativeSqliteAssetPresent -Path $out -Context 'app build output'
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            return $false
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $Path $AppLeaf) -PathType Leaf)) {
+            return $false
+        }
+        if (-not (Test-NativeSqliteAssetPresent -Path $Path)) {
+            return $false
+        }
 
-if ((-not (Test-Path -LiteralPath (Join-Path $run $leaf))) -or (-not (Test-NativeSqliteAssetPresent -Path $run))) {
-    if (Test-Path -LiteralPath $run) {
-        Remove-Item -LiteralPath $run -Recurse -Force
+        $markerPath = Join-Path $Path $script:RunCacheMarkerName
+        if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+            return $false
+        }
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+        if ([int]$marker.schemaVersion -ne $script:RunCacheSchemaVersion -or
+            -not ([string]$marker.digest).Equals($ExpectedDigest, [System.StringComparison]::Ordinal)) {
+            return $false
+        }
+
+        $snapshot = Get-OutputContentSnapshot -Path $Path -ExcludeRunCacheMarker
+        return $snapshot.Digest.Equals($ExpectedDigest, [System.StringComparison]::Ordinal) -and
+            [int]$marker.fileCount -eq $snapshot.FileCount
     }
-
-    [void](New-Item -ItemType Directory -Force -Path $run)
-    # Pipe each top-level item to Copy-Item -Recurse to copy subdirs (e.g. runtimes/ native libs) correctly.
-    Get-ChildItem -LiteralPath $out | Copy-Item -Destination $run -Recurse -Force
+    catch {
+        return $false
+    }
 }
 
-Assert-NativeSqliteAssetPresent -Path $run -Context 'isolated run directory'
+$resolvedDll = [System.IO.Path]::GetFullPath($Dll)
+if (-not (Test-Path -LiteralPath $resolvedDll -PathType Leaf)) {
+    throw "Orchestrator application assembly does not exist: $resolvedDll"
+}
 
-# Best-effort prune of old, unused run copies. A copy a process is actively running has its dll locked,
-# so its directory survives the delete; only abandoned copies are removed.
-if (Test-Path -LiteralPath $base) {
-    foreach ($dir in (Get-ChildItem -LiteralPath $base -Directory)) {
-        if ($dir.LastWriteTime -lt (Get-Date).AddDays(-7)) {
-            Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+$out = Split-Path $resolvedDll
+$leaf = Split-Path $resolvedDll -Leaf
+$base = Join-Path (Join-Path $env:TEMP 'mcg-run') "v$script:RunCacheSchemaVersion"
+[void](New-Item -ItemType Directory -Force -Path $base)
+
+$resolvedRun = $null
+$lastSnapshotFailure = $null
+for ($attempt = 1; $attempt -le $script:SourceSnapshotAttempts; $attempt++) {
+    $staging = $null
+    try {
+        Assert-NativeSqliteAssetPresent -Path $out -Context 'app build output'
+        $before = Get-OutputContentSnapshot -Path $out
+        $run = Join-Path $base $before.Digest
+
+        if (Test-Path -LiteralPath $run) {
+            if (Test-PublishedRunDirectory -Path $run -ExpectedDigest $before.Digest -AppLeaf $leaf) {
+                $resolvedRun = $run
+                break
+            }
+            throw "Published orchestrator run directory is invalid and will not be modified or launched: $run"
+        }
+
+        $staging = Join-Path $base ".staging-$PID-$([Guid]::NewGuid().ToString('N'))"
+        [void](New-Item -ItemType Directory -Path $staging -ErrorAction Stop)
+        Get-ChildItem -LiteralPath $out -Force | Copy-Item -Destination $staging -Recurse -Force -ErrorAction Stop
+
+        Assert-NativeSqliteAssetPresent -Path $staging -Context 'staged isolated run directory'
+        $staged = Get-OutputContentSnapshot -Path $staging
+        $after = Get-OutputContentSnapshot -Path $out
+        if (-not $before.Digest.Equals($staged.Digest, [System.StringComparison]::Ordinal) -or
+            -not $before.Digest.Equals($after.Digest, [System.StringComparison]::Ordinal) -or
+            $before.FileCount -ne $staged.FileCount -or
+            $before.FileCount -ne $after.FileCount) {
+            $lastSnapshotFailure = "App output changed while it was being staged (attempt $attempt of $script:SourceSnapshotAttempts)."
+            continue
+        }
+
+        $marker = [ordered]@{
+            schemaVersion = $script:RunCacheSchemaVersion
+            digest = $before.Digest
+            fileCount = $before.FileCount
+            sealedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+        }
+        [System.IO.File]::WriteAllText(
+            (Join-Path $staging $script:RunCacheMarkerName),
+            ($marker | ConvertTo-Json -Compress),
+            [System.Text.Encoding]::UTF8)
+
+        try {
+            [System.IO.Directory]::Move($staging, $run)
+            $staging = $null
+        }
+        catch [System.IO.IOException] {
+            if (-not (Test-PublishedRunDirectory -Path $run -ExpectedDigest $before.Digest -AppLeaf $leaf)) {
+                throw "Concurrent orchestrator run publication did not produce a valid closure at '$run'. $($_.Exception.Message)"
+            }
+        }
+
+        if (-not (Test-PublishedRunDirectory -Path $run -ExpectedDigest $before.Digest -AppLeaf $leaf)) {
+            throw "Published orchestrator run directory failed recursive closure validation: $run"
+        }
+        $resolvedRun = $run
+        break
+    }
+    catch {
+        $lastSnapshotFailure = $_.Exception.Message
+        if ($attempt -eq $script:SourceSnapshotAttempts) {
+            throw
+        }
+    }
+    finally {
+        if ($null -ne $staging -and (Test-Path -LiteralPath $staging)) {
+            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
 
-Write-Output $run
+if ([string]::IsNullOrWhiteSpace($resolvedRun)) {
+    throw "Could not seal a stable orchestrator application closure after $script:SourceSnapshotAttempts attempts. $lastSnapshotFailure"
+}
+
+Write-Output $resolvedRun

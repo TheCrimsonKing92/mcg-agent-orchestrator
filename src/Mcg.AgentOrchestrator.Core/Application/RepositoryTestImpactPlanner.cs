@@ -3,11 +3,23 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record RepositoryTestImpactCheck(
     string Name,
     IReadOnlyList<string> Command,
-    string Reason)
+    string Reason,
+    RepositoryTestProject? TestProject = null,
+    IReadOnlyList<string>? TestClassSelections = null)
 {
     public string CommandLine => Command.Count == 0
         ? "(no command)"
         : string.Join(" ", Command);
+}
+
+public enum RepositoryTestProject
+{
+    Core,
+    Infrastructure,
+    Acceptance,
+    ProviderEnvironment,
+    Cli,
+    Dashboard
 }
 
 public sealed record RepositoryTestImpactPlan(
@@ -18,7 +30,10 @@ public sealed record RepositoryTestImpactPlan(
 
 public static class RepositoryTestImpactPlanner
 {
-    private sealed record TestClassFilterBuildResult(string? Filter, string? AbandonReason);
+    private sealed record TestClassFilterBuildResult(
+        string? Filter,
+        string? AbandonReason,
+        IReadOnlyList<string> TestClasses);
 
     private static readonly string[] CoreTests =
     [
@@ -36,6 +51,16 @@ public static class RepositoryTestImpactPlanner
         "test",
         "--project",
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+        "--verbosity",
+        "minimal"
+    ];
+
+    private static readonly string[] AcceptanceTests =
+    [
+        "dotnet",
+        "test",
+        "--project",
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
         "--verbosity",
         "minimal"
     ];
@@ -70,11 +95,21 @@ public static class RepositoryTestImpactPlanner
         "minimal"
     ];
 
-    private const string CliInfrastructureFilter =
-        "FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests";
+    private static readonly string[] CliInfrastructureClasses =
+        ["CliCommandTests", "CliHelpTests"];
 
-    private const string DashboardFilter =
-        "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardDispatchStartFailureEndpointTests|FullyQualifiedName~DashboardValidationHarnessTests";
+    private static readonly string CliInfrastructureFilter = BuildClassFilter(CliInfrastructureClasses);
+
+    private static readonly string[] DashboardClasses =
+    [
+        "DashboardRenderingTests",
+        "DashboardHostTests",
+        "DashboardDispatchStartFailureEndpointTests",
+        "DashboardValidationHarnessTests"
+    ];
+
+    private static readonly string DashboardFilter =
+        $"({BuildClassFilter(DashboardClasses)})&Category!=HostIntegration";
 
     // The full suite is expressed as per-project runs rather than one solution-level
     // "dotnet test": the test projects are Microsoft.Testing.Platform, and a project-less
@@ -103,7 +138,11 @@ public static class RepositoryTestImpactPlanner
                 nameof(repositoryRoot));
         }
 
-        return Plan(summary, new FileSystemTestClassDeclarationReader(repositoryRoot));
+        ITestClassDeclarationReader declarationReader = ReverseDependencyTestImpactReader
+            .IsDeliberatelyPartialRepositoryRoot(repositoryRoot)
+                ? UnavailableTestClassDeclarationReader.Instance
+                : new FileSystemTestClassDeclarationReader(repositoryRoot);
+        return Plan(summary, declarationReader);
     }
 
     internal static RepositoryTestImpactPlan Plan(
@@ -138,11 +177,14 @@ public static class RepositoryTestImpactPlanner
         var checks = new List<RepositoryTestImpactCheck>();
         var touchesCore = summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/"));
+        const string acceptanceTestsPrefix = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/";
+        var touchesAcceptanceTests = summary.Files.Any(file => StartsWith(file.Path, acceptanceTestsPrefix));
         var touchesInfrastructure = summary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/") ||
-            StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/"));
+            StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/") &&
+            !StartsWith(file.Path, acceptanceTestsPrefix));
         var touchesDashboardTests = summary.Files.Any(file =>
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Dashboard.Tests/"));
         var coreTestFilter = BuildChangedTestClassFilter(
@@ -152,6 +194,11 @@ public static class RepositoryTestImpactPlanner
         var infrastructureTestFilter = BuildChangedTestClassFilter(
             summary,
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/",
+            declarationReader,
+            acceptanceTestsPrefix);
+        var acceptanceTestFilter = BuildChangedTestClassFilter(
+            summary,
+            acceptanceTestsPrefix,
             declarationReader);
         var dashboardTestFilter = BuildChangedTestClassFilter(
             summary,
@@ -169,6 +216,12 @@ public static class RepositoryTestImpactPlanner
         var touchesScriptsOrConfig = summary.Files.Any(file =>
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
             file.Categories.Contains(RepositoryChangeCategory.Configuration));
+        var reverseDependencySelection = TrySelectReverseDependentInfrastructureTests(
+            summary,
+            touchesInfrastructure,
+            touchesApp,
+            touchesScriptsOrConfig,
+            declarationReader);
         var focusedInfrastructureFilter = TryBuildFocusedInfrastructureFilter(
             summary,
             appSubsystems,
@@ -182,15 +235,46 @@ public static class RepositoryTestImpactPlanner
                 checks.Add(new RepositoryTestImpactCheck(
                     "focused changed core tests",
                     [.. CoreTests, "--filter", coreTestFilter.Filter],
-                    "Only Core test files changed; run the touched test classes."));
+                    "Only Core test files changed; run the touched test classes.",
+                    RepositoryTestProject.Core,
+                    coreTestFilter.TestClasses));
             }
             else
             {
                 checks.Add(new RepositoryTestImpactCheck(
                     "core tests",
                     CoreTests,
-                    coreTestFilter.AbandonReason ?? "Core contracts changed or core tests changed."));
+                    coreTestFilter.AbandonReason ?? "Core contracts changed or core tests changed.",
+                    RepositoryTestProject.Core));
             }
+        }
+
+        if (reverseDependencySelection is { Outcome: ReverseDependencySelectionOutcome.Resolved } resolved &&
+            resolved.TestClassNames.Count > 0)
+        {
+            checks.Add(new RepositoryTestImpactCheck(
+                "focused reverse-dependent infrastructure tests",
+                [
+                    .. InfrastructureTests,
+                    "--filter",
+                    JoinFilterUnion(resolved.TestClassNames.Select(name => $"FullyQualifiedName~{name}"))
+                ],
+                AppendReverseDependencyCacheReceipt(
+                    "Core production behavior changed; run integration tests that reference its bounded two-hop consumers.",
+                    resolved.CacheReceipt),
+                RepositoryTestProject.Infrastructure,
+                resolved.TestClassNames));
+        }
+        else if (reverseDependencySelection is
+            { Outcome: ReverseDependencySelectionOutcome.Unreadable or ReverseDependencySelectionOutcome.Abandoned } degraded)
+        {
+            checks.Add(new RepositoryTestImpactCheck(
+                "infrastructure tests",
+                InfrastructureTests,
+                AppendReverseDependencyCacheReceipt(
+                    degraded.Reason ?? "Reverse-dependency evidence was unavailable; run the full Infrastructure test suite.",
+                    degraded.CacheReceipt),
+                RepositoryTestProject.Infrastructure));
         }
 
         if (touchesDashboard)
@@ -198,6 +282,9 @@ public static class RepositoryTestImpactPlanner
             var mappedDashboardFilter = touchesDashboardApp
                 ? JoinFilters(DashboardFilter, dashboardTestFilter.Filter)
                 : dashboardTestFilter.Filter;
+            var mappedDashboardClasses = touchesDashboardApp
+                ? DashboardClasses.Concat(dashboardTestFilter.TestClasses).Distinct(StringComparer.Ordinal).ToArray()
+                : dashboardTestFilter.TestClasses;
             var useFocusedDashboardFilter =
                 mappedDashboardFilter is not null &&
                 dashboardTestFilter.AbandonReason is null &&
@@ -210,16 +297,36 @@ public static class RepositoryTestImpactPlanner
                 useFocusedDashboardFilter
                     ? "Dashboard or API behavior changed; run the mapped Dashboard test classes."
                     : dashboardTestFilter.AbandonReason ??
-                        "Dashboard behavior changed alongside shared behavior; run the full Dashboard test suite."));
+                        "Dashboard behavior changed alongside shared behavior; run the full Dashboard test suite.",
+                RepositoryTestProject.Dashboard,
+                useFocusedDashboardFilter ? mappedDashboardClasses : null));
+        }
+
+        if (touchesAcceptanceTests)
+        {
+            checks.Add(new RepositoryTestImpactCheck(
+                acceptanceTestFilter.Filter is null ? "acceptance execution owner tests" : "focused acceptance execution owner tests",
+                acceptanceTestFilter.Filter is null
+                    ? AcceptanceTests
+                    : [.. AcceptanceTests, "--filter", acceptanceTestFilter.Filter],
+                acceptanceTestFilter.AbandonReason ?? "Acceptance execution-owner tests changed; run their independently owned project.",
+                RepositoryTestProject.Acceptance,
+                acceptanceTestFilter.Filter is null ? null : acceptanceTestFilter.TestClasses));
         }
 
         if (focusedInfrastructureFilter is not null && infrastructureTestFilter.AbandonReason is null)
         {
             var filter = JoinFilters(focusedInfrastructureFilter.Value.Filter, infrastructureTestFilter.Filter);
+            var selectedClasses = focusedInfrastructureFilter.Value.TestClasses
+                .Concat(infrastructureTestFilter.TestClasses)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
             checks.Add(new RepositoryTestImpactCheck(
                 focusedInfrastructureFilter.Value.Name,
                 [.. InfrastructureTests, "--filter", filter],
-                focusedInfrastructureFilter.Value.Reason));
+                focusedInfrastructureFilter.Value.Reason,
+                RepositoryTestProject.Infrastructure,
+                selectedClasses));
         }
         else if (infrastructureTestFilter.Filter is not null &&
             !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/")) &&
@@ -230,7 +337,9 @@ public static class RepositoryTestImpactPlanner
             checks.Add(new RepositoryTestImpactCheck(
                 "focused changed infrastructure tests",
                 [.. InfrastructureTests, "--filter", infrastructureTestFilter.Filter],
-                "Only Infrastructure test files changed; run the touched test classes."));
+                "Only Infrastructure test files changed; run the touched test classes.",
+                RepositoryTestProject.Infrastructure,
+                infrastructureTestFilter.TestClasses));
         }
         else if (touchesInfrastructure || touchesNonDashboardApp || touchesScriptsOrConfig)
         {
@@ -242,7 +351,8 @@ public static class RepositoryTestImpactPlanner
                     ? "Multiple App subsystems changed; run the full Infrastructure test suite."
                     : touchesNonDashboardApp
                     ? "App behavior lacks a focused test-impact mapping; run the full Infrastructure test suite."
-                    : "Infrastructure, script, or configuration behavior changed.")));
+                    : "Infrastructure, script, or configuration behavior changed."),
+                RepositoryTestProject.Infrastructure));
         }
 
         var distinctChecks = checks
@@ -267,6 +377,11 @@ public static class RepositoryTestImpactPlanner
             Checks: distinctChecks);
     }
 
+    private static string AppendReverseDependencyCacheReceipt(
+        string reason,
+        ReverseDependencyCacheReceipt? receipt) =>
+        receipt is null ? reason : $"{reason} {receipt.Render()}";
+
     private static RepositoryTestImpactPlan NoBuild(string summary) =>
         new(
             RequiresBuild: false,
@@ -290,23 +405,33 @@ public static class RepositoryTestImpactPlanner
                 new RepositoryTestImpactCheck(
                     "core tests",
                     CoreTests,
-                    summary),
+                    summary,
+                    RepositoryTestProject.Core),
                 new RepositoryTestImpactCheck(
                     "infrastructure tests",
                     InfrastructureTests,
-                    summary),
+                    summary,
+                    RepositoryTestProject.Infrastructure),
+                new RepositoryTestImpactCheck(
+                    "acceptance execution owner tests",
+                    AcceptanceTests,
+                    summary,
+                    RepositoryTestProject.Acceptance),
                 new RepositoryTestImpactCheck(
                     "provider environment tests",
                     ProviderEnvironmentTests,
-                    summary),
+                    summary,
+                    RepositoryTestProject.ProviderEnvironment),
                 new RepositoryTestImpactCheck(
                     "cli tests",
                     CliTests,
-                    summary),
+                    summary,
+                    RepositoryTestProject.Cli),
                 new RepositoryTestImpactCheck(
                     "full dotnet tests: dashboard",
                     DashboardTests,
-                    summary)
+                    summary,
+                    RepositoryTestProject.Dashboard)
             ]);
 
     private static bool StartsWith(string path, string prefix) =>
@@ -315,16 +440,18 @@ public static class RepositoryTestImpactPlanner
     private static TestClassFilterBuildResult BuildChangedTestClassFilter(
         RepositoryChangeSummary summary,
         string testProjectPrefix,
-        ITestClassDeclarationReader declarationReader)
+        ITestClassDeclarationReader declarationReader,
+        string? excludedPrefix = null)
     {
         var changedTestSources = summary.Files
             .Where(file => StartsWith(file.Path, testProjectPrefix))
+            .Where(file => excludedPrefix is null || !StartsWith(file.Path, excludedPrefix))
             .Where(file => Path.GetExtension(file.Path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
         if (changedTestSources.Length == 0)
         {
-            return new TestClassFilterBuildResult(null, null);
+            return new TestClassFilterBuildResult(null, null, []);
         }
 
         var classFilters = new List<string>();
@@ -355,7 +482,8 @@ public static class RepositoryTestImpactPlanner
                     {
                         return new TestClassFilterBuildResult(
                             null,
-                            $"Focused test selection was abandoned because the legacy selector for {fileName} could not be resolved against project declarations; run the project unfiltered.");
+                            $"Focused test selection was abandoned because the legacy selector for {fileName} could not be resolved against project declarations; run the project unfiltered.",
+                            []);
                     }
                 }
 
@@ -366,21 +494,24 @@ public static class RepositoryTestImpactPlanner
             {
                 return new TestClassFilterBuildResult(
                     null,
-                    $"Focused test selection was abandoned because {fileName} declares no qualifying test class; run the project unfiltered.");
+                    $"Focused test selection was abandoned because {fileName} declares no qualifying test class; run the project unfiltered.",
+                    []);
             }
 
             if (declarations.Outcome == TestClassDeclarationOutcome.Unreadable)
             {
                 return new TestClassFilterBuildResult(
                     null,
-                    $"Focused test selection was abandoned because declarations could not be read from {fileName}; run the project unfiltered.");
+                    $"Focused test selection was abandoned because declarations could not be read from {fileName}; run the project unfiltered.",
+                    []);
             }
 
             if (baseName.Contains('.', StringComparison.Ordinal))
             {
                 return new TestClassFilterBuildResult(
                     null,
-                    $"Focused test selection was abandoned because declarations could not be read from dotted test file {fileName}; run the project unfiltered.");
+                    $"Focused test selection was abandoned because declarations could not be read from dotted test file {fileName}; run the project unfiltered.",
+                    []);
             }
 
             if (!string.IsNullOrWhiteSpace(baseName))
@@ -395,7 +526,8 @@ public static class RepositoryTestImpactPlanner
             .ToArray();
         return new TestClassFilterBuildResult(
             distinctFilters.Length == 0 ? null : string.Join("|", distinctFilters),
-            null);
+            null,
+            distinctFilters.Select(filter => filter["FullyQualifiedName~".Length..]).ToArray());
     }
 
     private static string JoinFilters(string left, string? right) =>
@@ -424,7 +556,7 @@ public static class RepositoryTestImpactPlanner
             : trimmed;
     }
 
-    private static (string Name, string Filter, string Reason)? TryBuildFocusedInfrastructureFilter(
+    private static (string Name, string Filter, string Reason, IReadOnlyList<string> TestClasses)? TryBuildFocusedInfrastructureFilter(
         RepositoryChangeSummary summary,
         string[] appSubsystems,
         ITestClassDeclarationReader declarationReader)
@@ -434,6 +566,7 @@ public static class RepositoryTestImpactPlanner
 
         var filters = new List<string>();
         var names = new List<string>();
+        var testClasses = new List<string>();
         foreach (var subsystem in appSubsystems.Order(StringComparer.OrdinalIgnoreCase))
         {
             if (IsDashboardSubsystem(subsystem))
@@ -443,6 +576,7 @@ public static class RepositoryTestImpactPlanner
             {
                 filters.Add(CliInfrastructureFilter);
                 names.Add("CLI");
+                testClasses.AddRange(CliInfrastructureClasses);
                 continue;
             }
 
@@ -484,6 +618,7 @@ public static class RepositoryTestImpactPlanner
 
                 filters.Add(JoinFilterUnion(orchestrationFilters));
                 names.Add("orchestration");
+                testClasses.AddRange(resolvedClassNames);
                 continue;
             }
 
@@ -500,7 +635,40 @@ public static class RepositoryTestImpactPlanner
             JoinFilterUnion(filters),
             filters.Count == 1
                 ? $"{names[0]}-only App change; run the mapped Infrastructure test partition."
-                : $"{string.Join(" and ", names)} App changes; run the union of mapped Infrastructure test partitions.");
+                : $"{string.Join(" and ", names)} App changes; run the union of mapped Infrastructure test partitions.",
+            testClasses.Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private static string BuildClassFilter(IEnumerable<string> testClasses) =>
+        string.Join("|", testClasses.Select(testClass => $"FullyQualifiedName~{testClass}"));
+
+    private static ReverseDependencyTestSelection? TrySelectReverseDependentInfrastructureTests(
+        RepositoryChangeSummary summary,
+        bool touchesInfrastructure,
+        bool touchesApp,
+        bool touchesScriptsOrConfig,
+        ITestClassDeclarationReader declarationReader)
+    {
+        var changedCoreSources = summary.Files
+            .Where(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/"))
+            .Where(file => file.Categories.Contains(RepositoryChangeCategory.Source))
+            .Select(file => file.Path)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (changedCoreSources.Length == 0 ||
+            touchesInfrastructure ||
+            touchesApp ||
+            touchesScriptsOrConfig ||
+            summary.Files.Any(file =>
+                file.Categories.Contains(RepositoryChangeCategory.Source) &&
+                !StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/") &&
+                !StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/")))
+        {
+            return null;
+        }
+
+        return declarationReader.ReadReverseDependentTestClasses(changedCoreSources);
     }
 
     private static bool CanUseFocusedAppFilters(RepositoryChangeSummary summary) =>

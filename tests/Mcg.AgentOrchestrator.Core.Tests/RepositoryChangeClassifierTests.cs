@@ -408,7 +408,7 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementGate.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/DispatchReadinessEvaluator.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorEntityResolver.cs")]
-    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Dashboard/Api/GoalManagementCommandService.Dispatches.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Application/GoalDispatchOperations.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/SubscriptionPlanning/SubscriptionPlanBuilder.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/Application/VerificationPolicyCompiler.cs")]
@@ -924,19 +924,54 @@ public sealed class RepositoryChangeClassifierTests
         Assert.DoesNotContain("--filter", check.Command);
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]
-    public void RepositoryTestImpactPlannerSelectsCoreTestsForCoreChanges()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_keeps_unrelated_core_change_narrow")]
+    public void RepositoryTestImpactPlannerKeepsUnrelatedCoreChangeNarrow()
     {
-        var plan = RepositoryTestImpactPlanner.Plan([
-            "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.cs"
-        ]);
+        var repositoryRoot = FindRepositoryRootFromSource();
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Domain/GoalBriefRevision.cs"],
+            repositoryRoot);
 
         Assert.True(plan.RequiresBuild);
         Assert.False(plan.RequiresBroadVerification);
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("core tests", check.Name);
-        Assert.True(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
-        Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", StringComparison.Ordinal)));
+        Assert.Equal(2, plan.Checks.Count);
+        Assert.Contains(plan.Checks, check => check.Name == "core tests");
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        var filter = RequiredTestImpactFilter(infrastructureCheck);
+        Assert.Contains("FullyQualifiedName~TrialCompareCliCommandTests", filter, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunGoalServiceTests", filter, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_real_reverse_dependent_integration_consumer")]
+    public void RepositoryTestImpactPlannerSelectsRealReverseDependentIntegrationConsumer()
+    {
+        var repositoryRoot = FindRepositoryRootFromSource();
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            repositoryRoot);
+        var repeatedPlan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            repositoryRoot);
+
+        Assert.True(plan.RequiresBuild);
+        Assert.False(plan.RequiresBroadVerification);
+        Assert.Equal(
+            plan.Checks.Select(check => check.CommandLine),
+            repeatedPlan.Checks.Select(check => check.CommandLine));
+        Assert.Equal(2, plan.Checks.Count);
+        Assert.Contains(plan.Checks, check =>
+            check.Name == "core tests" &&
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj"));
+        var infrastructureCheck = Assert.Single(plan.Checks, check =>
+            check.Command.Contains(
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        Assert.Contains(
+            "FullyQualifiedName~RunGoalServiceTests",
+            RequiredTestImpactFilter(infrastructureCheck),
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_and_infrastructure_tests_for_mixed_changes")]
@@ -966,7 +1001,7 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.True(plan.RequiresBroadVerification);
-        Assert.Equal(5, plan.Checks.Count);
+        Assert.Equal(6, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
         {
             Assert.Equal("dotnet", check.Command[0]);
@@ -979,6 +1014,7 @@ public sealed class RepositoryChangeClassifierTests
             [
                 "core tests",
                 "infrastructure tests",
+                "acceptance execution owner tests",
                 "provider environment tests",
                 "cli tests",
                 "full dotnet tests: dashboard"
@@ -988,6 +1024,7 @@ public sealed class RepositoryChangeClassifierTests
             [
                 "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"

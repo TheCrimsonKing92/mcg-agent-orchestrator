@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -47,36 +48,103 @@ internal sealed class OwnedProcessGroup : IDisposable
     }
 
     public static SuspendedProcessStart StartSuspended(ProcessStartInfo startInfo)
-        => StartSuspendedCore(startInfo, null, null, contained: false);
+        => StartSuspendedCore(startInfo, null, null, contained: false, inheritableWindowObserver: null);
 
     internal static SuspendedProcessStart StartSuspendedContained(ProcessStartInfo startInfo)
-        => StartSuspendedCore(startInfo, null, null, contained: true);
+        => StartSuspendedCore(startInfo, null, null, contained: true, inheritableWindowObserver: null);
 
+    internal static SuspendedRedirectedProcessStart StartSuspendedContainedRedirected(ProcessStartInfo startInfo)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Suspended redirected owned-process launch is Windows-only.");
+        }
+
+        if (startInfo.UseShellExecute ||
+            !startInfo.RedirectStandardInput ||
+            !startInfo.RedirectStandardOutput ||
+            !startInfo.RedirectStandardError)
+        {
+            throw new InvalidOperationException(
+                "Suspended redirected owned-process launch requires UseShellExecute=false and all standard streams redirected.");
+        }
+
+        var stdin = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
+        var stdout = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        var stderr = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        var group = CreateContained();
+        try
+        {
+            var processStart = WindowsJob.StartSuspendedInJobWithStandardHandles(
+                group._jobHandle!,
+                startInfo,
+                stdin.ClientSafePipeHandle.DangerousGetHandle(),
+                stdout.ClientSafePipeHandle.DangerousGetHandle(),
+                stderr.ClientSafePipeHandle.DangerousGetHandle());
+            stdin.DisposeLocalCopyOfClientHandle();
+            stdout.DisposeLocalCopyOfClientHandle();
+            stderr.DisposeLocalCopyOfClientHandle();
+            group._processIds.Add(processStart.Process.Id);
+            var suspended = new SuspendedProcessStart(
+                group,
+                processStart.Process,
+                processStart.ProcessHandle,
+                processStart.InitialThread);
+            return new SuspendedRedirectedProcessStart(
+                suspended,
+                stdin,
+                stdout,
+                stderr,
+                startInfo.StandardInputEncoding ?? new UTF8Encoding(false),
+                startInfo.StandardOutputEncoding ?? Encoding.UTF8,
+                startInfo.StandardErrorEncoding ?? Encoding.UTF8);
+        }
+        catch
+        {
+            stdin.Dispose();
+            stdout.Dispose();
+            stderr.Dispose();
+            group.Kill();
+            throw;
+        }
+    }
+
+    /// <param name="inheritableWindowObserver">
+    /// Invoked while this launch's inheritable capture-file duplicates exist, immediately before
+    /// CreateProcessW. Only the caller that owns this launch can observe its own window; production
+    /// callers leave it null.
+    /// </param>
     internal static SuspendedProcessStart StartSuspendedWithFileCapture(
         ProcessStartInfo startInfo,
         string stdoutPath,
-        string stderrPath)
+        string stderrPath,
+        Action? inheritableWindowObserver = null)
         => StartSuspendedCore(
             startInfo,
             Path.GetFullPath(stdoutPath),
             Path.GetFullPath(stderrPath),
-            contained: false);
+            contained: false,
+            inheritableWindowObserver);
 
     internal static SuspendedProcessStart StartSuspendedContainedWithFileCapture(
         ProcessStartInfo startInfo,
         string stdoutPath,
-        string stderrPath)
+        string stderrPath,
+        Action? inheritableWindowObserver = null)
         => StartSuspendedCore(
             startInfo,
             Path.GetFullPath(stdoutPath),
             Path.GetFullPath(stderrPath),
-            contained: true);
+            contained: true,
+            inheritableWindowObserver);
 
     private static SuspendedProcessStart StartSuspendedCore(
         ProcessStartInfo startInfo,
         string? stdoutPath,
         string? stderrPath,
-        bool contained)
+        bool contained,
+        Action? inheritableWindowObserver)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
@@ -100,7 +168,8 @@ internal sealed class OwnedProcessGroup : IDisposable
                 group._jobHandle!,
                 startInfo,
                 stdoutPath,
-                stderrPath);
+                stderrPath,
+                inheritableWindowObserver);
             group._processIds.Add(processStart.Process.Id);
             return new SuspendedProcessStart(
                 group,
@@ -239,6 +308,11 @@ internal sealed class OwnedProcessGroup : IDisposable
 
     internal static string QuoteCommandArgument(string value)
     {
+        if (value.Length > 0 && value.IndexOfAny([' ', '\t', '\n', '\r', '"']) < 0)
+        {
+            return value;
+        }
+
         var quoted = new StringBuilder();
         quoted.Append('"');
         var backslashes = 0;
@@ -310,6 +384,9 @@ internal sealed class OwnedProcessGroup : IDisposable
         return OperatingSystem.IsWindows() && WindowsJob.TryReadAccounting(jobHandle, out accounting);
     }
 
+    internal static int ReadProcessExitCode(SafeFileHandle processHandle) =>
+        WindowsJob.ReadProcessExitCode(processHandle);
+
     // Bounded wait for the WHOLE job tree (children and grandchildren) to exit after a kill,
     // polled via a duplicated job handle because Kill() closes the group's own handle. Slot
     // release/handoff must never proceed over a live gate-owned process.
@@ -377,6 +454,60 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         internal OwnedProcessGroup Group { get; }
         internal Process Process { get; }
+        internal bool HasOwnedExitObservation =>
+            _processHandle is { IsClosed: false, IsInvalid: false };
+
+        internal WindowsNativeProcessInspection.ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(int expectedProcessId)
+        {
+            if (_processHandle is not { IsClosed: false, IsInvalid: false } processHandle)
+            {
+                return new(null, null, ProcessInspectionStatus.NativeFailure, 0, "process-handle-validation");
+            }
+
+            return WindowsNativeProcessInspection.ReadLifecycleIdentity(expectedProcessId, processHandle);
+        }
+
+        internal int? TryReadOwnedExitCode()
+        {
+            var processHandle = RequireExitObservationHandle();
+            using var waitHandle = new NativeProcessWaitHandle(processHandle);
+            return waitHandle.WaitOne(TimeSpan.Zero)
+                ? WindowsJob.ReadProcessExitCode(processHandle)
+                : null;
+        }
+
+        internal bool WaitForOwnedExit(TimeSpan timeout)
+        {
+            using var waitHandle = new NativeProcessWaitHandle(RequireExitObservationHandle());
+            return waitHandle.WaitOne(timeout);
+        }
+
+        internal async Task WaitForOwnedExitAsync(CancellationToken cancellationToken)
+        {
+            using var waitHandle = new NativeProcessWaitHandle(RequireExitObservationHandle());
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var registeredWait = ThreadPool.RegisterWaitForSingleObject(
+                waitHandle,
+                static (state, _) => ((TaskCompletionSource)state!).TrySetResult(),
+                completion,
+                Timeout.InfiniteTimeSpan,
+                executeOnlyOnce: true);
+            using var cancellationRegistration = cancellationToken.Register(
+                static state =>
+                {
+                    var (source, token) = ((TaskCompletionSource Source, CancellationToken Token))state!;
+                    source.TrySetCanceled(token);
+                },
+                (completion, cancellationToken));
+            try
+            {
+                await completion.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                registeredWait.Unregister(null);
+            }
+        }
 
         internal void Resume()
         {
@@ -426,7 +557,125 @@ internal sealed class OwnedProcessGroup : IDisposable
             _processHandle = null;
             Process.Dispose();
         }
+
+        private SafeFileHandle RequireExitObservationHandle()
+        {
+            if (!HasOwnedExitObservation)
+            {
+                throw new InvalidOperationException("Owned process exit handle is unavailable for exit observation.");
+            }
+
+            return _processHandle!;
+        }
+
+        private sealed class NativeProcessWaitHandle : WaitHandle
+        {
+            private readonly SafeFileHandle _processHandle;
+            private bool _addedRef;
+
+            internal NativeProcessWaitHandle(SafeFileHandle processHandle)
+            {
+                _processHandle = processHandle;
+                try
+                {
+                    processHandle.DangerousAddRef(ref _addedRef);
+                    SafeWaitHandle = new SafeWaitHandle(processHandle.DangerousGetHandle(), ownsHandle: false);
+                }
+                catch
+                {
+                    ReleaseProcessHandle();
+                    throw;
+                }
+            }
+
+            protected override void Dispose(bool explicitDisposing)
+            {
+                base.Dispose(explicitDisposing);
+                ReleaseProcessHandle();
+            }
+
+            private void ReleaseProcessHandle()
+            {
+                if (!_addedRef)
+                {
+                    return;
+                }
+
+                _addedRef = false;
+                _processHandle.DangerousRelease();
+            }
+        }
     }
+
+    internal sealed class SuspendedRedirectedProcessStart : IDisposable
+    {
+        private readonly SuspendedProcessStart _suspended;
+        private bool _transferred;
+
+        internal SuspendedRedirectedProcessStart(
+            SuspendedProcessStart suspended,
+            AnonymousPipeServerStream stdin,
+            AnonymousPipeServerStream stdout,
+            AnonymousPipeServerStream stderr,
+            Encoding inputEncoding,
+            Encoding outputEncoding,
+            Encoding errorEncoding)
+        {
+            _suspended = suspended;
+            StandardInput = new StreamWriter(stdin, inputEncoding, bufferSize: 1024, leaveOpen: false)
+            {
+                AutoFlush = true
+            };
+            StandardOutput = new StreamReader(stdout, outputEncoding, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: false);
+            StandardError = new StreamReader(stderr, errorEncoding, detectEncodingFromByteOrderMarks: true, bufferSize: 1024, leaveOpen: false);
+        }
+
+        internal Process Process => _suspended.Process;
+        internal OwnedProcessGroup Group => _suspended.Group;
+        internal StreamWriter StandardInput { get; }
+        internal StreamReader StandardOutput { get; }
+        internal StreamReader StandardError { get; }
+
+        internal WindowsNativeProcessInspection.ProcessLifecycleIdentityReadResult ReadLifecycleIdentity(
+            int expectedProcessId) =>
+            _suspended.ReadLifecycleIdentity(expectedProcessId);
+
+        internal void Resume() => _suspended.Resume();
+
+        internal RedirectedOwnedProcessStart TransferOwnership()
+        {
+            var transfer = _suspended.TransferOwnedProcess();
+            _transferred = true;
+            return new(
+                transfer.Process,
+                transfer.ProcessHandle,
+                _suspended.Group,
+                StandardInput,
+                StandardOutput,
+                StandardError);
+        }
+
+        public void Dispose()
+        {
+            _suspended.Dispose();
+            if (_transferred)
+            {
+                return;
+            }
+
+            StandardInput.Dispose();
+            StandardOutput.Dispose();
+            StandardError.Dispose();
+        }
+    }
+
+    internal sealed record RedirectedOwnedProcessStart(
+        Process Process,
+        SafeFileHandle ProcessHandle,
+        OwnedProcessGroup Group,
+        StreamWriter StandardInput,
+        StreamReader StandardOutput,
+        StreamReader StandardError);
 
     internal sealed record OwnedProcessStartTransfer(
         Process Process,
@@ -454,30 +703,71 @@ internal sealed class OwnedProcessGroup : IDisposable
         private const uint CreateAlways = 2;
         private const uint FileAttributeNormal = 0x00000080;
 
+        /// <param name="inheritableWindowObserver">
+        /// Invoked while this launch's inheritable capture duplicates exist and immediately before
+        /// CreateProcessW. Per-launch, so only the caller that owns the launch observes its own window.
+        /// </param>
         public static WindowsSuspendedProcess StartSuspendedInJob(
             SafeFileHandle job,
             ProcessStartInfo startInfo,
             string? stdoutPath,
-            string? stderrPath)
+            string? stderrPath,
+            Action? inheritableWindowObserver = null)
         {
-            var captureToFiles = stdoutPath is not null && stderrPath is not null;
-            using var stdoutHandle = captureToFiles ? CreateInheritedOutputFile(stdoutPath!) : null;
-            using var stderrHandle = captureToFiles ? CreateInheritedOutputFile(stderrPath!) : null;
-            var startupInfo = new STARTUPINFOEX
+            if (stdoutPath is null || stderrPath is null)
             {
-                StartupInfo = new STARTUPINFO
-                {
-                    cb = Marshal.SizeOf<STARTUPINFOEX>(),
-                    dwFlags = captureToFiles ? StartfUseStdHandles : 0,
-                    hStdOutput = stdoutHandle?.DangerousGetHandle() ?? IntPtr.Zero,
-                    hStdError = stderrHandle?.DangerousGetHandle() ?? IntPtr.Zero
-                }
-            };
-            var inheritedHandles = captureToFiles
-                ? new[] { stdoutHandle!.DangerousGetHandle(), stderrHandle!.DangerousGetHandle() }
-                : [];
-            using var attributes = WindowsJobAttributeList.Create(job, inheritedHandles);
-            startupInfo.lpAttributeList = attributes.AttributeList;
+                return StartSuspendedInJobCore(
+                    job,
+                    startInfo,
+                    InheritableStandardHandles.AcquireNone,
+                    inheritableWindowObserver);
+            }
+
+            // The capture files are opened NON-inheritable and only duplicated as inheritable for the
+            // duration of CreateProcessW. An inheritable handle is process-global: any concurrent
+            // CreateProcess with bInheritHandles=TRUE and no PROC_THREAD_ATTRIBUTE_HANDLE_LIST - which is
+            // exactly what System.Diagnostics.Process.Start does when it redirects a stream - would
+            // otherwise capture a write handle to this canary log and hold it for that unrelated child's
+            // whole lifetime, long after the canary's own job object has confirmed exit.
+            using var stdoutHandle = CreateOwnedOutputFile(stdoutPath);
+            using var stderrHandle = CreateOwnedOutputFile(stderrPath);
+            return StartSuspendedInJobCore(
+                job,
+                startInfo,
+                () => InheritableStandardHandles.DuplicateForCapture(stdoutHandle, stderrHandle),
+                inheritableWindowObserver);
+        }
+
+        public static WindowsSuspendedProcess StartSuspendedInJobWithStandardHandles(
+            SafeFileHandle job,
+            ProcessStartInfo startInfo,
+            IntPtr stdin,
+            IntPtr stdout,
+            IntPtr stderr) =>
+            StartSuspendedInJobCore(
+                job,
+                startInfo,
+                () => InheritableStandardHandles.Borrowed(stdin, stdout, stderr),
+                inheritableWindowObserver: null);
+
+        public static int ReadProcessExitCode(SafeFileHandle processHandle)
+        {
+            if (!GetExitCodeProcess(processHandle, out var exitCode))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to read owned process exit code.");
+            }
+
+            return unchecked((int)exitCode);
+        }
+
+        private static WindowsSuspendedProcess StartSuspendedInJobCore(
+            SafeFileHandle job,
+            ProcessStartInfo startInfo,
+            Func<InheritableStandardHandles> acquireStandardHandles,
+            Action? inheritableWindowObserver)
+        {
+            // Everything that can allocate, enumerate, or throw is done before any inheritable handle
+            // exists, so the process-global inheritance window is only the CreateProcessW call itself.
             var commandLine = new StringBuilder(BuildCommandLine(startInfo));
             var environment = BuildEnvironmentBlock(startInfo.Environment);
             var workingDirectory = string.IsNullOrWhiteSpace(startInfo.WorkingDirectory)
@@ -485,25 +775,47 @@ internal sealed class OwnedProcessGroup : IDisposable
                 : startInfo.WorkingDirectory;
 
             using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn();
-            if (!CreateProcessW(
-                    null,
-                    commandLine,
-                    IntPtr.Zero,
-                    IntPtr.Zero,
-                    captureToFiles,
-                    CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent,
-                    environment,
-                    workingDirectory,
-                    ref startupInfo,
-                    out var processInformation))
+            PROCESS_INFORMATION processInformation;
+            using (var standardHandles = acquireStandardHandles())
             {
-                var nativeErrorCode = Marshal.GetLastWin32Error();
-                throw new OwnedProcessLaunchException(
-                    nativeErrorCode,
-                    "Failed to start suspended process in owned job object.",
-                    CaptureLaunchFailureEvidence(job));
+                var inheritedHandles = standardHandles.InheritedHandles;
+                var useStandardHandles = inheritedHandles.Count > 0;
+                var startupInfo = new STARTUPINFOEX
+                {
+                    StartupInfo = new STARTUPINFO
+                    {
+                        cb = Marshal.SizeOf<STARTUPINFOEX>(),
+                        dwFlags = useStandardHandles ? StartfUseStdHandles : 0,
+                        hStdInput = standardHandles.StandardInput,
+                        hStdOutput = standardHandles.StandardOutput,
+                        hStdError = standardHandles.StandardError
+                    }
+                };
+                using var attributes = WindowsJobAttributeList.Create(job, inheritedHandles);
+                startupInfo.lpAttributeList = attributes.AttributeList;
+                inheritableWindowObserver?.Invoke();
+                if (!CreateProcessW(
+                        null,
+                        commandLine,
+                        IntPtr.Zero,
+                        IntPtr.Zero,
+                        useStandardHandles,
+                        CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,
+                        environment,
+                        workingDirectory,
+                        ref startupInfo,
+                        out processInformation))
+                {
+                    var nativeErrorCode = Marshal.GetLastWin32Error();
+                    throw new OwnedProcessLaunchException(
+                        nativeErrorCode,
+                        "Failed to start suspended process in owned job object.",
+                        CaptureLaunchFailureEvidence(job));
+                }
             }
 
+            // Inheritable duplicates are already closed here, before the comparatively slow
+            // Process.GetProcessById full-table enumeration below.
             var nativeProcess = new SafeFileHandle(processInformation.hProcess, ownsHandle: true);
             var initialThread = new SafeFileHandle(processInformation.hThread, ownsHandle: true);
             try
@@ -519,13 +831,13 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
         }
 
-        private static SafeFileHandle CreateInheritedOutputFile(string path)
+        private static SafeFileHandle CreateOwnedOutputFile(string path)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
             var securityAttributes = new SECURITY_ATTRIBUTES
             {
                 nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
-                bInheritHandle = true
+                bInheritHandle = false
             };
             var handle = CreateFileW(
                 path,
@@ -543,6 +855,118 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
 
             return handle;
+        }
+
+        /// <summary>
+        /// Standard handles supplied to a single CreateProcessW call. Capture-file handles are owned:
+        /// they are inheritable duplicates created immediately before the launch and closed immediately
+        /// after it, which narrows the window in which they are inheritable to that one call rather than
+        /// eliminating it. Any unrelated CreateProcessW that this process issues with bInheritHandle=TRUE
+        /// while the window is open still inherits them - that is exactly what the two-arm inheritance
+        /// control in PostLandingCanaryCaptureAvailabilityTests demonstrates, and why a retained capture
+        /// can be held by a process this group never launched. Pipe handles are borrowed and their
+        /// lifetime stays with the caller that created them.
+        /// </summary>
+        private readonly struct InheritableStandardHandles : IDisposable
+        {
+            private readonly SafeFileHandle? _ownedStandardOutput;
+            private readonly SafeFileHandle? _ownedStandardError;
+
+            private InheritableStandardHandles(
+                IntPtr standardInput,
+                IntPtr standardOutput,
+                IntPtr standardError,
+                IReadOnlyList<IntPtr> inheritedHandles,
+                SafeFileHandle? ownedStandardOutput,
+                SafeFileHandle? ownedStandardError)
+            {
+                StandardInput = standardInput;
+                StandardOutput = standardOutput;
+                StandardError = standardError;
+                InheritedHandles = inheritedHandles;
+                _ownedStandardOutput = ownedStandardOutput;
+                _ownedStandardError = ownedStandardError;
+            }
+
+            public IntPtr StandardInput { get; }
+
+            public IntPtr StandardOutput { get; }
+
+            public IntPtr StandardError { get; }
+
+            public IReadOnlyList<IntPtr> InheritedHandles { get; }
+
+            public static InheritableStandardHandles AcquireNone() =>
+                new(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, [], null, null);
+
+            public static InheritableStandardHandles Borrowed(IntPtr stdin, IntPtr stdout, IntPtr stderr) =>
+                new(stdin, stdout, stderr, [stdin, stdout, stderr], null, null);
+
+            public static InheritableStandardHandles DuplicateForCapture(
+                SafeFileHandle standardOutput,
+                SafeFileHandle standardError)
+            {
+                var ownedStandardOutput = DuplicateAsInheritable(standardOutput);
+                try
+                {
+                    var ownedStandardError = DuplicateAsInheritable(standardError);
+                    var stdout = ownedStandardOutput.DangerousGetHandle();
+                    var stderr = ownedStandardError.DangerousGetHandle();
+                    return new InheritableStandardHandles(
+                        IntPtr.Zero,
+                        stdout,
+                        stderr,
+                        [stdout, stderr],
+                        ownedStandardOutput,
+                        ownedStandardError);
+                }
+                catch
+                {
+                    ownedStandardOutput.Dispose();
+                    throw;
+                }
+            }
+
+            public void Dispose()
+            {
+                _ownedStandardOutput?.Dispose();
+                _ownedStandardError?.Dispose();
+            }
+
+            private static SafeFileHandle DuplicateAsInheritable(SafeFileHandle source)
+            {
+                var addedRef = false;
+                try
+                {
+                    source.DangerousAddRef(ref addedRef);
+                    var currentProcess = GetCurrentProcess();
+                    if (!DuplicateHandle(
+                            currentProcess,
+                            source.DangerousGetHandle(),
+                            currentProcess,
+                            out var duplicate,
+                            0,
+                            true,
+                            DuplicateSameAccess) ||
+                        duplicate.IsInvalid)
+                    {
+                        var nativeErrorCode = Marshal.GetLastWin32Error();
+                        duplicate?.Dispose();
+                        throw new Win32Exception(
+                            nativeErrorCode,
+                            "Failed to duplicate an owned-process capture handle for inheritance.");
+                    }
+
+                    return duplicate;
+                }
+                finally
+                {
+                    if (addedRef)
+                    {
+                        source.DangerousRelease();
+                    }
+                }
+            }
         }
 
         public static string CaptureAssignmentFailureEvidence(SafeFileHandle ownedJob, Process candidate)
@@ -892,6 +1316,9 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool TerminateJobObject(SafeFileHandle hJob, uint uExitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetExitCodeProcess(SafeFileHandle processHandle, out uint exitCode);
 
         public static bool TryDuplicateCurrentProcessHandle(SafeFileHandle job, out SafeFileHandle duplicate)
         {
@@ -1514,7 +1941,7 @@ internal sealed class OwnedProcessAttachmentException : Win32Exception
 internal sealed class OwnedProcessLaunchException : Win32Exception
 {
     public OwnedProcessLaunchException(int nativeErrorCode, string operationMessage, string jobEvidence)
-        : base(nativeErrorCode, operationMessage)
+        : base(nativeErrorCode, ComposeMessage(nativeErrorCode, operationMessage, jobEvidence))
     {
         OperationMessage = operationMessage;
         JobEvidence = jobEvidence;
@@ -1522,4 +1949,17 @@ internal sealed class OwnedProcessLaunchException : Win32Exception
 
     public string OperationMessage { get; }
     public string JobEvidence { get; }
+
+    // The native error code and job evidence are captured at the throw site but only Message is
+    // serialised into a TRX, so without this a launch failure is unattributable from its artifact.
+    private static string ComposeMessage(int nativeErrorCode, string operationMessage, string jobEvidence)
+    {
+        var evidence = string.IsNullOrWhiteSpace(jobEvidence) ? "none" : jobEvidence.Trim();
+        if (evidence.Length > 400)
+        {
+            evidence = evidence[..400];
+        }
+
+        return $"{operationMessage} nativeErrorCode={nativeErrorCode} (0x{nativeErrorCode:X8}); jobEvidence={evidence}";
+    }
 }

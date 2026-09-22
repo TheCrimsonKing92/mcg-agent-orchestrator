@@ -142,13 +142,9 @@ try {
         throw "dotnet build failed with exit code $LASTEXITCODE."
     }
 
-    $testIsolationArguments = @(
-        "--property:McgIsolatedArtifactsPath=$($buildIsolation.ArtifactsPath)",
-        "--property:BuildInParallel=false"
-    )
-    dotnet test --solution $Solution --no-build --verbosity minimal @testIsolationArguments
+    & (Join-Path $PSScriptRoot 'Invoke-TestSummary.ps1') -Target $Solution
     if ($LASTEXITCODE -ne 0) {
-        throw "dotnet test failed with exit code $LASTEXITCODE."
+        throw "Managed MTP test summary failed with exit code $LASTEXITCODE."
     }
 
     Start-RestartCommand -RestartCommand $plan.RestartCommand

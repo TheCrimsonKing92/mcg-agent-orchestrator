@@ -15,8 +15,30 @@ using System.Text.Json;
 
 public abstract class WorkerDispatchTestSupport
 {
-    private static readonly Lazy<string> SeededDispatchRepositoryTemplate =
-        new(CreateSeededDispatchRepositoryTemplate);
+    private static readonly string SeededRepositoryFactoryRoot = CreateSeededRepositoryFactoryRoot();
+    private static int _seededRepositoryDirectoryOrdinal;
+    private static readonly WorkerDispatchTestsSeededRepositoryFactory SeededDispatchRepositories =
+        new(
+            AllocateSeededRepositoryDirectory,
+            SeedDispatchRepositoryTemplate,
+            SeededRepositoryFactoryRoot);
+
+    private static string CreateSeededRepositoryFactoryRoot()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"seeded-repository-factory-{Environment.ProcessId:x}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static string AllocateSeededRepositoryDirectory()
+    {
+        var ordinal = Interlocked.Increment(ref _seededRepositoryDirectoryOrdinal);
+        var path = Path.Combine(SeededRepositoryFactoryRoot, $"owned-{ordinal}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
     protected static string CreateTempDirectory()
     {
@@ -35,12 +57,15 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("test-subscription", "test-model", "low"));
 
-protected static void CompleteResearcherArtifact(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompleteResearcherArtifact(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? research = null)
 {
     var researcher = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Researcher);
     var artifactRoot = CreateTempDirectory();
     var outputPath = Path.Combine(artifactRoot, "researcher.out.log");
-    File.WriteAllText(outputPath, ResearcherContractFixture());
+    File.WriteAllText(outputPath, research ?? ResearcherContractFixture());
     var result = ResearcherOutputContract.Resolve(File.ReadAllText(outputPath));
     var diagnostic = string.Empty;
     if (!result.Succeeded ||
@@ -67,13 +92,16 @@ protected static void CompleteResearcherArtifact(AgentOrchestratorKernel kernel,
             StandardOutputPath: outputPath));
 }
 
-protected static void CompletePlannerArtifact(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompletePlannerArtifact(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? plan = null)
 {
     var planner = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Planner);
     var artifactRoot = CreateTempDirectory();
     File.WriteAllText(Path.Combine(artifactRoot, "seed.txt"), "seed");
     var outputPath = Path.Combine(artifactRoot, "planner.out.log");
-    var plan = PlannerContractPlanFixture();
+    plan ??= PlannerContractPlanFixture();
     File.WriteAllText(outputPath, "Planner fixture completed.");
     if (!PlannerOutputContract.TryPersistDurableReceipt(
             outputPath,
@@ -97,10 +125,14 @@ protected static void CompletePlannerArtifact(AgentOrchestratorKernel kernel, Go
             StandardOutputPath: outputPath));
 }
 
-protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKernel kernel, Goal goal)
+protected static void CompleteResearcherAndPlannerArtifacts(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    string? research = null,
+    string? plan = null)
 {
-    CompleteResearcherArtifact(kernel, goal);
-    CompletePlannerArtifact(kernel, goal);
+    CompleteResearcherArtifact(kernel, goal, research);
+    CompletePlannerArtifact(kernel, goal, plan);
 }
 
 
@@ -316,7 +348,10 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
             readCommandLines: pids => pids
                 .Distinct()
                 .Where(commandLines.ContainsKey)
-                .ToDictionary(pid => pid, pid => commandLines[pid]));
+                .ToDictionary(pid => pid, pid => commandLines[pid]),
+            readProcessIdentity: pid => pid > 0
+                ? (clock.UtcNow, $@"C:\workers\worker-{pid}.exe")
+                : null);
 
     protected static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) CreateCompletedGoalWorktreeDispatch(
         string root,
@@ -417,13 +452,21 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     var ownedPidsJson = ownedPids is { Count: > 0 }
         ? string.Join(",", ownedPids)
         : string.Empty;
+    var identityPids = (ownedPids ?? [])
+        .Concat(childPid is > 0 ? [childPid.Value] : [])
+        .Concat(process.ProcessId > 0 ? [process.ProcessId] : [])
+        .Distinct()
+        .ToArray();
+    var ownedProcessIdentitiesJson = string.Join(",", identityPids.Select(pid =>
+        $"{{\"processId\":{pid},\"startedAt\":\"{process.StartedAt:O}\",\"imagePath\":\"C:\\\\workers\\\\worker-{pid}.exe\"}}"));
     var exitFileExistsJson = exitFileExists ? "true" : "false";
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(process),
         "{" +
-        "\"pid\":999999," +
+        $"\"pid\":{process.ProcessId}," +
         $"\"childPid\":{childPidJson}," +
         $"\"ownedPids\":[{ownedPidsJson}]," +
+        $"\"ownedProcessIdentities\":[{ownedProcessIdentitiesJson}]," +
         $"\"startedAt\":\"{process.StartedAt:O}\"," +
         $"\"lastObservedAt\":\"{lastObservedAt:O}\"," +
         $"\"lastProgressAt\":\"{lastProgressAt:O}\"," +
@@ -495,19 +538,11 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         });
     }
 
-    protected static string CreateSeededDispatchRepository()
-{
-    var root = InfrastructureTestSupport.CreateTempDirectory();
-    CopyDirectoryContents(SeededDispatchRepositoryTemplate.Value, root);
-    return root;
-}
+    protected static string CreateSeededDispatchRepository() =>
+        SeededDispatchRepositories.Create().PublishedIdentity.RepositoryPath;
 
-private static string CreateSeededDispatchRepositoryTemplate()
+private static void SeedDispatchRepositoryTemplate(string root)
 {
-    var root = InfrastructureTestSupport.CreateTempDirectory();
-    RunGit(root, ["init", "-b", "main"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
     WriteSkill(root, "dotnet-windows-build-hygiene");
     WriteSkill(root, "orchestrator-dogfood");
@@ -519,83 +554,13 @@ private static string CreateSeededDispatchRepositoryTemplate()
     WriteSkill(root, "criterion-ownership-planning");
     WriteSkill(root, "systematic-debugging");
     WriteSkill(root, "verification-before-completion");
-    RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    // The fixture postcondition is a committed HEAD, not a particular commit count. Keep the bounded retry
-    // valid when an earlier attempt has already reached that state, as recorded by the shared-gate failure.
-    RunGit(root, ["commit", "--allow-empty", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    return root;
-}
-
-private static void CopyDirectoryContents(string source, string destination)
-{
-    foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
-    {
-        Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
-    }
-
-    foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-    {
-        var target = Path.Combine(destination, Path.GetRelativePath(source, file));
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.Copy(file, target);
-    }
 }
 
     protected static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
-{
-    const int maximumAttempts = 2;
-    var isCommit = arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal));
-    var previousHead = isCommit ? TryGetGitHead(workingDirectory) : null;
-    for (var attempt = 1; attempt <= maximumAttempts; attempt++)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        RemoveAmbientGitRepositoryEnvironment(startInfo);
-        if (arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal)))
-        {
-            startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
-            startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
-        }
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        if (process.ExitCode == 0)
-        {
-            return;
-        }
-
-        if (isCommit && HasNewCommittedCleanGitHead(workingDirectory, previousHead))
-        {
-            return;
-        }
-
-        var detail = string.Join(Environment.NewLine, [output.Trim(), error.Trim()])
-            .Trim();
-        if (detail.Length == 0 && attempt < maximumAttempts)
-        {
-            continue;
-        }
-
-        throw new InvalidOperationException(
-            $"git {string.Join(' ', arguments)} failed with exit code {process.ExitCode} " +
-            $"after {attempt} attempt(s): {detail}");
-    }
-}
+        => WorkerDispatchTestsSeededRepositoryFactory.RunFixtureGit(
+            workingDirectory,
+            arguments,
+            commitTime);
 
 public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSupport
 {
@@ -1504,8 +1469,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Equal(GoalStatus.Active, goal.Status);
     }
 
-    [Xunit.Fact(DisplayName = "Research_first_pipeline_blocks_Planner_then_injects_full_artifacts_without_survey_or_retry_trimming")]
-    public void ResearchFirstPipelineBlocksPlannerThenInjectsFullArtifactsWithoutSurveyOrRetryTrimming()
+    [Xunit.Fact(DisplayName = "Research_first_pipeline_blocks_Planner_then_collapses_large_file_backed_artifacts_losslessly")]
+    public void ResearchFirstPipelineBlocksPlannerThenCollapsesLargeFileBackedArtifactsLosslessly()
     {
         var root = CreateSeededDispatchRepository();
         var kernel = new AgentOrchestratorKernel();
@@ -1578,7 +1543,15 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var contextDirectory = Path.Combine(root, ".orchestrator-context", goal.Id.Value);
         var plannerDigest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
         Assert.Contains("## Durable Research Notes", plannerPrompt, StringComparison.Ordinal);
-        Assert.Contains("CURRENT-SOURCE-RESEARCH-9182", plannerPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("CURRENT-SOURCE-RESEARCH-9182", plannerPrompt, StringComparison.Ordinal);
+        Assert.Contains(
+            "Read research-notes.md in the context directory for the complete artifact",
+            plannerPrompt,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CURRENT-SOURCE-RESEARCH-9182",
+            File.ReadAllText(Path.Combine(contextDirectory, "research-notes.md")),
+            StringComparison.Ordinal);
         Assert.Contains("selected-skills.md: read the selected planning skill", plannerDigest, StringComparison.Ordinal);
         Assert.DoesNotContain("Prefer the dashboard source survey", plannerPrompt, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(contextDirectory, "source-survey.md")));
@@ -1637,9 +1610,16 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var persistedPlan = File.ReadAllText(Path.Combine(contextDirectory, "planner-plan.md"));
         Assert.Equal(largePlan.ReplaceLineEndings("\n"), persistedPlan);
         Assert.Contains("## Durable Planner Plan", developerPrompt, StringComparison.Ordinal);
-        Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", developerPrompt, StringComparison.Ordinal);
-        Assert.Contains("CURRENT-SOURCE-RESEARCH-9182", developerPrompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("inline plan collapsed", developerPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PLAN-TAIL-BYTE-IDENTITY-4417", developerPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("CURRENT-SOURCE-RESEARCH-9182", developerPrompt, StringComparison.Ordinal);
+        Assert.Contains(
+            "Read planner-plan.md in the context directory for the complete artifact",
+            developerPrompt,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Read research-notes.md in the context directory for the complete artifact",
+            developerPrompt,
+            StringComparison.Ordinal);
 
         var testerContext = new WorkerArtifactWriter().Write(goal, testerSpec, root);
         var testerBrief = kernel.BuildTaskBrief(
@@ -1655,8 +1635,12 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             contextDirectory: reviewerContext).Content;
         Assert.Equal(persistedPlan, File.ReadAllText(Path.Combine(testerContext, "planner-plan.md")));
         Assert.Equal(persistedPlan, File.ReadAllText(Path.Combine(reviewerContext, "planner-plan.md")));
-        Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", testerBrief, StringComparison.Ordinal);
-        Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", reviewerBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLAN-TAIL-BYTE-IDENTITY-4417", testerBrief, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLAN-TAIL-BYTE-IDENTITY-4417", reviewerBrief, StringComparison.Ordinal);
+        Assert.Contains("Read planner-plan.md in the context directory", testerBrief, StringComparison.Ordinal);
+        Assert.Contains("Read planner-plan.md in the context directory", reviewerBrief, StringComparison.Ordinal);
+        Assert.Contains("sha256:", testerBrief, StringComparison.Ordinal);
+        Assert.Contains("sha256:", reviewerBrief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Legacy_Planner_brief_without_durable_research_keeps_source_discovery_guidance")]
@@ -2153,7 +2137,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         try
         {
             var pending = Assert.Throws<InvalidOperationException>(() =>
-                GoalManagementCommandService.ProfileDispatchTask(
+                new GoalDispatchOperations().ProfileDispatchTask(
                     kernel,
                     workspace,
                     kernel.GetGoal(goal.Id),
@@ -2178,7 +2162,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
             kernel = await repository.LoadAsync();
             goal = kernel.GetGoal(goal.Id);
             task = goal.Tasks.Single();
-            var result = GoalManagementCommandService.ProfileDispatchTask(
+            var result = new GoalDispatchOperations().ProfileDispatchTask(
                 kernel,
                 workspace,
                 goal,
@@ -2281,7 +2265,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(root);
+            _ = GoalWorktrees.DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -2434,7 +2418,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             var decision = coordinator.Evaluate(
                 candidate,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, _, _, _) =>
+                (attemptCandidate, _, _, _, _) =>
                 {
                     preflightRuns++;
                     paidStarts++;

@@ -28,8 +28,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID", _originalProtectedPid);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProcessJobs_supervisor_cleanup_reaps_named_owned_root")]
-    public void WorkerProcessJobsSupervisorCleanupReapsNamedOwnedRoot()
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_supervisor_cleanup_retains_identityless_owned_root")]
+    public void WorkerProcessJobsSupervisorCleanupRetainsIdentitylessOwnedRoot()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -46,8 +46,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 [processId],
                 [sharedRoot]));
 
-            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, result.Status);
-            Assert.False(Directory.Exists(ownedRoot));
+            Assert.Equal(TempRootJanitorReapDisposition.RetainedUnknownOwner, result.Disposition);
+            Assert.True(Directory.Exists(ownedRoot));
         }
         finally
         {
@@ -68,20 +68,27 @@ public sealed class WorkerProcessJobsTests : IDisposable
         var sharedRoot = Path.Combine(appBase, ".test-tmp");
         var ownedRoot = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
         Directory.CreateDirectory(ownedRoot);
+        var capturedOwner = AvailableProcess(processId) with
+        {
+            ExecutablePath = Path.Combine(appBase, "testhost.exe")
+        };
         try
         {
             var captured = Assert.Single(
                 TempRootJanitor.SnapshotOwnedRoots(
                     [processId],
-                    _ => Path.Combine(appBase, "testhost.exe")),
+                    _ => Inspected(capturedOwner)),
                 root => string.Equals(
                     root.SharedRoot,
                     sharedRoot,
                     StringComparison.OrdinalIgnoreCase));
 
-            var result = Assert.Single(WorkerProcessJobs.ReapOwnedTempRoots([captured]));
+            var result = Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                [captured],
+                _ => Inspected(ExitedProcess(processId)),
+                TempRootJanitor.DeleteTree));
 
-            Assert.Equal(TempRootJanitorDeleteStatus.Deleted, result.Status);
+            Assert.Equal(TempRootJanitorReapDisposition.Deleted, result.Disposition);
             Assert.False(Directory.Exists(ownedRoot));
         }
         finally
@@ -89,6 +96,322 @@ public sealed class WorkerProcessJobsTests : IDisposable
             _ = TempRootJanitor.DeleteTree(appBase);
         }
     }
+
+    [Xunit.Theory(DisplayName = "TempRootJanitor_live_recycled_or_ambiguous_owner_is_retained")]
+    [Xunit.InlineData("live")]
+    [Xunit.InlineData("recycled")]
+    [Xunit.InlineData("inaccessible")]
+    public void TempRootJanitorLiveRecycledOrAmbiguousOwnerIsRetained(string observation)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var processId = 4242;
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-retain-{Guid.NewGuid():N}");
+        var ownedRootPath = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        Directory.CreateDirectory(ownedRootPath);
+        var captured = AvailableProcess(processId);
+        var observed = observation switch
+        {
+            "live" => captured,
+            "recycled" => captured with { StartedAt = captured.StartedAt!.Value.AddSeconds(1) },
+            _ => captured with { Status = ProcessInspectionStatus.AccessDenied }
+        };
+        var deleteCalls = 0;
+        try
+        {
+            var result = Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                [new TempRootJanitorOwnedRoot(processId, sharedRoot, captured, "retention-matrix")],
+                _ => Inspected(observed),
+                path =>
+                {
+                    deleteCalls++;
+                    return TempRootJanitor.DeleteTree(path);
+                }));
+
+            var expected = observation switch
+            {
+                "live" => TempRootJanitorReapDisposition.RetainedLiveOwner,
+                "recycled" => TempRootJanitorReapDisposition.RetainedRecycledPid,
+                _ => TempRootJanitorReapDisposition.RetainedUnknownOwner
+            };
+            Assert.Equal(expected, result.Disposition);
+            Assert.Equal(0, deleteCalls);
+            Assert.True(Directory.Exists(ownedRootPath));
+            Assert.Contains("captured=Available/", TempRootJanitor.FormatDiagnostic(result), StringComparison.Ordinal);
+            Assert.Contains($"observed={observed.Status}/", TempRootJanitor.FormatDiagnostic(result), StringComparison.Ordinal);
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TempRootJanitor_immediate_revalidation_retains_reused_pid")]
+    public void TempRootJanitorImmediateRevalidationRetainsReusedPid()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var processId = 4243;
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-reuse-{Guid.NewGuid():N}");
+        var ownedRootPath = TempRootJanitor.BuildOwnedRootPath(sharedRoot, processId);
+        Directory.CreateDirectory(ownedRootPath);
+        var captured = AvailableProcess(processId);
+        var replacement = captured with
+        {
+            StartedAt = captured.StartedAt!.Value.AddMinutes(1),
+            ExecutablePath = @"C:\replacement\testhost.exe"
+        };
+        var reads = 0;
+        try
+        {
+            var result = Assert.Single(TempRootJanitor.ReapOwnedRoots(
+                [new TempRootJanitorOwnedRoot(processId, sharedRoot, captured, "pre-delete-revalidation")],
+                _ =>
+                {
+                    reads++;
+                    return Inspected(replacement);
+                },
+                _ => throw new Xunit.Sdk.XunitException("Delete must not run for a replacement process instance.")));
+
+            Assert.Equal(1, reads);
+            Assert.Equal(TempRootJanitorReapDisposition.RetainedRecycledPid, result.Disposition);
+            Assert.True(Directory.Exists(ownedRootPath));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TempRootJanitor_dead_matching_owner_deletes_and_continues_after_failure")]
+    public void TempRootJanitorDeadMatchingOwnerDeletesAndContinuesAfterFailure()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-dead-{Guid.NewGuid():N}");
+        var failedId = 4244;
+        var deletedId = 4245;
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(sharedRoot, failedId));
+        Directory.CreateDirectory(TempRootJanitor.BuildOwnedRootPath(sharedRoot, deletedId));
+        var owners = new[]
+        {
+            new TempRootJanitorOwnedRoot(failedId, sharedRoot, AvailableProcess(failedId), "dead-matrix"),
+            new TempRootJanitorOwnedRoot(deletedId, sharedRoot, AvailableProcess(deletedId), "dead-matrix")
+        };
+        try
+        {
+            var results = TempRootJanitor.ReapOwnedRoots(
+                owners,
+                ids => Inspected(ids.Select(ExitedProcess).ToArray()),
+                path => path.EndsWith($"p{failedId:x}", StringComparison.OrdinalIgnoreCase)
+                    ? new TempRootJanitorDeleteResult(
+                        path,
+                        TempRootJanitorDeleteStatus.Failed,
+                        nameof(IOException),
+                        path,
+                        0)
+                    : TempRootJanitor.DeleteTree(path));
+
+            Assert.Collection(
+                results,
+                result => Assert.Equal(TempRootJanitorReapDisposition.DeleteFailed, result.Disposition),
+                result => Assert.Equal(TempRootJanitorReapDisposition.Deleted, result.Disposition));
+            Assert.True(Directory.Exists(TempRootJanitor.BuildOwnedRootPath(sharedRoot, failedId)));
+            Assert.False(Directory.Exists(TempRootJanitor.BuildOwnedRootPath(sharedRoot, deletedId)));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TempRootJanitor_dead_owner_reports_absent_and_rejects_escaped_candidate")]
+    public void TempRootJanitorDeadOwnerReportsAbsentAndRejectsEscapedCandidate()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var sharedRoot = Path.Combine(Path.GetTempPath(), $"janitor-path-{Guid.NewGuid():N}");
+        var absentId = 4247;
+        var escapedId = 4248;
+        var escapedPath = Path.GetFullPath(Path.Combine(sharedRoot, "..", $"escaped-{Guid.NewGuid():N}"));
+        var deleteCalls = 0;
+        try
+        {
+            var results = TempRootJanitor.ReapOwnedRoots(
+                [
+                    new TempRootJanitorOwnedRoot(
+                        absentId,
+                        sharedRoot,
+                        AvailableProcess(absentId),
+                        "absent-control"),
+                    new TempRootJanitorOwnedRoot(
+                        escapedId,
+                        sharedRoot,
+                        AvailableProcess(escapedId),
+                        "containment-control",
+                        escapedPath)
+                ],
+                ids => Inspected(ids.Select(ExitedProcess).ToArray()),
+                path =>
+                {
+                    deleteCalls++;
+                    return TempRootJanitor.DeleteTree(path);
+                });
+
+            Assert.Collection(
+                results,
+                result => Assert.Equal(TempRootJanitorReapDisposition.AlreadyAbsent, result.Disposition),
+                result =>
+                {
+                    Assert.Equal(TempRootJanitorReapDisposition.RejectedPath, result.Disposition);
+                    Assert.Equal(escapedPath, result.Path);
+                });
+            Assert.Equal(1, deleteCalls);
+            Assert.False(Directory.Exists(escapedPath));
+        }
+        finally
+        {
+            _ = TempRootJanitor.DeleteTree(sharedRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_emits_one_bounded_receipt_per_reap_candidate")]
+    public void WorkerProcessJobsEmitsOneBoundedReceiptPerReapCandidate()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var owner = AvailableProcess(4249);
+        var results = TempRootJanitor.ReapOwnedRoots(
+            [
+                new TempRootJanitorOwnedRoot(
+                    owner.ProcessId,
+                    new string('s', 500),
+                    owner,
+                    new string('c', 100)),
+                new TempRootJanitorOwnedRoot(
+                    owner.ProcessId + 1,
+                    "shared",
+                    AvailableProcess(owner.ProcessId + 1),
+                    "second")
+            ],
+            ids => Inspected(ids.Select(id => AvailableProcess(id)).ToArray()),
+            _ => throw new Xunit.Sdk.XunitException("Live owners must not reach deletion."));
+        var receipts = new List<string>();
+
+        WorkerProcessJobs.EmitTempRootReapResults(results, receipts.Add);
+
+        Assert.Equal(2, receipts.Count);
+        Assert.All(receipts, receipt =>
+        {
+            Assert.StartsWith("temp-root-janitor ", receipt, StringComparison.Ordinal);
+            Assert.True(receipt.Length <= 600, $"Receipt was not bounded: {receipt.Length}");
+        });
+    }
+
+    [Xunit.Fact]
+    public void WorkerProcessJobs_PostMortemDeletedOwners_DoNotPersistApparatusLossReceipt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-typed-reap-receipt", Guid.NewGuid().ToString("N"));
+        var receiptPath = Path.Combine(root, "receipts.jsonl");
+        var startedAt = DateTimeOffset.Parse("2026-09-02T12:00:00Z");
+        var first = AvailableProcess(4249) with { StartedAt = startedAt };
+        var second = AvailableProcess(4250) with { StartedAt = startedAt.AddSeconds(1) };
+        var results = new[]
+        {
+            DeletedResult(root, first),
+            DeletedResult(root, second)
+        };
+
+        using (TempRootApparatusLossReceiptStore.PushScope("attempt-a", receiptPath))
+        {
+            WorkerProcessJobs.EmitTempRootReapResults(results, _ => { });
+        }
+
+        Assert.Empty(TempRootApparatusLossReceiptStore.Read(receiptPath));
+    }
+
+    [Xunit.Fact]
+    public void TempRootReceiptScope_AppliesAttemptLocalChildContract()
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            [TempRootApparatusLossReceiptStore.GateInvocationIdVariable] = "ambient-attempt",
+            [TempRootApparatusLossReceiptStore.ReceiptPathVariable] = "ambient-path"
+        };
+        var receiptPath = Path.Combine(Path.GetTempPath(), "attempt-local", "receipt.jsonl");
+
+        using (TempRootApparatusLossReceiptStore.PushScope("attempt-local", receiptPath))
+        {
+            TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
+            Assert.Equal("attempt-local", environment[TempRootApparatusLossReceiptStore.GateInvocationIdVariable]);
+            Assert.Equal(receiptPath, environment[TempRootApparatusLossReceiptStore.ReceiptPathVariable]);
+        }
+
+        TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
+        Assert.DoesNotContain(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, environment.Keys);
+        Assert.DoesNotContain(TempRootApparatusLossReceiptStore.ReceiptPathVariable, environment.Keys);
+    }
+
+    private static ProcessInspectionRecord AvailableProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 100,
+            Name: "testhost",
+            ExecutablePath: @"C:\host\testhost.exe",
+            StartedAt: DateTimeOffset.Parse("2026-08-30T12:00:00Z"),
+            CommandLine: "testhost controlled-probe",
+            ProcessInspectionStatus.Available);
+
+    private static TempRootJanitorReapResult DeletedResult(
+        string sharedRoot,
+        ProcessInspectionRecord owner)
+    {
+        var path = TempRootJanitor.BuildOwnedRootPath(sharedRoot, owner.ProcessId);
+        return new TempRootJanitorReapResult(
+            owner.ProcessId,
+            sharedRoot,
+            path,
+            "test-owned-deletion",
+            owner,
+            owner with { Status = ProcessInspectionStatus.Exited },
+            TempRootJanitorReapDisposition.Deleted,
+            new TempRootJanitorDeleteResult(
+                path,
+                TempRootJanitorDeleteStatus.Deleted,
+                null,
+                null,
+                0));
+    }
+
+    private static ProcessInspectionRecord ExitedProcess(int processId) =>
+        new(
+            processId,
+            ParentProcessId: 0,
+            Name: string.Empty,
+            ExecutablePath: null,
+            StartedAt: null,
+            CommandLine: null,
+            ProcessInspectionStatus.Exited);
+
+    private static WindowsNativeProcessInspection.ProcessInspectionResult Inspected(
+        params ProcessInspectionRecord[] records) =>
+        WindowsNativeProcessInspection.ProcessInspectionResult.Success(
+            records.ToDictionary(record => record.ProcessId));
 
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_startup_sweep_retains_worker_owned_by_live_process")]
     public void WorkerProcessJobsStartupSweepRetainsWorkerOwnedByLiveProcess()
@@ -641,10 +964,18 @@ public sealed class WorkerProcessJobsTests : IDisposable
         {
             wrapper = StartLongRunningShell();
 
-            Assert.True(WorkerProcessJobs.TryRegister(
+            // A bare Assert.True discarded the registration diagnostic when this failed the gate on
+            // 2026-09-04 (first failure on record). Carry the reason so the next one names its stage.
+            Func<Process, SpawnProcessIdentity?> forbiddenReader =
+                _ => throw new InvalidOperationException("Identity reader must not run without a registry.");
+            var registered = WorkerProcessJobs.TryRegister(
                 wrapper,
                 "in-memory-only",
-                _ => throw new InvalidOperationException("Identity reader must not run without a registry.")));
+                forbiddenReader,
+                forbiddenReader,
+                _ => { },
+                out var registrationDiagnostic);
+            Assert.True(registered, $"TryRegister failed: {registrationDiagnostic}");
             Assert.True(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
 
             WorkerProcessJobs.Release(wrapper.Id);
@@ -909,6 +1240,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Directory.CreateDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? newlyRegisteredWorker = null;
+        var registeredWorkerId = 0;
         try
         {
             ProgramStartupLifecycle.InitializeWorkerProcessTracking(
@@ -919,21 +1251,36 @@ public sealed class WorkerProcessJobsTests : IDisposable
 
             newlyRegisteredWorker = StartLongRunningShell();
             Assert.True(WorkerProcessJobs.TryRegister(newlyRegisteredWorker, "new-dispatch"));
+            registeredWorkerId = newlyRegisteredWorker.Id;
             var registered = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
             Assert.Equal("new-dispatch", registered.OwnerId);
             Assert.Equal(Environment.ProcessId, registered.OwnerProcessId);
         }
         finally
         {
-            WorkerProcessJobs.ClearRegistryForTests();
-            if (newlyRegisteredWorker is not null)
+            try
             {
-                try { newlyRegisteredWorker.Kill(entireProcessTree: true); } catch { }
-                newlyRegisteredWorker.Dispose();
+                if (newlyRegisteredWorker is not null)
+                {
+                    try
+                    {
+                        if (registeredWorkerId != 0) WorkerProcessJobs.Release(registeredWorkerId);
+                    }
+                    finally
+                    {
+                        try { newlyRegisteredWorker.Kill(entireProcessTree: true); } catch { }
+                        newlyRegisteredWorker.Dispose();
+                    }
+                }
             }
-
-            try { Directory.Delete(root, recursive: true); } catch { }
+            finally
+            {
+                WorkerProcessJobs.ClearRegistryForTests();
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
         }
+
+        Assert.False(WorkerProcessJobs.HasRegisteredJob(registeredWorkerId));
     }
 
     [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_handoff_configures_registry_without_sweeping_incumbent_processes")]
@@ -945,6 +1292,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? incumbentWorker = null;
         Process? successorWorker = null;
+        var successorWorkerId = 0;
         try
         {
             incumbentWorker = StartLongRunningShell();
@@ -960,27 +1308,42 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.True(IsRunning(incumbentWorker.Id));
             successorWorker = StartLongRunningShell();
             Assert.True(WorkerProcessJobs.TryRegister(successorWorker, "successor-dispatch"));
+            successorWorkerId = successorWorker.Id;
             var activeEntries = WorkerProcessJobs.ListActiveRegistryEntriesForTests();
             Assert.Contains(activeEntries, entry => entry.OwnerId == "incumbent-dispatch");
             Assert.Contains(activeEntries, entry => entry.OwnerId == "successor-dispatch");
         }
         finally
         {
-            WorkerProcessJobs.ClearRegistryForTests();
-            if (incumbentWorker is not null)
+            try
             {
-                try { incumbentWorker.Kill(entireProcessTree: true); } catch { }
-                incumbentWorker.Dispose();
+                if (successorWorker is not null)
+                {
+                    try
+                    {
+                        if (successorWorkerId != 0) WorkerProcessJobs.Release(successorWorkerId);
+                    }
+                    finally
+                    {
+                        try { successorWorker.Kill(entireProcessTree: true); } catch { }
+                        successorWorker.Dispose();
+                    }
+                }
             }
-
-            if (successorWorker is not null)
+            finally
             {
-                try { successorWorker.Kill(entireProcessTree: true); } catch { }
-                successorWorker.Dispose();
-            }
+                if (incumbentWorker is not null)
+                {
+                    try { incumbentWorker.Kill(entireProcessTree: true); } catch { }
+                    incumbentWorker.Dispose();
+                }
 
-            try { Directory.Delete(root, recursive: true); } catch { }
+                WorkerProcessJobs.ClearRegistryForTests();
+                try { Directory.Delete(root, recursive: true); } catch { }
+            }
         }
+
+        Assert.False(WorkerProcessJobs.HasRegisteredJob(successorWorkerId));
     }
 
     [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_authority_transfer_signal_suppresses_cleanup_for_every_command")]
@@ -1289,6 +1652,126 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(true, "recycled-pid", "start-time,image")]
+    [Xunit.InlineData(false, "duplicate-registration", "none")]
+    public void DuplicateRegistrationProjectsIdentityDecision(
+        bool identityMismatch,
+        string expectedConflict,
+        string expectedMismatch)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dbPath = Path.Combine(
+            Path.GetTempPath(),
+            "mcg-worker-job-tests",
+            Guid.NewGuid().ToString("n"),
+            "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        WorkerProcessJobs.ConfigureRegistry(dbPath);
+        Process? candidate = null;
+        try
+        {
+            candidate = StartLongRunningShell();
+            var observedStartedAt = new DateTimeOffset(
+                candidate.StartTime.ToUniversalTime(),
+                TimeSpan.Zero);
+            var observedImage = candidate.MainModule?.FileName
+                ?? throw new InvalidOperationException("Candidate image was unavailable before registration.");
+            var recordedStartedAt = identityMismatch ? observedStartedAt.AddMinutes(-1) : observedStartedAt;
+            var recordedImage = identityMismatch
+                ? Path.Combine("recorded", "synthetic-candidate.exe")
+                : observedImage;
+
+            Assert.True(WorkerProcessJobs.TryRegister(
+                candidate,
+                "diagnostic-incumbent",
+                process => new SpawnProcessIdentity(process.Id, recordedStartedAt, recordedImage),
+                owner => new SpawnProcessIdentity(owner.Id, recordedStartedAt, "synthetic-owner.exe"),
+                _ => { },
+                out var firstDiagnostic), firstDiagnostic);
+
+            var operationStarted = Stopwatch.GetTimestamp();
+            var registered = WorkerProcessJobs.TryRegister(candidate, "diagnostic-candidate", out var failure);
+            var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
+            Assert.False(registered);
+
+            Assert.Contains($"conflict={expectedConflict}", failure, StringComparison.Ordinal);
+            Assert.Contains($"recorded_started_at={recordedStartedAt:O}", failure, StringComparison.Ordinal);
+            Assert.Contains($"recorded_image={Path.GetFileName(recordedImage)}", failure, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains($"observed_started_at={observedStartedAt:O}", failure, StringComparison.Ordinal);
+            Assert.Contains($"observed_image={Path.GetFileName(observedImage)}", failure, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains($"mismatch={expectedMismatch}", failure, StringComparison.Ordinal);
+            Assert.DoesNotContain(recordedImage, failure, StringComparison.OrdinalIgnoreCase);
+            Assert.True(WorkerProcessJobs.HasActiveJobForTests(candidate.Id));
+            Assert.True(WaitUntilNotRunning(candidate.Id, TimeSpan.FromSeconds(5)));
+            Console.WriteLine(
+                $"process-lifecycle-receipt seam=registration variant={(identityMismatch ? "conflicting-identity" : "matching-identity")} " +
+                $"candidate_pid={candidate.Id} candidate_started_at={observedStartedAt:O} " +
+                $"recorded_started_at={recordedStartedAt:O} operation=TryRegister " +
+                $"elapsed_ms={operationElapsed.TotalMilliseconds:F3} result={failure}");
+        }
+        finally
+        {
+            if (candidate is not null)
+            {
+                try { WorkerProcessJobs.Release(candidate.Id); } catch { }
+                try { if (!candidate.HasExited) candidate.Kill(entireProcessTree: true); } catch { }
+                candidate.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void RegistrationWithoutConflictProducesHarnessReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Process? candidate = null;
+        try
+        {
+            candidate = StartLongRunningShell();
+            var candidateStartedAt = new DateTimeOffset(
+                candidate.StartTime.ToUniversalTime(),
+                TimeSpan.Zero);
+            var candidateImage = Path.GetFileName(candidate.MainModule?.FileName);
+            var operationStarted = Stopwatch.GetTimestamp();
+
+            var registered = WorkerProcessJobs.TryRegister(
+                candidate,
+                "diagnostic-isolated",
+                out var failure);
+            var operationElapsed = Stopwatch.GetElapsedTime(operationStarted);
+
+            Assert.True(registered, failure);
+            Assert.True(WorkerProcessJobs.HasActiveJobForTests(candidate.Id));
+            Console.WriteLine(
+                $"process-lifecycle-receipt seam=registration variant=isolated " +
+                $"candidate_pid={candidate.Id} candidate_started_at={candidateStartedAt:O} " +
+                $"candidate_image={candidateImage} operation=TryRegister " +
+                $"elapsed_ms={operationElapsed.TotalMilliseconds:F3} result=registered");
+        }
+        finally
+        {
+            if (candidate is not null)
+            {
+                try { WorkerProcessJobs.Release(candidate.Id); } catch { }
+                try { if (!candidate.HasExited) candidate.Kill(entireProcessTree: true); } catch { }
+                candidate.Dispose();
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_owned_child_uses_retained_handle_for_fast_exit_and_metadata")]
     public async Task WorkerProcessJobsOwnedChildUsesRetainedHandleForFastExitAndMetadata()
     {
@@ -1338,6 +1821,130 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Assert.False(WorkerProcessJobs.HasRegisteredJob(processId));
         Assert.False(child.HasOpenNativeHandle);
         Assert.True(child.IsDisposed);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_suspended_child_registers_native_identity_before_readiness")]
+    public async Task WorkerProcessJobsSuspendedChildRegistersNativeIdentityBeforeReadiness()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
+        var dbPath = Path.Combine(root, "state.db");
+        var readyPath = Path.Combine(root, "child-ready.pid");
+        Directory.CreateDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        WorkerProcessJobs.ConfigureRegistry(dbPath);
+        RegisteredOwnedProcess? child = null;
+        try
+        {
+            var startInfo = CreateIsolatedDotnetProbeStartInfo(readyPath);
+            var negativeControl = OwnedProcessGroup.StartSuspendedContained(startInfo);
+            var negativeControlProcessId = negativeControl.Process.Id;
+            using (negativeControl)
+            {
+                var mainModuleFailure = Assert.Throws<Win32Exception>(
+                    () => _ = negativeControl.Process.MainModule?.FileName);
+                Assert.Equal(299, mainModuleFailure.NativeErrorCode);
+
+                var nativeIdentity = negativeControl.ReadLifecycleIdentity(negativeControl.Process.Id);
+                Assert.Equal(ProcessInspectionStatus.Available, nativeIdentity.Status);
+                Assert.NotNull(nativeIdentity.StartedAt);
+                Assert.False(string.IsNullOrWhiteSpace(nativeIdentity.ExecutablePath));
+                Assert.False(File.Exists(readyPath));
+                negativeControl.Group.Kill();
+                Assert.True(negativeControl.WaitForOwnedExit(TimeSpan.FromSeconds(5)));
+            }
+            var closedHandleIdentity = negativeControl.ReadLifecycleIdentity(negativeControlProcessId);
+            Assert.Equal(ProcessInspectionStatus.NativeFailure, closedHandleIdentity.Status);
+            Assert.Equal("process-handle-validation", closedHandleIdentity.Operation);
+
+            var registrationStarted = Stopwatch.GetTimestamp();
+            child = WorkerProcessJobs.StartRegisteredOwnedOrThrow(
+                CreateIsolatedDotnetProbeStartInfo(readyPath),
+                "suspended-native-identity");
+            var registrationElapsed = Stopwatch.GetElapsedTime(registrationStarted);
+            var entry = Assert.Single(
+                WorkerProcessJobs.ListActiveRegistryEntriesForTests(),
+                candidate => candidate.ProcessId == child.Id);
+
+            var readyDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+            while (!File.Exists(readyPath) && DateTimeOffset.UtcNow < readyDeadline)
+            {
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            }
+
+            Assert.True(File.Exists(readyPath), "Suspended child did not publish its readiness sentinel after resume.");
+            var identity = Assert.IsType<SpawnProcessIdentity>(child.Identity);
+            Assert.Equal(1, child.IdentityReadAttempts);
+            Assert.Equal(child.Id, identity.ProcessId);
+            Assert.Equal(entry.ProcessStartedAt, identity.StartedAt);
+            Assert.Equal(entry.ImagePath, identity.ImagePath, ignoreCase: true);
+            Assert.Equal(
+                SpawnTrackedProcessStatus.LiveMatch,
+                SpawnProcessIdentityReader.EvaluateTrackedProcess(entry, out var observedProcess, out _));
+            Assert.IsType<Process>(observedProcess).Dispose();
+            Assert.True(
+                entry.RegisteredAt <= File.GetLastWriteTimeUtc(readyPath),
+                $"Registration {entry.RegisteredAt:O} must precede readiness {File.GetLastWriteTimeUtc(readyPath):O}.");
+            Console.WriteLine(
+                $"suspended-registration-receipt pid={child.Id} identity_attempts={child.IdentityReadAttempts} " +
+                $"elapsed_ms={registrationElapsed.TotalMilliseconds:F3} registered_at={entry.RegisteredAt:O} " +
+                $"ready_at={File.GetLastWriteTimeUtc(readyPath):O} image={Path.GetFileName(entry.ImagePath)}");
+        }
+        finally
+        {
+            if (child is not null)
+            {
+                try { child.Kill(entireProcessTree: true); } catch { }
+                try
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await child.WaitForExitAsync(timeout.Token);
+                }
+                catch { }
+                try { _ = child.Release(out _); } catch { }
+                child.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_atomic_redirected_owned_start_closes_fast_exit_registration_window")]
+    public async Task WorkerProcessJobsAtomicRedirectedOwnedStartClosesFastExitRegistrationWindow()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string marker = "atomic-redirected-fast-exit";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("echo");
+        startInfo.ArgumentList.Add(marker);
+        using var atomicFast = WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(
+            startInfo,
+            "atomic-redirected-fast");
+        atomicFast.CompleteInput();
+
+        Assert.True(WorkerProcessJobs.HasRegisteredJob(atomicFast.Id));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await atomicFast.WaitForExitAsync(timeout.Token);
+        Assert.Contains(marker, await atomicFast.StandardOutput.ReadToEndAsync(timeout.Token), StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -1702,6 +2309,179 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_kill_or_fallback_and_wait_refuses_current_process_without_protected_pid")]
+    public void WorkerProcessJobsKillOrFallbackAndWaitRefusesCurrentProcessWithoutProtectedPid()
+    {
+        using var protectedPidEnvironment = InfrastructureTestSupport.ClearProtectedPidEnvironment();
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        var killCalled = false;
+        WorkerProcessJobs.TryKillPidTree = _ =>
+        {
+            killCalled = true;
+            return true;
+        };
+
+        try
+        {
+            Assert.False(WorkerProcessJobs.TryKillOrFallbackAndWait(Environment.ProcessId, TimeSpan.Zero));
+            Assert.False(killCalled);
+            Assert.True(IsRunning(Environment.ProcessId));
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_kill_or_fallback_and_wait_refuses_current_process_ancestor")]
+    public void WorkerProcessJobsKillOrFallbackAndWaitRefusesCurrentProcessAncestor()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var parentProcessId = ProcessParentIdResolver.TryGetParentProcessId(Environment.ProcessId);
+        Assert.NotNull(parentProcessId);
+
+        using var protectedPidEnvironment = InfrastructureTestSupport.ClearProtectedPidEnvironment();
+        var originalKill = WorkerProcessJobs.TryKillPidTree;
+        var killCalled = false;
+        WorkerProcessJobs.TryKillPidTree = _ =>
+        {
+            killCalled = true;
+            return true;
+        };
+
+        try
+        {
+            Assert.False(WorkerProcessJobs.TryKillOrFallbackAndWait(parentProcessId.Value, TimeSpan.Zero));
+            Assert.False(killCalled);
+        }
+        finally
+        {
+            WorkerProcessJobs.TryKillPidTree = originalKill;
+        }
+    }
+
+    // The 2026-09-15 chain: protected daemon 1000 ← supervisor 900 ← cmd 800 ← pwsh 700, where 700 had
+    // exited hours earlier. Windows keeps 700 in 800's parent-pid record, and had just handed pid 700 to
+    // a freshly spawned gate child.
+    private const int ProtectedDaemonPid = 1000;
+    private const int SupervisorPid = 900;
+    private const int LauncherShellPid = 800;
+    private const int RecycledShellPid = 700;
+
+    private static readonly DateTime ChainStartedAt = new(2026, 9, 15, 4, 50, 0, DateTimeKind.Utc);
+
+    private static readonly Dictionary<int, (int ParentProcessId, DateTime StartTimeUtc)> ProtectedChain = new()
+    {
+        [ProtectedDaemonPid] = (SupervisorPid, ChainStartedAt.AddMinutes(3)),
+        [SupervisorPid] = (LauncherShellPid, ChainStartedAt.AddMinutes(2)),
+        [LauncherShellPid] = (RecycledShellPid, ChainStartedAt),
+        // The live process now holding pid 700 started three hours after the child that still names it.
+        [RecycledShellPid] = (1, ChainStartedAt.AddHours(3))
+    };
+
+    private static WorkerProcessJobs.ProcessAncestryLookup AncestryLookup(
+        IReadOnlyDictionary<int, (int ParentProcessId, DateTime StartTimeUtc)> chain) =>
+        (int processId, out WorkerProcessJobs.ProcessAncestryFacts facts) =>
+        {
+            if (!chain.TryGetValue(processId, out var entry))
+            {
+                facts = default;
+                return false;
+            }
+
+            facts = new WorkerProcessJobs.ProcessAncestryFacts(entry.ParentProcessId, entry.StartTimeUtc);
+            return true;
+        };
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_refuses_recycled_dead_ancestor_pid")]
+    public void WorkerProcessJobsAncestryWalkRefusesRecycledDeadAncestorPid()
+    {
+        var lookup = AncestryLookup(ProtectedChain);
+
+        Assert.False(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            RecycledShellPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.False(WorkerProcessJobs.IsDescendantOf(ProtectedDaemonPid, RecycledShellPid, lookup));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_refuses_hop_through_an_exited_parent_pid")]
+    public void WorkerProcessJobsAncestryWalkRefusesHopThroughAnExitedParentPid()
+    {
+        // Same chain, except pid 700 names no process at all: the hop cannot be verified either way.
+        var chain = ProtectedChain
+            .Where(entry => entry.Key != RecycledShellPid)
+            .ToDictionary(entry => entry.Key, entry => entry.Value);
+
+        Assert.False(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            RecycledShellPid,
+            ProtectedDaemonPid,
+            AncestryLookup(chain)));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_refuses_equal_start_time_parent")]
+    public void WorkerProcessJobsAncestryWalkRefusesEqualStartTimeParent()
+    {
+        var chain = new Dictionary<int, (int ParentProcessId, DateTime StartTimeUtc)>
+        {
+            [ProtectedDaemonPid] = (SupervisorPid, ChainStartedAt),
+            [SupervisorPid] = (1, ChainStartedAt)
+        };
+
+        Assert.False(WorkerProcessJobs.IsDescendantOf(
+            ProtectedDaemonPid,
+            SupervisorPid,
+            AncestryLookup(chain)));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_still_refuses_protected_pid_and_live_ancestors")]
+    public void WorkerProcessJobsAncestryWalkStillRefusesProtectedPidAndLiveAncestors()
+    {
+        var lookup = AncestryLookup(ProtectedChain);
+
+        Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            ProtectedDaemonPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            SupervisorPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+            LauncherShellPid,
+            ProtectedDaemonPid,
+            lookup));
+        Assert.True(WorkerProcessJobs.IsDescendantOf(ProtectedDaemonPid, LauncherShellPid, lookup));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_ancestry_walk_accepts_a_real_live_ancestor")]
+    public void WorkerProcessJobsAncestryWalkAcceptsARealLiveAncestor()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var child = StartLongRunningShell();
+        try
+        {
+            // The default lookup reads the live Toolhelp32 parent plus Process.StartTime, so this
+            // process — a genuinely live ancestor of the child it just spawned — still classifies as one.
+            Assert.True(WorkerProcessJobs.IsProtectedProcessOrAncestor(
+                Environment.ProcessId,
+                child.Id,
+                WorkerProcessJobs.ReadProcessAncestryFactsForTests));
+        }
+        finally
+        {
+            try { child.Kill(entireProcessTree: true); } catch { }
+        }
+    }
+
     private static Process StartLongRunningShell()
     {
         var process = Process.Start(new ProcessStartInfo
@@ -1725,6 +2505,53 @@ public sealed class WorkerProcessJobsTests : IDisposable
         try { process.Kill(entireProcessTree: true); } catch { }
         process.Dispose();
         throw new InvalidOperationException("Started wrapper process did not expose a durable identity within the registration window.");
+    }
+
+    private static ProcessStartInfo CreateIsolatedDotnetProbeStartInfo(string readyPath)
+    {
+        var assemblyDirectory = new DirectoryInfo(Path.GetDirectoryName(typeof(WorkerProcessJobsTests).Assembly.Location)!);
+        var parentDirectory = assemblyDirectory.Parent;
+        var probeAssemblyName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe.dll";
+        var candidates = new List<string>
+        {
+            Path.Combine(assemblyDirectory.FullName, probeAssemblyName)
+        };
+        if (parentDirectory?.Parent?.Parent is { } testProjectDirectory)
+        {
+            candidates.Add(Path.Combine(
+                testProjectDirectory.FullName,
+                "Fixtures",
+                "IsolatedDotnetProbe",
+                "bin",
+                parentDirectory.Name,
+                assemblyDirectory.Name,
+                probeAssemblyName));
+        }
+
+        if (parentDirectory?.Parent is { } projectOutputRoot)
+        {
+            candidates.Add(Path.Combine(
+                projectOutputRoot.FullName,
+                "Mcg.AgentOrchestrator.IsolatedDotnetProbe",
+                assemblyDirectory.Name,
+                probeAssemblyName));
+        }
+
+        var probeAssembly = candidates.FirstOrDefault(File.Exists);
+        Assert.False(
+            string.IsNullOrWhiteSpace(probeAssembly),
+            $"Missing isolated dotnet probe. Tried: {string.Join("; ", candidates)}");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = InfrastructureTestSupport.ResolveDotnetHostPath(),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(readyPath)!
+        };
+        startInfo.ArgumentList.Add(probeAssembly!);
+        startInfo.ArgumentList.Add("spawn-descendant");
+        startInfo.ArgumentList.Add(readyPath);
+        return startInfo;
     }
 
     private static int WaitForPidFile(string path)
@@ -1977,7 +2804,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "BackgroundDispatchRunner.cs")] =
                 "if (!WorkerProcessJobs.TryRegister(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "LocalProcessVerifier.cs")] =
-                "WorkerProcessJobs.RegisterOrThrow(",
+                "WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "GoalAcceptanceVerifier.cs")] =
                 "WorkerProcessJobs.StartRegisteredOwnedOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.App", "Orchestration", "PostLandingCanaryRunner.cs")] =

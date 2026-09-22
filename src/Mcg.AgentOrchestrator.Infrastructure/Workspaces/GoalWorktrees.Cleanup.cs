@@ -19,7 +19,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
@@ -35,7 +35,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminalNow(
         string executionDirectory,
@@ -51,7 +51,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: true,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveSupersededTerminal(
         string executionDirectory,
@@ -76,7 +76,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default,
+            hooks ?? new GoalWorktreeCleanupHooks(),
             expectedSupersededBranchTip: expectedBranchTip);
     }
 
@@ -96,7 +96,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: false,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
@@ -114,7 +114,7 @@ public static partial class GoalWorktrees
             hasBranch,
             forceTerminalCleanup: true,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -132,7 +132,7 @@ public static partial class GoalWorktrees
             precomputedHasBranch: null,
             forceTerminalCleanup,
             bypassCleanupBackoff: false,
-            hooks ?? GoalWorktreeCleanupHooks.Default);
+            hooks ?? new GoalWorktreeCleanupHooks());
 
     private static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -406,7 +406,7 @@ public static partial class GoalWorktrees
         AgentOrchestratorKernel? kernel = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         if (!IsGitWorkTree(executionDirectory))
         {
             return new GoalWorktreeSweepResult(0, []);
@@ -449,7 +449,7 @@ public static partial class GoalWorktrees
         AgentOrchestratorKernel? kernel = null,
         GoalWorktreeCleanupHooks? hooks = null)
     {
-        hooks ??= GoalWorktreeCleanupHooks.Default;
+        hooks ??= new GoalWorktreeCleanupHooks();
         var root = Path.GetFullPath(executionDirectory);
         var removed = 0;
         var leftovers = new List<string>();
@@ -478,7 +478,8 @@ public static partial class GoalWorktrees
         GoalOwnedEphemeralSweepResult ownedEphemeralCleanup,
         GoalWorktreeCleanupHooks hooks)
     {
-        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId);
+        var storageRoot = hooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
+        var root = DotnetBuildEnvironmentManager.GoalRoot(goalId, storageRoot);
         if (!Directory.Exists(root))
         {
             ClearCleanupNeeded(root, executionDirectory, hooks);
@@ -503,7 +504,7 @@ public static partial class GoalWorktrees
             ClearCleanupNeeded(root, executionDirectory, hooks);
         }
 
-        if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId))
+        if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storageRoot))
         {
             ClearCleanupNeeded(root, executionDirectory, hooks);
             return ownedEphemeralCleanup with { RemovedCount = ownedEphemeralCleanup.RemovedCount + 1 };
@@ -1075,40 +1076,33 @@ public static partial class GoalWorktrees
         }
     }
 
-    internal static List<WorktreeLockHolder> FindLockHolders(string path)
+    internal static List<WorktreeLockHolder> FindLockHolders(
+        string path,
+        Func<IEnumerable<string>, ProcessCommandLineSnapshot>? processCommandLineSnapshot = null)
     {
         var normalizedPath = NormalizePath(path);
-        var processesByPid = new Dictionary<int, string>();
-
-        foreach (var name in LockHolderCandidates)
-        {
-            try
-            {
-                foreach (var proc in Process.GetProcessesByName(name))
-                {
-                    using (proc)
-                    {
-                        processesByPid[proc.Id] = proc.ProcessName;
-                    }
-                }
-            }
-            catch
-            {
-                // Skip if enumeration fails for this candidate name.
-            }
-        }
-
-        if (processesByPid.Count == 0)
-        {
-            return [];
-        }
-
-        var commandLines = ProcessCommandLines.Read(processesByPid.Keys);
+        var snapshot = (processCommandLineSnapshot ?? ProcessCommandLines.SnapshotByNames)(LockHolderCandidates);
         var holders = new List<WorktreeLockHolder>();
-
-        foreach (var (pid, name) in processesByPid)
+        if (snapshot.Failure is { } failure)
         {
-            commandLines.TryGetValue(pid, out var cmdLine);
+            holders.Add(new WorktreeLockHolder(
+                0,
+                "process-inspection-unavailable",
+                $"status={failure.Status} nativeError={failure.NativeError} operation={failure.Operation}"));
+            return holders;
+        }
+
+        foreach (var (pid, record) in snapshot.Records)
+        {
+            if (record.Status is ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled)
+            {
+                continue;
+            }
+
+            var name = record.Name;
+            var cmdLine = record.Status == ProcessInspectionStatus.Available
+                ? record.CommandLine
+                : null;
             var referencesPath = cmdLine is not null &&
                 (cmdLine.Contains(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
                  cmdLine.Contains(path, StringComparison.OrdinalIgnoreCase));
@@ -1129,46 +1123,6 @@ public static partial class GoalWorktrees
     {
         return string.Equals(processName, "VBCSCompiler", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(processName, "MSBuild", StringComparison.OrdinalIgnoreCase);
-    }
-
-    internal static Dictionary<int, string> ParseWmicListOutput(string output)
-    {
-        var result = new Dictionary<int, string>();
-        var currentBlock = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        void FlushBlock()
-        {
-            if (currentBlock.TryGetValue("ProcessId", out var pidStr) &&
-                currentBlock.TryGetValue("CommandLine", out var cmdLine) &&
-                int.TryParse(pidStr, out var pid) &&
-                !string.IsNullOrWhiteSpace(cmdLine))
-            {
-                result[pid] = cmdLine.Trim();
-            }
-
-            currentBlock.Clear();
-        }
-
-        using var reader = new StringReader(output);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            line = line.Trim();
-            if (string.IsNullOrEmpty(line))
-            {
-                FlushBlock();
-                continue;
-            }
-
-            var sep = line.IndexOf('=');
-            if (sep > 0)
-            {
-                currentBlock[line[..sep]] = line[(sep + 1)..];
-            }
-        }
-
-        FlushBlock();
-        return result;
     }
 
 }

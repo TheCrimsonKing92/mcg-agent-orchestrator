@@ -38,7 +38,14 @@ public sealed class TaskVerificationTests
             [new WorkerContextSectionReceipt("brief/current.md", 12, 12, new string('b', 64), ContextDeliveryMode.InlineFull, 1, [AgentRole.Developer])],
             ProviderUsageValue.Reported(123),
             ProviderUsageValue.Unknown("unsupported"),
-            ProviderUsageValue.Reported(45));
+            ProviderUsageValue.Reported(45),
+            RenderedPromptBytes: 4_096,
+            ReviewFindingProjectionMode: ReviewFindingHistoryProjectionMode.ContractRepair,
+            UniqueReviewFindingRoundCount: 7,
+            DuplicateReviewFindingRoundCount: 13,
+            UniqueFindingEvidenceReceiptCount: 9,
+            DuplicateFindingEvidenceReceiptCount: 21,
+            ReviewFindingFallbackReason: "material-evidence-changed");
         kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
             "developer",
             "run",
@@ -54,6 +61,16 @@ public sealed class TaskVerificationTests
         Assert.Equal(ProviderUsageState.Unknown, restoredReceipt.CachedInputTokens.State);
         Assert.Equal("unsupported", restoredReceipt.CachedInputTokens.UnknownReason);
         Assert.Equal(ContextDeliveryMode.InlineFull, Assert.Single(restoredReceipt.Sections).DeliveryMode);
+        Assert.Equal(4_096, restoredReceipt.RenderedPromptBytes);
+        Assert.Equal(ReviewFindingHistoryProjectionMode.ContractRepair, restoredReceipt.ReviewFindingProjectionMode);
+        Assert.Equal(7, restoredReceipt.UniqueReviewFindingRoundCount);
+        Assert.Equal(13, restoredReceipt.DuplicateReviewFindingRoundCount);
+        Assert.Equal(9, restoredReceipt.UniqueFindingEvidenceReceiptCount);
+        Assert.Equal(21, restoredReceipt.DuplicateFindingEvidenceReceiptCount);
+        Assert.Equal("material-evidence-changed", restoredReceipt.ReviewFindingFallbackReason);
+        var serializedReceipt = JsonSerializer.Serialize(restoredReceipt);
+        Assert.DoesNotContain("prompt_body", serializedReceipt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("receipt_body", serializedReceipt, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact]
@@ -294,6 +311,37 @@ public sealed class TaskVerificationTests
         Assert.Equal("candidate-sha", receipt.CandidateSha);
         Assert.Equal(PreReviewEvidenceDisposition.Green, receipt.Disposition);
         Assert.Equal("receipt\\result.trx", receipt.EvidencePointer);
+        Assert.Single(restored.GetGoal(goal.Id).FindTask(reviewer.Id).PreReviewEvidenceHistory);
+    }
+
+    [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_history_round_trips_current_candidate_constituents")]
+    public void PreReviewEvidenceReceiptHistoryRoundTripsCurrentCandidateConstituents()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist pre-review evidence constituents", [reviewer]);
+        PreReviewEvidenceReceipt Create(string selection) => new(
+            goal.Id.Value,
+            1,
+            "candidate-sha",
+            [selection],
+            PreReviewEvidenceDisposition.Green,
+            1,
+            0,
+            [new PreReviewEvidenceCheckReceipt(selection, selection, true, 0)],
+            [],
+            "mapped",
+            $"receipt\\{selection}.trx",
+            DateTimeOffset.UtcNow);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, Create("First"));
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, Create("Second"));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredReviewer = restored.GetGoal(goal.Id).FindTask(reviewer.Id);
+
+        Assert.Equal(["First", "Second"], restoredReviewer.PreReviewEvidenceHistory
+            .SelectMany(receipt => receipt.SelectedFocusedTests));
+        Assert.Equal("Second", Assert.Single(restoredReviewer.PreReviewEvidenceReceipt!.SelectedFocusedTests));
     }
 
     [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_is_structurally_idempotent_and_current_head_owned")]
@@ -327,10 +375,13 @@ public sealed class TaskVerificationTests
                 "receipt\\result.trx",
                 recordedAt.AddSeconds(receiptNumber++));
 
-        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
-        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
+        var receipt = CreateReceipt();
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, receipt);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, receipt);
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, receipt with { RecordedAt = receipt.RecordedAt.AddTicks(1) });
 
-        Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.PreReviewEvidenceRecorded));
+        Assert.Equal(2, goal.Timeline.Count(evt => evt.Kind == ProgressKind.PreReviewEvidenceRecorded));
+        Assert.Equal(2, reviewer.PreReviewEvidenceAttemptCount);
         Assert.True(reviewer.PreReviewEvidenceReceipt!.MatchesCurrentCandidate(
             goal.Id.Value,
             "candidate-sha",
@@ -832,12 +883,40 @@ public sealed class TaskVerificationTests
     var goal = kernel.CreateGoal("Retry mechanical receipt");
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var candidateSha = new string('a', 40);
+    var location = new ReviewFindingLocation("src/One.cs", "One.Run");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "review",
+        "C:\\repo",
+        1,
+        "malformed output",
+        string.Empty,
+        DateTimeOffset.UtcNow,
+        ReviewFindingTouchedAnchors: [location],
+        ReviewedCommit: candidateSha,
+        MergedReviewFindings: [new ReviewFinding("stable-one", ReviewFindingState.Open, location, "finding")],
+        ReviewFindingContractViolation: new ReviewFindingContractViolation("schema-invalid", "missing fields"),
+        FindingEvidenceReceipts:
+        [
+            new FindingEvidenceReceipt(
+                "receipt-one",
+                candidateSha,
+                new FindingEvidenceRequest([new FindingEvidenceSelection("tests/Tests.csproj", "Tests.One")]),
+                true,
+                true,
+                "evidence")
+        ],
+        FullStandardOutput: "malformed output",
+        FullStandardError: string.Empty));
 
     kernel.RetryTask(goal.Id, task.Id, "Rerun named commands and quote receipts.", retryRoundKind: RetryRoundKind.Mechanical);
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
     var restoredTask = restored.GetTask(goal.Id, task.Id);
     Assert.Equal(RetryRoundKind.Mechanical, restoredTask.PendingRetryRoundKind);
+    Assert.Equal(candidateSha, restoredTask.PendingReviewFindingRepairCheckpoint!.CandidateSha);
+    Assert.Single(restoredTask.PendingReviewFindingRepairCheckpoint.EvidenceContentHashes);
+    Assert.Equal(["stable-one"], restoredTask.PendingReviewFindingRepairCheckpoint.StableFindingIds);
 
     restored.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("worker", "worker run", "C:\\repo", DateTimeOffset.UtcNow));
     restored.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
@@ -849,6 +928,7 @@ public sealed class TaskVerificationTests
         DateTimeOffset.UtcNow));
 
     Assert.Null(restored.GetTask(goal.Id, task.Id).PendingRetryRoundKind);
+    Assert.Null(restored.GetTask(goal.Id, task.Id).PendingReviewFindingRepairCheckpoint);
 }
     [Xunit.Fact(DisplayName = "RetryTask_rejects_running_or_waiting_tasks")]
     public void RetryTaskRejectsRunningOrWaitingTasks()

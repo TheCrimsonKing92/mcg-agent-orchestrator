@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
+[Xunit.Collection(TestCollections.PostLandingCanary)]
 public sealed class PostLandingCanaryTests : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "Post-landing canary classifier covers every engine surface and ignores unrelated paths")]
@@ -15,6 +16,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         {
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs",
             "src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner.cs",
+            "src/Mcg.AgentOrchestrator.Core/Application/ReverseDependencyTestImpactReader.cs",
+            "src/Mcg.AgentOrchestrator.Core/Application/TestClassDeclarationReader.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
             "src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant.cs",
@@ -31,6 +34,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             [
                 "acceptance-verifier",
                 "test-impact-planner",
+                "reverse-dependency-index",
                 "build-environment",
                 "change-classifier",
                 "gate-settings",
@@ -116,6 +120,20 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             1,
             "real rejection",
             Checks: [new AcceptanceCheckResult("core tests", false, 1, "failed")]);
+        var seededRepositoryApparatus = new AcceptanceVerificationResult(
+            false,
+            false,
+            1,
+            "typed seeded repository apparatus receipt",
+            Checks:
+            [
+                new AcceptanceCheckResult(
+                    "infrastructure tests: Remainder",
+                    false,
+                    1,
+                    "typed apparatus",
+                    FailureClassification: AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus)
+            ]);
 
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
@@ -123,6 +141,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
             PostLandingCanaryCommand.ClassifyFailure(interference, executedTestCount: 0));
+        Assert.Equal(
+            PostLandingCanaryFailureReason.InfrastructureError,
+            PostLandingCanaryCommand.ClassifyFailure(seededRepositoryApparatus, executedTestCount: 1));
         Assert.Equal(
             PostLandingCanaryFailureReason.Reject,
             PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 1));
@@ -1313,11 +1334,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("underlying executable", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Xunit.Fact(DisplayName = "Known-green fixture runs from an isolated landed worktree despite a dirty operator checkout")]
+    [Xunit.Fact(DisplayName = "Known-green canary ignores unrelated source activity but detects owned dirt")]
     public async Task KnownGreenFixtureRunsThroughFreshBinaryWithoutDirtyingRepository()
     {
         var sourceRoot = FindRepoRoot();
-        var sourceStatusBefore = ReadGitStatus(sourceRoot);
         var testRoot = CreateExternalTestRoot(sourceRoot);
         var repositoryRoot = Path.Combine(testRoot, "repository");
         var logDirectory = Path.Combine(testRoot, "logs");
@@ -1337,12 +1357,32 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             "commit", "--quiet", "-m", "minimal canary repository");
         var landingSha = RunGit(repositoryRoot, "rev-parse", "HEAD").Output.Trim();
         Assert.False(string.IsNullOrWhiteSpace(landingSha));
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var dirtySentinel = Path.Combine(repositoryRoot, "operator-owned-uncommitted.sentinel");
-        var resolver = new FixedAppBinaryResolver(appDllPath);
+        var concurrentSentinel = Path.Combine(repositoryRoot, "unrelated-concurrent.sentinel");
+        var resolver = new FixedAppBinaryResolver(
+            appDllPath,
+            _ => File.WriteAllText(concurrentSentinel, "unrelated source-worktree activity"));
+        var occupiedBuildRoot = Path.Combine(testRoot, "foreign-slot-owner");
+        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         var clock = Stopwatch.StartNew();
         try
         {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                occupiedBuildRoot);
+            using var firstForeignSlot = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.Zero);
+            using var secondForeignSlot = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.Zero);
+            Assert.Equal(
+                DotnetBuildEnvironmentManager.StableSlotCount,
+                new[]
+                {
+                    firstForeignSlot.Environment.BuildPermitIndex,
+                    secondForeignSlot.Environment.BuildPermitIndex
+                }.Distinct().Count());
             File.WriteAllText(dirtySentinel, "operator-owned uncommitted content");
             var statusBefore = ReadGitStatus(repositoryRoot);
             Assert.Contains(
@@ -1361,6 +1401,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 $"PostLandingCanary known-green elapsed={clock.Elapsed.TotalSeconds:F2}s baseline=38.02s");
 
             Assert.True(outcome.Green, outcome.Detail);
+            Assert.DoesNotContain(nameof(DotnetBuildSlotsBusyException), outcome.Detail, StringComparison.Ordinal);
+            Assert.Equal("isolated-root", outcome.SlotResolution);
             Assert.True(outcome.ExecutedTestCount > 0);
             Assert.Equal(1, resolver.CallCount);
             Assert.Equal(landingSha, resolver.SourceSha);
@@ -1387,20 +1429,47 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             var probe = JsonSerializer.Deserialize<PostLandingCanaryProbeResult>(
                 resultLine[PostLandingCanaryCommand.ResultPrefix.Length..],
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            Assert.True(Assert.IsType<PostLandingCanaryProbeResult>(probe).Green);
+            var typedProbe = Assert.IsType<PostLandingCanaryProbeResult>(probe);
+            Assert.True(typedProbe.Green);
+            Assert.Equal("isolated-root", typedProbe.SlotResolution);
             Assert.NotEmpty(Directory.GetFiles(
                 logDirectory,
                 $"post-landing-canary-{landingSha}-*.trx"));
+            var sourceStatusAfter = ReadGitStatus(repositoryRoot)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .ToArray();
+            var expectedSourceStatus = statusBefore
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Append($"?? {Path.GetFileName(concurrentSentinel)}")
+                .Order(StringComparer.Ordinal)
+                .ToArray();
             Assert.Equal(
-                statusBefore,
-                ReadGitStatus(repositoryRoot));
-            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
+                expectedSourceStatus,
+                sourceStatusAfter.Order(StringComparer.Ordinal).ToArray());
+
+            var ownedMutationResolver = new FixedAppBinaryResolver(
+                appDllPath,
+                canaryRoot => File.WriteAllText(
+                    Path.Combine(canaryRoot, "canary-owned-mutation.sentinel"),
+                    "injected canary-owned dirt"));
+            var ownedMutation = await Assert.ThrowsAsync<PostLandingCanaryEvaluationException>(() =>
+                new PostLandingCanaryRunner(
+                        repositoryRoot,
+                        logDirectory: Path.Combine(testRoot, "owned-mutation-logs"),
+                        applicationBinaryResolver: ownedMutationResolver)
+                    .RunAsync(
+                        new PostLandingCanaryRequest(landingSha!, ["owned-mutation-control"]),
+                        timeout.Token));
+            Assert.Contains("canary-owned-mutation.sentinel", ownedMutation.Message, StringComparison.Ordinal);
+            Assert.Contains("dirtied", ownedMutation.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                previousIsolatedRoot);
             DeleteDirectoryLoudly(testRoot);
             Assert.False(Directory.Exists(testRoot), $"Disposable canary repository cleanup failed: {testRoot}");
-            Assert.Equal(sourceStatusBefore, ReadGitStatus(sourceRoot));
         }
     }
 
@@ -1440,13 +1509,17 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 $"post-landing-canary-{landingSha}-*.err.log");
             Assert.NotEmpty(stdoutLogs);
             Assert.NotEmpty(stderrLogs);
+            var stdoutContents = await Task.WhenAll(stdoutLogs.Select(path =>
+                GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
+            var stderrContents = await Task.WhenAll(stderrLogs.Select(path =>
+                GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(path, captureLimitReached: false)));
             if (!OperatingSystem.IsWindows())
             {
-                Assert.Contains(stdoutLogs, path =>
-                    File.ReadAllText(path).Contains("induced canary stdout", StringComparison.Ordinal));
+                Assert.Contains(stdoutContents, content =>
+                    content.Contains("induced canary stdout", StringComparison.Ordinal));
             }
-            Assert.Contains(stderrLogs, path =>
-                File.ReadAllText(path).Contains(expectedStderr, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(stderrContents, content =>
+                content.Contains(expectedStderr, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -1771,11 +1844,19 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         int executedTestCount)
     {
         var exitCode = -1;
+        var executionOwner = new FakeAcceptanceExecutionOwner();
         var output = CaptureConsole(() =>
             exitCode = PostLandingCanaryCommand.Run(
                 [PostLandingCanaryCommand.SubcommandName, "fixture-root"],
                 verifier,
-                _ => executedTestCount));
+                _ => executedTestCount,
+                (worktreePath, _) =>
+                {
+                    Assert.Equal("fixture-root", worktreePath);
+                    return executionOwner;
+                }));
+        Assert.Same(executionOwner, verifier.ExecutionOwner);
+        Assert.True(executionOwner.Disposed);
         var resultLine = output
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Single(line => line.StartsWith(PostLandingCanaryCommand.ResultPrefix, StringComparison.Ordinal));
@@ -1795,7 +1876,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             run(request, cancellationToken);
     }
 
-    private sealed class FixedAppBinaryResolver(string appDllPath)
+    private sealed class FixedAppBinaryResolver(string appDllPath, Action<string>? onResolve = null)
         : IPostLandingCanaryApplicationBinaryResolver
     {
         internal int CallCount { get; private set; }
@@ -1811,6 +1892,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             CallCount++;
             SourceRoot = sourceRoot;
             SourceSha = sourceSha;
+            onResolve?.Invoke(sourceRoot);
             return Task.FromResult(appDllPath);
         }
     }
@@ -1820,29 +1902,42 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     {
         internal string? WorktreePath { get; private set; }
         internal IReadOnlyList<string>? ChangedFiles { get; private set; }
+        internal IAcceptanceAttemptExecutionOwner? ExecutionOwner { get; private set; }
 
-        public Task<AcceptanceVerificationResult> RunAsync(
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(
             string worktreePath,
-            GoalId? goalId = null,
-            IReadOnlyList<string>? changedFiles = null,
-            int? stableSlotIndex = null,
-            DotnetBuildEnvironmentLease? stableSlotLease = null,
-            CancellationToken cancellationToken = default)
+            GoalId? goalId,
+            IReadOnlyList<string>? changedFiles,
+            int? stableSlotIndex,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
         {
             WorktreePath = worktreePath;
             ChangedFiles = changedFiles;
+            ExecutionOwner = executionOwner;
             return Task.FromResult(result);
         }
 
-        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
             string worktreePath,
             GoalId? goalId,
             string request,
+            IAcceptanceFocusedVerificationOwner executionOwner,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
-            bool runBaselineArm = false,
-            CancellationToken cancellationToken = default) =>
+            bool runBaselineArm = false) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class FakeAcceptanceExecutionOwner : IAcceptanceAttemptExecutionOwner
+    {
+        internal bool Disposed { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class ToggleAcceptanceEngineStateReader(PostLandingCanaryEventStore inner)

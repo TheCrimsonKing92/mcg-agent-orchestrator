@@ -8,7 +8,8 @@ public sealed record EffectiveAcceptanceCriteriaCorrection(
     TaskId? SourceTaskId,
     ProgressKind SourceKind,
     bool IsWaiver = false,
-    string? CapturedAcceptanceCriteriaHash = null)
+    string? CapturedAcceptanceCriteriaHash = null,
+    IReadOnlyList<CriterionDisposition>? Dispositions = null)
 {
     private const string WaiverPrefix = "WAIVED: ";
 
@@ -22,6 +23,19 @@ public sealed record EffectiveAcceptanceCriteriaCorrection(
         string criterion,
         string reason,
         string actor,
-        DateTimeOffset recordedAt) =>
-        new(criterion, $"{WaiverPrefix}{reason}", actor, recordedAt, null, ProgressKind.GoalPolicyDecision, IsWaiver: true);
+        DateTimeOffset recordedAt,
+        IReadOnlyList<CriterionDisposition>? dispositions = null) =>
+        new(
+            criterion,
+            $"{WaiverPrefix}{reason}",
+            actor,
+            recordedAt,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            IsWaiver: true,
+            Dispositions: dispositions);
 }
+
+public sealed record CriterionDisposition(string Criterion, string Disposition);
+
+public sealed record CriterionDispositionRequest(string CriterionReference, string Disposition);

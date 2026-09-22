@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record OrchestratorWorkspace(
+public sealed record OrchestratorWorkspace(
     string RootDirectory,
     string ExecutionDirectory,
     string OrchestratorDirectory,
@@ -177,6 +177,9 @@ internal sealed record OrchestratorWorkspace(
     // Answered spec-clarification forks recorded as precedents so a second goal with the same
     // forkKind reuses the recorded choice rather than re-asking.
     public string SpecRefinerPrecedentsPath => Path.Combine(OrchestratorDirectory, "spec-refiner-precedents.json");
+
+    public string SpecRefinementLaunchAttemptsDirectory =>
+        Path.Combine(OrchestratorDirectory, "spec-refinement-launch-attempts");
 
     // Goal work runs in the goal's worktree when one exists so concurrent
     // goals do not contend for the shared execution directory.

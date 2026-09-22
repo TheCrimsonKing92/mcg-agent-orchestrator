@@ -1,5 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -9,18 +9,30 @@ internal static class RunGoalService
 {
     internal static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(5);
     internal delegate Task SleepFunc(TimeSpan delay, CancellationToken ct);
+
+    // Test-only seam. Mirrors GoalAdvancementOperations.AdvanceGoalWithSubscriptionsUntilBlocked so the
+    // control-flow tests can drive RunAsync in-process; production callers leave it unset and get the real step.
+    internal delegate GoalAdvanceLoopOutcome AdvanceStepFunc(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles,
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        bool allowLargePaidSubscriptionStart,
+        IModelProviderRegistry? providers);
+
     private const int OutputTailLineCount = 20;
     private const int MaxAutomaticFailoverAttemptsPerTask = 3;
 
     internal sealed record RunGoalResult(
         bool Executed,
         string StopReason,
-        NextActionDto? BlockingAction,
+        NextActionItem? BlockingAction,
         IReadOnlyList<RunGoalTaskSummary> CompletedTasks,
         RunGoalStopEvidence? StopEvidence,
         DateTimeOffset? ContinueAfter = null,
         bool StateChanged = false,
-        DispatchProcessStartFailureDto? Failure = null);
+        DispatchProcessStartFailure? Failure = null);
 
     internal sealed record RunGoalTaskSummary(
         int TaskNumber,
@@ -50,11 +62,13 @@ internal static class RunGoalService
         SleepFunc? sleep = null,
         IClock? clock = null,
         IModelProviderRegistry? providers = null,
+        AdvanceStepFunc? advanceStep = null,
         CancellationToken cancellationToken = default)
     {
         var interval = pollInterval ?? DefaultPollInterval;
         var sleepImpl = sleep ?? ((delay, ct) => Task.Delay(delay, ct));
         var clockImpl = clock ?? new SystemClock();
+        var advanceImpl = advanceStep ?? new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked;
         var completedTasks = new List<RunGoalTaskSummary>();
         var completedTaskIds = new HashSet<TaskId>();
         var failedAgentsByTask = new Dictionary<TaskId, HashSet<AgentId>>();
@@ -67,7 +81,7 @@ internal static class RunGoalService
         {
             var priorStatuses = goal.Tasks.ToDictionary(t => t.Id, t => t.Status);
 
-            var result = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+            var result = advanceImpl(
                 kernel, agents, profiles, workspace, goal, allowLargePaidSubscriptionStart, providers);
 
             if (result.StepCount > 0) executed = true;
@@ -179,7 +193,7 @@ internal static class RunGoalService
         }
     }
 
-    private static RunGoalStopEvidence? BuildStopEvidence(Goal goal, AdvanceLoopResultDto result, IClock clock)
+    private static RunGoalStopEvidence? BuildStopEvidence(Goal goal, GoalAdvanceLoopOutcome result, IClock clock)
     {
         var task = ResolveStopTask(goal, result.BlockingAction)
             ?? goal.Tasks.FirstOrDefault(task => task.Status is WorkTaskStatus.Failed or WorkTaskStatus.WaitingForHuman)
@@ -198,7 +212,7 @@ internal static class RunGoalService
             BuildOutputTail(task));
     }
 
-    private static TaskSpec? ResolveStopTask(Goal goal, NextActionDto? action)
+    private static TaskSpec? ResolveStopTask(Goal goal, NextActionItem? action)
     {
         if (action?.TaskId is null)
         {
@@ -206,7 +220,7 @@ internal static class RunGoalService
         }
 
         return goal.Tasks.FirstOrDefault(task =>
-            task.Id.Value.StartsWith(action.TaskId, StringComparison.OrdinalIgnoreCase));
+            task.Id.Value.StartsWith(action.TaskId.Value, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string? BuildOutputTail(TaskSpec task)
@@ -237,7 +251,7 @@ internal static class RunGoalService
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
         Goal goal,
-        AdvanceLoopResultDto result,
+        GoalAdvanceLoopOutcome result,
         IClock clock,
         Dictionary<TaskId, HashSet<AgentId>> failedAgentsByTask,
         Dictionary<TaskId, int> failoverAttemptsByTask,
@@ -296,13 +310,14 @@ internal static class RunGoalService
         kernel.RetryTask(
             goal.Id,
             task.Id,
-            $"Automatic run-goal failover after {evidence.Reason} from agent '{failedAgentId.Value}'; retrying with alternate agent '{alternate.Id.Value}'.");
+            $"Automatic run-goal failover after {evidence.Reason} from agent '{failedAgentId.Value}'; retrying with alternate agent '{alternate.Id.Value}'.",
+            retryCause: RetryCause.ProviderInterruption);
         return true;
     }
 
     private static bool TryResolveAutomaticFailoverTask(
         Goal goal,
-        AdvanceLoopResultDto result,
+        GoalAdvanceLoopOutcome result,
         IClock clock,
         out TaskSpec task,
         out AutomaticFailoverEvidence evidence)
@@ -330,6 +345,15 @@ internal static class RunGoalService
 
     private static bool TryGetAutomaticFailoverEvidence(TaskSpec task, DateTimeOffset now, out AutomaticFailoverEvidence evidence)
     {
+        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
+        {
+            var count = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
+            evidence = new AutomaticFailoverEvidence(
+                $"recoverable provider connectivity evidence ({count} failure(s))",
+                count);
+            return true;
+        }
+
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
         {
             evidence = new AutomaticFailoverEvidence(
@@ -352,15 +376,6 @@ internal static class RunGoalService
             evidence = new AutomaticFailoverEvidence(
                 "provider-neutral heartbeat/progress stall evidence",
                 task.VerificationHistory.Count(DispatchFailureClassifier.IsProviderNeutralProgressStallFailure));
-            return true;
-        }
-
-        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
-        {
-            var count = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
-            evidence = new AutomaticFailoverEvidence(
-                $"recoverable provider connectivity evidence ({count} failure(s))",
-                count);
             return true;
         }
 

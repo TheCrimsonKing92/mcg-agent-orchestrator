@@ -129,6 +129,9 @@ public sealed class BudgetAwareRoutingTests
     {
         var kernel = new AgentOrchestratorKernel();
         var agents = AgentCatalog.Default().Agents;
+        var developerAgent = agents.Single(agent => agent.Role == AgentRole.Developer);
+        var scorecardProvider = developerAgent.Model.ProviderName;
+        var scorecardModel = developerAgent.Subscription!.ModelAlias!;
         var task = new TaskSpec(TaskId.New(), "Implement high-risk multi-scope persistence migration", AgentRole.Developer);
         var goal = kernel.CreateGoal("Complex dispatch planning", [task]);
         kernel.RecordGoalPolicyDecision(
@@ -139,8 +142,8 @@ public sealed class BudgetAwareRoutingTests
         var scorecard = new[]
         {
             new ModelOutcomeRecord(
-                "OpenAI",
-                AgentCatalog.OpenAiSolSubscriptionModelAlias,
+                scorecardProvider,
+                scorecardModel,
                 Completed: 3,
                 Failed: 0,
                 SelfRatedAdequate: 3,
@@ -151,8 +154,8 @@ public sealed class BudgetAwareRoutingTests
                 Reason: "3/3 recent dispatches completed.",
                 DispatchLane: "codex-cli"),
             new ModelOutcomeRecord(
-                "OpenAI",
-                AgentCatalog.OpenAiSolSubscriptionModelAlias,
+                scorecardProvider,
+                scorecardModel,
                 Completed: 0,
                 Failed: 3,
                 SelfRatedAdequate: 3,
@@ -170,6 +173,21 @@ public sealed class BudgetAwareRoutingTests
         Assert.Equal("codex-cli", item.ProfileName);
         Assert.Equal(WorkerRouteDisposition.Selected, item.Route!.Disposition);
         Assert.Contains(item.Route.Reasons, reason => reason.Contains("scorecard=Prefer", StringComparison.OrdinalIgnoreCase));
+
+        var sparkDeveloperAgent = developerAgent with
+        {
+            Subscription = developerAgent.Subscription! with { WorkerProfileName = "codex-spark" }
+        };
+        var sparkAgents = agents
+            .Select(agent => agent.Id == developerAgent.Id ? sparkDeveloperAgent : agent)
+            .ToArray();
+
+        var sparkPlan = SubscriptionPlanBuilder.Build(updatedGoal, sparkAgents, DefaultProfiles, scorecard: scorecard);
+        var sparkItem = sparkPlan.Items.Single(i => i.Role == AgentRole.Developer);
+
+        Assert.Equal("codex-spark", sparkItem.ProfileName);
+        Assert.Equal(WorkerRouteDisposition.Blocked, sparkItem.Route!.Disposition);
+        Assert.Contains(sparkItem.Route.Reasons, reason => reason.Contains("scorecard=Avoid", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "BudgetAwareRouting_budget_exhausted_suggests_ollama_fallback")]

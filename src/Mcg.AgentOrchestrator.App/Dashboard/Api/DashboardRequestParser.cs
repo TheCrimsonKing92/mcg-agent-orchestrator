@@ -100,7 +100,7 @@ public static AddTaskSubmissionDto ParseAddTaskSubmission(string body)
     }
 
     return new AddTaskSubmissionDto(
-        CliArgumentParser.ParseAgentRole(request.Role),
+        DashboardApplicationServices.ParseAgentRole(request.Role),
         request.Description.Trim(),
         request.Delegate,
         string.IsNullOrWhiteSpace(request.VerificationPlan) ? null : request.VerificationPlan.Trim());

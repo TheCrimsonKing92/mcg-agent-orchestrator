@@ -82,6 +82,19 @@ internal enum AcceptanceStableSlotExhaustionPolicy
     DegradeToSerial
 }
 
+internal sealed class AcceptanceArtifactWriterLeaseBusyException(
+    string goalDirectory,
+    string? observedAttemptId = null)
+    : Exception(
+        observedAttemptId is null
+            ? $"Acceptance artifact writer lease is held before a canonical attempt is observable in '{goalDirectory}'."
+            : $"Acceptance artifact writer lease is held while observed attempt '{observedAttemptId}' is not live in '{goalDirectory}'.")
+{
+    public string GoalDirectory { get; } = goalDirectory;
+
+    public string? ObservedAttemptId { get; } = observedAttemptId;
+}
+
 internal sealed record ConductorParallelAcceptanceAttempt(
     string AttemptId,
     string GoalId,
@@ -125,7 +138,12 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     IReadOnlyList<FindingEvidenceRequestDisposition>? FocusedEvidenceRequestDispositions = null,
     string? FocusedEvidenceReceiptId = null,
     string? PolicyJson = null,
-    AcceptanceStableSlotExhaustionPolicy? StableSlotExhaustionPolicy = null)
+    AcceptanceStableSlotExhaustionPolicy? StableSlotExhaustionPolicy = null,
+    string ExecutionProtocol = "out-of-process",
+    // The conductor generation that started this attempt, and the one that later adopted it across a
+    // renewal. Null means an attempt written before generation identity was recorded: unknown, not mine.
+    int? ConductorGenerationId = null,
+    int? AdoptedByGenerationId = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -158,7 +176,8 @@ internal sealed record ConductorParallelAcceptanceAttemptDecision(
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunch(
     ConductorParallelAcceptanceAttempt Attempt,
-    Action<int> ExecuteInCurrentProcess);
+    Action<int> ExecuteInCurrentProcess,
+    DotnetBuildStorageRoot? BuildStorageRoot);
 
 internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(int ProcessId);
 
@@ -166,7 +185,8 @@ internal delegate ConductorParallelAcceptanceRunResult ConductorParallelAcceptan
     ConductorParallelAcceptanceCandidate candidate,
     ConductorAutonomyPolicy policy,
     DotnetBuildEnvironmentLease? stableSlotLease,
-    CancellationToken cancellationToken);
+    CancellationToken cancellationToken,
+    AcceptanceRunExecutionOptions executionOptions);
 
 internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAcceptanceTryRunPreSlot(
     ConductorParallelAcceptanceCandidate candidate,
@@ -317,7 +337,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
     private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
-    private const int RetainedAttemptCountPerGoal = 20;
+    internal const int RetainedAttemptCountPerGoal = 20;
     private static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(15);
 
     private readonly string _rootDirectory;
@@ -333,10 +353,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
     private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests? _attemptCompletionGateForTests;
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _cleanupObservedForTests;
+    private readonly Action<ConductorParallelAcceptanceAttempt>? _resultPublishedForTests;
+    private readonly Action? _attemptWriterLeaseAcquiringForTests;
     private readonly Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?> _acquireStableSlotLease;
+    private readonly IReadOnlyDictionary<string, TextWriter>? _attemptLogWriters;
     private readonly TimeSpan _buildPermitBusyTimeout;
     private readonly Action<TimeSpan>? _buildPermitSleep;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
+    private readonly DotnetBuildStorageRoot? _buildStorageRoot;
+    private readonly int _conductorGenerationId;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -355,7 +380,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductEventLogWriter? conductEventLogWriter = null,
         TimeProvider? timeProvider = null,
         TimeSpan? buildPermitBusyTimeout = null,
-        Action<TimeSpan>? buildPermitSleep = null)
+        Action<TimeSpan>? buildPermitSleep = null,
+        Action? attemptWriterLeaseAcquiringForTests = null,
+        IReadOnlyDictionary<string, TextWriter>? attemptLogWriters = null,
+        Action<ConductorParallelAcceptanceAttempt>? resultPublishedForTests = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null,
+        // Each conductor renewal is a fresh child process, so the loop pid is a sound generation
+        // identity and the driver needs no threading change to supply one.
+        int? conductorGenerationId = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -377,17 +409,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _heartbeatWritten = heartbeatWritten;
         _attemptCompletionGateForTests = attemptCompletionGateForTests;
         _cleanupObservedForTests = cleanupObservedForTests;
+        _resultPublishedForTests = resultPublishedForTests;
+        _attemptWriterLeaseAcquiringForTests = attemptWriterLeaseAcquiringForTests;
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
+        _attemptLogWriters = attemptLogWriters;
         _conductEventLogWriter = conductEventLogWriter;
+        // Only an explicit operation setting crosses the hermetic child boundary.
+        // An absent setting retains the existing per-process default resolution.
+        _buildStorageRoot = buildStorageRoot;
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
         _buildPermitSleep = buildPermitSleep;
+        _conductorGenerationId = conductorGenerationId ?? Environment.ProcessId;
     }
-
-    internal ConductorParallelAcceptanceAttemptDecision Evaluate(
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
-        Evaluate(candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
         ConductorParallelAcceptanceCandidate candidate,
@@ -421,7 +454,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json"))
             {
                 var attempt = ReadCanonicalAttempt(path, goalId);
-                if (!IsReconciled(attempt))
+                if (!IsReconciled(attempt) || IsCapacityReservingAttempt(attempt))
                 {
                     attempts.Add(attempt);
                 }
@@ -449,8 +482,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 $"Acceptance attempt identity changed at canonical metadata path '{attempt.MetadataPath}'.");
         }
 
+        if (IsCapacityReservingInvalidatedAttempt(current))
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+
         if (IsReconciled(current))
         {
+            if (IsTerminalWithoutRunOutcome(current.Outcome))
+            {
+                return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
+            }
+
             throw new InvalidDataException(
                 $"Acceptance attempt '{current.AttemptId}' was selected for observation after reconciliation.");
         }
@@ -477,7 +520,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
             timeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
             cancellationToken: cancellationToken,
-            slotCount: DotnetBuildEnvironmentManager.StableSlotCount);
+            slotCount: DotnetBuildEnvironmentManager.StableSlotCount,
+            storageRoot: _buildStorageRoot);
         Console.WriteLine(
             $"ACCEPTANCE_LEASE_ACQUIRE cohort={cohortId} permit=acceptance-{lease.Environment.BuildPermitIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} holderPid={Environment.ProcessId}");
         return lease;
@@ -495,7 +539,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return EvaluateCore(
             candidate,
             policy,
-            (attemptCandidate, _, lease, cancellationToken) => ConductorParallelAcceptanceRunResult.Focused(
+            (attemptCandidate, _, lease, cancellationToken, _) => ConductorParallelAcceptanceRunResult.Focused(
                 attemptCandidate,
                 runFocusedEvidence(attemptCandidate.Goal, request, lease, cancellationToken)),
             PreReviewEvidenceDispatchKind,
@@ -514,6 +558,36 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         AcceptanceStableSlotExhaustionPolicy stableSlotExhaustionPolicy)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
+        if (current is not null && (IsLiveInvalidatedAttempt(current) || IsLiveAttempt(current)))
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+
+        // Before any path that can reach Launch: an attempt left running by a dead generation whose gate
+        // child is still alive is adopted, not replaced. Its verdict is applied from artifacts by the
+        // existing completion path once the child publishes them, so the retry budget is charged once.
+        if (current is not null &&
+            MatchesCandidate(current, candidate, dispatchKind, focusedEvidenceRequest, requestContext) &&
+            TryAdoptOrphanAttempt(current) is { } adopted)
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(adopted);
+        }
+
+        _attemptWriterLeaseAcquiringForTests?.Invoke();
+        var goalDirectory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
+        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        if (artifactLease is null)
+        {
+            current = TryReadLatest(candidate.Goal.Id.Value);
+            if (current is not null && (IsLiveInvalidatedAttempt(current) || IsLiveAttempt(current)))
+            {
+                return ConductorParallelAcceptanceAttemptDecision.Running(current);
+            }
+
+            throw new AcceptanceArtifactWriterLeaseBusyException(goalDirectory, current?.AttemptId);
+        }
+
+        current = TryReadLatest(candidate.Goal.Id.Value);
         if (current is not null && IsLiveInvalidatedAttempt(current))
         {
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
@@ -836,23 +910,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return attempt is not null && IsLiveAttempt(attempt);
     }
 
-    internal IReadOnlySet<string> GetLiveAttemptGoalIds(IEnumerable<string> goalIds)
-    {
-        ArgumentNullException.ThrowIfNull(goalIds);
+    internal IReadOnlyList<ConductorParallelAcceptanceAttempt> GetCapacityReservingAttempts(IEnumerable<string> goalIds) =>
+        GetUnreconciledAttempts(goalIds)
+            .Where(IsCapacityReservingAttempt)
+            .ToArray();
 
-        var liveGoalIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var goalId in goalIds.Distinct(StringComparer.Ordinal))
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
-            var attempt = TryReadLatest(goalId);
-            if (attempt is not null && IsLiveAttempt(attempt))
-            {
-                liveGoalIds.Add(goalId);
-            }
-        }
-
-        return liveGoalIds;
-    }
+    internal IReadOnlySet<string> GetLiveAttemptGoalIds(IEnumerable<string> goalIds) =>
+        GetUnreconciledAttempts(goalIds)
+            .Where(attempt => IsLiveAttempt(attempt) || IsLiveInvalidatedAttempt(attempt))
+            .Select(attempt => attempt.GoalId)
+            .ToHashSet(StringComparer.Ordinal);
 
     internal string DescribeFocusedEvidenceHold(ConductorParallelAcceptanceAttempt attempt)
     {
@@ -889,8 +956,35 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _isProcessAlive(attempt.OwnerProcessId) &&
         !IsHeartbeatStale(attempt);
 
+    private bool IsCapacityReservingAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt switch
+        {
+            { Outcome: ConductorParallelAcceptanceAttemptOutcome.Running, ReconciledAt: null } =>
+                !File.Exists(attempt.ResultPath) &&
+                !File.Exists(attempt.ExitCodePath) &&
+                _isProcessAlive(attempt.OwnerProcessId),
+            { Outcome: ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, ReconciledAt: not null } =>
+                IsCapacityReservingInvalidatedAttempt(attempt),
+            _ => false
+        };
+
+    private bool IsCapacityReservingInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
+        attempt.ReconciledAt.HasValue &&
+        !File.Exists(attempt.ExitCodePath) &&
+        _isProcessAlive(attempt.OwnerProcessId);
+
     internal IReadOnlyList<string> TakePendingLeaseReceipts(ConductorParallelAcceptanceAttempt attempt)
     {
+        var goalDirectory = Path.GetDirectoryName(attempt.MetadataPath) ?? _rootDirectory;
+        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        if (artifactLease is null)
+        {
+            // Retention may be selecting terminal metadata for deletion. Leave the replay count
+            // untouched so a later tick can retry after the cross-process writer boundary clears.
+            return [];
+        }
+
         lock (MetadataWriteGate)
         {
             var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
@@ -953,7 +1047,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
                 _attemptCompletionGateForTests.HoldForTests(
                     held,
-                    () => RunAttempt(held, candidate, policy, runAcceptance));
+                    () => RunAttemptWithArtifactLease(held, candidate, policy, runAcceptance));
                 return ConductorParallelAcceptanceAttemptDecision.Started(held);
             }
 
@@ -967,8 +1061,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                         return;
                     }
 
-                    RunAttempt(activeAttempt, candidate, policy, runAcceptance);
-                }));
+                    RunAttemptWithArtifactLease(activeAttempt, candidate, policy, runAcceptance);
+                },
+                _buildStorageRoot));
             var launched = TryPersistOwnerProcess(attempt, launch.ProcessId);
             if (launched.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
             {
@@ -979,33 +1074,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
         catch (ConductorParallelAcceptanceAttemptCompletionGateViolationException ex)
         {
-            var rejected = attempt with
-            {
-                Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
-                CompletedAt = _utcNow(),
-                LastHeartbeatAt = _utcNow(),
-                Detail = ex.Message
-            };
-            Persist(rejected);
-            TryAppend(attempt.StderrPath, $"test completion gate rejected attempt: {ex.Message}{Environment.NewLine}");
-            TryWriteExit(attempt.ExitCodePath, 1);
+            CompleteLaunchFailure(
+                attempt,
+                ex,
+                $"test completion gate rejected attempt: {ex.Message}{Environment.NewLine}");
             throw;
         }
         catch (Exception ex)
         {
-            var transientFailureCount = IsTransientAttemptIo(ex)
-                ? CountConsecutiveTransientFailures(attempt) + 1
-                : 0;
-            var failed = attempt with
-            {
-                Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
-                CompletedAt = _utcNow(),
-                Detail = ex.Message,
-                TransientFailureCount = transientFailureCount
-            };
-            Persist(failed);
-            TryAppend(attempt.StderrPath, $"launch failed: {ex}{Environment.NewLine}");
-            TryWriteExit(attempt.ExitCodePath, 1);
+            var failed = CompleteLaunchFailure(
+                attempt,
+                ex,
+                $"launch failed: {ex}{Environment.NewLine}");
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(failed);
         }
     }
@@ -1014,21 +1094,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        Func<ConductorParallelAcceptanceCandidate, ConductorAutonomyPolicy, ConductorParallelAcceptanceRunResult> runAcceptance) =>
-        RunAttemptForTests(attempt, candidate, policy, (attemptCandidate, attemptPolicy, _, _) => runAcceptance(attemptCandidate, attemptPolicy));
-
-    internal void RunAttemptForTests(
-        ConductorParallelAcceptanceAttempt attempt,
-        ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
-        RunAttempt(attempt, candidate, policy, runAcceptance);
+        RunAttemptWithArtifactLease(attempt, candidate, policy, runAcceptance);
     }
 
-    internal static int RunOwnedProcess(string metadataPath)
+    internal static int RunOwnedProcess(
+        string metadataPath,
+        TimeSpan? attemptWriterLeaseTimeout = null)
     {
         ConductorParallelAcceptanceAttempt? attempt = null;
+        IDisposable? artifactLease = null;
+        IReadOnlyDictionary<string, TextWriter>? attemptLogWriters = null;
         try
         {
             attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
@@ -1039,7 +1116,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 throw new InvalidOperationException("acceptance attempt metadata was empty");
             }
 
-            RedirectConsole(attempt);
+            artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
+                Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
+                    "acceptance attempt metadata path has no parent directory"),
+                attemptWriterLeaseTimeout);
+            attemptLogWriters = RedirectConsole(attempt);
             var executionDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
                 ? attempt.ExecutionDirectory!
                 : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
@@ -1055,11 +1136,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var driver = new ConductorDriver(
                 kernel,
                 workspace,
-                new GoalAcceptanceVerifier(),
+                new GoalAcceptanceVerifier(DotnetBuildEnvironmentManager.CaptureStorageRoot()),
                 agents,
                 profiles,
                 NullOperatorChannel.Instance,
-                providers);
+                providers,
+                cleanupHooks: WorktreeCleanupContext.Load(
+                    attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
             var policy = ResolveAttemptPolicy(attempt);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -1073,7 +1156,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot,
                 conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
                     ? null
-                    : new ConductEventLogWriter(attempt.ConductEventLogPath));
+                    : new ConductEventLogWriter(attempt.ConductEventLogPath),
+                attemptLogWriters: attemptLogWriters);
             var activeAttempt = coordinator.TryPersistOwnerProcess(attempt, Environment.ProcessId);
             if (activeAttempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
             {
@@ -1091,7 +1175,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     activeAttempt,
                     candidate,
                     policy,
-                    (attemptCandidate, _, lease, cancellationToken) =>
+                    (attemptCandidate, _, lease, cancellationToken, _) =>
                         driver.RunPreReviewFocusedEvidence(
                             attemptCandidate,
                             activeAttempt.FocusedEvidenceRequest,
@@ -1107,12 +1191,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     activeAttempt,
                     candidate,
                     policy,
-                    (attemptCandidate, attemptPolicy, lease, cancellationToken) =>
+                    (attemptCandidate, attemptPolicy, lease, cancellationToken, executionOptions) =>
                         driver.RunParallelLandingAcceptance(
                             attemptCandidate,
                             attemptPolicy,
                             lease,
                             cancellationToken,
+                            executionOptions,
                             omitStableSlotIndexWithoutLease));
             }
             return 0;
@@ -1121,21 +1206,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             if (attempt is not null)
             {
-                TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
-                TryWriteExit(attempt.ExitCodePath, 1);
                 var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                     Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? Environment.CurrentDirectory,
                     attempt.ExecutionDirectory,
                     conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
                         ? null
-                        : new ConductEventLogWriter(attempt.ConductEventLogPath));
-                coordinator.CompleteWithoutResult(
+                        : new ConductEventLogWriter(attempt.ConductEventLogPath),
+                    attemptLogWriters: attemptLogWriters);
+                coordinator.CompleteOwnedProcessFailure(
                     attempt with { OwnerProcessId = Environment.ProcessId },
-                    IsTransientAttemptIo(ex)
-                        ? ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
-                        : ConductorParallelAcceptanceAttemptOutcome.Failed,
-                    ex.Message,
-                    transient: IsTransientAttemptIo(ex));
+                    ex);
             }
             else
             {
@@ -1144,6 +1224,22 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             return 1;
         }
+        finally
+        {
+            artifactLease?.Dispose();
+        }
+    }
+
+    private void RunAttemptWithArtifactLease(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance)
+    {
+        using var artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
+            Path.GetDirectoryName(attempt.MetadataPath) ?? throw new InvalidOperationException(
+                "acceptance attempt metadata path has no parent directory"));
+        RunAttempt(attempt, candidate, policy, runAcceptance);
     }
 
     internal static ConductorAutonomyPolicy ResolveAttemptPolicy(ConductorParallelAcceptanceAttempt attempt)
@@ -1269,9 +1365,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             WriteResult(attempt.ResultPath, ToArtifact(run));
+            _resultPublishedForTests?.Invoke(attempt);
             var outcome = OutcomeFor(run, attempt.Kind);
-            TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
-            TryPersistTerminal(attempt, current => current with
+            var claimedTerminal = TryPersistTerminal(attempt, current => current with
             {
                 BranchHeadSha = run.Candidate.BranchHeadSha,
                 MainHeadSha = run.Candidate.MainHeadSha,
@@ -1284,12 +1380,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     ? CountConsecutiveTransientFailures(current) + 1
                     : current.TransientFailureCount
             });
+            WriteTerminalExitReceipt(
+                attempt,
+                claimedTerminal,
+                outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
             if (!string.IsNullOrWhiteSpace(stderrDetail))
             {
-                TryAppend(attempt.StderrPath, $"{stderrDetail}{Environment.NewLine}");
+                TryAppendAttemptLog(attempt.StderrPath, $"{stderrDetail}{Environment.NewLine}");
             }
 
-            File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} completed outcome={outcome}{Environment.NewLine}");
+            AppendAttemptLog(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} completed outcome={outcome}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
         }
         catch (Exception ex) when (IsTransientAttemptIo(ex))
@@ -1306,7 +1406,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 attempt,
                 FaultOutcomeFor(attempt.Kind),
                 ex.Message);
-            TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
+            TryAppendAttemptLog(attempt.StderrPath, $"{ex}{Environment.NewLine}");
         }
     }
 
@@ -1319,9 +1419,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             : "parallel-acceptance";
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
-            $"{purpose}-{attempt.AttemptId}");
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
+            $"{purpose}-{attempt.AttemptId}",
+            storageRoot: _buildStorageRoot);
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermitOwned(
             environment,
+            new AcceptanceAttemptArtifactCustodyContext(
+                attempt.AttemptId,
+                attempt.MetadataPath,
+                Environment.ProcessId),
             _buildPermitBusyTimeout,
             onWait: () => EmitAttemptLeaseReceipt(
                 "wait",
@@ -1383,57 +1488,40 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
         Action<DotnetBuildEnvironmentLease> leaseAcquired)
     {
-        var previous = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
-        var previousAttemptId = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.AttemptIdVariable);
-        var previousLivenessHint = Environment.GetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
         var prefix = Path.Combine(Path.GetDirectoryName(attempt.MetadataPath) ?? Environment.CurrentDirectory, attempt.AttemptId);
-        Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
-        Environment.SetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.AttemptIdVariable,
-            attempt.AttemptId);
-        Environment.SetEnvironmentVariable(
-            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
-            attempt.MetadataPath);
+        DotnetBuildEnvironmentLease? stableSlotLease;
         try
         {
-            DotnetBuildEnvironmentLease? stableSlotLease;
-            try
-            {
-                stableSlotLease = _acquireStableSlotLease(attempt, candidate);
-            }
-            catch (Exception ex) when (
-                attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial &&
-                ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
-            {
-                EmitAttemptLeaseReceipt(
-                    "degrade",
-                    attempt,
-                    candidate,
-                    holderPid: null,
-                    permitName: AllBuildPermitNames(),
-                    waitReason: ex is DotnetBuildSlotsBusyException
-                        ? AcceptanceBuildPermitWaitReason.AllPermitsBusy
-                        : null);
-                stableSlotLease = null;
-            }
-            if (stableSlotLease is not null)
-            {
-                leaseAcquired(stableSlotLease);
-            }
-            return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
+            stableSlotLease = _acquireStableSlotLease(attempt, candidate);
         }
-        finally
+        catch (Exception ex) when (
+            attempt.StableSlotExhaustionPolicy == AcceptanceStableSlotExhaustionPolicy.DegradeToSerial &&
+            ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
         {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previous);
-            Environment.SetEnvironmentVariable(
-                AcceptanceAttemptArtifactCustody.AttemptIdVariable,
-                previousAttemptId);
-            Environment.SetEnvironmentVariable(
-                AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable,
-                previousLivenessHint);
+            EmitAttemptLeaseReceipt(
+                "degrade",
+                attempt,
+                candidate,
+                holderPid: null,
+                permitName: AllBuildPermitNames(),
+                waitReason: ex is DotnetBuildSlotsBusyException
+                    ? AcceptanceBuildPermitWaitReason.AllPermitsBusy
+                    : null);
+            stableSlotLease = null;
         }
+        if (stableSlotLease is not null)
+        {
+            leaseAcquired(stableSlotLease);
+        }
+        return runAcceptance(
+            candidate,
+            policy,
+            stableSlotLease,
+            CancellationToken.None,
+            new AcceptanceRunExecutionOptions(
+                RunId: attempt.AttemptId,
+                ResultsPrefix: prefix,
+                LivenessCheckHint: attempt.MetadataPath));
     }
 
     private void EmitAttemptLeaseReceipt(
@@ -1529,7 +1617,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         string detail,
         bool transient = false)
     {
-        TryPersistTerminal(attempt, current => current with
+        var claimedTerminal = TryPersistTerminal(attempt, current => current with
         {
             Outcome = outcome,
             CompletedAt = _utcNow(),
@@ -1539,10 +1627,64 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 ? CountConsecutiveTransientFailures(current) + 1
                 : current.TransientFailureCount
         });
-        TryWriteExit(attempt.ExitCodePath, 1);
-        TryAppend(attempt.StderrPath, $"{outcome}: {detail}{Environment.NewLine}");
+        WriteTerminalExitReceipt(attempt, claimedTerminal, claimedExitCode: 1);
+        TryAppendAttemptLog(attempt.StderrPath, $"{outcome}: {detail}{Environment.NewLine}");
         WriteHeartbeat(attempt, "exiting");
     }
+
+    private void CompleteOwnedProcessFailure(
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception exception)
+    {
+        var transient = IsTransientAttemptIo(exception);
+        TryAppendAttemptLog(attempt.StderrPath, $"{exception}{Environment.NewLine}");
+        CompleteWithoutResult(
+            attempt,
+            exception is TimeoutException
+                ? ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred
+                : transient
+                    ? ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts
+                    : ConductorParallelAcceptanceAttemptOutcome.Failed,
+            exception.Message,
+            transient: transient);
+    }
+
+    internal void CompleteOwnedProcessFailureForTests(
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception exception) =>
+        CompleteOwnedProcessFailure(attempt, exception);
+
+    private ConductorParallelAcceptanceAttempt CompleteLaunchFailure(
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception exception,
+        string stderrDetail)
+    {
+        var transient = IsTransientAttemptIo(exception);
+        var claimedTerminal = TryPersistTerminal(attempt, current => current with
+        {
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
+            CompletedAt = _utcNow(),
+            LastHeartbeatAt = _utcNow(),
+            Detail = exception.Message,
+            TransientFailureCount = transient
+                ? CountConsecutiveTransientFailures(current) + 1
+                : current.TransientFailureCount
+        });
+        TryAppendAttemptLog(attempt.StderrPath, stderrDetail);
+        WriteTerminalExitReceipt(attempt, claimedTerminal, claimedExitCode: 1);
+        return TryReadAttemptFile(attempt.MetadataPath) ?? attempt with
+        {
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
+            CompletedAt = _utcNow(),
+            LastHeartbeatAt = _utcNow(),
+            Detail = exception.Message
+        };
+    }
+
+    internal ConductorParallelAcceptanceAttempt CompleteLaunchFailureForTests(
+        ConductorParallelAcceptanceAttempt attempt,
+        Exception exception) =>
+        CompleteLaunchFailure(attempt, exception, $"launch failed: {exception}{Environment.NewLine}");
 
     private ConductorParallelAcceptanceAttemptDecision? TryCompleteRunningAttempt(
         ConductorParallelAcceptanceAttempt attempt,
@@ -1803,7 +1945,6 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var id = rawId[..Math.Min(64, rawId.Length)];
         var directory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
         Directory.CreateDirectory(directory);
-        PruneOldAttempts(directory, RetainedAttemptCountPerGoal - 1);
         var ordinal = AllocateOrdinal(directory);
         var prefix = Path.Combine(directory, id);
         var focusedMembers = focusedEvidenceRequest?
@@ -1847,7 +1988,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             FindingRoundFingerprint: requestContext?.FindingRoundFingerprint,
             FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions,
             PolicyJson: policy.ToJson(),
-            StableSlotExhaustionPolicy: stableSlotExhaustionPolicy);
+            StableSlotExhaustionPolicy: stableSlotExhaustionPolicy,
+            ExecutionProtocol: _runInline ? "in-process" : "out-of-process",
+            ConductorGenerationId: _conductorGenerationId);
     }
 
     private static int AllocateOrdinal(string directory)
@@ -1986,7 +2129,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal) ||
                 current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
             {
-                TryAppend(attempt.StderrPath, $"terminal outcome ignored because durable attempt is no longer running{Environment.NewLine}");
+                TryAppendAttemptLog(attempt.StderrPath, $"terminal outcome ignored because durable attempt is no longer running{Environment.NewLine}");
                 return false;
             }
 
@@ -2176,6 +2319,72 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
+    /// <summary>
+    /// Adopts an orphan gate attempt left running by another conductor generation, returning the adopted
+    /// attempt, or null when the attempt is not an orphan of a dead generation. Adoption refreshes the
+    /// heartbeat every tick so the attempt does not read stale to any other observer, and records the
+    /// adopting generation at most once, best-effort, for the reason given below.
+    /// </summary>
+    private ConductorParallelAcceptanceAttempt? TryAdoptOrphanAttempt(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (!ConductorOrphanGateAttemptAdoption.ShouldAdopt(
+                attempt,
+                _conductorGenerationId,
+                _isProcessAlive,
+                File.Exists))
+        {
+            return null;
+        }
+
+        var adopted = ConductorOrphanGateAttemptAdoption.NeedsAdoptionRecord(attempt, _conductorGenerationId)
+            ? TryPersistAdoption(attempt) ?? attempt
+            : attempt;
+        WriteHeartbeat(adopted, "adopted");
+        return adopted;
+    }
+
+    /// <summary>
+    /// Records the adopting generation on the attempt, or returns null when the writer lease is held.
+    ///
+    /// The running gate child holds that lease for its whole run, and the in-process metadata gate cannot
+    /// order a write against another process. The adoption record is evidence, not the fence — the fence
+    /// is the decision above, which does not depend on it — so a busy lease skips the record and retries
+    /// on a later tick rather than racing the child's terminal write and clobbering a published verdict.
+    /// </summary>
+    private ConductorParallelAcceptanceAttempt? TryPersistAdoption(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var goalDirectory = Path.GetDirectoryName(attempt.MetadataPath);
+        if (string.IsNullOrWhiteSpace(goalDirectory))
+        {
+            return null;
+        }
+
+        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        if (artifactLease is null)
+        {
+            return null;
+        }
+
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath);
+            if (current is null ||
+                !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal) ||
+                current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+            {
+                return null;
+            }
+
+            var updated = current with
+            {
+                AdoptedByGenerationId = _conductorGenerationId,
+                LastHeartbeatAt = _utcNow()
+            };
+            WriteAttemptFile(updated);
+            return updated;
+        }
+    }
+
     private void WriteHeartbeat(ConductorParallelAcceptanceAttempt attempt, string state)
     {
         var now = _utcNow();
@@ -2211,8 +2420,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
-        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt);
-        var process = Process.Start(startInfo)
+        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt, buildStorageRoot: launch.BuildStorageRoot);
+        var process = ProcessTreeGuiSuppression.Start(startInfo)
             ?? throw new InvalidOperationException("failed to start acceptance attempt process");
         var processId = process.Id;
         DetachOwnedProcessStreams(process, launch.Attempt);
@@ -2221,6 +2430,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     internal static ProcessStartInfo BuildOwnedProcessStartInfo(
         ConductorParallelAcceptanceAttempt attempt,
+        DotnetBuildStorageRoot? buildStorageRoot,
         string? executable = null,
         IReadOnlyList<string>? commandLineArgs = null)
     {
@@ -2254,6 +2464,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
             attempt.ExecutionDirectory);
+        if (buildStorageRoot is { } storageRoot)
+        {
+            // This attempt selects the namespace; the child and its build descendants
+            // need the same value after ambient verification overrides are scrubbed.
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = storageRoot.RootPath;
+        }
         return startInfo;
     }
 
@@ -2299,13 +2515,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         }
     }
 
-    private static void RedirectConsole(ConductorParallelAcceptanceAttempt attempt)
+    private static IReadOnlyDictionary<string, TextWriter> RedirectConsole(ConductorParallelAcceptanceAttempt attempt)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(attempt.StdoutPath) ?? ".");
         var stdout = new StreamWriter(new FileStream(attempt.StdoutPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
         var stderr = new StreamWriter(new FileStream(attempt.StderrPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { AutoFlush = true };
         Console.SetOut(stdout);
         Console.SetError(stderr);
+        return new Dictionary<string, TextWriter>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Path.GetFullPath(attempt.StdoutPath)] = Console.Out,
+            [Path.GetFullPath(attempt.StderrPath)] = Console.Error
+        };
     }
 
     private static ConductorParallelAcceptanceRunArtifact ToArtifact(ConductorParallelAcceptanceRunResult run)
@@ -2595,51 +2816,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static string TemporarySiblingPath(string path) =>
         $"{path}.{Guid.NewGuid():N}.tmp";
 
-    private static void PruneOldAttempts(string directory, int retainCount)
+    internal ConductorParallelAcceptanceAttempt CreateAttemptForTests(
+        ConductorParallelAcceptanceCandidate candidate)
     {
-        if (!Directory.Exists(directory))
-        {
-            return;
-        }
-
-        var staleAttempts = Directory.EnumerateFiles(directory, "*.attempt.json")
-            .Select(path => new
-            {
-                Path = path,
-                Attempt = TryReadAttemptFile(path),
-                Timestamp = File.GetLastWriteTimeUtc(path)
-            })
-            .OrderByDescending(item => item.Attempt?.StartedAt.UtcDateTime ?? item.Timestamp)
-            .Skip(Math.Max(0, retainCount))
-            .ToArray();
-
-        foreach (var item in staleAttempts)
-        {
-            var prefix = item.Path[..^".attempt.json".Length];
-            foreach (var path in Directory.EnumerateFiles(directory, Path.GetFileName(prefix) + ".*"))
-            {
-                TryDeleteFile(path);
-            }
-
-            var receiptDirectory = prefix + ".receipts";
-            if (Directory.Exists(receiptDirectory))
-            {
-                try
-                {
-                    Directory.Delete(receiptDirectory, recursive: true);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    Console.Error.WriteLine(
-                        $"ATTEMPT_RECEIPT_PRUNE_FAILED path=\"{receiptDirectory}\" error=\"{ex.Message}\"");
-                }
-            }
-        }
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try { File.Delete(path); } catch { }
+        var attempt = CreateAttempt(
+            candidate,
+            ConductorAutonomyPolicy.Permissive,
+            GateDispatchKind,
+            focusedEvidenceRequest: null,
+            requestContext: null,
+            AcceptanceStableSlotExhaustionPolicy.Fail);
+        Persist(attempt);
+        return attempt;
     }
 
     private static ConductorParallelAcceptanceAttempt? TryReadAttemptFile(string path)
@@ -2723,6 +2911,46 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static void TryWriteExit(string path, int exitCode)
     {
         try { File.WriteAllText(path, exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+        catch { }
+    }
+
+    private static void WriteTerminalExitReceipt(
+        ConductorParallelAcceptanceAttempt attempt,
+        bool claimedTerminal,
+        int claimedExitCode)
+    {
+        if (claimedTerminal)
+        {
+            TryWriteExit(attempt.ExitCodePath, claimedExitCode);
+            return;
+        }
+
+        if (File.Exists(attempt.ExitCodePath))
+        {
+            return;
+        }
+
+        // Terminal metadata and the attempt exit receipt have different owners. Losing the metadata
+        // claim preserves the parent's decision, but does not change this completion path's exit claim.
+        TryWriteExit(attempt.ExitCodePath, claimedExitCode);
+    }
+
+    private void AppendAttemptLog(string path, string text)
+    {
+        if (_attemptLogWriters is not null &&
+            _attemptLogWriters.TryGetValue(Path.GetFullPath(path), out var writer))
+        {
+            writer.Write(text);
+            writer.Flush();
+            return;
+        }
+
+        File.AppendAllText(path, text);
+    }
+
+    private void TryAppendAttemptLog(string path, string text)
+    {
+        try { AppendAttemptLog(path, text); }
         catch { }
     }
 
@@ -2872,7 +3100,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static bool IsTransientAttemptIo(Exception ex) =>
         ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException &&
-        (ex is IOException or UnauthorizedAccessException ||
+        (ex is IOException or UnauthorizedAccessException or TimeoutException ||
             ex.InnerException is not null && IsTransientAttemptIo(ex.InnerException));
 
     private static string ReadAllTextSharedWithRetry(string path)

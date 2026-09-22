@@ -18,6 +18,25 @@ public static partial class GoalWorktrees
         return File.Exists(Path.Combine(path, ".git")) ? path : null;
     }
 
+    internal static bool IsExclusiveGoalWorktree(string path, GoalId goalId)
+    {
+        var normalized = NormalizePath(path);
+        var worktreeDirectory = Directory.GetParent(normalized);
+        var executionDirectory = worktreeDirectory?.Parent;
+        if (worktreeDirectory is null || executionDirectory is null ||
+            !worktreeDirectory.Name.Equals(DirectoryName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var resolved = TryResolve(executionDirectory.FullName, goalId);
+        return resolved is not null &&
+            string.Equals(
+                NormalizePath(resolved),
+                normalized,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
     public static IReadOnlyDictionary<GoalId, string> ResolveAll(
         string executionDirectory,
         IEnumerable<GoalId> goalIds)

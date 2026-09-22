@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -112,6 +113,161 @@ internal static partial class PlannerOutputContract
 
         return sections;
     }
+
+    internal static PlannerStructuralQualityVector EvaluateStructuralQuality(
+        string plan,
+        int? criterionCount = null)
+    {
+        var sections = SplitRequiredSections(plan);
+        if (!sections.TryGetValue("acceptance criterion mapping", out var mappingBody))
+            return new PlannerStructuralQualityVector(0, 0, 0, 0, 0, 0);
+
+        var completeMappings = 0;
+        var concreteOwningSeams = 0;
+        var feasibleEvidenceOwners = 0;
+        var integrationSeams = 0;
+        var verificationClasses = 0;
+        var stopConditions = 0;
+        var mappings = new Dictionary<int, string>();
+        foreach (var line in mappingBody.Split('\n'))
+        {
+            if (!TryParseCriterionMappingLine(line, out var criterion, out var mapping) ||
+                criterion <= 0 ||
+                string.IsNullOrWhiteSpace(mapping))
+            {
+                continue;
+            }
+
+            mappings.TryAdd(criterion, mapping);
+        }
+
+        var boundedCriterionCount = criterionCount ?? CountContiguousCriteria(mappings);
+        foreach (var mapping in mappings
+                     .Where(pair => pair.Key <= boundedCriterionCount)
+                     .OrderBy(pair => pair.Key)
+                     .Select(pair => pair.Value))
+        {
+
+            completeMappings++;
+            var codeSpans = BacktickedCitation().Matches(mapping)
+                .Select(match => match.Groups["citation"].Value)
+                .ToArray();
+            if (codeSpans.Any(citation =>
+                    citation.Contains('.', StringComparison.Ordinal) ||
+                    citation.Contains('/', StringComparison.Ordinal) ||
+                    citation.Contains("::", StringComparison.Ordinal)))
+            {
+                concreteOwningSeams++;
+            }
+
+            if (HasFeasibleEvidenceOwner(mapping))
+                feasibleEvidenceOwners++;
+
+            if (Regex.IsMatch(mapping, @"(?i)\b(?:integration|seam)\b"))
+                integrationSeams++;
+            if (Regex.IsMatch(mapping, @"(?i)\b(?:TEST-VERIFIABLE|REAL-WORLD-DEPENDENT)\b"))
+                verificationClasses++;
+            if (Regex.IsMatch(mapping, @"(?i)\b(?:stop|fail(?:s|ed)? closed|fallback)\b"))
+                stopConditions++;
+        }
+
+        return new PlannerStructuralQualityVector(
+            completeMappings,
+            concreteOwningSeams,
+            feasibleEvidenceOwners,
+            integrationSeams,
+            verificationClasses,
+            stopConditions);
+    }
+
+    private static int CountContiguousCriteria(IReadOnlyDictionary<int, string> mappings)
+    {
+        var count = 0;
+        while (mappings.ContainsKey(count + 1))
+            count++;
+        return count;
+    }
+
+    private static bool HasFeasibleEvidenceOwner(string mapping)
+    {
+        var testVerifiable = Regex.IsMatch(mapping, @"(?i)\bTEST-VERIFIABLE\b");
+        var realWorldDependent = Regex.IsMatch(mapping, @"(?i)\bREAL-WORLD-DEPENDENT\b");
+        if (testVerifiable == realWorldDependent)
+            return false;
+
+        if (realWorldDependent)
+            return DeclaresEvidenceOwner(mapping, "operator");
+
+        if (DeclaresEvidenceOwner(mapping, "Acceptance|conductor"))
+            return true;
+
+        return TryGetDeclaredWorkerRole(mapping, out var role) &&
+            IsFeasibleWorkerEvidence(mapping, role);
+    }
+
+    private static bool TryGetDeclaredWorkerRole(string mapping, out AgentRole role)
+    {
+        foreach (var candidate in Enum.GetValues<AgentRole>())
+        {
+            if (DeclaresEvidenceOwner(mapping, Regex.Escape(candidate.ToString())))
+            {
+                role = candidate;
+                return true;
+            }
+        }
+
+        role = default;
+        return false;
+    }
+
+    private static bool IsFeasibleWorkerEvidence(
+        string mapping,
+        AgentRole role)
+    {
+        if (Regex.IsMatch(
+            mapping,
+            @"(?i)\b(?:full[-\s]?suite|acceptance[-\s]?gate|test[-\s]?host|gate[-\s]?(?:receipt|wall[-\s]?clock)|coverage[-\s]?total)\b"))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(mapping, @"(?i)\bfocused[-\s]?evidence[-\s]?request\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.FocusedEvidenceRequest);
+
+        if (Regex.IsMatch(mapping, @"(?i)\b(?:worker[-\s]?build|build[-\s]?(?:result|receipt))\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.WorkerBuildResult);
+
+        if (Regex.IsMatch(mapping, @"(?i)\bmanual[-\s]?reproduction\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.ManualReproduction);
+
+        if (Regex.IsMatch(mapping, @"(?i)\bsource[-\s]?(?:reproduction|trace)\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.SourceTrace);
+
+        if (Regex.IsMatch(mapping, @"(?i)\bverification[-\s]?matrix\b"))
+            return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                role,
+                DispatchRoleEvidenceRequirement.VerificationMatrix);
+
+        return DispatchRoleOutputCapabilities.CanProduceEvidence(
+                   role,
+                   DispatchRoleEvidenceRequirement.ScopedRepositoryChange) &&
+            BacktickedCitation().Matches(mapping).Any(match =>
+                match.Groups["citation"].Value.IndexOfAny(['.', '/', '\\']) >= 0 ||
+                match.Groups["citation"].Value.Contains("::", StringComparison.Ordinal));
+    }
+
+    private static bool DeclaresEvidenceOwner(string mapping, string rolePattern) =>
+        Regex.IsMatch(
+            mapping,
+            $@"(?i)(?:\b(?:{rolePattern})\b(?:\s+|-)(?:owns?|owned)\b|\bowned\s+by\s+(?:{rolePattern})\b)");
 
     internal static string ReadCapturedOutputTail(string path)
     {

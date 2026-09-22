@@ -95,7 +95,11 @@ public abstract class ConductorBatchLoopTests
             ConductorMergeTrainRunResult>? runMergeTrain = null,
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
-        Func<DateTimeOffset>? utcNow = null) =>
+        Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?>? recordAcceptanceFailure = null,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
+        Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
+        Func<DateTimeOffset>? utcNow = null,
+        string? executionDirectory = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -134,7 +138,11 @@ public abstract class ConductorBatchLoopTests
             runMergeTrain: runMergeTrain,
             tryAcquireEvidenceMutationLease: tryAcquireEvidenceMutationLease,
             getEvidenceMutationLease: getEvidenceMutationLease,
-            utcNow: utcNow);
+            recordAcceptanceFailureWithAttribution: recordAcceptanceFailure,
+            resolveAcceptanceHeads: resolveAcceptanceHeads,
+            getPreReviewEvidenceContext: getPreReviewEvidenceContext,
+            utcNow: utcNow,
+            executionDirectory: executionDirectory);
 
     // Returns a path to a stop file that does NOT exist yet.
     private protected static string NoStopPath() =>
@@ -259,6 +267,14 @@ public abstract class ConductorBatchLoopTests
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy _) =>
         ConductorParallelAcceptanceRunResult.Accepted(candidate, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
+
+    private protected static ConductorParallelAcceptanceRunResult PassingRun(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy _,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken,
+        AcceptanceRunExecutionOptions executionOptions) =>
+        PassingRun(candidate, _);
 
     private protected static ConductorParallelAcceptanceAttempt ReadAttempt(string path) =>
         JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(

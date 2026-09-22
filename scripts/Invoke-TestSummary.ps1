@@ -1,19 +1,19 @@
 <#
 .SYNOPSIS
-  Run manifest-declared test projects through their Microsoft.Testing.Platform apphosts.
+  Run manifest-declared test projects through their managed Microsoft.Testing.Platform assemblies.
 
 .DESCRIPTION
-  Builds the target in Debug by default, launches each MTP apphost directly, streams stdout
+  Builds the target in Debug by default, launches each MTP assembly through dotnet, streams stdout
   and stderr, and prints compact TRX summaries. The target may be the repository solution or
   a test project declared by config/acceptance-manifest.json. Use -NoBuild only when the
-  apphost is already current. Use -AllowBreakaway only for tests that explicitly validate
+  managed assembly is already current. Use -AllowBreakaway only for tests that explicitly validate
   Windows CREATE_BREAKAWAY_FROM_JOB behavior. Clean-run receipts are removed; failed runs are retained.
 
 .EXAMPLE
   .\scripts\Invoke-TestSummary.ps1
   .\scripts\Invoke-TestSummary.ps1 -Target .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj
-  .\scripts\Invoke-TestSummary.ps1 -Filter "DisplayName~lifecycle"
-  .\scripts\Invoke-TestSummary.ps1 -AllowBreakaway -Filter "DisplayName~ConductorLoopHandoff"
+  .\scripts\Invoke-TestSummary.ps1 -Filter "Name~Lifecycle"
+  .\scripts\Invoke-TestSummary.ps1 -AllowBreakaway -Filter "Name~ConductorLoopHandoff"
   .\scripts\Invoke-TestSummary.ps1 -Partition GoalWorktree
 #>
 [CmdletBinding()]

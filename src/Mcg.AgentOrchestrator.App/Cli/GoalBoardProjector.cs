@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -77,7 +78,8 @@ internal sealed record GoalBoardGoalFact(
     bool LiveAcceptance,
     bool LiveWorker,
     string FallbackCommand,
-    GoalLifecycleState? LifecycleState = null);
+    GoalLifecycleState? LifecycleState = null,
+    GoalEvidenceLeaseFact? EvidenceLease = null);
 
 internal sealed record GoalBoardProjection(
     IReadOnlyList<string> Rows,
@@ -145,19 +147,39 @@ internal static class GoalBoardProjector
             .ThenBy(candidate => candidate.Index)
             .FirstOrDefault();
         var signalAt = latestSignal?.Signal.At;
-        var signal = latestSignal is null
-            ? "unknown"
-            : $"{Sanitize(latestSignal.Signal.Source, 24)}:{FormatAge(now - signalAt!.Value)}";
         var prefix = Prefix(fact.Id);
         var control = SelectControl(fact, prefix);
         var attention = fact.AttentionCount?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
         var intents = fact.IntentCount?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
         var ahead = fact.Worktree.Ahead?.ToString(CultureInfo.InvariantCulture) ?? "?";
         var behind = fact.Worktree.Behind?.ToString(CultureInfo.InvariantCulture) ?? "?";
-        var tail =
-            $" [{prefix}] status={FormatStatus(fact)} stage={Sanitize(fact.Stage, 28)} " +
-            $"work={Sanitize(fact.Work, 48)} signal={signal} attention={attention} intents={intents} " +
-            $"backlog={Sanitize(fact.Backlog, 28)} worktree={Sanitize(fact.Worktree.State, 8)} ahead={ahead} behind={behind} {control}";
+        var tail = BuildTail(
+            fact,
+            now,
+            latestSignal?.Signal.Source,
+            signalAt,
+            prefix,
+            control,
+            attention,
+            intents,
+            ahead,
+            behind,
+            compact: false);
+        if (tail.Length >= MaximumRowLength)
+        {
+            tail = BuildTail(
+                fact,
+                now,
+                latestSignal?.Signal.Source,
+                signalAt,
+                prefix,
+                control,
+                attention,
+                intents,
+                ahead,
+                behind,
+                compact: true);
+        }
         var titleBudget = Math.Max(1, Math.Min(80, MaximumRowLength - tail.Length));
         var text = Sanitize(Title(fact.Objective), titleBudget) + tail;
         if (text.Length > MaximumRowLength)
@@ -168,6 +190,34 @@ internal static class GoalBoardProjector
         return new ProjectedRow(fact.Id, Bucket(fact), signalAt, text);
     }
 
+    private static string BuildTail(
+        GoalBoardGoalFact fact,
+        DateTimeOffset now,
+        string? signalSource,
+        DateTimeOffset? signalAt,
+        string prefix,
+        string control,
+        string attention,
+        string intents,
+        string ahead,
+        string behind,
+        bool compact)
+    {
+        var signal = signalAt is null
+            ? "unknown"
+            : $"{Sanitize(signalSource, compact ? 1 : 24)}:{FormatAge(now - signalAt.Value, compact)}";
+        var leaseRecoveryMaximumLength = compact
+            ? fact.DeadDispatch ? 0 : 8
+            : 32;
+        var lease = FormatLease(fact.EvidenceLease, now, leaseRecoveryMaximumLength, compact);
+        return
+            $" [{prefix}] status={FormatStatus(fact)} stage={Sanitize(fact.Stage, compact ? 1 : 28)} " +
+            $"work={Sanitize(fact.Work, compact ? 1 : 48)} signal={signal} " +
+            $"attention={CompactMetric(attention, compact)} intents={CompactMetric(intents, compact)} " +
+            $"backlog={Sanitize(fact.Backlog, compact ? 1 : 28)} worktree={Sanitize(fact.Worktree.State, 8)} " +
+            $"ahead={CompactMetric(ahead, compact)} behind={CompactMetric(behind, compact)}{lease} {control}";
+    }
+
     private static string SelectControl(GoalBoardGoalFact fact, string prefix)
     {
         if (fact.AttentionCount > 0)
@@ -176,6 +226,8 @@ internal static class GoalBoardProjector
             return "held=operator intent pending";
         if (fact.DeadDispatch)
             return $"next={Sanitize(fact.DispatchRecoveryCommand ?? $"next {prefix} --full", 96)}";
+        if (fact.EvidenceLease is { } lease)
+            return $"held=goal-evidence lease {GoalEvidenceLeaseRecoveryStatuses.Format(lease.RecoveryStatus)}";
         if (fact.LiveAcceptance)
             return "held=acceptance live";
         if (fact.LiveWorker)
@@ -192,7 +244,7 @@ internal static class GoalBoardProjector
         if (fact.Status is GoalStatus.WaitingForHuman or GoalStatus.Failed or GoalStatus.AcceptanceFailed ||
             fact.DeadDispatch || fact.AttentionCount > 0 || fact.IntentCount > 0)
             return 0;
-        if (fact.LiveAcceptance || fact.LiveWorker)
+        if (fact.LiveAcceptance || fact.LiveWorker || fact.EvidenceLease is not null)
             return 1;
         if (fact.Status == GoalStatus.Parked)
             return 3;
@@ -211,6 +263,38 @@ internal static class GoalBoardProjector
         if (age < TimeSpan.FromDays(2))
             return $"{(int)age.TotalHours}h";
         return $"{(int)age.TotalDays}d";
+    }
+
+    private static string FormatAge(TimeSpan age, bool compact)
+    {
+        var formatted = FormatAge(age);
+        return compact && formatted.Length > 5 ? "999d+" : formatted;
+    }
+
+    private static string CompactMetric(string value, bool compact) =>
+        compact && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) && value.Length > 4
+            ? "999+"
+            : value;
+
+    private static string FormatLease(
+        GoalEvidenceLeaseFact? lease,
+        DateTimeOffset now,
+        int recoveryMaximumLength,
+        bool compact)
+    {
+        if (lease is null)
+        {
+            return string.Empty;
+        }
+
+        var age = lease.AcquiredAtUtc is { } acquiredAt && acquiredAt <= now
+            ? FormatAge(now - acquiredAt, compact)
+            : "unknown";
+        var recovery = recoveryMaximumLength <= 0 || string.IsNullOrWhiteSpace(lease.LatestRecovery)
+            ? string.Empty
+            : $" lease-recovery={Sanitize(lease.LatestRecovery, recoveryMaximumLength)}";
+        return $" lease-goal={Prefix(lease.GoalId)} owner-operation={Sanitize(lease.Operation, 36)}" +
+            $" lease-age={age} lease-status={GoalEvidenceLeaseRecoveryStatuses.Format(lease.RecoveryStatus)}{recovery}";
     }
 
     private static string Title(string objective) =>

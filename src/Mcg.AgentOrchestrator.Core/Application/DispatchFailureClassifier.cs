@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -26,7 +27,8 @@ public enum DispatchOutcomeKind
     ProviderModelRejection,
     DirtyWorktreeRecoverable,
     VerificationInconclusive,
-    UnknownFailure
+    UnknownFailure,
+    ProviderInterruption
 }
 
 public sealed record DispatchOutcome(
@@ -52,6 +54,16 @@ public enum DispatchRoleOutputCapability
     VerificationOnly
 }
 
+public enum DispatchRoleEvidenceRequirement
+{
+    ScopedRepositoryChange,
+    WorkerBuildResult,
+    ManualReproduction,
+    SourceTrace,
+    FocusedEvidenceRequest,
+    VerificationMatrix
+}
+
 public static class DispatchRoleOutputCapabilities
 {
     public static bool TryGet(AgentRole role, out DispatchRoleOutputCapability capability)
@@ -65,6 +77,27 @@ public static class DispatchRoleOutputCapabilities
         };
 
         return Enum.IsDefined(role);
+    }
+
+    public static bool CanProduceEvidence(
+        AgentRole role,
+        DispatchRoleEvidenceRequirement requirement)
+    {
+        if (!TryGet(role, out _))
+            return false;
+
+        return requirement switch
+        {
+            DispatchRoleEvidenceRequirement.ScopedRepositoryChange => role == AgentRole.Developer,
+            DispatchRoleEvidenceRequirement.WorkerBuildResult => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.ManualReproduction => role is AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.SourceTrace =>
+                role is AgentRole.Researcher or AgentRole.Developer or AgentRole.Tester,
+            DispatchRoleEvidenceRequirement.FocusedEvidenceRequest =>
+                role is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer,
+            DispatchRoleEvidenceRequirement.VerificationMatrix => role == AgentRole.Tester,
+            _ => false
+        };
     }
 }
 
@@ -158,6 +191,23 @@ public static class DispatchRejectionDiagnosticMarker
 public static class DispatchFailureClassifier
 {
     private static readonly TimeSpan BareClockRetryStalenessTolerance = TimeSpan.FromHours(1);
+
+    private enum ProviderTurnRecordKind
+    {
+        Other,
+        Completed,
+        Failed
+    }
+
+    // Codex emits these records under `codex exec --json`. The configured claude-cli and grok-cli
+    // profiles emit plain text, so their failure vocabularies remain named gaps rather than guesses.
+    private static readonly IReadOnlyDictionary<string, ProviderTurnRecordKind> ProviderTurnRecordVocabulary =
+        new Dictionary<string, ProviderTurnRecordKind>(StringComparer.Ordinal)
+        {
+            ["turn.completed"] = ProviderTurnRecordKind.Completed,
+            ["turn.failed"] = ProviderTurnRecordKind.Failed,
+            ["error"] = ProviderTurnRecordKind.Failed
+        };
 
     private sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description);
 
@@ -499,6 +549,24 @@ public static class DispatchFailureClassifier
         bool workerResultPresent = false,
         bool hasCommittedChanges = false)
     {
+        if (IsProviderInterruptionFailure(verification))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.ProviderInterruption,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.ProviderInterruption,
+                verification.ExitCode,
+                HasZeroByteStandardOutput(verification),
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildEvidenceSummary(verification)));
+        }
+
         providerFailureKind = providerFailureKind == ProviderFailureKind.Unknown
             ? verification.ProviderFailureKind
             : providerFailureKind;
@@ -574,6 +642,46 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.OperatorNeeded,
                 BuildProviderModelRejectionEvidenceSummary(verification)));
+        }
+
+        if (task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.TryFindMalformedEvidenceBoundOutcome(
+                verification.AuthoritativeStandardOutput ?? verification.StandardOutput,
+                out var outputContractDiagnostic))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.UnknownFailure,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.OperatorNeeded,
+                    $"Malformed WORKER_RESULT structured outcome: {outputContractDiagnostic}"));
+        }
+
+        if (task.RequiredRole == AgentRole.Developer &&
+            WorkerResultBlockers.GetAssignedScopeComplete(verification) is false)
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.IncompleteScopeDeclaration,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.AutoRetry,
+                    "Developer declared the assigned implementation scope incomplete."));
         }
 
         if (HasGreenCommittedWorkerResultEvidence(verification, workerResultPresent, hasCommittedChanges))
@@ -1635,6 +1743,8 @@ public static class DispatchFailureClassifier
             !workerResultPresent ||
             !WasRedispatchedByAnyRoute(task) ||
             string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit) ||
+            task.LastDispatch.ContextPackageReceipt is not { } contextReceipt ||
+            !contextReceipt.HasEarlyConvergenceEvidenceFor(task.LastDispatch.BaseCommit) ||
             !HasPopulatedStandardOutput(verification) ||
             !DispatchRejectionDiagnosticMarker.TryParse(
                 verification.StandardError,
@@ -1656,7 +1766,7 @@ public static class DispatchFailureClassifier
             blockersStatus != WorkerResultBlockers.BlockersStatus.None ||
             WorkerResultBlockers.TryFindBlocker(verification, out _) ||
             !WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) ||
-            testsStatus is not (WorkerResultBlockers.TestsStatus.Pass or WorkerResultBlockers.TestsStatus.Deferred) ||
+            testsStatus != WorkerResultBlockers.TestsStatus.Pass ||
             HasStructuredFailingTests(verification))
         {
             return false;
@@ -1917,6 +2027,90 @@ public static class DispatchFailureClassifier
             IsRecoverableProviderConnectivityFailure(verification));
     }
 
+    public static int CountConsecutiveProviderInterruptionFailures(TaskSpec task)
+    {
+        var count = 0;
+        for (var index = task.VerificationHistory.Count - 1; index >= 0; index--)
+        {
+            if (!IsProviderInterruptionFailure(task.VerificationHistory[index]))
+            {
+                break;
+            }
+
+            count++;
+        }
+
+        return count;
+    }
+
+    public static bool IsProviderInterruptionFailure(TaskVerificationRecord verification)
+    {
+        var hasCompletedTurn = false;
+        var hasFailedTurn = false;
+        var inWorkerResultBlock = false;
+
+        foreach (var rawLine in EnumerateEvidenceLines(
+                     verification,
+                     includeStandardOutput: true,
+                     includeStandardError: false))
+        {
+            var line = rawLine.Trim();
+            if (IsWorkerResultOpener(line))
+            {
+                inWorkerResultBlock = true;
+                continue;
+            }
+
+            if (IsWorkerResultEndMarker(line))
+            {
+                inWorkerResultBlock = false;
+                continue;
+            }
+
+            if (inWorkerResultBlock || !line.StartsWith('{'))
+            {
+                continue;
+            }
+
+            var recordKind = ClassifyProviderTurnRecord(line);
+            hasCompletedTurn |= recordKind == ProviderTurnRecordKind.Completed;
+            hasFailedTurn |= recordKind == ProviderTurnRecordKind.Failed;
+        }
+
+        // A fast exit with low CPU and memory is a useful operator diagnostic, but recorded event
+        // structure is the authority. Resource timing and provider message text are not inputs.
+        return !hasCompletedTurn && hasFailedTurn;
+    }
+
+    private static ProviderTurnRecordKind ClassifyProviderTurnRecord(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return ProviderTurnRecordKind.Other;
+            }
+
+            var root = document.RootElement;
+            if ((!root.TryGetProperty("type", out var discriminator) &&
+                 !root.TryGetProperty("kind", out discriminator)) ||
+                discriminator.ValueKind != JsonValueKind.String)
+            {
+                return ProviderTurnRecordKind.Other;
+            }
+
+            var value = discriminator.GetString();
+            return value is not null && ProviderTurnRecordVocabulary.TryGetValue(value, out var recordKind)
+                ? recordKind
+                : ProviderTurnRecordKind.Other;
+        }
+        catch (JsonException)
+        {
+            return ProviderTurnRecordKind.Other;
+        }
+    }
+
     public static bool IsRecoverableProviderAuthenticationFailure(TaskVerificationRecord verification)
     {
         if (verification.Succeeded)
@@ -2030,21 +2224,23 @@ public static class DispatchFailureClassifier
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {
         retryAfter = default;
-        if (task.VerificationHistory.LastOrDefault() is not { Succeeded: false } latest ||
-            !IsRecoverableSubscriptionLimitFailure(latest))
-        {
-            return false;
-        }
-
         if (task.SubscriptionRetryAfter is { } storedRetryAfter)
         {
             retryAfter = storedRetryAfter;
             return true;
         }
 
+        if (task.VerificationHistory.LastOrDefault() is not { Succeeded: false } latest ||
+            !IsRecoverableSubscriptionLimitFailure(latest))
+        {
+            return false;
+        }
+
         // RetryTask is the operator's explicit reset boundary. Keep the historical receipt, but do not
         // let a verification from before that boundary regenerate a deferral after the stored value was cleared.
-        if (task.LatestRetryAt is { } latestRetryAt && latest.CompletedAt <= latestRetryAt)
+        if (task.LatestRetryAt is { } latestRetryAt &&
+            latest.CompletedAt <= latestRetryAt &&
+            task.PendingRetryCause != RetryCause.ProviderInterruption)
         {
             return false;
         }

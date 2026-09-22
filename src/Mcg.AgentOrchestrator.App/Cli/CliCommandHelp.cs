@@ -5,27 +5,27 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|five-role>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|five-role>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|five-role>] [--request-key <key>]";
+    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|five-role|developer-reviewer|developer-only>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|five-role|developer-reviewer|developer-only>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|five-role|developer-reviewer|developer-only>] [--request-key <key>]";
     public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
-    public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|five-role>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
+    public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|five-role|developer-reviewer|developer-only>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
     public const string RunGoalUsage = "Usage: run-goal [goal-id-prefix] --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--autonomy <policy>]";
     public const string GoalIntakeStatusUsage = "Usage: goal-intake-status <request-key>";
     public const string GoalBoardUsage = GoalBoardOptions.Usage;
-    public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|five-role>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
+    public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|five-role|developer-reviewer|developer-only>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
-    public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--goal <goal-prefix>] [--mechanical]";
+    public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--cause <cause>] [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--cause <cause>] [--goal <goal-prefix>] [--mechanical]";
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
     public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>]";
     public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
-    public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
+    public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>]";
     public const string ReviseUsage = "Usage: revise <goal-prefix> <new-brief> [--reason <reason>] [--supersede-answer <clarification-id>=<replacement>...] | revise <goal-prefix> --brief-file <path|-> [--reason <reason>|--reason-file <path|->] [--supersede-answer <clarification-id>=<replacement>...] | revise <goal-prefix> --history (- reads stdin for revise file flags)";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
-    public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
+    public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
@@ -68,6 +68,7 @@ internal static class CliCommandHelp
     public const string TrialCompareUsage = "Usage: trial-compare --spec <path> [--receipts <directory>] [--timeout-seconds <seconds>] [--format text|json]. Spec source: explicit baseCommit + canonical workload, or historical goal/task/dispatch selector (mutually exclusive).";
     public const string AcceptanceEngineUsage = "Usage: acceptance-engine status | acceptance-engine clear <repair-or-operator-note>";
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
+    public const string StateDatabaseMaintenanceUsage = "Usage: state-db-maintenance plan | state-db-maintenance execute --confirm-offline | state-db-maintenance convert-copy --output <path> --confirm-offline | state-db-maintenance convert-live --confirm-offline --confirm-live-replacement";
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
 
     private static readonly CommandHelpEntry Conduct = new(
@@ -189,7 +190,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Retry = new(
         RetryUsage,
         "Retry a task with operator feedback.",
-        ["--goal", "--text-file", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+        ["--goal", "--text-file", "--cause", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Note = new(
         NoteUsage,
@@ -206,6 +207,25 @@ internal static class CliCommandHelp
         "Record manual verification evidence for a task.",
         ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--help", "-h"]);
 
+    public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> <criterion-index> <criterion-version> <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>]";
+    public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>]";
+    public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> <criterion-index> <criterion-version> <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>]";
+
+    private static readonly CommandHelpEntry CriterionEvidenceMap = new(
+        CriterionEvidenceMapUsage,
+        "Queue a candidate-bound criterion ownership mapping for the conductor.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry CriterionEvidenceRecord = new(
+        CriterionEvidenceRecordUsage,
+        "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry CriterionEvidenceRepair = new(
+        CriterionEvidenceRepairUsage,
+        "Queue an attributed repair that rebinds one malformed Unknown claim; the replacement remains pending until valid evidence arrives.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+
     private static readonly CommandHelpEntry Recover = new(
         RecoverUsage,
         "Recover stuck goal/task state with an operator note.",
@@ -219,7 +239,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry GoalAmend = new(
         GoalAmendUsage,
         "Waive one acceptance criterion on an in-flight goal with durable audit provenance.",
-        ["--waive", "--reason", "--reason-file", "--text-file", "--actor", "--help", "-h"]);
+        ["--waive", "--reason", "--reason-file", "--text-file", "--disposition", "--disposition-file", "--actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Revise = new(
         ReviseUsage,
@@ -243,7 +263,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Attention = new(
         AttentionUsage,
-        "Show, dismiss, or answer operator attention items.",
+        "Show, dismiss, or answer operator attention items. Use top-level `answer` when supplying --gate-deliverable evidence.",
         ["--all", "--include-parked", "--goal", "--item", "--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AbandonGoal = new(
@@ -458,6 +478,11 @@ internal static class CliCommandHelp
         "Prune high-churn run-events.db conductor tick rows and optionally reclaim free pages when idle.",
         ["--tick-max-age-days", "--keep-tick-rows", "--payload-max-bytes", "--batch-size", "--legacy-purge-oversized-ticks", "--vacuum", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry StateDatabaseMaintenance = new(
+        StateDatabaseMaintenanceUsage,
+        "Plan/execute bounded reclamation, create a validated conversion copy, or explicitly replace state.db during an off-peak exclusive-maintenance window.",
+        ["--confirm-offline", "--confirm-live-replacement", "--output", "--help", "-h"]);
+
     private static readonly CommandHelpEntry RunEvent = new(
         RunEventUsage,
         "Show one stored run event by sequence, including goal-less event receipt text.",
@@ -469,12 +494,19 @@ internal static class CliCommandHelp
             ["project"] = Flags("--root"),
             ["status"] = Flags("--tasks-only"),
             ["trial-compare"] = Flags("--spec", "--receipts", "--timeout-seconds", "--format"),
+            ["hermes-acp-trial"] = Flags(
+                "--confirm-live-hermes-start", "--prompt", "--prompt-sha256", "--workspace",
+                "--sandbox", "--provider", "--model", "--role", "--receipt"),
+            ["hermes-acp-verify-identity"] = Flags(
+                "--executable", "--working-directory", "--hermes-home", "--receipt"),
             ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
+            ["dashboard"] = DashboardFlags(),
             ["prototype-ui"] = DashboardFlags(),
             ["serve-dashboard"] = DashboardFlags(),
             ["hosted-dashboard"] = DashboardFlags(),
             ["simple-hosted-dashboard"] = DashboardFlags(),
             ["open-dashboard"] = DashboardFlags(),
+            ["transcript"] = Flags(),
             ["monitor-goal"] = Flags(
                 "--event-kind", "--format", "--from-cursor", "--goal-prefix", "--once", "--since",
                 "--task", "--timeout", "--wait-terminal"),
@@ -545,7 +577,7 @@ internal static class CliCommandHelp
         flags.Concat(["--help", "-h"]).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static IReadOnlySet<string> DashboardFlags() =>
-        Flags("--lan", "--no-open", "--open", "--refresh");
+        Flags("--lan", "--mode", "--no-open", "--open", "--refresh");
 
     private static IReadOnlySet<string> LifecycleGoalFlags() =>
         Flags(
@@ -784,6 +816,24 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("criterion-evidence-map", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceMap;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-record", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceRecord;
+            return true;
+        }
+
+        if (args[0].Equals("criterion-evidence-repair", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = CriterionEvidenceRepair;
+            return true;
+        }
+
         if (args[0].Equals("recover", StringComparison.OrdinalIgnoreCase))
         {
             entry = Recover;
@@ -835,6 +885,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("run-events-maintenance", StringComparison.OrdinalIgnoreCase))
         {
             entry = RunEventsMaintenance;
+            return true;
+        }
+
+        if (args[0].Equals("state-db-maintenance", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = StateDatabaseMaintenance;
             return true;
         }
 
@@ -1070,7 +1126,7 @@ internal static class CliCommandHelp
 
         if (!args[0].Equals("workspace", StringComparison.OrdinalIgnoreCase))
         {
-            if (CliArgumentParser.IsRecognizedCommand(args[0]))
+            if (IsDashboardAdapterCommand(args[0]) || CliArgumentParser.IsRecognizedCommand(args[0]))
             {
                 entry = CommandHelpEntry.Generic(args[0]);
                 return true;
@@ -1088,6 +1144,15 @@ internal static class CliCommandHelp
         entry = Workspace;
         return true;
     }
+
+    private static bool IsDashboardAdapterCommand(string command) =>
+        command.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("transcript", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryPrintHelpCommand(IReadOnlyList<string> args)
     {

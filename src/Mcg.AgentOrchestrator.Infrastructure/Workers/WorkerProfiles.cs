@@ -1,11 +1,24 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record WorkerProfile(string Name, string CommandTemplate)
+public sealed record WorkerProfile(
+    string Name,
+    string CommandTemplate,
+    bool AutoLoadsRepositoryPolicy = false,
+    int RepositoryPolicyMaxBytes = 0)
 {
     public const string QwenCodeCliName = "qwen-code-cli";
+
+    [JsonIgnore]
+    public bool HasCompleteRepositoryPolicyAutoLoadContract =>
+        AutoLoadsRepositoryPolicy &&
+        RepositoryPolicyMaxBytes > 0 &&
+        CommandTemplate.Contains(
+            $"project_doc_max_bytes={RepositoryPolicyMaxBytes}",
+            StringComparison.OrdinalIgnoreCase);
 
     // Measured `--bare` startup at this repo: system prompt plus tool schemas,
     // without the workspace-init dump. Default (non-bare) startup is ~25728 tokens.
@@ -111,6 +124,9 @@ public static class WorkerProfileDiagnostics
         {
             ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
             ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => EvaluateCodexPatchCapability(normalized),
+            ProviderKind.HermesAcp => new WorkerProfilePatchCapability(
+                true,
+                "Hermes ACP may patch only inside the orchestrator sandbox; CanSelfCommit=false keeps commit and landing authority with the orchestrator."),
             _ => new WorkerProfilePatchCapability(
                 true,
                 "Provider is not a typed Codex or Claude launcher; patch capability cannot be inferred beyond executing the prompt.")
@@ -346,12 +362,239 @@ public static class WorkerProfileDiagnostics
             ProviderKind.AnthropicClaudeCli => ["claude"],
             ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => ["codex"],
             ProviderKind.OllamaQwenCodeCli => ["qwen"],
+            ProviderKind.HermesAcp => ["mcg-orchestrator", "mcg-orchestrator.cmd"],
             _ => []
         };
 }
 
 public sealed record WorkerProfilePatchCapability(bool IsPatchCapable, string Detail);
 public sealed record WorkerProfileLauncherValidation(bool IsRealLauncher, string Executable, string Detail);
+
+/// <summary>
+/// Owns the Claude CLI reasoning-effort vocabulary and the single template segment through which a
+/// configured effort is materialized. Substitution of that segment is the ONLY path that injects an
+/// effort flag: nothing appends <c>--effort</c> to an already-resolved command, so an operator-authored
+/// command template is never rewritten and can never end up with two effort flags.
+/// </summary>
+/// <remarks>
+/// Change record for the observation that motivated this seam: on the same frozen-runtime
+/// SubscriptionCliCompleter control and the same 7921-character refinement prompt, the unchanged saved
+/// profile timed out at 180499ms while a copy with only <c>--effort high</c> added exited 0 at 158526ms.
+/// That pair demonstrates command-policy mismatch only - the configured reasoning-effort policy never
+/// reached the CLI - and it is asserted for nothing else. It is a single paired observation and supports no
+/// throughput, latency, or timeout-resolution claim; any such claim requires operator-run multi-run timing
+/// and is out of scope for this slice. Accordingly this slice changes no timeout value, adds no model role
+/// or parallel effort config key, and writes nothing to user-level Claude settings.
+/// </remarks>
+public static class ClaudeCliEffortPolicy
+{
+    public const string EffortFlag = "--effort";
+    public const string EffortPlaceholder = "{subscriptionReasoningEffort}";
+
+    /// <summary>The literal template segment appended to the built-in claude-cli command.</summary>
+    public const string EffortSegment = EffortFlag + " " + EffortPlaceholder;
+
+    /// <summary>
+    /// Effort vocabulary accepted by the pinned Claude CLI, read from `claude --help` at Claude Code
+    /// 2.1.269: "--effort &lt;level&gt;  Effort level for the current session (low, medium, high, xhigh, max)".
+    /// This table is static by contract - never probed from the CLI at runtime and never read from
+    /// user-level Claude settings. Changing the vocabulary is a code change plus a test.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedValues = ["low", "medium", "high", "xhigh", "max"];
+
+    /// <summary>
+    /// Versioned allowlist of prior built-in claude-cli command templates. Matching is exact (after
+    /// whitespace normalization only) so a saved profile that merely resembles a built-in - an operator
+    /// customization - is never clobbered. Repair happens per invocation, in memory, and is never persisted.
+    /// </summary>
+    public static readonly IReadOnlyList<string> StaleBuiltInCommandTemplates =
+    [
+        // Observed on main 40cc42ef (2026-09-08): carries no effort argument, so a configured
+        // reasoning-effort policy never reached the Claude CLI.
+        "claude -p --model {subscriptionModelName} --permission-mode {permissionMode}"
+    ];
+
+    public static string SupportedValuesDisplay => string.Join(", ", SupportedValues);
+
+    /// <summary>
+    /// Exact, case-sensitive membership: the CLI accepts these tokens and nothing else, so a value that
+    /// differs only in case or padding would be emitted verbatim and rejected by the CLI mid-dispatch.
+    /// Refusing it at preflight names the mismatch instead. Blank is "unset", not "unsupported".
+    /// </summary>
+    public static bool IsSupported(string? reasoningEffort) =>
+        !string.IsNullOrWhiteSpace(reasoningEffort) &&
+        SupportedValues.Contains(reasoningEffort, StringComparer.Ordinal);
+
+    public static bool MatchesStaleBuiltInCommandTemplate(string commandTemplate) =>
+        StaleBuiltInCommandTemplates.Any(stale =>
+            NormalizeWhitespace(commandTemplate).Equals(NormalizeWhitespace(stale), StringComparison.Ordinal));
+
+    /// <summary>The current built-in claude-cli command template: the only repair target.</summary>
+    public static string CurrentBuiltInCommandTemplate =>
+        WorkerProfileCatalog.Default()
+            .GetRequired(WorkerProfileDispatcher.AnthropicSubscriptionProfileName)
+            .CommandTemplate;
+
+    /// <summary>
+    /// Invocation-time, in-memory repair. A saved command that matches a recognized stale built-in renders
+    /// from the current built-in for this one invocation; the returned string is handed to command
+    /// construction and never to <see cref="WorkerProfileStore.Save"/>. Nothing is written back to the
+    /// profile store - not on load, not on migration, not on the next write - so an unrelated profile edit
+    /// saved afterwards keeps the operator's bytes and persisting the repair stays a separate explicit
+    /// operator migration. A command that is not an exact stale built-in is returned unchanged.
+    /// </summary>
+    public static string ResolveInvocationCommandTemplate(
+        string profileName,
+        string commandTemplate,
+        Action<string>? diagnosticSink = null)
+    {
+        if (!MatchesStaleBuiltInCommandTemplate(commandTemplate))
+        {
+            return commandTemplate;
+        }
+
+        var repaired = CurrentBuiltInCommandTemplate;
+        WarnStaleBuiltInRepair(profileName, commandTemplate, repaired, diagnosticSink);
+        return repaired;
+    }
+
+    /// <summary>
+    /// The profile this one invocation renders from. A saved claude-cli command that matches a recognized
+    /// stale built-in is repaired in memory here; every other profile - including every non-Claude provider -
+    /// comes back unchanged, so the caller holds the resolved profile without restating the Claude rule.
+    /// </summary>
+    public static WorkerProfile ResolveInvocationProfile(
+        WorkerProfile profile,
+        ProviderKind providerKind,
+        Action<string>? diagnosticSink = null) =>
+        providerKind == ProviderKind.AnthropicClaudeCli
+            ? profile with
+            {
+                CommandTemplate = ResolveInvocationCommandTemplate(
+                    profile.Name,
+                    profile.CommandTemplate,
+                    diagnosticSink)
+            }
+            : profile;
+
+    /// <summary>
+    /// True when the invocation built from this template materializes a configured effort - either the
+    /// template carries the effort variable, or it is a stale built-in repaired at invocation time. Findings
+    /// that describe the invocation must agree with what <see cref="ResolveInvocationCommandTemplate"/>
+    /// actually constructs, not with the saved bytes alone.
+    /// </summary>
+    public static bool MaterializesConfiguredEffort(string commandTemplate) =>
+        WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(commandTemplate) ||
+        MatchesStaleBuiltInCommandTemplate(commandTemplate);
+
+    /// <summary>
+    /// Claude-scoped reasoning-effort preflight findings, produced beside the vocabulary and the repair rule
+    /// they describe so a finding can never disagree with the invocation actually constructed. An unsupported
+    /// value refuses the dispatch before any worker process starts, so a config typo costs no paid start and
+    /// is never clamped or remapped. A preserved custom template that cannot materialize a supported value is
+    /// a <c>warn:</c> finding on purpose: the invocation must still proceed, so this must not use the
+    /// <c>blocked:</c> prefix that the dispatcher's preflight turns into a refusal.
+    /// </summary>
+    public static void AddPreflightFindings(
+        List<string> findings,
+        ProviderKind providerKind,
+        WorkerProfile profile,
+        string? reasoningEffort)
+    {
+        if (providerKind != ProviderKind.AnthropicClaudeCli || string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            return;
+        }
+
+        if (!IsSupported(reasoningEffort))
+        {
+            findings.Add(
+                $"blocked: {WorkerProfileDispatcher.UnsupportedClaudeReasoningEffortErrorCode}: worker profile " +
+                $"'{profile.Name}' configured reasoning effort '{reasoningEffort}' is not supported by the Claude " +
+                $"CLI; supported values: {SupportedValuesDisplay}");
+            return;
+        }
+
+        // Judged against what the invocation will actually be, not the saved bytes alone: a superseded
+        // built-in has no effort variable on disk yet materializes one after the in-memory repair, so
+        // testing the saved template here would report a drop that does not happen.
+        if (!MaterializesConfiguredEffort(profile.CommandTemplate))
+        {
+            findings.Add(
+                $"warn: worker profile '{profile.Name}' has no {EffortPlaceholder} template variable; " +
+                $"configured reasoning effort '{reasoningEffort}' was not materialized");
+            return;
+        }
+
+        var repairNote = WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate)
+            ? string.Empty
+            : " (superseded built-in command template repaired in memory for this invocation; saved profile unchanged)";
+        findings.Add(
+            $"ok: worker profile '{profile.Name}' materializes reasoning effort '{reasoningEffort}' " +
+            $"as {EffortFlag}{repairNote}");
+    }
+
+    // One diagnostic per profile per process: the repair is re-derived on every invocation, so repeating the
+    // line on each dispatch would bury it. A supplied sink bypasses the guard so a caller observing
+    // diagnostics never depends on which invocation happened to be first.
+    private static readonly HashSet<string> _staleBuiltInRepairWarnings = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void WarnStaleBuiltInRepair(
+        string profileName,
+        string staleTemplate,
+        string repairedTemplate,
+        Action<string>? diagnosticSink)
+    {
+        var message =
+            $"[ClaudeCliEffortPolicy] WARNING: saved worker profile '{profileName}' command '{staleTemplate}' is a " +
+            $"superseded built-in; this invocation was rendered in memory from the current built-in " +
+            $"'{repairedTemplate}' so configured reasoning effort is materialized as {EffortFlag}. The saved " +
+            "profile store was not modified; persisting the repair is a separate explicit operator migration.";
+        if (diagnosticSink is not null)
+        {
+            diagnosticSink(message);
+            return;
+        }
+
+        lock (_staleBuiltInRepairWarnings)
+        {
+            if (!_staleBuiltInRepairWarnings.Add(profileName))
+            {
+                return;
+            }
+        }
+
+        Console.Error.WriteLine(message);
+    }
+
+    /// <summary>
+    /// Removes the effort segment, together with its preceding whitespace run, when no effort is
+    /// configured. An unset effort must leave no flag and no empty operand behind so user-level Claude
+    /// settings continue to govern; an explicitly configured value is emitted and overrides them.
+    /// </summary>
+    public static string ElideUnsetEffortSegment(string commandTemplate, string? reasoningEffort) =>
+        string.IsNullOrWhiteSpace(reasoningEffort) ? ElideEffortSegment(commandTemplate) : commandTemplate;
+
+    public static string ElideEffortSegment(string commandTemplate)
+    {
+        var index = commandTemplate.IndexOf(EffortSegment, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            return commandTemplate;
+        }
+
+        var start = index;
+        while (start > 0 && char.IsWhiteSpace(commandTemplate[start - 1]))
+        {
+            start--;
+        }
+
+        return commandTemplate.Remove(start, index + EffortSegment.Length - start);
+    }
+
+    private static string NormalizeWhitespace(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+}
 
 public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 {
@@ -375,7 +618,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 
         var profiles = Profiles
             .Where(existing => !existing.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase))
-            .Append(new WorkerProfile(profile.Name.Trim(), profile.CommandTemplate.Trim()))
+            .Append(profile with { Name = profile.Name.Trim(), CommandTemplate = profile.CommandTemplate.Trim() })
             .OrderBy(existing => existing.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -398,12 +641,13 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
         return new WorkerProfileCatalog(
         [
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
-            new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
-            new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
+            new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
+            new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile(WorkerProfile.QwenCodeCliName, "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} --input-format text"),
             // -p = headless print mode; without it Claude opens the interactive REPL and emits nothing (exits 0 empty, so the task is wrongly classified Failed). The prompt is piped via stdin and --session-id is appended by the spawn layer.
-            new WorkerProfile("claude-cli", "claude -p --model {subscriptionModelName} --permission-mode {permissionMode}"),
+            // --effort carries the configured reasoning-effort policy; the segment is elided whole when effort is unset, so user-level Claude settings still govern.
+            new WorkerProfile("claude-cli", "claude -p --model {subscriptionModelName} --permission-mode {permissionMode} " + ClaudeCliEffortPolicy.EffortSegment),
             new WorkerProfile("grok-cli", "grok --prompt-file {promptPath} --model {subscriptionModelName} --permission-mode {permissionMode} --cwd {workingDirectory} --output-format plain --no-subagents --verbatim --max-turns 32")
         ]);
     }
@@ -530,11 +774,17 @@ public static class WorkerProfileStore
         {
             const string legacyStructuredOutputTemplate =
                 "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
+            const string legacyRepositoryPolicyTemplate =
+                "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
             var missingStructuredOutputFromKnownBuiltIn =
                 !profile.CommandTemplate.Contains("--json", StringComparison.OrdinalIgnoreCase) &&
                 profile.CommandTemplate.Equals(legacyStructuredOutputTemplate, StringComparison.OrdinalIgnoreCase);
+            var missingRepositoryPolicyBudgetFromKnownBuiltIn =
+                !profile.HasCompleteRepositoryPolicyAutoLoadContract &&
+                profile.CommandTemplate.Equals(legacyRepositoryPolicyTemplate, StringComparison.OrdinalIgnoreCase);
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
                 missingStructuredOutputFromKnownBuiltIn ||
+                missingRepositoryPolicyBudgetFromKnownBuiltIn ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase) ||
@@ -563,6 +813,10 @@ public static class WorkerProfileStore
                 profile.CommandTemplate.Contains("-p (Get-Content", StringComparison.OrdinalIgnoreCase);
         }
 
+        // A superseded built-in claude-cli command is deliberately NOT repaired here. The effort repair is
+        // invocation-time and in-memory only (ClaudeCliEffortPolicy.ResolveInvocationCommandTemplate): the
+        // catalog this returns is what the dashboard and CLI hand back to Save, so repairing it on load
+        // would persist the rewritten template on the next unrelated profile edit.
         return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&
             (!profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("{permissionMode}", StringComparison.OrdinalIgnoreCase) ||

@@ -50,7 +50,7 @@ internal static partial class DashboardEndpoints
 
     private static long ParseMonitoringSinceEventId(HttpRequest request)
     {
-        var raw = DashboardRequestParser.GetQueryValue(request, "since")
+        var raw = DashboardHttpRequestParser.GetQueryValue(request, "since")
             ?? request.Headers["Last-Event-ID"].FirstOrDefault();
         return long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
             ? parsed

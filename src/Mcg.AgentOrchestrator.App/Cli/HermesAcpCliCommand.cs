@@ -1,0 +1,190 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core;
+using System.Text.Json;
+
+namespace Mcg.AgentOrchestrator.App.Cli;
+
+internal static class HermesAcpCliCommand
+{
+    public const string Usage =
+        "Usage: hermes-acp-trial --confirm-live-hermes-start [--prompt <path>] [--prompt-sha256 <sha256>] " +
+        "[--workspace <path>] [--sandbox <path>] --provider <provider> --model <model> --role <role> [--receipt <path>]. " +
+        "Trial-compare may supply prompt path/hash through MCG_TRIAL_BRIEF_PATH/MCG_TRIAL_BRIEF_SHA256.";
+    public const string IdentityUsage =
+        "Usage: hermes-acp-verify-identity --executable <absolute-path> " +
+        "[--working-directory <path>] [--hermes-home <path>] [--receipt <path>].";
+
+    internal static async Task<HermesAcpTerminalReceipt> ExecuteAsync(
+        IReadOnlyList<string> parts,
+        TextWriter output,
+        TextWriter error,
+        Func<HermesAcpRequest, string, TextWriter, CancellationToken, Task<HermesAcpTerminalReceipt>>? run = null,
+        Func<string?>? containedTrialState = null,
+        Func<string?>? inheritedHermesHome = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(error);
+        if (!parts.Any(part => part.Equals("--confirm-live-hermes-start", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                "hermes-acp-trial requires --confirm-live-hermes-start; this command starts the pinned external Hermes process.");
+        }
+
+        var promptPath = ValueAfter(parts, "--prompt") ?? Environment.GetEnvironmentVariable("MCG_TRIAL_BRIEF_PATH");
+        var promptSha256 = ValueAfter(parts, "--prompt-sha256") ?? Environment.GetEnvironmentVariable("MCG_TRIAL_BRIEF_SHA256");
+        var workspace = Path.GetFullPath(ValueAfter(parts, "--workspace") ?? Environment.CurrentDirectory);
+        var sandboxValue = ValueAfter(parts, "--sandbox") ??
+            (string.IsNullOrWhiteSpace(promptPath) ? null : Path.GetDirectoryName(Path.GetFullPath(promptPath)));
+        var provider = ValueAfter(parts, "--provider");
+        var model = ValueAfter(parts, "--model");
+        var roleValue = ValueAfter(parts, "--role");
+
+        if (string.IsNullOrWhiteSpace(promptPath) || string.IsNullOrWhiteSpace(promptSha256) ||
+            string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model) ||
+            string.IsNullOrWhiteSpace(sandboxValue) ||
+            !Enum.TryParse<AgentRole>(roleValue, ignoreCase: true, out var role) ||
+            !Enum.IsDefined(role))
+        {
+            throw new ArgumentException(Usage);
+        }
+
+        promptPath = Path.GetFullPath(promptPath);
+        var sandbox = Path.GetFullPath(sandboxValue);
+        RequireContainedTrialRoot(workspace, sandbox, containedTrialState);
+        Directory.CreateDirectory(sandbox);
+        var receiptPath = Path.GetFullPath(
+            ValueAfter(parts, "--receipt") ?? Path.Combine(sandbox, HermesAcpAdapter.TerminalReceiptFileName));
+        inheritedHermesHome ??= () => Environment.GetEnvironmentVariable("HERMES_HOME");
+        var request = new HermesAcpRequest(
+            promptPath,
+            promptSha256,
+            workspace,
+            sandbox,
+            model,
+            provider,
+            role,
+            inheritedHermesHome());
+        run ??= (candidate, path, progress, token) =>
+            new HermesAcpLifecycle().RunAsync(candidate, path, progress, token);
+
+        var receipt = await run(request, receiptPath, error, cancellationToken).ConfigureAwait(false);
+        await output.WriteAsync(receipt.FinalOutput).ConfigureAwait(false);
+        if (!receipt.FinalOutput.EndsWith(Environment.NewLine, StringComparison.Ordinal))
+        {
+            await output.WriteLineAsync().ConfigureAwait(false);
+        }
+        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+        await error.WriteLineAsync($"[hermes-acp] terminal receipt: {receiptPath}").ConfigureAwait(false);
+        await error.FlushAsync(cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
+
+    internal static async Task<HermesExecutableIdentityReceipt> ExecuteIdentityVerificationAsync(
+        IReadOnlyList<string> parts,
+        TextWriter output,
+        Func<string, string, string, CancellationToken, Task<HermesExecutableIdentityReceipt>>? verify = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentNullException.ThrowIfNull(output);
+        var executableValue = ValueAfter(parts, "--executable");
+        if (string.IsNullOrWhiteSpace(executableValue) || !Path.IsPathFullyQualified(executableValue))
+            throw new ArgumentException(IdentityUsage);
+
+        var executablePath = Path.GetFullPath(executableValue);
+        var workingDirectory = Path.GetFullPath(
+            ValueAfter(parts, "--working-directory") ?? Path.GetDirectoryName(executablePath)!);
+        if (!Directory.Exists(workingDirectory))
+            throw new DirectoryNotFoundException($"Hermes identity working directory does not exist: '{workingDirectory}'.");
+
+        var temporaryHome = string.IsNullOrWhiteSpace(ValueAfter(parts, "--hermes-home"));
+        var hermesHome = Path.GetFullPath(
+            ValueAfter(parts, "--hermes-home") ??
+            Path.Combine(Path.GetTempPath(), "mcg-hermes-identity", Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(hermesHome);
+        verify ??= (image, directory, home, token) =>
+            new HermesAcpLifecycle().VerifyExecutableIdentityAsync(image, directory, home, token);
+
+        try
+        {
+            var receipt = await verify(executablePath, workingDirectory, hermesHome, cancellationToken).ConfigureAwait(false);
+            var json = JsonSerializer.Serialize(
+                receipt,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
+            var receiptValue = ValueAfter(parts, "--receipt");
+            if (!string.IsNullOrWhiteSpace(receiptValue))
+            {
+                var receiptPath = Path.GetFullPath(receiptValue);
+                Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+                var temporaryPath = receiptPath + $".{Guid.NewGuid():N}.tmp";
+                File.WriteAllText(temporaryPath, json + Environment.NewLine);
+                File.Move(temporaryPath, receiptPath, overwrite: true);
+            }
+
+            await output.WriteLineAsync(json).ConfigureAwait(false);
+            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            return receipt;
+        }
+        finally
+        {
+            if (temporaryHome && Directory.Exists(hermesHome))
+            {
+                try { Directory.Delete(hermesHome, recursive: true); } catch { }
+            }
+        }
+    }
+
+    private static void RequireContainedTrialRoot(
+        string workspace,
+        string sandbox,
+        Func<string?>? containedTrialState)
+    {
+        containedTrialState ??= () => Environment.GetEnvironmentVariable("MCG_TRIAL_HARNESS_STATE");
+        var harnessState = containedTrialState();
+        if (string.IsNullOrWhiteSpace(harnessState))
+        {
+            throw new InvalidOperationException(
+                "hermes-acp-trial must run inside the contained trial root created by trial-compare.");
+        }
+
+        var stateDirectory = Directory.GetParent(Path.GetFullPath(harnessState));
+        var trialRoot = stateDirectory?.Name.Equals(".trial-state", StringComparison.OrdinalIgnoreCase) == true
+            ? stateDirectory.Parent?.FullName
+            : null;
+        if (trialRoot is null || !IsWithin(workspace, trialRoot) || !IsWithin(sandbox, trialRoot))
+        {
+            throw new InvalidOperationException(
+                "hermes-acp-trial workspace and sandbox must remain inside the contained trial root.");
+        }
+    }
+
+    private static bool IsWithin(string path, string root)
+    {
+        var relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));
+        return relative != ".." &&
+            !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+            !Path.IsPathRooted(relative);
+    }
+
+    private static string? ValueAfter(IReadOnlyList<string> parts, string flag)
+    {
+        for (var index = 1; index < parts.Count; index++)
+        {
+            if (!parts[index].Equals(flag, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (index + 1 >= parts.Count || parts[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"{flag} requires a value. {Usage}");
+            }
+
+            return parts[index + 1];
+        }
+
+        return null;
+    }
+}

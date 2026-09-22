@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class ProcessSpawnGuard
 {
     private const uint HandleFlagInherit = 0x00000001;
+    private const int ErrorInvalidHandle = 6;
     private const uint FileTypeDisk = 0x0001;
     private const uint FileNameNormalized = 0x0;
     private const int ProcessHandleInformation = 51;
@@ -16,6 +17,10 @@ public static class ProcessSpawnGuard
     private const int StatusBufferTooSmall = unchecked((int)0xC0000023);
     private const int StatusBufferOverflow = unchecked((int)0x80000005);
 
+    private const int StdInputHandle = -10;
+    private const int StdOutputHandle = -11;
+    private const int StdErrorHandle = -12;
+
     public static int ClearInheritableStateDatabaseHandles()
     {
         if (!OperatingSystem.IsWindows())
@@ -23,7 +28,55 @@ public static class ProcessSpawnGuard
             return 0;
         }
 
-        return ClearInheritableFileHandles("state.db", "state.db-wal", "state.db-shm");
+        return ClearInheritableStandardHandles() +
+            ClearInheritableFileHandles("state.db", "state.db-wal", "state.db-shm");
+    }
+
+    // This process's own standard handles are the pipes its supervisor reads. CreateProcess hands every
+    // inheritable handle to a child that redirects any stream, so a worker or gate launched from here
+    // would hold the supervisor's pipe open until it exits, and the supervisor, which waits for EOF
+    // before staging a successor, would stall for the lifetime of the longest grandchild (observed:
+    // 38 minutes at a max-duration handoff on 2026-09-05). Children get their own std handles from the
+    // launcher, so nothing here needs to be inheritable.
+    public static int ClearInheritableStandardHandles()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return 0;
+        }
+
+        var cleared = 0;
+        foreach (var kind in new[] { StdInputHandle, StdOutputHandle, StdErrorHandle })
+        {
+            var handle = GetStdHandle(kind);
+            if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+            {
+                continue;
+            }
+
+            if (!GetHandleInformation(handle, out var flags) ||
+                (flags & HandleFlagInherit) == 0)
+            {
+                continue;
+            }
+
+            if (!SetHandleInformation(handle, HandleFlagInherit, 0))
+            {
+                var error = Marshal.GetLastWin32Error();
+                if (error == ErrorInvalidHandle)
+                {
+                    continue;
+                }
+
+                throw new Win32Exception(
+                    error,
+                    $"Failed to clear inheritable flag for standard handle {kind}: win32={error} (0x{error:X8}).");
+            }
+
+            cleared++;
+        }
+
+        return cleared;
     }
 
     internal static int ClearInheritableFileHandles(params string[] fileNames)
@@ -42,8 +95,16 @@ public static class ProcessSpawnGuard
                 continue;
             }
 
-            var hasResolvedTargetPath = TryGetDiskHandlePath(handle, out var path) && fileNames.Length > 0;
-            if (hasResolvedTargetPath &&
+            // Only handles that resolve to a disk file are in scope. Anonymous pipes, events, job and
+            // process handles that are inheritable at this instant belong to another launch in flight on
+            // a different thread (Process.Start keeps its child's std pipe ends inheritable until
+            // CreateProcess returns); clearing their flag starts that child with invalid std handles.
+            if (!TryGetDiskHandlePath(handle, out var path))
+            {
+                continue;
+            }
+
+            if (fileNames.Length > 0 &&
                 !fileNames.Any(fileName => IsSameFileName(path, fileName)))
             {
                 continue;
@@ -51,7 +112,16 @@ public static class ProcessSpawnGuard
 
             if (!SetHandleInformation(handle, HandleFlagInherit, 0))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to clear inheritable flag for disk handle.");
+                var error = Marshal.GetLastWin32Error();
+                if (error == ErrorInvalidHandle)
+                {
+                    // Closed by its owner between enumeration and here; nothing to clear.
+                    continue;
+                }
+
+                throw new Win32Exception(
+                    error,
+                    $"Failed to clear inheritable flag for disk handle '{path}': win32={error} (0x{error:X8}).");
             }
 
             cleared++;
@@ -264,6 +334,9 @@ public static class ProcessSpawnGuard
         IntPtr processInformation,
         int processInformationLength,
         out int returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);

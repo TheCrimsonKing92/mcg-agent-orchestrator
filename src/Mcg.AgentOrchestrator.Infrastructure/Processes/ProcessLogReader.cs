@@ -37,9 +37,12 @@ public sealed record DispatchHeartbeatStatus(
     long OwnedCpuMs = 0L,
     string? ProviderSessionId = null,
     string? WorktreeHeadSha = null,
-    string? DirtyStateHash = null);
+    string? DirtyStateHash = null)
+{
+    internal IReadOnlyList<SpawnProcessIdentity> OwnedProcessIdentities { get; init; } = [];
+}
 
-public static class ProcessLogReader
+public sealed partial class ProcessLogReader
 {
     public static ProcessLogSnapshot Read(TaskProcessRecord process)
     {
@@ -90,7 +93,10 @@ public static class ProcessLogReader
                 GetInt64(root, "ownedCpuMs"),
                 GetNullableString(root, "providerSessionId"),
                 GetNullableString(root, "worktreeHeadSha"),
-                GetNullableString(root, "dirtyStateHash"));
+                GetNullableString(root, "dirtyStateHash"))
+            {
+                OwnedProcessIdentities = DispatchProcessIdentityEvidence.Read(root)
+            };
         }
         catch (IOException)
         {

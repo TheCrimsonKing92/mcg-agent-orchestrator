@@ -454,7 +454,8 @@ public sealed class GoalBacklogLinkTests
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         await repository.SaveAsync(kernel);
 
-        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath}");
+        await using var conn = new Microsoft.Data.Sqlite.SqliteConnection(
+            $"Data Source={workspace.SqliteStatePath};Pooling=False");
         await conn.OpenAsync();
         await using (var cmd = conn.CreateCommand())
         {

@@ -44,6 +44,175 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Equal(testResultPaths, normalized.TestResultPaths);
         Assert.Equal(attributions, normalized.CheckAttributions);
         Assert.Equal("attested-red", normalized.BaselineAttestation);
+        Assert.Null(Assert.Single(normalized.RequiredUnmetCriteria).FailureClassification);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_named_introduced_apparatus_normalization_preserves_origin_and_routes_environmentally")]
+    public void ConductorDriverNamedIntroducedApparatusNormalizationPreservesOriginAndRoutesEnvironmentally()
+    {
+        var attributions = new[]
+        {
+            new AcceptanceCheckAttribution(
+                "infrastructure tests: Remainder",
+                AcceptanceFailureOrigin.Introduced,
+                "typed process-output apparatus receipt",
+                AcceptanceFailureCause.EnvironmentalApparatus)
+        };
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [],
+            "Remainder failed",
+            ["infrastructure tests: Remainder"],
+            "candidate-a",
+            "main-a",
+            CheckAttributions: attributions);
+
+        var normalized = ConductorDriver.NormalizeNamedFailedChecksForRetry(acceptance);
+
+        Assert.Equal(
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
+            Assert.Single(normalized.RequiredUnmetCriteria).FailureClassification);
+        var attribution = Assert.Single(normalized.CheckAttributions!);
+        Assert.Equal(AcceptanceFailureOrigin.Introduced, attribution.Origin);
+        Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, attribution.Cause);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_gets_typed_apparatus_cause")]
+    public void ConductorDriverAllInheritedRedGetsTypedApparatusCause()
+    {
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "red")],
+            FailedChecks: ["infrastructure tests: Remainder"],
+            BranchHeadSha: "candidate-a",
+            MainHeadSha: "main-a",
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests: Remainder",
+                    AcceptanceFailureOrigin.Inherited,
+                    "typed process-output apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ],
+            BaselineAttestation: "attested-red");
+
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(acceptance);
+
+        Assert.Equal(
+            AcceptanceFailureClassifications.InheritedBaselineApparatus,
+            Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
+        Assert.Equal(
+            AcceptanceFailureCause.EnvironmentalApparatus,
+            Assert.Single(classified.CheckAttributions!).Cause);
+        Assert.Equal("candidate-a", classified.BranchHeadSha);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_observed_candidate_correlation_keeps_origin_unattributed")]
+    public void ConductorDriverObservedCandidateCorrelationKeepsOriginUnattributed()
+    {
+        var current = GoalId.New();
+        var first = GoalId.New();
+        var second = GoalId.New();
+        GoalOperationJournalEntry Entry(GoalId goalId) => new(
+            Guid.NewGuid().ToString("N"),
+            goalId,
+            "conductor:acceptance",
+            GoalOperationStatus.Failed,
+            DateTimeOffset.UtcNow,
+            "receipt",
+            MainHeadSha: "main-a",
+            AcceptanceOutcome: "failed",
+            FailedCheckNames: ["infrastructure tests: Remainder"]);
+        var firstEntry = Entry(first);
+        var secondEntry = Entry(second);
+        var journals = new Dictionary<GoalId, GoalOperationJournalSummary>
+        {
+            [first] = new("first", [firstEntry], [firstEntry], []),
+            [second] = new("second", [secondEntry], [secondEntry], [])
+        };
+        var failedCheck = new AcceptanceCheckResult(
+            "infrastructure tests: Remainder",
+            false,
+            1,
+            "diagnostic text is not consulted",
+            FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference);
+        failedCheck = GoalAcceptanceVerifier.AttachFailureCauseEvidence(failedCheck);
+
+        var baseline = CleanTestBaseline.Resolve(journals, current, "main-a", null);
+        var attributions = CleanTestBaseline.Attribute(
+            baseline,
+            [failedCheck.Name],
+            journals,
+            current,
+            "main-a",
+            [failedCheck]);
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(
+            new AcceptanceVerificationSummary(
+                false,
+                [failedCheck],
+                FailedChecks: [failedCheck.Name],
+                BranchHeadSha: "candidate-a",
+                MainHeadSha: "main-a",
+                CheckAttributions: attributions,
+                BaselineAttestation: CleanTestBaseline.FormatFailureAttestation(baseline)));
+
+        var attribution = Assert.Single(classified.CheckAttributions!);
+        Assert.Equal(AcceptanceFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, attribution.Cause);
+        Assert.Equal(failedCheck.Name, failedCheck.FailureCauseEvidence?.CheckName);
+        Assert.Equal(
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
+            failedCheck.FailureCauseEvidence?.SourceClassification);
+        Assert.Equal(
+            AcceptanceFailureClassifications.GateEnvironmentInterference,
+            Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
+        Assert.True(ConductorDriver.IsEnvironmentalApparatusAcceptanceRun(classified));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_all_inherited_red_without_typed_cause_stays_unclassified")]
+    public void ConductorDriverAllInheritedRedWithoutTypedCauseStaysUnclassified()
+    {
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [new AcceptanceCheckResult("infrastructure tests: Remainder", false, 1, "red")],
+            FailedChecks: ["infrastructure tests: Remainder"],
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution(
+                    "infrastructure tests: Remainder",
+                    AcceptanceFailureOrigin.Inherited,
+                    "same check failed on main")
+            ]);
+
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(acceptance);
+
+        Assert.Null(Assert.Single(classified.RequiredUnmetCriteria).FailureClassification);
+        Assert.Equal(
+            AcceptanceFailureCause.NotClassified,
+            Assert.Single(classified.CheckAttributions!).Cause);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_mixed_red_does_not_get_apparatus_classification")]
+    public void ConductorDriverMixedRedDoesNotGetApparatusClassification()
+    {
+        var acceptance = new AcceptanceVerificationSummary(
+            false,
+            [
+                new AcceptanceCheckResult("inherited", false, 1, "red"),
+                new AcceptanceCheckResult("introduced", false, 1, "red")
+            ],
+            FailedChecks: ["inherited", "introduced"],
+            CheckAttributions:
+            [
+                new AcceptanceCheckAttribution("inherited", AcceptanceFailureOrigin.Inherited, "baseline"),
+                new AcceptanceCheckAttribution("introduced", AcceptanceFailureOrigin.Introduced, "green baseline")
+            ]);
+
+        var classified = ConductorDriver.ClassifyInheritedBaselineApparatus(acceptance);
+
+        Assert.All(classified.RequiredUnmetCriteria, check => Assert.Null(check.FailureClassification));
+        Assert.All(classified.CheckAttributions!, attribution =>
+            Assert.Equal(AcceptanceFailureCause.NotClassified, attribution.Cause));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_match_per_goal_read_path")]
@@ -84,6 +253,33 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         {
             Assert.Equal(ReadFactsPerGoal(workspace, goal), driver.GetFacts(goal));
         }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_construction_does_not_eagerly_read_goal_journals")]
+    public void ConductorDriverConstructionDoesNotEagerlyReadGoalJournals()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var queried = kernel.CreateGoal("Queried journal goal");
+        var unqueried = kernel.CreateGoal("Unqueried locked journal goal");
+        GoalOperationJournal.Completed(root, unqueried, "conductor:land", "landed");
+
+        var unqueriedJournalPath = GoalOperationJournal.PathFor(root, unqueried.Id);
+        using var exclusiveJournalLock = new FileStream(
+            unqueriedJournalPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        Assert.Equal(ReadFactsPerGoal(workspace, queried), driver.GetFacts(queried));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_real_dispatch_checkpoint_rolls_back_then_notifies_on_success")]
@@ -143,6 +339,135 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.NotNull(kernel.GetGoal(goal.Id).Tasks.Single().LastProcess);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_critical_checkpoint_conflict_holds_without_starting_stale_worker")]
+    public void ConductorDriverCriticalCheckpointConflictHoldsWithoutStartingStaleWorker()
+    {
+        var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var (kernel, goal) = SimpleGoal("Reject stale critical dispatch checkpoint");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Critical checkpoint conflict fixture is already refined.",
+            ["No stale paid worker starts after an operator advances the task."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        GoalWorktrees.Ensure(root, goal.Id);
+        var task = goal.Tasks.Single();
+        var authoritativeKernel = AgentOrchestratorKernel.FromSnapshot(
+            new OrchestratorSnapshot([kernel.ExportGoalSnapshot(goal.Id)], []));
+        authoritativeKernel.ReportTaskProgress(
+            goal.Id,
+            task.Id,
+            WorkTaskStatus.Completed,
+            "Operator preserved existing work.");
+        authoritativeKernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        var authoritative = authoritativeKernel.ExportGoalSnapshot(goal.Id);
+        var successfulCheckpointNotifications = 0;
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default(),
+            persistCriticalDispatchStart: (checkpoint, _) =>
+            {
+                checkpoint.ReplaceGoalWithSnapshot(authoritative);
+                throw new DispatchCheckpointConflictException(
+                    "Critical dispatch checkpoint rejected stale state; worker start was aborted.");
+            });
+        driver.DispatchRecordWriteSucceededSink = _ => successfulCheckpointNotifications++;
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("worker start was aborted", held.Reason, StringComparison.Ordinal);
+        var liveTask = kernel.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Completed, liveTask.Status);
+        Assert.NotNull(liveTask.LastVerification);
+        Assert.Null(liveTask.LastDispatch);
+        Assert.Null(liveTask.LastProcess);
+        Assert.Equal(0, successfulCheckpointNotifications);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_terminal_critical_checkpoint_conflict_holds_after_authoritative_eviction")]
+    public void ConductorDriverTerminalCriticalCheckpointConflictHoldsAfterAuthoritativeEviction()
+    {
+        var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        var (kernel, goal) = SimpleGoal("Honor terminal state during dispatch checkpoint");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Terminal checkpoint conflict fixture is already refined.",
+            ["A concurrently cancelled goal cannot crash the conductor."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        GoalWorktrees.Ensure(root, goal.Id);
+        var authoritativeKernel = AgentOrchestratorKernel.FromSnapshot(
+            new OrchestratorSnapshot([kernel.ExportGoalSnapshot(goal.Id)], []));
+        authoritativeKernel.CancelGoal(goal.Id, "Operator cancelled obsolete work.");
+        var authoritative = authoritativeKernel.ExportGoalSnapshot(goal.Id);
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default(),
+            persistCriticalDispatchStart: (checkpoint, _) =>
+            {
+                checkpoint.ReplaceGoalWithSnapshot(authoritative);
+                checkpoint.EvictTerminalGoalAggregates([goal.Id]);
+                throw new DispatchCheckpointConflictException(
+                    "Critical dispatch checkpoint rejected terminal authoritative state; worker start was aborted.");
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("worker start was aborted", held.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(kernel.Goals, candidate => candidate.Id == goal.Id);
+    }
+
+    [Xunit.Theory(DisplayName = "DispatchRecordWriteException_authoritative_conflict_is_soft_only_before_process_start")]
+    [Xunit.InlineData(DispatchRecordCheckpointPhase.BeforeProcessStart, true)]
+    [Xunit.InlineData(DispatchRecordCheckpointPhase.ProcessMayHaveStarted, false)]
+    public void DispatchRecordWriteExceptionAuthoritativeConflictIsSoftOnlyBeforeProcessStart(
+        DispatchRecordCheckpointPhase phase,
+        bool expected)
+    {
+        var error = DispatchRecordWriteException.From(
+            new DispatchCheckpointConflictException("stale critical checkpoint"),
+            phase,
+            "dispatch-start",
+            GoalId.New(),
+            TaskId.New());
+
+        Assert.Equal(expected, error.PreservesAuthoritativeState);
+        Assert.Equal(phase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted, error.IsFatal);
+    }
+
     [Xunit.Fact]
     public void ConductorDriverReplacementLeaseBlocksWorkspaceEvidenceMutation()
     {
@@ -199,7 +524,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Contains("blocked by concurrent acceptance or replacement", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("Goal evidence mutation is held", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("lease-recovery=state-unavailable", held.Reason, StringComparison.Ordinal);
         Assert.DoesNotContain(phaseTimings, timing => timing.Contains("phase=dispatch-remediation", StringComparison.Ordinal));
         Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id)));
         Assert.All(goal.Tasks, task => Assert.Null(task.LastDispatch));
@@ -672,6 +998,56 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         Assert.Equal(expectedRevisionReads, revisionReads);
     }
 
+    [Xunit.Fact]
+    public void ProjectGateReadyCandidate_UnchangedApparatusHold_IsExcluded()
+    {
+        var (kernel, goal) = SimpleGoal("Held gate-ready candidate");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        const string branchRevision = "1111111111111111111111111111111111111111";
+        const string mainRevision = "2222222222222222222222222222222222222222";
+        var currentMainRevision = mainRevision;
+        const string failedCheck = "infrastructure tests: Remainder";
+        kernel.RecordAcceptanceFailure(
+            goal.Id,
+            [failedCheck],
+            branchRevision,
+            mainRevision,
+            [
+                new AcceptanceCheckAttribution(
+                    failedCheck,
+                    AcceptanceFailureOrigin.Introduced,
+                    "typed seeded repository apparatus receipt",
+                    AcceptanceFailureCause.EnvironmentalApparatus)
+            ]);
+        var projector = new GateReadyCandidateProjector(
+            _ => new GateReadyCandidateRevisionPair(branchRevision, currentMainRevision),
+            _ => new GateReadyLandingScopeObservation(
+                true,
+                ["src/Mcg.AgentOrchestrator.Core/Feature.cs"]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            resolveAcceptanceHeads: _ => (branchRevision, currentMainRevision));
+
+        var heldResult = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(
+            GateReadyCandidateExclusionReason.ApparatusHold,
+            Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(heldResult).Reason);
+
+        currentMainRevision = "3333333333333333333333333333333333333333";
+        Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+            driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative));
+
+        currentMainRevision = mainRevision;
+        Assert.Equal(1, kernel.RetryAcceptanceGate(goal.Id, "Operator confirmed the apparatus repair."));
+        Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+            driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver fails closed when the gate-ready projector is absent")]
     public void ProjectGateReadyCandidateWithoutProjectorReturnsRevisionUnknown()
     {
@@ -731,7 +1107,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var decision = coordinator.Evaluate(
             candidate!,
             ConductorAutonomyPolicy.Conservative,
-            (_, _, lease, _) =>
+            (_, _, lease, _, _) =>
             {
                 acceptanceRan = true;
                 Assert.NotNull(lease);
@@ -786,7 +1162,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             candidate,
             ConductorAutonomyPolicy.Conservative,
             stableSlotLease: null,
-            CancellationToken.None);
+            CancellationToken.None, new AcceptanceRunExecutionOptions());
 
         Assert.Null(result.Exception);
         Assert.Same(accepted, result.Acceptance);

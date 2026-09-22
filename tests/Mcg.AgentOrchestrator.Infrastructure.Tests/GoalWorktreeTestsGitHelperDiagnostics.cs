@@ -1,5 +1,10 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
 public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
 {
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
     // Parallel-safe: every fact owns a GUID-named repository and cleans it up independently.
     [Xunit.Fact]
     public void RunGitFailureCarriesStdoutAndExitCode()
@@ -27,6 +32,37 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         finally
         {
             DeleteDirectory(repo);
+        }
+    }
+
+    // A bare "not inside a git work tree" message is thrown identically for a genuinely non-git
+    // directory, a probe that exited 0 with empty output, a timeout, and a probe that never started.
+    // The diagnostic must carry the probe evidence so those are distinguishable from the artifact.
+    [Xunit.Fact]
+    public void RequireGitWorkTreeFailureCarriesProbeEvidence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "not-a-repo-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => GoalWorktrees.HasBranch(directory, GoalId.New()));
+
+            // Assert.Contains truncates the inspected string to 50 characters on failure, which hid the
+            // probe evidence this message exists to carry (2026-09-04: exit=128 with EMPTY stderr under
+            // parallel load, and the drain/pool diagnostics were cut off). Fail with the whole message.
+            AssertMessageContains(exception.Message, "to be inside a git work tree");
+            AssertMessageContains(exception.Message, "probe='git rev-parse --is-inside-work-tree'");
+            // git reports "not a git repository" with exit 128; an empty-output probe would report exit=0.
+            AssertMessageContains(exception.Message, "exit=128");
+            AssertMessageContains(exception.Message, "processStarted=True");
+            AssertMessageContains(exception.Message, "stdoutBytes=");
+            AssertMessageContains(exception.Message, "directoryExists=True");
+            AssertMessageContains(exception.Message, "not a git repository");
+        }
+        finally
+        {
+            DeleteDirectory(directory);
         }
     }
 
@@ -78,6 +114,100 @@ public sealed class GoalWorktreeTestsGitHelperDiagnostics : GoalWorktreeTestBase
         {
             DeleteDirectory(repo);
         }
+    }
+
+    [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbeLinkedWorktreeDoesNotDirtyTheWorktree()
+    {
+        var repo = CreateEmptyRepository();
+        var linkedWorktree = repo + "-linked";
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+            RunGit(repo, "add", "seed.txt");
+            RunGit(repo, "commit", "-m", "Seed");
+            RunGit(repo, "worktree", "add", "-b", "probe", linkedWorktree, "HEAD");
+
+            var result = InfrastructureTestSupport.RunGitProbe(linkedWorktree, ["status", "--short"]);
+
+            Assert.True(result.Succeeded, result.StandardError);
+            Assert.Empty(result.StandardOutput);
+            Assert.Empty(Directory.EnumerateFiles(
+                linkedWorktree,
+                ".mcg-git-probe-*",
+                SearchOption.TopDirectoryOnly));
+        }
+        finally
+        {
+            DeleteDirectory(linkedWorktree);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(Skip = "Requires Windows owned-file capture semantics.", SkipUnless = nameof(IsWindows))]
+    public void RunGitProbeKeepsLiveCapturesOutsideTheRepositoryTree()
+    {
+        var repo = CreateEmptyRepository();
+        try
+        {
+            var repositoryPrefix = Path.GetFullPath(repo)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar;
+            var callbackObserved = false;
+            string? observedStandardOutputPath = null;
+            string? observedStandardErrorPath = null;
+            var standardOutputCaptureExisted = false;
+            var standardErrorCaptureExisted = false;
+            string[] repositoryCapturePaths = [];
+            var result = InfrastructureTestSupport.RunGitProbe(
+                repo,
+                ["status", "--short"],
+                beforeOwnedCaptureRead: (standardOutputPath, standardErrorPath) =>
+                {
+                    callbackObserved = true;
+                    observedStandardOutputPath = standardOutputPath;
+                    observedStandardErrorPath = standardErrorPath;
+                    standardOutputCaptureExisted = File.Exists(standardOutputPath);
+                    standardErrorCaptureExisted = File.Exists(standardErrorPath);
+                    repositoryCapturePaths = Directory.GetFiles(
+                        repo,
+                        ".mcg-git-probe-*",
+                        SearchOption.AllDirectories);
+                });
+
+            Assert.True(callbackObserved);
+            Assert.Equal(
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
+                result.Classification);
+            Assert.True(result.Succeeded, result.StandardError);
+            Assert.True(standardOutputCaptureExisted);
+            Assert.True(standardErrorCaptureExisted);
+            Assert.NotNull(observedStandardOutputPath);
+            Assert.NotNull(observedStandardErrorPath);
+            Assert.False(
+                Path.GetFullPath(observedStandardOutputPath).StartsWith(
+                    repositoryPrefix,
+                    StringComparison.OrdinalIgnoreCase),
+                $"stdout capture was created inside the repository: {observedStandardOutputPath}");
+            Assert.False(
+                Path.GetFullPath(observedStandardErrorPath).StartsWith(
+                    repositoryPrefix,
+                    StringComparison.OrdinalIgnoreCase),
+                $"stderr capture was created inside the repository: {observedStandardErrorPath}");
+            Assert.Empty(repositoryCapturePaths);
+            Assert.Empty(result.StandardOutput);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static void AssertMessageContains(string message, string expected)
+    {
+        Assert.True(
+            message.Contains(expected, StringComparison.OrdinalIgnoreCase),
+            $"Expected '{expected}' in the failure message. Full message:{Environment.NewLine}{message}");
     }
 
     private static string CreateEmptyRepository()

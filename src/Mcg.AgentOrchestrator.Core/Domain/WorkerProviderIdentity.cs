@@ -8,7 +8,8 @@ public enum ProviderKind
     OpenAICodexSpark,
     OpenAICodexOssCli,
     // Qwen-code harness (how). Backend URL (what) is injected as {openaiBaseUrl}.
-    OllamaQwenCodeCli
+    OllamaQwenCodeCli,
+    HermesAcp
 }
 
 public enum ProviderFailureKind

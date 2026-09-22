@@ -82,6 +82,7 @@ internal sealed class ConductorContinuitySupervisor(
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
+    internal const string LoopReadyLinePrefix = "LOOP_READY ";
     internal const string StdoutLogPathEnvironmentVariable = "MCG_ORCHESTRATOR_STDOUT_LOG_PATH";
     internal const string StderrLogPathEnvironmentVariable = "MCG_ORCHESTRATOR_STDERR_LOG_PATH";
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -160,7 +161,8 @@ internal sealed class ConductorContinuitySupervisor(
                 commandPrefix,
                 line =>
                 {
-                    if (line.StartsWith("LOOP_START ", StringComparison.Ordinal))
+                    if (line.StartsWith(LoopReadyLinePrefix, StringComparison.Ordinal) ||
+                        line.StartsWith("LOOP_START ", StringComparison.Ordinal))
                     {
                         readiness?.TrySetResult();
                     }

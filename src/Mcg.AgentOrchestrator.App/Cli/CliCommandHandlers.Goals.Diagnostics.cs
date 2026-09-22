@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
@@ -27,10 +26,12 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
     var dispatchSurface = new DispatchStateSurface(inspectWorktree: false);
     var dispositionSurface = new GoalOperatorDispositionSurface(dispatchSurface: dispatchSurface);
+    var processSnapshot = ProcessCommandLines.SnapshotOperation();
     var disposition = dispositionSurface.Evaluate(
         goal,
         pendingHumanInputCount: context.Kernel.BuildHumanInputWorklist(goal.Id).OpenCount,
-        verificationSatisfied);
+        verificationSatisfied,
+        commandLineSnapshot: processSnapshot);
     ConsoleViews.PrintOperatorDisposition(disposition);
 
     Console.WriteLine("Dispatches:");
@@ -107,7 +108,8 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
     ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
     ConsoleViews.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));
-    ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(context.Kernel, goal, context.Workspace.ExecutionDirectory));
+    ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
+        context.Kernel, goal, context.Workspace.ExecutionDirectory, cleanupHooks: context.CleanupContext.Hooks));
     ConsoleViews.PrintGoalSupervisorPlan(GoalSupervisor.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));
     ConsoleViews.PrintOperatorInbox(OperatorInbox.Build(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, goal.Id.Value[..8], includeAcknowledged: false));
 }
@@ -418,6 +420,6 @@ private static bool TryResolveIntegrationCommitAuthoredAt(
 private static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal)
 {
     var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, goal));
-    return DashboardResponseMapper.GoalStatusText(goal.Status, lifecycle);
+    return ApplicationGoalStatusText.Resolve(goal.Status, lifecycle);
 }
 }

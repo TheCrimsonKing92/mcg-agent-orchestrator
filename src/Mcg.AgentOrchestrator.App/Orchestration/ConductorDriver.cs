@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -17,7 +17,11 @@ internal sealed record PreReviewEvidenceContext(
     string? FocusedRequest,
     string MappingReason,
     bool NoApplicableTests,
-    bool MappingNeedsInput);
+    bool MappingNeedsInput,
+    IReadOnlyList<string>? SourceCleanupPaths = null)
+{
+    public bool RequiresSourceCleanup => SourceCleanupPaths is { Count: > 0 };
+}
 
 internal sealed record WorkerAdmissionSnapshot(
     int ConfiguredWorkerCap,
@@ -44,6 +48,8 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed partial class ConductorDriver
 {
+    private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
+
     private sealed record CohortGateRun(
         DateTimeOffset StartedAt,
         IReadOnlySet<string> MemberGoalIds,
@@ -66,7 +72,7 @@ internal sealed partial class ConductorDriver
 
     private const int MaxCriterionRetryEvidenceLines = 30;
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
     private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
 
     // Finding evidence retries deliver a Conductor-owned receipt or typed refusal to the role that
@@ -93,9 +99,11 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
+    private readonly Func<Goal, TaskId, bool> _reconcileExitedDispatch;
+    private readonly Action<Goal, FailedGoalRecoveryDecision>? _beforeFailedGoalRecoveryEffect;
     private readonly Func<TimeSpan, string> _buildServerShutdown;
     private readonly TimeSpan _buildServerShutdownTimeout;
-    private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
+    private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceRunExecutionOptions, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
@@ -105,10 +113,11 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, string, string, IReadOnlyList<string>> _resolveFindingEvidenceSiblingClasses;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
-    private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
+    private readonly Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
+    private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
     private readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
@@ -139,6 +148,7 @@ internal sealed partial class ConductorDriver
     private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
     private readonly AgentOrchestratorKernel? _cohortKernel;
     private readonly OrchestratorWorkspace? _cohortWorkspace;
+    private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = new();
     private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
     private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
@@ -160,7 +170,10 @@ internal sealed partial class ConductorDriver
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly Func<Goal, string, IDisposable?> _tryAcquireEvidenceMutationLease;
+    private readonly Func<Goal, GoalEvidenceOperationStart>? _tryBeginDeveloperIntegrationEvidenceOperation;
+    private readonly Func<Goal, GoalEvidenceLeaseFact?>? _tryRecoverTerminalDeveloperIntegrationLease;
     private readonly Func<Goal, ReconcileAcceptanceLeaseState?> _getEvidenceMutationLease;
+    private readonly Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> _resolveAcceptanceHeads;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
@@ -240,28 +253,49 @@ internal sealed partial class ConductorDriver
         IModelProviderRegistry? providers = null,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
-        bool runAcceptanceAttemptsInCurrentProcess = false)
+        bool runAcceptanceAttemptsInCurrentProcess = false,
+        Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
+        _resolveAcceptanceHeads = goal =>
+            (TryResolveAcceptanceBranchHead(goal), TryResolveGitHead(dir));
         _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
         _getWorkerAdmissionCapacity = () => ConductorBatchLoop.WorkerAdmissionCapacity;
         _parallelAcceptanceEnabled = true;
+        _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
-            runInline: runAcceptanceAttemptsInCurrentProcess);
+            runInline: runAcceptanceAttemptsInCurrentProcess,
+            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
+        _apparatusRedGate = new ApparatusRedGate(
+            Path.Combine(
+                workspace.OrchestratorDirectory,
+                "acceptance-gate-attempts",
+                AcceptanceFailingTestIndex.FileName),
+            goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
             dir,
-            conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath));
+            conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
+            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         _cohortKernel = kernel;
         _cohortWorkspace = workspace;
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
+        var dispatchRunner = new BackgroundDispatchRunner();
+        _reconcileExitedDispatch = (goal, taskId) =>
+        {
+            dispatchRunner.RefreshLatestProcessWithOutcome(kernel, goal.Id, taskId);
+            var task = kernel.GetTask(goal.Id, taskId);
+            return task.LastProcess is { } process &&
+                   DispatchProcessCompletionState.HasAlreadyBeenApplied(task, process);
+        };
         _cohortAcceptanceStore = new CohortAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
         _startCohortGateBackground = action =>
@@ -276,18 +310,34 @@ internal sealed partial class ConductorDriver
                 ? reason
                 : null;
         var factGoalIds = kernel.Goals.Select(goal => goal.Id).ToArray();
-        var journalSnapshot = GoalOperationJournal.ReadAll(dir, factGoalIds)
-            .ToDictionary(pair => pair.Key, pair => pair.Value);
+        var journalFacts = new ConcurrentDictionary<GoalId, JournalLifecycleFacts>();
         var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
-        void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
+        static JournalLifecycleFacts ProjectJournalFacts(GoalOperationJournalSummary journal) => new(
+            GoalOperationJournal.HasCompletedLandingEvidence(journal),
+            GoalOperationJournal.HasCompletedRecordEvidence(journal),
+            GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+        JournalLifecycleFacts ReadInitialJournalFacts(GoalId goalId) =>
+            ProjectJournalFacts(GoalOperationJournal.ReadActive(dir, goalId));
+        void RefreshJournal(GoalId goalId) =>
+            journalFacts[goalId] = ProjectJournalFacts(GoalOperationJournal.Read(dir, goalId));
         var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+        var goalEvidenceOperationCoordinator = new GoalEvidenceOperationCoordinator(
+            evidenceMutationLeaseStore,
+            dir,
+            EvidenceMutationLeaseDuration,
+            pidProbe: new ConductLockPidProbe());
+        _tryBeginDeveloperIntegrationEvidenceOperation = goal =>
+            goalEvidenceOperationCoordinator.TryBegin(goal, "conductor:developer-branch-integration");
+        _tryRecoverTerminalDeveloperIntegrationLease = goal =>
+            goalEvidenceOperationCoordinator.TryRecoverTerminal(goal);
         _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
             goal.Id.Value,
             EvidenceMutationLeaseDuration);
         _utcNow = () => DateTimeOffset.UtcNow;
         IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
         {
+            _tryRecoverTerminalDeveloperIntegrationLease(goal);
             var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
             return evidenceMutationLeaseStore.TryAcquireAcceptanceLease(
                 goal.Id.Value,
@@ -313,14 +363,17 @@ internal sealed partial class ConductorDriver
             }
 
             var workspaceExists = worktreeSnapshot.ContainsKey(goal.Id);
-            var journal = journalSnapshot.TryGetValue(goal.Id, out var summary)
-                ? summary
-                : new GoalOperationJournalSummary(GoalOperationJournal.PathFor(dir, goal.Id), [], [], []);
-            var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
-            var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
-            var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
+            // Initial facts deliberately match ReadAll's active-journal-only population policy.
+            // Refreshes remain archive-aware, preserving the existing behavior for completed goals.
+            var persistedFacts = journalFacts.GetOrAdd(goal.Id, ReadInitialJournalFacts);
             var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
-            return new GoalLifecycleFacts(workspaceExists, IsBlocked: false, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
+            return new GoalLifecycleFacts(
+                workspaceExists,
+                IsBlocked: false,
+                persistedFacts.IsMerged,
+                persistedFacts.IsRecorded,
+                persistedFacts.IsCleanedUp,
+                hasOpenClarification);
         };
 
         _getRunningPaidWorkerCount = () =>
@@ -338,7 +391,9 @@ internal sealed partial class ConductorDriver
                 ?? throw new EvidenceMutationLeaseUnavailableException(
                     $"GOAL_OPERATION_BLOCKED goal={goal.Id.Value} operation=conductor:workspace-create reason=concurrent-acceptance-or-replacement");
             GoalOperationJournal.Begin(dir, goal, "conductor:workspace-create", GoalWorktrees.BranchName(goal.Id));
-            var path = GoalWorktrees.Ensure(dir, goal.Id);
+            // Worktree-add retry clears an orphan directory; that deletion, its warning sink and
+            // lock-holder discovery must use the same cleanup owner as conductor cleanup below.
+            var path = GoalWorktrees.Ensure(dir, goal.Id, _cohortCleanupHooks);
             GoalOperationJournal.Completed(dir, goal, "conductor:workspace-create", path);
             worktreeSnapshot[goal.Id] = path;
             RefreshJournal(goal.Id);
@@ -359,7 +414,7 @@ internal sealed partial class ConductorDriver
             SubscriptionStartResult result;
             try
             {
-                result = GoalManagementCommandService.StartSubscriptionReadyTasks(
+                result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
                     kernel,
                     workspace,
                     goal,
@@ -379,12 +434,20 @@ internal sealed partial class ConductorDriver
                                 checkpointPhase);
                             criticalCheckpointPersisted = true;
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
-                        },
+                    },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    conductorPolicy: policy);
+                    conductorPolicy: policy,
+                    recordDurableGoalBaseline: recordDurableGoalBaseline);
             }
             catch (DispatchRecordWriteException ex)
             {
+                if (ex.PreservesAuthoritativeState)
+                {
+                    var reason = ex.InnerException?.Message ?? ex.Message;
+                    GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", reason);
+                    return DispatchStartOutcome.Deferred(reason);
+                }
+
                 if (!ex.ProcessMayHaveStarted && !criticalCheckpointPersisted)
                     kernel.ReplaceGoalWithSnapshot(goalSnapshotBeforeDispatch);
                 throw;
@@ -429,7 +492,7 @@ internal sealed partial class ConductorDriver
             ProcessBatchExecutionResult result;
             try
             {
-                result = GoalManagementCommandService.StartDispatches(
+                result = new GoalDispatchOperations().StartDispatches(
                     kernel,
                     workspace,
                     goal,
@@ -446,7 +509,14 @@ internal sealed partial class ConductorDriver
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
-                    conductorPolicy: policy);
+                    conductorPolicy: policy,
+                    recordDurableGoalBaseline: recordDurableGoalBaseline);
+            }
+            catch (DispatchRecordWriteException ex) when (ex.PreservesAuthoritativeState)
+            {
+                var reason = ex.InnerException?.Message ?? ex.Message;
+                GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", reason);
+                return DispatchStartOutcome.Deferred(reason);
             }
             catch (Exception ex) when (ex is not DispatchRecordWriteException)
             {
@@ -481,7 +551,7 @@ internal sealed partial class ConductorDriver
         _buildServerShutdownTimeout = DefaultBuildServerShutdownTimeout;
         _buildServerShutdown = timeout => RunBuildServerShutdown(dir, timeout);
 
-        _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken) =>
+        _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken, attemptOptions) =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null) return AcceptanceVerificationSummary.Failed;
@@ -491,14 +561,15 @@ internal sealed partial class ConductorDriver
             var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             var branchHeadSha = TryResolveGitHead(worktreePath);
             var mainHeadSha = TryResolveGitHead(dir);
-            IReadOnlyDictionary<GoalId, GoalOperationJournalSummary> baselineJournals =
-                new Dictionary<GoalId, GoalOperationJournalSummary>();
+            IReadOnlyList<CleanTestBaselineEvidence> baselineEvidence = [];
             var baselineReceipt = CleanTestBaseline.Unattested(mainHeadSha);
             try
             {
-                baselineJournals = GoalOperationJournal.ReadAll(dir);
+                baselineEvidence = GoalOperationJournal.ReadAcceptanceEvidenceForMain(
+                    dir,
+                    mainHeadSha ?? string.Empty);
                 baselineReceipt = CleanTestBaseline.Resolve(
-                    baselineJournals,
+                    baselineEvidence,
                     goal.Id,
                     mainHeadSha ?? string.Empty,
                     mergeBaseSha: null);
@@ -547,31 +618,27 @@ internal sealed partial class ConductorDriver
             }
 
             AcceptanceVerificationResult verification;
-            AcceptanceAttemptCancellationDecision? cancellationDecision = null;
+            var cancellationProbeState = new AcceptanceAttemptCancellationProbe(() =>
+                GetAcceptanceAttemptCancellationDecision(
+                    workspace,
+                    goal.Id,
+                    attemptInvalidationRecorded: () =>
+                        _parallelAcceptanceAttemptCoordinator.TryGetLiveInvalidatedAttempt(
+                            goal.Id.Value,
+                            out _)));
             try
             {
                 var gateProgressEventWriter = new ConductEventLogWriter(
                     Path.Combine(dir, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
-                using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-                    AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress));
-                using var cancellationProbe = GoalAcceptanceVerifier.PushGateCancellationProbe(() =>
+                var executionOptions = attemptOptions with
                 {
-                    cancellationDecision = GetAcceptanceAttemptCancellationDecision(
-                        workspace,
-                        goal.Id,
-                        attemptInvalidationRecorded: () =>
-                            _parallelAcceptanceAttemptCoordinator.TryGetLiveInvalidatedAttempt(
-                                goal.Id.Value,
-                                out _));
-                    return cancellationDecision.ShouldCancel;
-                });
-                verification = acceptanceVerifier.RunAsync(
-                    worktreePath,
-                    goal.Id,
-                    changedFiles,
-                    stableSlotIndex,
-                    stableSlotLease,
-                    cancellationToken).GetAwaiter().GetResult();
+                    ProgressSink = progress => AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress),
+                    CancellationProbe = cancellationProbeState.ShouldCancel,
+                    BoundaryCancellationProbe = cancellationProbeState.ShouldCancelNow
+                };
+                verification = AcceptanceExecutionRunner.RunAttempt(
+                    acceptanceVerifier, worktreePath, goal.Id, changedFiles, stableSlotIndex,
+                    stableSlotLease, cancellationToken, executionOptions);
             }
             catch (AcceptanceInfrastructureDeferredException ex)
             {
@@ -612,9 +679,10 @@ internal sealed partial class ConductorDriver
                     acceptanceAttemptStartedAt);
                 throw;
             }
-            catch (OperationCanceledException ex) when (cancellationDecision?.ShouldCancel == true)
+            catch (OperationCanceledException ex) when (
+                cancellationProbeState.CancellationDecision?.ShouldCancel == true)
             {
-                var decision = cancellationDecision!;
+                var decision = cancellationProbeState.CancellationDecision!;
                 GoalOperationJournal.AcceptanceBlocked(
                     dir,
                     goal,
@@ -643,12 +711,13 @@ internal sealed partial class ConductorDriver
             {
                 try
                 {
-                    checkAttributions = CleanTestBaseline.Attribute(
+                    (baselineReceipt, checkAttributions) = AttributeAcceptanceFailureWithExecutedBaseline(
                         baselineReceipt,
                         failedChecks,
-                        baselineJournals,
+                        baselineEvidence,
                         goal.Id,
-                        mainHeadSha ?? string.Empty);
+                        mainHeadSha ?? string.Empty,
+                        verification.Checks);
                 }
                 catch
                 {
@@ -680,7 +749,7 @@ internal sealed partial class ConductorDriver
                     acceptanceAttemptStartedAt,
                     GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
                     failedChecks);
-            return new AcceptanceVerificationSummary(
+            return ClassifyInheritedBaselineApparatus(new AcceptanceVerificationSummary(
                 verification.Passed,
                 unmetCriteria,
                 verification.Passed ? null : verification.OutputTail,
@@ -689,7 +758,7 @@ internal sealed partial class ConductorDriver
                 mainHeadSha,
                 testResultPaths,
                 checkAttributions,
-                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt));
+                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt)));
         };
 
         FocusedEvidenceRunResult RunFocusedEvidence(
@@ -711,15 +780,10 @@ internal sealed partial class ConductorDriver
             }
 
             GoalOperationJournal.Begin(dir, goal, "conductor:finding-evidence", $"Running focused finding evidence: {request}");
-            var result = acceptanceVerifier.RunFocusedEvidenceAsync(
-                    worktreePath,
-                    goal.Id,
-                    request,
-                    stableSlotLease: stableSlotLease,
-                    runBaselineArm: runBaselineArm,
-                    cancellationToken: cancellationToken)
-                .GetAwaiter()
-                .GetResult();
+            var result = AcceptanceExecutionRunner.RunFocusedVerification(
+                acceptanceVerifier, worktreePath, goal.Id, request,
+                stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
+                runBaselineArm, cancellationToken);
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
@@ -738,8 +802,8 @@ internal sealed partial class ConductorDriver
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
         _focusedEvidenceRunnerConfigured = true;
 
-        _retryTask = (goalId, taskId, message, retryRoundKind) =>
-            kernel.RetryTask(goalId, taskId, message, retryRoundKind: retryRoundKind);
+        _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
+            kernel.RetryTaskAutomatically(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
         _recordTaskNote = (goalId, taskId, message) =>
         {
             kernel.RecordTaskNote(goalId, taskId, message);
@@ -748,6 +812,9 @@ internal sealed partial class ConductorDriver
             kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
         _recordFindingEvidenceRun = (goalId, taskId, message) =>
             kernel.RecordFindingEvidenceRun(goalId, taskId, message);
+        _recordFindingEvidenceSuppressed = (goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity) =>
+            kernel.RecordFindingEvidenceSuppressed(
+                goalId, taskId, candidateSha, blockerIds, requestId, owner, reason, identity);
         _recordFindingEvidenceOutcome = (goalId, taskId, stableId, outcome, receipt) =>
         {
             kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
@@ -798,29 +865,7 @@ internal sealed partial class ConductorDriver
 
         _integrateMainBeforeDeveloperDispatch = goal =>
         {
-            GoalOperationJournal.Begin(
-                dir,
-                goal,
-                "conductor:developer-branch-integration",
-                "Checking goal branch against current main before Developer dispatch.");
             var result = IntegrateMainBeforeDeveloperDispatch(dir, goal);
-            if (result.CanDispatch)
-            {
-                GoalOperationJournal.Completed(
-                    dir,
-                    goal,
-                    "conductor:developer-branch-integration",
-                    result.Message);
-            }
-            else
-            {
-                GoalOperationJournal.Failed(
-                    dir,
-                    goal,
-                    "conductor:developer-branch-integration",
-                    result.Message);
-            }
-            RefreshJournal(goal.Id);
             return result;
         };
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
@@ -904,7 +949,11 @@ internal sealed partial class ConductorDriver
         _cleanup = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:cleanup", "Deferred goal cleanup scheduled for terminal sweep.");
-            var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(dir, goal.Id, "remove:conductor-deferred");
+            var cleanupBackoff = GoalWorktrees.RecordGoalCleanupNeeded(
+                dir,
+                goal.Id,
+                "remove:conductor-deferred",
+                _cohortCleanupHooks);
             var path = GoalWorktrees.WorktreePath(dir, goal.Id);
             var message = cleanupBackoff is null
                 ? "Workspace cleanup deferred to terminal sweep."
@@ -976,10 +1025,7 @@ internal sealed partial class ConductorDriver
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
-        _getPreReviewEvidenceContext = goal =>
-            BuildPreReviewEvidenceContext(
-                TryResolveAcceptanceBranchHead(goal),
-                _getLandingFileScopes(goal));
+        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir);
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
@@ -1205,6 +1251,7 @@ internal sealed partial class ConductorDriver
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRequestReceived = null,
         Action<GoalId, TaskId, string>? recordReviewerEvidenceRunRecorded = null,
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
+        Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? retryTaskWithCause = null,
         Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<int>? getWorkerAdmissionCapacity = null,
@@ -1218,6 +1265,7 @@ internal sealed partial class ConductorDriver
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
+        Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string>? recordFindingEvidenceSuppressed = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
         Func<Goal, string, string, IReadOnlyList<string>>? resolveFindingEvidenceSiblingClasses = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
@@ -1235,9 +1283,16 @@ internal sealed partial class ConductorDriver
         Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null,
         Func<Goal, ReconcileAcceptanceLeaseState?>? getEvidenceMutationLease = null,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
-        Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null)
+        Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null,
+        Func<Goal, GoalEvidenceOperationStart>? tryBeginDeveloperIntegrationEvidenceOperation = null,
+        Func<Goal, GoalEvidenceLeaseFact?>? tryRecoverTerminalDeveloperIntegrationLease = null,
+        Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
+        ApparatusRedGate? apparatusRedGate = null,
+        Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null)
     {
+        _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
@@ -1250,14 +1305,17 @@ internal sealed partial class ConductorDriver
         _startRecordedDispatches = startRecordedDispatches is null
             ? _dispatchAndStart
             : (goal, _) => startRecordedDispatches(goal);
+        _reconcileExitedDispatch = reconcileExitedDispatch ?? ((_, _) => false);
+        _beforeFailedGoalRecoveryEffect = beforeFailedGoalRecoveryEffect;
         _buildServerShutdownTimeout = buildServerShutdownTimeout ?? DefaultBuildServerShutdownTimeout;
         _buildServerShutdown = timeout => RunBoundedBuildServerShutdown(
             buildServerShutdown ?? (() => { }),
             timeout);
-        _runAcceptanceVerification = runAcceptanceVerificationWithLease
-            ?? (runAcceptanceVerificationWithSlot is not null
-                ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
-                : ((goal, _, _, _) => runAcceptanceVerification(goal)));
+        _runAcceptanceVerification = runAcceptanceVerificationWithLease is not null
+            ? ((goal, slot, lease, token, _) => runAcceptanceVerificationWithLease(goal, slot, lease, token))
+            : (runAcceptanceVerificationWithSlot is not null
+                ? ((goal, slot, _, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
+                : ((goal, _, _, _, _) => runAcceptanceVerification(goal)));
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = (acceptanceEventSink ?? ((_, _) => { }), noTickAcceptancePollDelay ?? Thread.Sleep, noTickAcceptancePollTimeout ?? DefaultNoTickAcceptancePollTimeout);
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
         _runFocusedEvidence = runFocusedEvidence is null
@@ -1284,13 +1342,17 @@ internal sealed partial class ConductorDriver
             ((_, _, _) => []);
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
-        _retryTask = retryTaskWithRoundKind
-            ?? (retryTask is not null
-                ? ((goalId, taskId, message, _) => retryTask(goalId, taskId, message))
-                : ((_, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured.")));
+        _retryTask = retryTaskWithCause
+            ?? (retryTaskWithRoundKind
+            is not null
+                ? ((goalId, taskId, message, roundKind, _) => retryTaskWithRoundKind(goalId, taskId, message, roundKind))
+                : retryTask is not null
+                    ? ((goalId, taskId, message, _, _) => retryTask(goalId, taskId, message))
+                    : ((_, _, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured.")));
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
+        _recordFindingEvidenceSuppressed = recordFindingEvidenceSuppressed ?? ((_, _, _, _, _, _, _, _) => { });
         _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
@@ -1320,7 +1382,7 @@ internal sealed partial class ConductorDriver
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
         _evaluateReadiness = evaluateReadiness ?? (goal =>
-            GoalManagementCommandService.HasAssignedDispatchCandidates(goal)
+            DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates"));
         _normalizeLifecycleState = normalizeLifecycleState ?? ((_, _) => false);
@@ -1342,7 +1404,10 @@ internal sealed partial class ConductorDriver
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
         _tryAcquireEvidenceMutationLease =
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
+        _tryBeginDeveloperIntegrationEvidenceOperation = tryBeginDeveloperIntegrationEvidenceOperation;
+        _tryRecoverTerminalDeveloperIntegrationLease = tryRecoverTerminalDeveloperIntegrationLease;
         _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
+        _resolveAcceptanceHeads = resolveAcceptanceHeads ?? (_ => (null, null));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _executionDirectory = executionDirectory;
         _parallelAcceptanceEnabled =
@@ -1390,7 +1455,7 @@ internal sealed partial class ConductorDriver
 
         if (result.Processes.Tasks.Count > 0)
         {
-            return DispatchStartOutcome.Started();
+            return DispatchStartOutcome.Started(result.Processes.Tasks);
         }
 
         if (result.Processes.StartFailures?.FirstOrDefault() is { } startFailure)
@@ -1406,7 +1471,7 @@ internal sealed partial class ConductorDriver
 
         var reason = result.Dispatches.Count == 0
             ? DescribeEmptyBatch(result.ParallelPlan, result.BlockedDiagnostics)
-            : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
+            : FormatPreparedDispatchWithoutStart(result);
         return result.Dispatches.Count == 0
             ? DispatchStartOutcome.EmptyBatch(reason)
             : DispatchStartOutcome.SpawnFailed(reason);
@@ -1421,7 +1486,7 @@ internal sealed partial class ConductorDriver
 
         if (result.Tasks.Count > 0)
         {
-            return DispatchStartOutcome.Started();
+            return DispatchStartOutcome.Started(result.Tasks);
         }
 
         if (result.StartFailures?.FirstOrDefault() is { } startFailure)
@@ -1435,7 +1500,7 @@ internal sealed partial class ConductorDriver
                 $"Skipped {result.RequeueSkippedCount} automatic interrupted-dispatch requeue(s) after terminal-state preflight");
         }
 
-        return DispatchStartOutcome.EmptyBatch(FormatNoRecordedDispatchStartedReason(result.Plan));
+        return DispatchStartOutcome.EmptyBatch(DispatchStartRefusalReasonBuilder.Build(result));
     }
 
     public ConductorAdvanceResult AdvanceOnce(
@@ -1466,242 +1531,9 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, sliceBatchParentHold));
         }
 
-        // Empty stdout from a subscription worker means the CLI never produced a worker verdict. Treat
-        // it as provider/startup flake, retry on a dedicated budget, and only escalate after all bounded
-        // auto-recover cycles are spent. Any non-empty stdout resets the task counter in TaskSpec and is
-        // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
-            var runningSibling = goal.Tasks.FirstOrDefault(task => task.LastProcess is { IsRunning: true });
-            if (runningSibling is not null)
-            {
-                return MakeResult(
-                    goalId,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        state,
-                        $"Failure handling deferred while task {runningSibling.Id.Value[..8]} still has a live worker process."));
-            }
-
-            var inconclusiveTester = goal.Tasks.FirstOrDefault(t =>
-                t.RequiredRole == AgentRole.Tester &&
-                t.Status == WorkTaskStatus.Failed &&
-                t.LastVerification is { } latest &&
-                DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.VerificationInconclusive);
-            if (inconclusiveTester is not null)
-            {
-                var outcome = DispatchFailureClassifier.Classify(inconclusiveTester, inconclusiveTester.LastVerification!);
-                var maxAttempts = policy.MaxEmptyOutputDispatchRetries * policy.MaxEmptyOutputAutoRecoverCycles;
-                if (inconclusiveTester.EmptyOutputRetryCount > maxAttempts)
-                {
-                    return Escalate(
-                        goal,
-                        goalPrefix,
-                        policy,
-                        state,
-                        $"Tester task {inconclusiveTester.Id.Value[..8]} exhausted verification-inconclusive recovery " +
-                        $"({inconclusiveTester.EmptyOutputRetryCount}/{maxAttempts}); operator action required. " +
-                        $"Latest current-round receipt: {outcome.EvidenceSummary}");
-                }
-
-                var delay = ComputeEmptyOutputBackoff(policy, inconclusiveTester.EmptyOutputRetryCount);
-                if (delay > TimeSpan.Zero)
-                {
-                    _emptyOutputBackoffDelay(delay);
-                }
-
-                var note =
-                    $"Auto-retry verification-inconclusive Tester task {inconclusiveTester.Id.Value[..8]} " +
-                    $"on the shared transient budget ({inconclusiveTester.EmptyOutputRetryCount}/{maxAttempts}) " +
-                    $"without reopening upstream Developer work. Latest current-round receipt: {outcome.EvidenceSummary}";
-                _retryTask(goal.Id, inconclusiveTester.Id, note, null);
-                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
-            }
-
-            var staleRecoveryTask = goal.Tasks.FirstOrDefault(t =>
-                t.Status == WorkTaskStatus.Failed &&
-                TryGetDispatchRecoveryAction(t.LastVerification, out var action) &&
-                action is DispatchRecoveryAction.RetryStale or DispatchRecoveryAction.BudgetExhausted or DispatchRecoveryAction.MarkStale);
-            if (staleRecoveryTask is not null)
-            {
-                var action = GetDispatchRecoveryAction(staleRecoveryTask.LastVerification!);
-                if (IsRetryableStaleRecovery(staleRecoveryTask.LastVerification!))
-                {
-                    var note = $"Auto-retry stale dispatch recovery for task {staleRecoveryTask.Id.Value[..8]}; " +
-                        ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!);
-                _retryTask(goal.Id, staleRecoveryTask.Id, note, null);
-                    return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
-                }
-
-                return Escalate(goal, goalPrefix, policy, state,
-                    $"Task {staleRecoveryTask.Id.Value[..8]} blocked by stale dispatch recovery; " +
-                    ExtractDispatchRecoveryDiagnostic(staleRecoveryTask.LastVerification!));
-            }
-
-            var preflightFlakedTask = goal.Tasks.FirstOrDefault(t =>
-                t.Status == WorkTaskStatus.Failed &&
-                t.LastVerification is { } latest &&
-                DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.PreflightFailure);
-            if (preflightFlakedTask is not null)
-            {
-                var outcome = DispatchFailureClassifier.Classify(preflightFlakedTask, preflightFlakedTask.LastVerification!);
-                // A sandbox launch-preflight failure means the worker never launched -- usually an INTERMITTENT
-                // sandbox-prep hiccup that a fresh dispatch clears (most launches in the same window succeed).
-                // Auto-retry on the shared transient-dispatch-flake budget and only escalate once it is spent,
-                // instead of escalating the whole goal to the operator on a single flake.
-                var preflightMaxAttempts = policy.MaxEmptyOutputDispatchRetries * policy.MaxEmptyOutputAutoRecoverCycles;
-                if (preflightFlakedTask.EmptyOutputRetryCount > preflightMaxAttempts)
-                {
-                    return Escalate(goal, goalPrefix, policy, state,
-                        $"Task {preflightFlakedTask.Id.Value[..8]} exhausted sandbox-preflight dispatch recovery " +
-                        $"({preflightFlakedTask.EmptyOutputRetryCount}/{preflightMaxAttempts}); operator action required: {outcome.EvidenceSummary}");
-                }
-
-                var preflightDelay = ComputeEmptyOutputBackoff(policy, preflightFlakedTask.EmptyOutputRetryCount);
-                if (preflightDelay > TimeSpan.Zero)
-                {
-                    _emptyOutputBackoffDelay(preflightDelay);
-                }
-
-                var preflightNote = $"Auto-retry sandbox-preflight dispatch flake " +
-                    $"{preflightFlakedTask.EmptyOutputRetryCount}/{preflightMaxAttempts} for task " +
-                    $"{preflightFlakedTask.Id.Value[..8]}; worker never launched (preflight failure): {outcome.EvidenceSummary}";
-                _retryTask(goal.Id, preflightFlakedTask.Id, preflightNote, null);
-                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
-            }
-
-            var realFailureTask = goal.Tasks.FirstOrDefault(t =>
-            {
-                if (t.Status != WorkTaskStatus.Failed || t.LastVerification is not { } latest)
-                {
-                    return false;
-                }
-
-                var outcome = DispatchFailureClassifier.Classify(t, latest);
-                var classification = TaskOutcomeClassifier.Classify(
-                    WorkTaskStatus.Failed,
-                    TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
-                return outcome.RecoveryRecommendation == RecoveryRecommendation.AutoRetry &&
-                    classification.Class == TaskOutcomeClass.RealFailure;
-            });
-            if (realFailureTask is not null)
-            {
-                var verification = realFailureTask.LastVerification!;
-                var outcome = DispatchFailureClassifier.Classify(realFailureTask, verification);
-                if (goal.AutomaticAcceptanceRetryCount >= policy.MaxCriterionRetries)
-                {
-                    return Escalate(
-                        goal,
-                        goalPrefix,
-                        policy,
-                        state,
-                        $"Task {realFailureTask.Id.Value[..8]} exhausted bounded real-failure retries " +
-                        $"({goal.AutomaticAcceptanceRetryCount}/{policy.MaxCriterionRetries}); " +
-                        $"failed command: {verification.Command}; failure evidence: {outcome.EvidenceSummary}");
-                }
-
-                var retryFeedback = new[]
-                {
-                    $"Failed command: {verification.Command}",
-                    $"Failure evidence: {outcome.EvidenceSummary}"
-                };
-                var retryCount = _recordCriterionRetryFeedback(
-                    goal.Id,
-                    realFailureTask.Id,
-                    retryFeedback);
-                var retryNote =
-                    $"Auto-retry real worker/command failure for task {realFailureTask.Id.Value[..8]} " +
-                    $"(attempt {retryCount}/{policy.MaxCriterionRetries}); " +
-                    string.Join("; ", retryFeedback);
-                _retryTask(goal.Id, realFailureTask.Id, retryNote, null);
-                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
-            }
-
-            var flakedTask = goal.Tasks.FirstOrDefault(t =>
-                t.Status == WorkTaskStatus.Failed &&
-                t.LastVerification is { } latest && DispatchFailureClassifier.Classify(t, latest).Kind is
-                    DispatchOutcomeKind.LaunchFailure or DispatchOutcomeKind.EmptyOutputFlake &&
-                t.EmptyOutputRetryCount > 0);
-            if (flakedTask is not null)
-            {
-                var maxAttempts = policy.MaxEmptyOutputDispatchRetries * policy.MaxEmptyOutputAutoRecoverCycles;
-                if (flakedTask.EmptyOutputRetryCount > maxAttempts)
-                {
-                    return Escalate(goal, goalPrefix, policy, state,
-                        $"Task {flakedTask.Id.Value[..8]} exhausted empty-output dispatch recovery " +
-                        $"({flakedTask.EmptyOutputRetryCount}/{maxAttempts}); operator action required");
-                }
-
-                var delay = ComputeEmptyOutputBackoff(policy, flakedTask.EmptyOutputRetryCount);
-                if (delay > TimeSpan.Zero)
-                {
-                    _emptyOutputBackoffDelay(delay);
-                }
-
-                var attemptInCycle = ((flakedTask.EmptyOutputRetryCount - 1) % policy.MaxEmptyOutputDispatchRetries) + 1;
-                var cycle = ((flakedTask.EmptyOutputRetryCount - 1) / policy.MaxEmptyOutputDispatchRetries) + 1;
-                var launchFailure = DispatchFailureClassifier.Classify(flakedTask, flakedTask.LastVerification!).Kind == DispatchOutcomeKind.LaunchFailure;
-                var sandboxLaunchFailure = flakedTask.LastVerification!.ProviderFailureKind == ProviderFailureKind.Sandbox1312;
-                var failureLabel = sandboxLaunchFailure
-                    ? "sandbox command-launch failure"
-                    : launchFailure ? "silent launch failure" : "empty-output dispatch flake";
-                var failureEvidence = sandboxLaunchFailure
-                    ? $"sandbox logon session failed with root exit {flakedTask.LastVerification.ExitCode}"
-                    : launchFailure
-                    ? $"task produced zero bytes on both streams with root exit {flakedTask.LastVerification.ExitCode}"
-                    : $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}";
-                var note = attemptInCycle == policy.MaxEmptyOutputDispatchRetries
-                    ? $"Auto-recover+re-admit {failureLabel} cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; {failureEvidence}"
-                    : $"Auto-retry {failureLabel} {attemptInCycle}/{policy.MaxEmptyOutputDispatchRetries} " +
-                        $"in recovery cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; {failureEvidence}";
-                _retryTask(goal.Id, flakedTask.Id, note, null);
-                // Immediately dispatch in the same tick after recovery, bypassing the next-tick
-                // WorkspaceReady path. If ownership blocks dispatch under Conservative policy,
-                // ExecuteDispatchAndStart returns Held (not Escalate) so the goal stays eligible.
-                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
-            }
-
-            if (TryBuildReviewContractRepairRetry(goal, out var autoRetry) ||
-                TryBuildVerifyingFindingAutoRetry(goal, policy, out autoRetry))
-            {
-                if (autoRetry.ShouldHold)
-                {
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(state, autoRetry.Message));
-                }
-
-                if (autoRetry.ShouldEscalate)
-                {
-                    return Escalate(goal, goalPrefix, policy, state, autoRetry.Message);
-                }
-
-                if (autoRetry.WarningMessage is not null)
-                {
-                    _recordTaskNote(goal.Id, autoRetry.TargetTask!.Id, autoRetry.WarningMessage);
-                }
-
-                try
-                {
-                    _retryTask(goal.Id, autoRetry.TargetTask!.Id, autoRetry.Message, autoRetry.RoundKind);
-                }
-                catch (InvalidOperationException ex) when (
-                    autoRetry.Message.StartsWith("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
-                    ex.Message.Contains("running process", StringComparison.OrdinalIgnoreCase))
-                {
-                    return Escalate(
-                        goal,
-                        goalPrefix,
-                        policy,
-                        state,
-                        $"ACTIONABLE_CANDIDATE_RED_LIFECYCLE_CONFLICT: {autoRetry.Message} " +
-                        $"Developer retry was not applied because {ex.Message} No additional downstream dispatch was started.");
-                }
-                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
-            }
+            return ExecuteFailedGoalRecovery(goal, goalPrefix, policy, state);
         }
 
         if (state == GoalLifecycleState.AwaitingClarification)
@@ -1752,28 +1584,24 @@ internal sealed partial class ConductorDriver
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
-    private bool TryBuildReviewContractRepairRetry(
+    private bool TryObserveReviewContractRecovery(
         Goal goal,
-        out VerifyingFindingAutoRetryDecision decision)
+        out FailedGoalFindingObservation observation)
     {
-        decision = VerifyingFindingAutoRetryDecision.None;
-        var reviewerTask = goal.Tasks.FirstOrDefault(task =>
-            (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester) &&
-            task.Status == WorkTaskStatus.Failed &&
-            task.LastVerification?.ReviewFindingContractViolation is not null);
-        if (reviewerTask?.LastVerification?.ReviewFindingContractViolation is not { } violation)
-        {
+        observation = FailedGoalFindingObservation.None;
+        var candidate = FailedGoalRecoveryPolicy.SelectReviewContractCandidate(
+            goal.Tasks.Select(task => new FailedGoalReviewContractCandidate(
+                task.Id,
+                task.RequiredRole,
+                task.Status,
+                task.LastVerification?.ReviewFindingContractViolation?.Code,
+                task.LastVerification?.MergedReviewFindings is not null)));
+        if (candidate is null)
             return false;
-        }
 
-        if ((violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
-                ReviewFindingConvergence.RecycledAnchorIdentityViolationCode) &&
-            reviewerTask.LastVerification.MergedReviewFindings is not null)
-        {
-            // The kernel retained the prior form of the invalid transition and accepted the rest of
-            // the substantive round. Let normal Reviewer/Tester convergence route its real blockers.
-            return false;
-        }
+        var reviewerTask = goal.Tasks.Single(task => task.Id == candidate.TaskId);
+        var violation = reviewerTask.LastVerification?.ReviewFindingContractViolation ??
+            throw new InvalidOperationException("Selected review-contract candidate lost its violation evidence.");
 
         IReadOnlyList<ReviewFinding> canonicalLedger;
         try
@@ -1784,85 +1612,108 @@ internal sealed partial class ConductorDriver
         catch (Exception ex) when (
             ex is ReviewFindingConvergenceException or InvalidOperationException or ArgumentException)
         {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"{reviewerTask.RequiredRole} contract-repair could not reconstruct the canonical finding ledger for task {reviewerTask.Id.Value[..8]}; " +
-                $"violation={violation.Code}; diagnostic={TrimForConductorMessage(ex.Message)}; operator action required.");
+            observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(
+                new FailedGoalReviewContractSelectionFacts(
+                    candidate,
+                    $"{reviewerTask.RequiredRole} contract-repair could not reconstruct the canonical finding ledger for task {reviewerTask.Id.Value[..8]}; " +
+                        $"violation={violation.Code}; diagnostic={TrimForConductorMessage(ex.Message)}; operator action required.",
+                    null,
+                    null,
+                    0,
+                    MaxReviewFindingContractRepairsPerRound,
+                    string.Empty,
+                    string.Empty,
+                    BuildFailedGoalAttemptIdentity(reviewerTask)));
             return true;
         }
-
-        if (violation.Code is ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
-                ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode)
-        {
-            var receipt = reviewerTask.LastDispatch?.ReviewRetryCap;
-            decision = VerifyingFindingAutoRetryDecision.Escalate(BuildReviewCapDecisionMessage(
-                goal,
-                reviewerTask,
-                receipt,
-                violation.Message,
-                FormatVerifyingRoleOutputArtifact(reviewerTask),
-                canonicalLedger));
-            return true;
-        }
-
-        if (violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
-                ReviewFindingConvergence.UntouchedReopenViolationCode &&
-            reviewerTask.LastVerification?.ReviewFindingTouchProofDiagnostic is { Length: > 0 } touchProofDiagnostic)
-        {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"{reviewerTask.RequiredRole} review-finding contract cannot classify touch-dependent violation {violation.Code} " +
+        var retryCapEvidence = violation.Code is ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
+                ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode
+            ? BuildReviewCapDecisionMessage(
+                 goal,
+                 reviewerTask,
+                 reviewerTask.LastDispatch?.ReviewRetryCap,
+                 violation.Message,
+                 FormatVerifyingRoleOutputArtifact(reviewerTask),
+                 canonicalLedger)
+            : null;
+        var touchProofDiagnostic = reviewerTask.LastVerification?.ReviewFindingTouchProofDiagnostic;
+        var touchProofUnavailableEvidence =
+            (violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
+                ReviewFindingConvergence.UntouchedReopenViolationCode) &&
+            touchProofDiagnostic is { Length: > 0 }
+            ? $"{reviewerTask.RequiredRole} review-finding contract cannot classify touch-dependent violation {violation.Code} " +
                 $"for task {reviewerTask.Id.Value[..8]} because system-derived round-diff proof is unavailable; " +
                 $"suppression=missing-system-derived-round-diff-proof; operator adjudication is required and the mechanical repair budget was not consumed. " +
-                $"Diagnostic: {TrimForConductorMessage(touchProofDiagnostic)}");
-            return true;
-        }
-
+                $"Diagnostic: {TrimForConductorMessage(touchProofDiagnostic)}"
+            : null;
         var priorRepairs = CountReviewerContractRepairsInCurrentRound(goal, reviewerTask);
-        if (priorRepairs >= MaxReviewFindingContractRepairsPerRound)
-        {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"{reviewerTask.RequiredRole} exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
+        var repairLimitEvidence =
+            $"{reviewerTask.RequiredRole} exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
                 $"violation_code={violation.Code}; prior_stable_id={violation.PriorStableId ?? "none"}; " +
                 $"submitted_stable_id={violation.SubmittedStableId ?? "none"}; " +
                 $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
                 $"submitted_location={violation.SubmittedLocation?.ToString() ?? "none"}; " +
                 $"canonical_open_count={canonicalLedger.Count(finding => finding.State == ReviewFindingState.Open)}. " +
-                "Operator remedy: retry <goal> <task#> \"<reason>\" --mechanical, then progress <task#> completed and verify-manual <task#> passed.");
+                "Operator remedy: retry <goal> <task#> \"<reason>\" --mechanical, then progress <task#> completed and verify-manual <task#> passed.";
+        var selectionFacts = new FailedGoalReviewContractSelectionFacts(
+                candidate,
+                null,
+                retryCapEvidence,
+                touchProofUnavailableEvidence,
+                priorRepairs,
+                MaxReviewFindingContractRepairsPerRound,
+                repairLimitEvidence,
+                string.Empty,
+                BuildFailedGoalAttemptIdentity(reviewerTask));
+        observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(selectionFacts);
+        if (observation.Kind != FailedGoalFindingObservationKind.ReviewContractRepairEnvelopeAvailable)
             return true;
-        }
-
-        var attempt = priorRepairs + 1;
         var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
             goal,
             reviewerTask,
             violation,
-            attempt,
+            priorRepairs + 1,
             MaxReviewFindingContractRepairsPerRound,
             FormatVerifyingRoleOutputArtifact(reviewerTask));
-        decision = VerifyingFindingAutoRetryDecision.Retry(
-            reviewerTask,
-            brief,
-            null,
-            RetryRoundKind.Mechanical);
+        observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(selectionFacts with { RepairEnvelope = brief });
         return true;
     }
 
-    private bool TryBuildVerifyingFindingAutoRetry(
+    private bool TryObserveVerifyingFindingRecovery(
         Goal goal,
         ConductorAutonomyPolicy policy,
-        out VerifyingFindingAutoRetryDecision decision)
+        IReadOnlyList<string> landingFileScopes,
+        out FailedGoalFindingObservation observation)
     {
-        decision = VerifyingFindingAutoRetryDecision.None;
-        foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
+        observation = FailedGoalFindingObservation.None;
+        var pendingNotes = new List<FailedGoalPendingNote>();
+        var trigger = goal.Tasks
+            .Select(task => BuildTesterDeveloperOwnedFindingTrigger(goal, task))
+            .FirstOrDefault(candidate =>
+                candidate is not null &&
+                VerifyingFindingCurrency.IsCurrent(
+                    goal,
+                    candidate.TriggeringTask,
+                    candidate.TriggeringTask.LastVerification!));
+        if (trigger is not null &&
+            TryRouteTesterFindingToPendingEvidence(goal, policy, trigger, out observation))
         {
-            if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out decision))
+            return true;
+        }
+        if (trigger is null)
+        {
+            foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
             {
-                return true;
+                if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out observation))
+                {
+                    return true;
+                }
             }
+            trigger = goal.Tasks
+                .Select(task => BuildVerifyingFindingTrigger(goal, task))
+                .FirstOrDefault(candidate => candidate is not null);
         }
 
-        var trigger = goal.Tasks
-            .Select(task => BuildVerifyingFindingTrigger(goal, task))
-            .FirstOrDefault(candidate => candidate is not null);
         if (trigger is null)
         {
             return false;
@@ -1872,7 +1723,7 @@ internal sealed partial class ConductorDriver
         var outputArtifact = FormatVerifyingRoleOutputArtifact(triggeringTask);
         if (triggeringTask.RequiredRole == AgentRole.Reviewer)
         {
-            RecordSuppressedAutoReviewRetryFindings(goal, triggeringTask, trigger.SuppressedFindings);
+            pendingNotes.AddRange(BuildSuppressedAutoReviewRetryFindingNotes(triggeringTask, trigger.SuppressedFindings));
         }
 
         ReviewRetryRoute? reviewerRoute = null;
@@ -1884,48 +1735,59 @@ internal sealed partial class ConductorDriver
                     out _,
                     out var criteriaDiagnostic))
             {
-                _recordTaskNote(
-                    goal.Id,
+                pendingNotes.Add(new FailedGoalPendingNote(
                     triggeringTask.Id,
-                    $"CRITERIA_ATTESTATION missing: {TrimForConductorMessage(criteriaDiagnostic)}");
+                    $"CRITERIA_ATTESTATION missing: {TrimForConductorMessage(criteriaDiagnostic)}"));
             }
 
             reviewerRoute = ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding);
-            if (reviewerRoute.EscalateToOperator)
-            {
-                decision = VerifyingFindingAutoRetryDecision.Escalate(
-                    $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
-                    $"Route: {reviewerRoute.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
-                return true;
-            }
-        }
-
-        var targetRole = triggeringTask.RequiredRole == AgentRole.Tester
-            ? AgentRole.Developer
-            : reviewerRoute?.TargetRole ?? AgentRole.Developer;
-        var targetTask = trigger.TargetTask ?? goal.Tasks
-            .TakeWhile(t => t.Id != triggeringTask.Id)
-            .LastOrDefault(t => t.RequiredRole == targetRole);
-        if (targetTask is null && triggeringTask.RequiredRole == AgentRole.Reviewer && targetRole != AgentRole.Developer)
-        {
-            targetRole = AgentRole.Developer;
-            targetTask = goal.Tasks
-                .TakeWhile(t => t.Id != triggeringTask.Id)
-                .LastOrDefault(t => t.RequiredRole == AgentRole.Developer);
-        }
-
-        if (targetTask is null)
-        {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {targetRole} task; operator action required. " +
-                $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
-            return true;
         }
 
         var round = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound).Round;
-        if (round >= policy.ReviewAutoRetryStopRound)
+        var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(
+            new FailedGoalVerifyingFindingRouteFacts(
+                triggeringTask.Id,
+                triggeringTask.RequiredRole,
+                BuildFailedGoalAttemptIdentity(triggeringTask),
+                trigger.TargetTask?.Id,
+                trigger.RequiresCommittedTarget,
+                reviewerRoute?.TargetRole,
+                reviewerRoute?.EscalateToOperator == true,
+                round,
+                policy.ReviewAutoRetryStopRound,
+                policy.ReviewAutoRetryWarningRound,
+                IsMissingFindingResultRetryEligible(goal, triggeringTask, trigger.Finding),
+                AutomaticWorkerRetryCause.Resolve(triggeringTask),
+                goal.Tasks
+                    .TakeWhile(task => task.Id != triggeringTask.Id)
+                    .Select(task => new FailedGoalFindingRouteTask(task.Id, task.RequiredRole))
+                    .ToImmutableArray()));
+
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired)
         {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
+            observation = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
+                $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
+                $"Route: {reviewerRoute?.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
+            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            return true;
+        }
+
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.TargetUnavailable)
+        {
+            observation = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingRouteUnavailable,
+                $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {route.TargetRole} task; operator action required. " +
+                $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            return true;
+        }
+
+        var targetTask = goal.Tasks.Single(task => task.Id == route.TargetTaskId);
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.RetryCapReached)
+        {
+            observation = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingRetryCapReached,
                 triggeringTask.RequiredRole == AgentRole.Reviewer
                     ? BuildReviewCapDecisionMessage(
                         goal,
@@ -1937,6 +1799,23 @@ internal sealed partial class ConductorDriver
                     : $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
                         $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(trigger.Finding)}. " +
                         $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            return true;
+        }
+
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.MissingFindingResult)
+        {
+            observation = FailedGoalFindingObservation.Routed(
+                FailedGoalFindingObservationKind.FindingResultMissing,
+                triggeringTask.Id,
+                route.AttemptIdentity,
+                $"auto-review-retry round {route.Round}: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} " +
+                "reported needs-work, but its structured finding result was missing or unparseable and no current open blocking finding exists. " +
+                "Re-run the verifying role against the current Developer output; do not reopen the Developer from superseded finding history.",
+                warningMessage: null,
+                route.RoundKind,
+                route.RetryCause);
+            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
             return true;
         }
 
@@ -1952,31 +1831,36 @@ internal sealed partial class ConductorDriver
                 triggeringTask,
                 trigger.Finding,
                 triggerLabel,
-                targetRole,
+                route.TargetRole,
                 round,
                 outputArtifact,
-                _getLandingFileScopes(goal));
+                landingFileScopes);
         }
         catch (ReviewFindingConvergenceException ex)
         {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
+            observation = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingConvergenceViolation,
                 $"review finding convergence violation code={ex.Code} previous_open={ex.PreviousOpenCount} next_open={ex.NextOpenCount}; " +
                 $"{ex.Message} Loop stopped before another retry brief was issued. Full reviewer output: {outputArtifact}");
+            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
             return true;
         }
 
-        var warning = round >= policy.ReviewAutoRetryWarningRound
+        var warning = route.EmitWarning
             ? $"auto-review-retry escalation-warning round {round}/{policy.ReviewAutoRetryStopRound - 1}: " +
                 $"continuing automatic retry for task {targetTask.Id.Value[..8]}; operator review will be required at round {policy.ReviewAutoRetryStopRound}."
             : null;
-        decision = VerifyingFindingAutoRetryDecision.Retry(
-            targetTask,
+        observation = FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.FindingRouteObserved,
+            targetTask.Id,
+            BuildFailedGoalAttemptIdentity(targetTask),
             message,
             warning,
-            null);
+            route.RoundKind,
+            route.RetryCause);
+        observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
         return true;
     }
-
     private VerifyingFindingTrigger? BuildVerifyingFindingTrigger(Goal goal, TaskSpec task)
     {
         if (task.Status != WorkTaskStatus.Failed)
@@ -2061,18 +1945,15 @@ internal sealed partial class ConductorDriver
             $"The goal remains non-terminal and cannot advance to acceptance. Full reviewer output: {outputArtifact}";
     }
 
-    private void RecordSuppressedAutoReviewRetryFindings(
-        Goal goal,
+    private static IReadOnlyList<FailedGoalPendingNote> BuildSuppressedAutoReviewRetryFindingNotes(
         TaskSpec reviewerTask,
         IReadOnlyList<string> suppressedFindings)
     {
-        foreach (var finding in suppressedFindings)
-        {
-            _recordTaskNote(
-                goal.Id,
+        return suppressedFindings
+            .Select(finding => new FailedGoalPendingNote(
                 reviewerTask.Id,
-                $"Suppressed auto-review-retry finding matching operator criteria correction: {TrimForConductorMessage(finding)}");
-        }
+                $"Suppressed auto-review-retry finding matching operator criteria correction: {TrimForConductorMessage(finding)}"))
+            .ToArray();
     }
 
     private static ReviewRetryRoute ResolveReviewerRetryRoute(
@@ -2097,30 +1978,16 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private static bool HasCommittedOutput(TaskSpec task)
-    {
-        if (task.LastVerification?.HasCommittedChanges is true)
-        {
-            return true;
-        }
-
-        var dispatch = task.LastDispatch;
-        if (dispatch is null || string.IsNullOrWhiteSpace(dispatch.ResultCommit))
-        {
-            return false;
-        }
-
-        return string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
-            !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool HasCommittedOutput(TaskSpec task) =>
+        VerifyingFindingCurrency.HasCommittedOutput(task);
 
     private bool TryBuildFindingEvidenceRequest(
         Goal goal,
         TaskSpec requestingTask,
         ConductorAutonomyPolicy policy,
-        out VerifyingFindingAutoRetryDecision decision)
+        out FailedGoalFindingObservation decision)
     {
-        decision = VerifyingFindingAutoRetryDecision.None;
+        decision = FailedGoalFindingObservation.None;
         if (!WorkerResultBlockers.TryFindReviewFindingRound(requestingTask.LastVerification, out var round, out _))
         {
             return false;
@@ -2142,8 +2009,54 @@ internal sealed partial class ConductorDriver
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 
+        if (requestingTask.RequiredRole == AgentRole.Reviewer)
+        {
+            var openBlockingFindings = ReviewFindings.GetOpenBlockingFindings(
+                mergedFindings.Count > 0 ? mergedFindings : round.Findings,
+                goal.EffectiveAcceptanceCriteriaCorrections);
+            var suppressionRoute = ReviewerFindingEvidenceSuppressionRouting.Resolve(
+                requestingTask.LastVerification, goal.EffectiveAcceptanceCriteriaCorrections, openBlockingFindings);
+            if (suppressionRoute.DeferToReviewRetryRoute)
+            {
+                return false;
+            }
+            var writableBlockerIds = suppressionRoute.WritableBlockerIds;
+            var reviewedCandidateSha = requestingTask.LastVerification?.ReviewedCommit?.Trim();
+            var requestTargetsCurrentCandidate =
+                !candidateShaAvailable ||
+                !ConductorGitRevisionReader.IsValid(reviewedCandidateSha) ||
+                string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
+            if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
+            {
+                var reason = candidateShaAvailable
+                    ? "unresolved-writable-blockers-on-unchanged-candidate"
+                    : "candidate-sha-unavailable-with-unresolved-writable-blockers";
+                foreach (var requestIdentity in requestingFindings
+                             .Select(finding => BuildFindingEvidenceIdentity(finding.EvidenceRequest!))
+                             .Distinct(StringComparer.Ordinal))
+                {
+                    var requestId = CreateFindingEvidenceRequestId(requestIdentity);
+                    _recordFindingEvidenceSuppressed(
+                        goal.Id,
+                        requestingTask.Id,
+                        telemetryCandidateSha,
+                        writableBlockerIds,
+                        requestId,
+                        suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
+                        reason,
+                        CreateFindingEvidenceSuppressionIdentity(
+                            telemetryCandidateSha,
+                            requestIdentity,
+                            writableBlockerIds));
+                }
+
+                return false;
+            }
+        }
+
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
+        var reusedGreenReceipt = false;
         foreach (var finding in requestingFindings)
         {
             if (!TryNormalizeFindingEvidenceRequest(
@@ -2162,15 +2075,33 @@ internal sealed partial class ConductorDriver
             var identity = BuildFindingEvidenceIdentity(typedRequest);
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
-            if (mergedFinding?.EvidenceOutcome is { } priorOutcome &&
-                (IsPermanentFindingEvidenceRefusal(priorOutcome) ||
-                    HasCurrentFindingEvidenceReceipt(
+            var priorOutcome = mergedFinding?.EvidenceOutcome;
+            if (priorOutcome is not null && IsPermanentFindingEvidenceRefusal(priorOutcome))
+            {
+                continue;
+            }
+
+            if (mergedFinding is not null &&
+                HasCurrentFindingEvidenceReceipt(
                         requestingTask,
                         mergedFinding,
                         typedRequest,
                         telemetryCandidateSha,
-                        findingRoundFingerprint)))
+                        findingRoundFingerprint))
             {
+                continue;
+            }
+
+            if (TryGetReusableGreenFindingEvidenceReceipt(
+                    requestingTask,
+                    typedRequest,
+                    telemetryCandidateSha,
+                    out var reusableOutcome,
+                    out var reusableReceipt))
+            {
+                reusedGreenReceipt = true;
+                ReattachReusableGreenFindingEvidence(
+                    goal, requestingTask, mergedFinding ?? finding, reusableOutcome!, reusableReceipt!);
                 continue;
             }
 
@@ -2190,6 +2121,14 @@ internal sealed partial class ConductorDriver
             decision = BuildFindingEvidenceDeliveryRetry(
                 requestingTask,
                 "Every current evidence request was refused during normalization; typed refusal details were attached.");
+            return true;
+        }
+
+        if (groups.Count == 0 && reusedGreenReceipt)
+        {
+            decision = BuildFindingEvidenceDeliveryRetry(
+                requestingTask,
+                "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.");
             return true;
         }
 
@@ -2246,13 +2185,13 @@ internal sealed partial class ConductorDriver
                 out var evidenceAttempt,
                 out decision))
         {
-            if (decision.ShouldEscalate)
+            if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
             {
                 foreach (var finding in runnable.Findings)
                 {
                     RecordNotHonoured(
                         goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed,
-                        decision.Message, telemetryCandidateSha);
+                        decision.Evidence, telemetryCandidateSha);
                 }
                 decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor failed; a typed refusal was attached.");
             }
@@ -2362,7 +2301,8 @@ internal sealed partial class ConductorDriver
                     receiptId,
                     requestDispositions))
             {
-                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                decision = FailedGoalFindingObservation.Observed(
+                    FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed,
                     $"Focused evidence receipt {receiptId} was recorded, but its per-request apparatus dispositions could not be persisted; downstream routing stopped.");
                 return true;
             }
@@ -2428,7 +2368,8 @@ internal sealed partial class ConductorDriver
                 receiptId,
                 requestDispositions))
         {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
+            decision = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed,
                 $"Focused evidence receipt {receiptId} was recorded, but its per-request dispositions could not be persisted; downstream routing stopped.");
             return true;
         }
@@ -2442,14 +2383,17 @@ internal sealed partial class ConductorDriver
             var findingIds = string.Join(",", actionableCandidateRed.Findings.Select(finding => finding.StableId));
             if (developer is null)
             {
-                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                decision = FailedGoalFindingObservation.Observed(
+                    FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable,
                     $"Actionable candidate RED receipt {receiptId} at candidate {candidateSha} could not be routed because no upstream Developer task exists; " +
                     $"finding_ids={findingIds}; failing_tests={failingTests}. No downstream Tester or Reviewer was started.");
                 return true;
             }
 
-            decision = VerifyingFindingAutoRetryDecision.Retry(
-                developer,
+            decision = FailedGoalFindingObservation.Routed(
+                FailedGoalFindingObservationKind.FindingActionableRed,
+                developer.Id,
+                BuildFailedGoalAttemptIdentity(developer),
                 $"ACTIONABLE_CANDIDATE_RED candidate_sha={candidateSha}; receipt_id={receiptId}; finding_ids={findingIds}; " +
                 $"failing_tests={failingTests}. Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.",
                 null);
@@ -2457,7 +2401,8 @@ internal sealed partial class ConductorDriver
         }
 
         decision = batches.Skip(1).Any()
-            ? VerifyingFindingAutoRetryDecision.Hold(
+            ? FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence completed; another distinct request from the same finding round remains pending.")
             : BuildFindingEvidenceDeliveryRetry(
                 requestingTask, "Focused evidence completed and its receipt was attached to the requesting finding.");
@@ -2482,13 +2427,14 @@ internal sealed partial class ConductorDriver
             $"reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)}; detail={TrimForConductorMessage(detail)}");
     }
 
-    private static VerifyingFindingAutoRetryDecision BuildFindingEvidenceDeliveryRetry(TaskSpec task, string summary) =>
-        VerifyingFindingAutoRetryDecision.Retry(
-            task,
+    private static FailedGoalFindingObservation BuildFindingEvidenceDeliveryRetry(TaskSpec task, string summary) =>
+        FailedGoalFindingObservation.Routed(
+            FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded,
+            task.Id,
+            BuildFailedGoalAttemptIdentity(task),
             $"{FindingEvidenceRetryMessagePrefix} role={task.RequiredRole}; task={task.Id.Value[..8]}; {summary} " +
             "Review the finding-bound outcome in this round's context.",
-            null,
-            RetryRoundKind.Mechanical);
+            null);
 
     private static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,
@@ -2538,7 +2484,7 @@ internal sealed partial class ConductorDriver
                 refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
                 refusalDetail =
                     $"Focused evidence does not support test project '{project}'. Accepted forms: " +
-                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms}.";
+                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms(engineSettings)}.";
                 return false;
             }
 
@@ -2646,7 +2592,7 @@ internal sealed partial class ConductorDriver
         selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
-        string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+        FindingEvidenceExecutionClassifier.BuildRequestIdentity(request);
 
     private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
     {
@@ -2780,58 +2726,6 @@ internal sealed partial class ConductorDriver
                 : "incompatible-filter-semantics";
     }
 
-    private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome)
-    {
-        if (!string.IsNullOrWhiteSpace(outcome.ReceiptId))
-        {
-            return false;
-        }
-
-        return outcome.Reason switch
-        {
-            FindingEvidenceNotHonouredReason.Unknown => true, // Permanent default: no typed retry signal exists.
-            FindingEvidenceNotHonouredReason.UnsupportedProject => true, // Permanent until the request changes.
-            FindingEvidenceNotHonouredReason.UnparseableSelection => true, // Permanent until the selection changes.
-            FindingEvidenceNotHonouredReason.CandidateShaMissing => false, // Transient: a later candidate may have a sha.
-            FindingEvidenceNotHonouredReason.ExecutorUnavailable => false, // Transient: the executor may recover.
-            FindingEvidenceNotHonouredReason.SelectionApparatusFailure => false, // Transient: source discovery may recover.
-            FindingEvidenceNotHonouredReason.RunFailed => false, // Transient: the focused run may succeed later.
-            FindingEvidenceNotHonouredReason.SupersededByActionableRed => true, // Permanent for this unchanged request.
-            FindingEvidenceNotHonouredReason.PerRoundCap => true, // Retired persisted disposition; preserve suppression.
-            null => true, // Persisted outcomes without a reason are unclassified and fail safe.
-            _ => true // Future or unrecognized reasons fail safe against verbatim replay.
-        };
-    }
-
-    private static bool HasCurrentFindingEvidenceReceipt(
-        TaskSpec requestingTask,
-        ReviewFinding finding,
-        FindingEvidenceRequest request,
-        string candidateSha,
-        string findingRoundFingerprint)
-    {
-        var receiptId = finding.EvidenceOutcome?.ReceiptId;
-        if (string.IsNullOrWhiteSpace(receiptId) || candidateSha == "unavailable")
-        {
-            return false;
-        }
-
-        var identity = BuildFindingEvidenceIdentity(request);
-        return requestingTask.VerificationHistory
-            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
-            .Any(receipt =>
-                string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
-                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(
-                    receipt.FindingRoundFingerprint,
-                    findingRoundFingerprint,
-                    StringComparison.Ordinal) &&
-                (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
-                    (receipt.RequestDispositions ?? []).Any(disposition =>
-                        string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
-                        string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal))));
-    }
-
     private static ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
         string candidateSha,
         FocusedEvidenceRunResult evidence,
@@ -2874,7 +2768,10 @@ internal sealed partial class ConductorDriver
             }
 
             var developerFindings = member.Findings.Where(finding =>
-                finding.Category is not (FindingCategory.OperatorOwned or FindingCategory.SpecDefect) &&
+                finding.Category is not (
+                    FindingCategory.OperatorOwned or
+                    FindingCategory.SpecDefect or
+                    FindingCategory.AcceptanceOwned) &&
                 IsDeveloperOwnedFindingAnchor(finding.Location.File));
             foreach (var finding in developerFindings)
             {
@@ -2925,6 +2822,26 @@ internal sealed partial class ConductorDriver
             SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{findingRoundFingerprint}:{identity}")))
             .ToLowerInvariant()[..24];
 
+    private static string CreateFindingEvidenceRequestId(string identity) =>
+        "evidence-request-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
+            .ToLowerInvariant()[..20];
+
+    private static string CreateFindingEvidenceSuppressionIdentity(
+        string candidateSha,
+        string requestIdentity,
+        IReadOnlyList<string> writableBlockerIds)
+    {
+        var blockerIdentity = string.Join(
+            "\u001f",
+            writableBlockerIds
+                .OrderBy(id => id, StringComparer.Ordinal));
+        return "evidence-suppression-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{candidateSha.Trim().ToLowerInvariant()}\u001e{requestIdentity}\u001e{blockerIdentity}")))
+            .ToLowerInvariant()[..24];
+    }
+
     private static string CreateFindingEvidenceBatchId(
         string candidateSha,
         string findingRoundFingerprint,
@@ -2944,29 +2861,41 @@ internal sealed partial class ConductorDriver
         ConductorFocusedEvidenceRequestContext? requestContext,
         out FocusedEvidenceRunResult evidence,
         out ConductorParallelAcceptanceAttempt? evidenceAttempt,
-        out VerifyingFindingAutoRetryDecision decision)
+        out FailedGoalFindingObservation decision)
     {
         evidence = null!;
         evidenceAttempt = null;
-        decision = VerifyingFindingAutoRetryDecision.None;
+        decision = FailedGoalFindingObservation.None;
         var candidate = ConductorParallelAcceptanceCandidate.Create(
             goal,
             slotIndex: 0,
             fileScopes: [],
             branchHeadSha: candidateSha?.Trim(),
             mainHeadSha: null);
-        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-            candidate,
-            policy,
-            request,
-            _runDualArmFocusedEvidence,
-            requestContext);
+        ConductorParallelAcceptanceAttemptDecision attemptDecision;
+        try
+        {
+            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                policy,
+                request,
+                _runDualArmFocusedEvidence,
+                requestContext);
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            decision = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingEvidencePending,
+                $"Background {source} focused-evidence artifact writer is busy; retry on next conduct tick. {ex.Message}");
+            return false;
+        }
         evidenceAttempt = attemptDecision.Attempt;
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
         {
-            decision = VerifyingFindingAutoRetryDecision.Hold(
+            decision = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingEvidencePending,
                 $"Background {source} focused evidence is running in attempt {attemptDecision.Attempt.AttemptId}.");
             return false;
         }
@@ -2978,7 +2907,8 @@ internal sealed partial class ConductorDriver
                 OperationCanceledException)
         {
             _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
-            decision = VerifyingFindingAutoRetryDecision.Hold(
+            decision = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingEvidencePending,
                 $"Background {source} focused evidence did not run ({attemptDecision.Attempt.Outcome}); " +
                 $"retry on next conduct tick. attempt={attemptDecision.Attempt.AttemptId}: " +
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"));
@@ -2988,7 +2918,8 @@ internal sealed partial class ConductorDriver
         _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
         if (attemptDecision.Run?.Exception is { } backgroundFailure)
         {
-            decision = VerifyingFindingAutoRetryDecision.Escalate(
+            decision = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
                 $"BACKGROUND_FOCUSED_EVIDENCE_FAILED: {source} focused evidence run failed. " +
                 $"attempt={attemptDecision.Attempt.AttemptId}: {backgroundFailure.Message}");
             return false;
@@ -3098,7 +3029,9 @@ internal sealed partial class ConductorDriver
         TaskSpec TriggeringTask,
         string Finding,
         IReadOnlyList<string> SuppressedFindings,
-        TaskSpec? TargetTask);
+        TaskSpec? TargetTask,
+        bool RequiresCommittedTarget = false,
+        IReadOnlyList<ReviewFinding>? DeveloperOwnedFindings = null);
 
     private sealed record FindingEvidenceRequestGroup(
         string Identity,
@@ -3116,30 +3049,6 @@ internal sealed partial class ConductorDriver
     private sealed record ActionableCandidateRedAttribution(
         IReadOnlyList<ReviewFinding> Findings,
         IReadOnlyList<string> FailingTestIdentities);
-
-    private sealed record VerifyingFindingAutoRetryDecision(
-        bool ShouldHold,
-        bool ShouldEscalate,
-        TaskSpec? TargetTask,
-        string Message,
-        string? WarningMessage,
-        RetryRoundKind? RoundKind)
-    {
-        public static VerifyingFindingAutoRetryDecision None { get; } = new(false, false, null, string.Empty, null, null);
-
-        public static VerifyingFindingAutoRetryDecision Hold(string message) =>
-            new(true, false, null, message, null, null);
-
-        public static VerifyingFindingAutoRetryDecision Retry(
-            TaskSpec targetTask,
-            string message,
-            string? warningMessage,
-            RetryRoundKind? roundKind = null) =>
-            new(false, false, targetTask, message, warningMessage, roundKind);
-
-        public static VerifyingFindingAutoRetryDecision Escalate(string message) =>
-            new(false, true, null, message, null, null);
-    }
 
     internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
         Goal goal,
@@ -3161,6 +3070,13 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
+        if (HasActiveApparatusHold(goal, out _))
+        {
+            return null;
+        }
+
+        var acceptanceHeads = _resolveAcceptanceHeads(goal);
+
         if (!_parallelAcceptanceAttemptCoordinator.HasLiveAttempt(goal.Id.Value) &&
             TryGetActiveEvidenceMutationLease(goal) is { } lease)
         {
@@ -3180,8 +3096,8 @@ internal sealed partial class ConductorDriver
             goal,
             slotIndex,
             _getLandingFileScopes(goal),
-            TryResolveAcceptanceBranchHead(goal),
-            _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
+            acceptanceHeads.BranchHeadSha,
+            acceptanceHeads.MainHeadSha);
     }
 
     internal GateReadyCandidateProjectionResult ProjectGateReadyCandidate(
@@ -3190,6 +3106,11 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(policy);
+
+        if (HasActiveApparatusHold(goal, out _))
+        {
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
+        }
 
         GoalLifecycleState lifecycleState;
         try
@@ -3366,9 +3287,7 @@ internal sealed partial class ConductorDriver
                 continue;
             }
 
-            var elapsed = _utcNow() - pair.Value.StartedAt;
-            detail =
-                $"outcome=inflight fingerprint={pair.Value.PairFingerprint} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
+            detail = FormatCohortGateInFlightDetail(pair.Value, _utcNow());
             return true;
         }
 
@@ -3399,6 +3318,31 @@ internal sealed partial class ConductorDriver
         {
             return _runAcceptanceCohortOverride(selection, orderedGoals, policy);
         }
+        var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
+            selection.Members[0],
+            selection.Members[1]);
+        var memberPairKey = CohortGateMemberPairKey(selection);
+        var memberGoalIds = selection.Members
+            .Select(member => member.GoalId.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        if (TryGetActiveCohortGateRun(memberGoalIds, out var currentRun))
+        {
+            return CohortInFlight(
+                selection,
+                orderedGoals,
+                policy,
+                currentRun);
+        }
+
+        // Drained ahead of the production-dependency check so a faulted background completion is always
+        // reported as data; describing the fault needs the selection only, not the cohort dependencies.
+        // A direct caller that did not come through RunAcceptanceCohortForTick still gets the held result
+        // rather than the background thread's exception.
+        if (TakeCohortGateFault(selection) is { } backgroundFault)
+        {
+            return CohortGateFaulted(orderedGoals, policy, backgroundFault);
+        }
+
         if (_cohortKernel is null ||
             _cohortWorkspace is null ||
             _cohortAcceptanceVerifier is null ||
@@ -3406,27 +3350,6 @@ internal sealed partial class ConductorDriver
         {
             throw new InvalidOperationException("Production acceptance cohort dependencies are unavailable.");
         }
-
-        var pairFingerprint = ConductorAcceptanceCohortSelector.PairFingerprint(
-            selection.Members[0],
-            selection.Members[1]);
-        var memberPairKey = CohortGateMemberPairKey(selection);
-        if (_cohortGateRuns.TryGetValue(memberPairKey, out var currentRun))
-        {
-            if (!currentRun.Completion.Task.IsCompleted)
-            {
-                return CohortInFlight(
-                    selection,
-                    orderedGoals,
-                    policy,
-                    currentRun.PairFingerprint,
-                    currentRun.StartedAt);
-            }
-
-            _cohortGateRuns.TryRemove(memberPairKey, out _);
-            currentRun.Completion.Task.GetAwaiter().GetResult();
-        }
-        SweepCompletedCohortGateRuns();
 
         var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
         var goals = selection.Members.Select(member =>
@@ -3440,7 +3363,8 @@ internal sealed partial class ConductorDriver
             integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                 _cohortWorkspace.ExecutionDirectory,
                 selection.Members[0].MainRevision,
-                bindings);
+                bindings,
+                _cohortCleanupHooks);
         }
         catch (AcceptanceCohortMaterializationException ex)
         {
@@ -3516,20 +3440,16 @@ internal sealed partial class ConductorDriver
             {
                 var run = new CohortGateRun(
                     _utcNow(),
-                    selection.Members
-                        .Select(member => member.GoalId.Value)
-                        .ToHashSet(StringComparer.Ordinal),
+                    memberGoalIds,
                     pairFingerprint,
                     new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                if (!_cohortGateRuns.TryAdd(memberPairKey, run))
+                if (!TryRegisterCohortGateRun(memberPairKey, run, out var blockingRun))
                 {
-                    var competingRun = _cohortGateRuns[memberPairKey];
                     return CohortInFlight(
                         selection,
                         orderedGoals,
                         policy,
-                        competingRun.PairFingerprint,
-                        competingRun.StartedAt);
+                        blockingRun!);
                 }
 
                 var ownedIntegration = integrationScope.Transfer();
@@ -3558,8 +3478,7 @@ internal sealed partial class ConductorDriver
                     selection,
                     orderedGoals,
                     policy,
-                    pairFingerprint,
-                    run.StartedAt);
+                    run);
             }
 
             receipt = ExecuteAcceptanceCohortGate(
@@ -3741,8 +3660,8 @@ internal sealed partial class ConductorDriver
         if (RunAcceptanceCohortSourceSizePreflight(integration.Path, identity, store) is { } sourceSizeReceipt) return sourceSizeReceipt;
         var gateProgressEventWriter = new ConductEventLogWriter(
             Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
-        using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-            AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress));
+        var executionOptions = new AcceptanceRunExecutionOptions(
+            ProgressSink: progress => AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress));
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;
@@ -3758,13 +3677,15 @@ internal sealed partial class ConductorDriver
                 identity.Value,
                 cancellationToken);
             onGateAdmitted?.Invoke();
-            var verification = verifier.RunAsync(
+            var verification = AcceptanceExecutionRunner.RunAttempt(
+                verifier,
                 integration.Path,
                 goalId: null,
-                changedFiles: bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                stableSlotIndex: stableSlotLease.Environment.BuildPermitIndex,
-                stableSlotLease: stableSlotLease,
-                cancellationToken: cancellationToken).GetAwaiter().GetResult();
+                bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                stableSlotLease.Environment.BuildPermitIndex,
+                stableSlotLease,
+                cancellationToken,
+                executionOptions);
             gateExitCode = verification.ExitCode;
             var classifiedVerification = ClassifyCohortVerificationResultWithPaths(verification);
             classification = classifiedVerification.Classification;
@@ -3870,16 +3791,15 @@ internal sealed partial class ConductorDriver
             using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(
                 workspace.ExecutionDirectory,
                 identity.ObservedMainRevision,
-                member);
+                member,
+                _cohortCleanupHooks);
             treeRevision = partition.TreeRevision;
             partitionManifest = verifier.ComputeEffectivePlanIdentity(
                 partition.Path,
                 member.LandingPaths);
-            var result = verifier.RunAsync(
-                partition.Path,
-                member.GoalId,
-                member.LandingPaths,
-                cancellationToken: cancellationToken).GetAwaiter().GetResult();
+            var result = AcceptanceExecutionRunner.RunAttempt(
+                verifier, partition.Path, member.GoalId, member.LandingPaths,
+                stableSlotIndex: null, stableSlotLease: null, cancellationToken);
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             partition.AssertGoalBranchesUnchanged();
             outcome = ClassifyCohortVerification(result);
@@ -3909,20 +3829,6 @@ internal sealed partial class ConductorDriver
             testResultPaths);
     }
 
-    private void SweepCompletedCohortGateRuns()
-    {
-        foreach (var pair in _cohortGateRuns)
-        {
-            if (!pair.Value.Completion.Task.IsCompleted ||
-                !_cohortGateRuns.TryRemove(pair.Key, out var completed))
-            {
-                continue;
-            }
-
-            completed.Completion.Task.GetAwaiter().GetResult();
-        }
-    }
-
     private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>
         string.Join(
             ":",
@@ -3934,14 +3840,11 @@ internal sealed partial class ConductorDriver
         ConductorAcceptanceCohortSelection selection,
         IReadOnlyList<Goal> orderedGoals,
         ConductorAutonomyPolicy policy,
-        string pairFingerprint,
-        DateTimeOffset startedAt)
+        CohortGateRun run)
     {
         var selectedIds = selection.Members.Select(member => member.GoalId).ToHashSet();
         var goals = orderedGoals.Where(goal => selectedIds.Contains(goal.Id)).ToArray();
-        var elapsed = _utcNow() - startedAt;
-        var detail =
-            $"outcome=inflight fingerprint={pairFingerprint} elapsed_ms={Math.Max(0L, (long)elapsed.TotalMilliseconds)}";
+        var detail = FormatCohortGateInFlightDetail(run, _utcNow());
         return new ConductorAcceptanceCohortRunResult(
             Receipt: null,
             goals.ToDictionary(
@@ -4139,8 +4042,7 @@ internal sealed partial class ConductorDriver
             return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
         }
 
-        var rebase = RebaseBeforeMerge(candidate.Goal, candidate.GoalPrefix, policy);
-        return rebase ?? CompleteLandingAfterRacingLandingCarryForward(candidate, policy, acceptance);
+        return CompleteParallelLandingAfterPreMergeRebase(candidate, policy, acceptance);
     }
 
     internal ConductorAdvanceResult EscalateParallelLandingAcceptance(
@@ -4173,12 +4075,25 @@ internal sealed partial class ConductorDriver
 
         var output = string.Join(Environment.NewLine, failedChecks);
         var summary = $"Named failing acceptance checks: {string.Join(", ", failedChecks)}";
+        var attributions = acceptance.CheckAttributions;
+        var allEnvironmentalApparatus = attributions is { Count: > 0 } &&
+            failedChecks.All(name => attributions.Any(attribution =>
+                attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
+        var allInherited = allEnvironmentalApparatus && failedChecks.All(name => attributions!.Any(attribution =>
+            attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+            attribution.Origin == AcceptanceFailureOrigin.Inherited));
         var check = new AcceptanceCheckResult(
             "acceptance failed checks",
             false,
             1,
             string.IsNullOrWhiteSpace(acceptance.FailureDetail) ? output : acceptance.FailureDetail,
-            ResultSummary: summary);
+            ResultSummary: summary,
+            FailureClassification: allEnvironmentalApparatus
+                ? allInherited
+                    ? AcceptanceFailureClassifications.InheritedBaselineApparatus
+                    : AcceptanceFailureClassifications.GateEnvironmentInterference
+                : null);
         return new AcceptanceVerificationSummary(
             false,
             [check],
@@ -4191,50 +4106,89 @@ internal sealed partial class ConductorDriver
             acceptance.BaselineAttestation);
     }
 
-    internal static void ReconcileCleanBaselineAttention(
-        ICollaborationItemStore store,
-        Goal goal,
-        string? mainHeadSha,
-        CleanTestBaselineReceipt receipt)
+    internal static AcceptanceVerificationSummary ClassifyInheritedBaselineApparatus(
+        AcceptanceVerificationSummary acceptance)
     {
-        ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(goal);
-        ArgumentNullException.ThrowIfNull(receipt);
-
-        var currentCorrelationKey =
-            CleanBaselineRedCorrelationKeyPrefix + (mainHeadSha?.Trim().ToLowerInvariant() ?? "unknown");
-        var activeCorrelationKey = receipt.Attestation == CleanBaselineAttestation.AttestedRed
-            ? currentCorrelationKey
-            : null;
-        if (activeCorrelationKey is not null)
+        if (acceptance.Passed ||
+            acceptance.FailedChecks is not { Count: > 0 } failedChecks ||
+            acceptance.CheckAttributions is not { Count: > 0 } attributions ||
+            !failedChecks.All(name => attributions.Any(attribution =>
+                attribution.CheckName.Equals(name, StringComparison.Ordinal) &&
+                attribution.Origin == AcceptanceFailureOrigin.Inherited &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus)))
         {
-            store.RaiseAsync(
-                CollaborationItemType.Decision,
-                goal.Id.Value,
-                $"Red clean-test baseline at {FormatShortSha(mainHeadSha)}",
-                CleanTestBaseline.FormatJournalDetail(receipt),
-                activeCorrelationKey,
-                CancellationToken.None).GetAwaiter().GetResult();
+            return acceptance;
         }
 
-        var staleItems = store.ListAsync(cancellationToken: CancellationToken.None)
-            .GetAwaiter()
-            .GetResult()
-            .Where(item =>
-                item.CorrelationKey is { Length: > 0 } key &&
-                key.StartsWith(CleanBaselineRedCorrelationKeyPrefix, StringComparison.Ordinal) &&
-                !string.Equals(key, activeCorrelationKey, StringComparison.Ordinal) &&
-                (receipt.Attestation != CleanBaselineAttestation.Unattested ||
-                 !string.Equals(key, currentCorrelationKey, StringComparison.Ordinal)))
+        var inheritedChecks = failedChecks.ToHashSet(StringComparer.Ordinal);
+        var classifiedChecks = acceptance.UnmetCriteria
+            .Select(check => !check.Advisory && inheritedChecks.Contains(check.Name)
+                ? check with
+                {
+                    FailureClassification = AcceptanceFailureClassifications.InheritedBaselineApparatus
+                }
+                : check)
             .ToArray();
-        foreach (var item in staleItems)
-        {
-            store.TryResolveAsync(
-                item.CorrelationKey!,
-                $"clean-test baseline no longer active at main {FormatShortSha(mainHeadSha)}",
-                CancellationToken.None).GetAwaiter().GetResult();
-        }
+        return new AcceptanceVerificationSummary(
+            acceptance.Passed,
+            classifiedChecks,
+            acceptance.FailureDetail,
+            acceptance.FailedChecks,
+            acceptance.BranchHeadSha,
+            acceptance.MainHeadSha,
+            acceptance.TestResultPaths,
+            attributions,
+            acceptance.BaselineAttestation);
     }
+
+    internal static bool IsEnvironmentalApparatusAcceptanceRun(AcceptanceVerificationSummary acceptance)
+    {
+        if (acceptance.RequiredUnmetCriteria is not { Count: > 0 } requiredUnmetCriteria)
+        {
+            return false;
+        }
+
+        return requiredUnmetCriteria.All(check =>
+            check.FailureClassification is
+                AcceptanceFailureClassifications.GateEnvironmentInterference or
+                AcceptanceFailureClassifications.InheritedBaselineApparatus or AcceptanceFailureClassifications.SharedGateApparatusInvalidated ||
+            acceptance.CheckAttributions is { Count: > 0 } attributions &&
+            attributions.Any(attribution =>
+                attribution.CheckName.Equals(check.Name, StringComparison.Ordinal) &&
+                attribution.Cause == AcceptanceFailureCause.EnvironmentalApparatus));
+    }
+
+    private static bool IsSameApparatusFailurePair(
+        AcceptanceFailureSummary? failure,
+        (string? BranchHeadSha, string? MainHeadSha) current)
+    {
+        if (failure is not { IsEnvironmentalApparatus: true })
+        {
+            return false;
+        }
+
+        return ShaIsUnchangedOrUnknown(failure.BranchHeadSha, current.BranchHeadSha) &&
+            ShaIsUnchangedOrUnknown(failure.MainHeadSha, current.MainHeadSha);
+    }
+
+    private bool HasActiveApparatusHold(
+        Goal goal,
+        out (string? BranchHeadSha, string? MainHeadSha) current)
+    {
+        current = (null, null);
+        if (goal.LatestAcceptanceFailure is not { IsEnvironmentalApparatus: true })
+        {
+            return false;
+        }
+
+        current = _resolveAcceptanceHeads(goal);
+        return IsSameApparatusFailurePair(goal.LatestAcceptanceFailure, current);
+    }
+
+    private static bool ShaIsUnchangedOrUnknown(string? recorded, string? current) =>
+        string.IsNullOrWhiteSpace(recorded) ||
+        string.IsNullOrWhiteSpace(current) ||
+        recorded.Equals(current, StringComparison.OrdinalIgnoreCase);
 
     internal ConductorAdvanceResult ReplayParallelLandingEarlyOutcome(
         ConductorParallelAcceptanceCandidate candidate,
@@ -4324,40 +4278,121 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(fromState, sliceDecision.Reason!));
         }
 
+        var exitedUnappliedTaskIds = goal.Tasks
+            .Where(task => task.LastProcess is { } process &&
+                           DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process))
+            .Select(task => task.Id)
+            .ToArray();
+        foreach (var taskId in exitedUnappliedTaskIds)
+        {
+            _reconcileExitedDispatch(goal, taskId);
+            goal = GetCurrentGoal(goal);
+        }
+
+        var unreconciledTask = goal.Tasks.FirstOrDefault(task =>
+            task.LastProcess is { } process &&
+            DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process));
+        if (unreconciledTask is not null)
+        {
+            var reason =
+                $"Dispatch start refused for task {unreconciledTask.Id.Value[..8]}: latest process record exited without an applied completion (exited-unapplied-process-record).";
+            _recordTaskNote(goal.Id, unreconciledTask.Id, reason);
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(fromState, reason));
+        }
+
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
-            using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
-                goal,
-                "conductor:developer-branch-integration");
-            if (integrationEvidenceMutationLease is null)
+            if (_tryBeginDeveloperIntegrationEvidenceOperation is not null)
             {
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        fromState,
-                        $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
-            }
+                var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation(goal);
+                if (operationStart.Scope is null)
+                {
+                    var status = operationStart.LeaseFact is { } leaseFact
+                        ? GoalEvidenceLeaseRecoveryStatuses.Format(leaseFact.RecoveryStatus)
+                        : "state-unavailable";
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            fromState,
+                            $"Goal evidence mutation is held for {goal.Id.Value}; lease-recovery={status}."));
+                }
 
-            var integration = _integrateMainBeforeDeveloperDispatch(goal);
-            if (!integration.CanDispatch)
+                using (operationStart.Scope)
+                {
+                    DeveloperBranchIntegrationResult integration;
+                    try
+                    {
+                        integration = _integrateMainBeforeDeveloperDispatch(goal);
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        operationStart.Scope.Abort(ex.Message);
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        operationStart.Scope.Fail(ex.Message);
+                        throw;
+                    }
+
+                    if (integration.CanDispatch)
+                    {
+                        operationStart.Scope.Complete(integration.Message);
+                    }
+                    else
+                    {
+                        operationStart.Scope.Fail(integration.Message);
+                        return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                    }
+                }
+            }
+            else
             {
-                return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
+                    goal,
+                    "conductor:developer-branch-integration");
+                if (integrationEvidenceMutationLease is null)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            fromState,
+                            $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
+                }
+
+                var integration = _integrateMainBeforeDeveloperDispatch(goal);
+                if (!integration.CanDispatch)
+                {
+                    return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                }
             }
         }
 
+        if (TryRunDeveloperCompletionStructuralPreflight(goal, goalPrefix, policy, fromState, out var structuralPrecheck))
+        {
+            return structuralPrecheck;
+        }
         if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
         {
             return preReviewResult;
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
+        var dispatchTimingGoal = goal;
         var startClock = Stopwatch.StartNew();
         var outcome = start(goal, policy);
         startClock.Stop();
-        EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category}");
+        EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category}");
+        goal = GetCurrentGoal(goal);
         if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
         {
             if (!TryRecoverSandboxPrep(outcome, goalPrefix, out var recoveryFailure))
@@ -4371,7 +4406,8 @@ internal sealed partial class ConductorDriver
             startClock.Restart();
             outcome = retryStart(goal, policy);
             startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category} retry=sandbox-prep");
+            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category} retry=sandbox-prep");
+            goal = GetCurrentGoal(goal);
         }
 
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
@@ -4391,7 +4427,8 @@ internal sealed partial class ConductorDriver
             startClock.Restart();
             outcome = retryStart(goal, policy);
             startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", goal, startClock.Elapsed, $"tasks={CountAssignedTasks(goal)} result={outcome.Category} retry=spawn-failed");
+            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category} retry=spawn-failed");
+            goal = GetCurrentGoal(goal);
             if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
             {
                 outcome = firstFailure;
@@ -4445,6 +4482,9 @@ internal sealed partial class ConductorDriver
         return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
     }
 
+    private Goal GetCurrentGoal(Goal goal) =>
+        (_cohortKernel ?? _conductorTickKernel)?.Goals.SingleOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
+
     private bool TryRunPreReviewEvidenceStage(
         Goal goal,
         string goalPrefix,
@@ -4475,21 +4515,28 @@ internal sealed partial class ConductorDriver
 
         var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
         var currentReceipt = reviewerTask.PreReviewEvidenceReceipt;
-        if (currentReceipt is { } current &&
+        if (context.NoApplicableTests && !context.MappingNeedsInput &&
+            currentReceipt is { Disposition: PreReviewEvidenceDisposition.NoApplicableTests } current &&
             current.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests))
         {
-            if (current.Disposition is PreReviewEvidenceDisposition.Green or PreReviewEvidenceDisposition.NoApplicableTests)
-            {
-                return false;
-            }
-            // Red or inconclusive evidence caused an upstream retry. Once that task completes,
-            // re-run the deterministic evidence even when the candidate SHA did not change;
-            // otherwise the stale non-green receipt can never be replaced by a current result.
+            return false;
+        }
+
+        if (!context.MappingNeedsInput && !context.NoApplicableTests && !string.IsNullOrWhiteSpace(context.FocusedRequest) &&
+            PreReviewEvidenceReceipts.TryReuse(
+                reviewerTask,
+                goal.Id.Value,
+                context.CandidateSha,
+                context.SelectedFocusedTests,
+                out var constituentReceipts))
+        {
+            PreReviewEvidenceReceipts.RecordReuse(_recordPreReviewEvidence, goal, reviewerTask, context, round, constituentReceipts);
+            return false;
         }
 
         if (context.NoApplicableTests)
         {
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -4503,7 +4550,7 @@ internal sealed partial class ConductorDriver
 
         if (context.MappingNeedsInput || string.IsNullOrWhiteSpace(context.FocusedRequest))
         {
-            var receipt = RecordPreReviewReceipt(
+            var receipt = PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -4512,7 +4559,33 @@ internal sealed partial class ConductorDriver
                 [],
                 [],
                 evidencePointer: null);
-            if (TryRoutePreReviewEvidenceToTester(
+            if (TryStopRepeatedPreReviewMappingRetry(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    fromState,
+                    context,
+                    currentReceipt,
+                    out result))
+            {
+                return true;
+            }
+
+            if (context.RequiresSourceCleanup && TryRoutePreReviewEvidenceToDeveloper(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    $"pre-review source cleanup required for candidate {context.CandidateSha}: remove the generated " +
+                    $"artifacts from the candidate and commit the cleanup before retrying; " +
+                    $"paths={FormatSourceCleanupPaths(context.SourceCleanupPaths)}",
+                    out result))
+            {
+                return true;
+            }
+
+            if (!context.RequiresSourceCleanup && TryRoutePreReviewEvidenceToTester(
                     goal,
                     reviewerTask,
                     goalPrefix,
@@ -4523,13 +4596,19 @@ internal sealed partial class ConductorDriver
                 return true;
             }
 
+            var routingRequirement = context.RequiresSourceCleanup
+                ? "source cleanup requires a writable Developer"
+                : "deterministic test-impact mapping requires typed operator/Tester selection";
             result = Escalate(
                 goal,
                 goalPrefix,
                 policy,
                 fromState,
-                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: deterministic test-impact mapping requires typed operator/Tester selection; " +
+                $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {routingRequirement}; " +
                 $"Reviewer dispatch is blocked for candidate {context.CandidateSha}. Reason: {context.MappingReason}. " +
+                (context.RequiresSourceCleanup
+                    ? $"Remove and commit these paths before retrying: {FormatSourceCleanupPaths(context.SourceCleanupPaths)}. "
+                    : string.Empty) +
                 $"Receipt round={receipt.ReviewerRound}.");
             return true;
         }
@@ -4540,11 +4619,26 @@ internal sealed partial class ConductorDriver
             fileScopes: [],
             branchHeadSha: context.CandidateSha,
             mainHeadSha: null);
-        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
-            candidate,
-            policy,
-            context.FocusedRequest,
-            _runFocusedEvidence);
+        ConductorParallelAcceptanceAttemptDecision attemptDecision;
+        try
+        {
+            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                policy,
+                context.FocusedRequest,
+                _runFocusedEvidence);
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            result = MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    fromState,
+                    $"Background pre-review evidence artifact writer is busy; retry on next conduct tick. {ex.Message}"));
+            return true;
+        }
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
@@ -4602,7 +4696,7 @@ internal sealed partial class ConductorDriver
         var evidencePointer = BuildPreReviewEvidencePointer(evidence);
         if (!evidence.Accepted)
         {
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -4611,6 +4705,19 @@ internal sealed partial class ConductorDriver
                 evidence.Checks,
                 [],
                 evidencePointer);
+            if (TryStopRepeatedPreReviewMappingRetry(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    fromState,
+                    context,
+                    currentReceipt,
+                    out result))
+            {
+                return true;
+            }
+
             if (TryRoutePreReviewEvidenceToTester(
                     goal,
                     reviewerTask,
@@ -4634,9 +4741,9 @@ internal sealed partial class ConductorDriver
 
         if (evidence.Passed)
         {
-            if (!TryValidatePreReviewEvidenceCoverage(context, evidence, out var mappingFailure))
+            if (!PreReviewEvidenceReceipts.ValidateCoverage(context, evidence, out var mappingFailure))
             {
-                RecordPreReviewReceipt(
+                PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                     goal,
                     reviewerTask,
                     context,
@@ -4646,6 +4753,19 @@ internal sealed partial class ConductorDriver
                     [],
                     evidencePointer);
                 var mismatch = $"pre-review evidence mapping failure for candidate {context.CandidateSha}: {mappingFailure}";
+                if (TryStopRepeatedPreReviewMappingRetry(
+                        goal,
+                        reviewerTask,
+                        goalPrefix,
+                        policy,
+                        fromState,
+                        context,
+                        currentReceipt,
+                        out result))
+                {
+                    return true;
+                }
+
                 if (TryRoutePreReviewEvidenceToTester(
                         goal,
                         reviewerTask,
@@ -4654,32 +4774,6 @@ internal sealed partial class ConductorDriver
                         mismatch,
                         out result))
                 {
-                    return true;
-                }
-
-                if (currentReceipt is { Disposition: PreReviewEvidenceDisposition.MappingNeedsInput } &&
-                    string.Equals(currentReceipt.CandidateSha, context.CandidateSha, StringComparison.OrdinalIgnoreCase))
-                {
-                    var suppressedCount = 1 + goal.Timeline.Count(evt =>
-                        evt.Kind == ProgressKind.PreReviewMappingEscalationSuppressed &&
-                        evt.TaskId == reviewerTask.Id &&
-                        evt.Message.Contains($"candidate_sha={context.CandidateSha}", StringComparison.OrdinalIgnoreCase) &&
-                        evt.Message.Contains(
-                            $"disposition={PreReviewEvidenceDisposition.MappingNeedsInput}",
-                            StringComparison.Ordinal));
-                    _recordPreReviewMappingEscalationSuppressed(
-                        goal.Id,
-                        reviewerTask.Id,
-                        context.CandidateSha,
-                        suppressedCount);
-                    result = MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            fromState,
-                            $"PRE_REVIEW_MAPPING_NEEDS_INPUT repeat suppressed for candidate {context.CandidateSha}; " +
-                            $"suppressed_count={suppressedCount}."));
                     return true;
                 }
 
@@ -4693,7 +4787,7 @@ internal sealed partial class ConductorDriver
                 return true;
             }
 
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -4707,7 +4801,7 @@ internal sealed partial class ConductorDriver
 
         if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
         {
-            RecordPreReviewReceipt(
+            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
                 goal,
                 reviewerTask,
                 context,
@@ -4719,6 +4813,19 @@ internal sealed partial class ConductorDriver
             var apparatusDetail =
                 $"pre-review focused selection apparatus failure for candidate {context.CandidateSha}; " +
                 $"the run executed zero tests and is not candidate-failure evidence; pointer={evidencePointer ?? "none"}";
+            if (TryStopRepeatedPreReviewMappingRetry(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    fromState,
+                    context,
+                    currentReceipt,
+                    out result))
+            {
+                return true;
+            }
+
             if (TryRoutePreReviewEvidenceToTester(
                     goal,
                     reviewerTask,
@@ -4740,7 +4847,7 @@ internal sealed partial class ConductorDriver
         }
 
         var failingTests = ExtractFailingTestIdentities(evidence.Checks);
-        RecordPreReviewReceipt(
+        PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
             goal, reviewerTask, context, round, PreReviewEvidenceDisposition.Red,
             evidence.Checks, failingTests, evidencePointer);
         var buildDiagnostic = failingTests.Count == 0
@@ -4781,9 +4888,99 @@ internal sealed partial class ConductorDriver
                 $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}"
             : $"pre-review build repair: candidate {context.CandidateSha}; diagnostic: {buildDiagnostic}; " +
                 $"evidence pointer: {evidencePointer ?? "none"}";
-        _retryTask(goal.Id, developerTask.Id, retryMessage, RetryRoundKind.Mechanical);
-        var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
-        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
+        _retryTask(goal.Id, developerTask.Id, retryMessage, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
+        var refreshedGoal = GetCurrentGoal(goal);
+        var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
+        result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);
+        return true;
+    }
+
+    private bool TryStopRepeatedPreReviewMappingRetry(
+        Goal goal,
+        TaskSpec reviewerTask,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        GoalLifecycleState fromState,
+        PreReviewEvidenceContext context,
+        PreReviewEvidenceReceipt? priorReceipt,
+        out ConductorAdvanceResult result)
+    {
+        if (priorReceipt is not { Disposition: PreReviewEvidenceDisposition.MappingNeedsInput } ||
+            !priorReceipt.MatchesCurrentCandidate(
+                goal.Id.Value,
+                context.CandidateSha!,
+                context.SelectedFocusedTests))
+        {
+            result = default!;
+            return false;
+        }
+
+        var requiredRole = context.RequiresSourceCleanup ? AgentRole.Developer : AgentRole.Tester;
+        var repairTask = TasksBefore(goal, reviewerTask)
+            .LastOrDefault(task => task.RequiredRole == requiredRole);
+        if (repairTask is not null)
+        {
+            var remedy = context.RequiresSourceCleanup
+                ? $" Remove and commit these paths: {FormatSourceCleanupPaths(context.SourceCleanupPaths)}."
+                : " Correct the test-impact mapping or provide an explicit focused-test selection before retrying.";
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_MAPPING_RETRY_DID_NOT_CONVERGE: automatic {requiredRole} retry left candidate " +
+                $"{context.CandidateSha} with the same mapping-needed disposition; no further paid retry was started.{remedy}");
+            return true;
+        }
+
+        var suppressedCount = 1 + goal.Timeline.Count(evt =>
+            evt.Kind == ProgressKind.PreReviewMappingEscalationSuppressed &&
+            evt.TaskId == reviewerTask.Id &&
+            evt.Message.Contains($"candidate_sha={context.CandidateSha}", StringComparison.OrdinalIgnoreCase) &&
+            evt.Message.Contains(
+                $"disposition={PreReviewEvidenceDisposition.MappingNeedsInput}",
+                StringComparison.Ordinal));
+        _recordPreReviewMappingEscalationSuppressed(
+            goal.Id,
+            reviewerTask.Id,
+            context.CandidateSha!,
+            suppressedCount);
+        result = MakeResult(
+            goal.Id.Value,
+            goalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Held(
+                fromState,
+                $"PRE_REVIEW_MAPPING_NEEDS_INPUT repeat suppressed for candidate {context.CandidateSha}; " +
+                $"suppressed_count={suppressedCount}."));
+        return true;
+    }
+
+    private bool TryRoutePreReviewEvidenceToDeveloper(
+        Goal goal,
+        TaskSpec reviewerTask,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        string reason,
+        out ConductorAdvanceResult result)
+    {
+        var developerTask = TasksBefore(goal, reviewerTask)
+            .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
+        if (developerTask is null)
+        {
+            result = default!;
+            return false;
+        }
+
+        _retryTask(
+            goal.Id,
+            developerTask.Id,
+            reason,
+            RetryRoundKind.Mechanical,
+            RetryCause.NewSourceFinding);
+        var refreshedGoal = GetCurrentGoal(goal);
+        var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
+        result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);
         return true;
     }
 
@@ -4807,31 +5004,53 @@ internal sealed partial class ConductorDriver
             goal.Id,
             testerTask.Id,
             reason,
-            RetryRoundKind.Mechanical);
-        var retryState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
-        result = ExecuteDispatchAndStart(goal, goalPrefix, policy, retryState);
+            RetryRoundKind.Mechanical,
+            RetryCause.NewTestFinding);
+        var refreshedGoal = GetCurrentGoal(goal);
+        var retryState = GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal));
+        result = ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, retryState);
         return true;
     }
 
-    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
-        string? candidateSha,
-        IReadOnlyList<string> changedFiles)
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory)
     {
-        var plan = RepositoryTestImpactPlanner.Plan(changedFiles);
+        var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        var candidateSha = worktreePath is null ? null : TryResolveGitHead(worktreePath);
+        var changedFiles = worktreePath is null
+            ? Array.Empty<string>()
+            : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+        return BuildPreReviewEvidenceContext(
+            candidateSha,
+            changedFiles,
+            worktreePath);
+    }
+
+    internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) =>
+        _getPreReviewEvidenceContext(goal);
+
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
+        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null)
+    {
+        var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
+        var plan = string.IsNullOrWhiteSpace(repositoryRoot)
+            ? RepositoryTestImpactPlanner.Plan(changeSummary)
+            : RepositoryTestImpactPlanner.Plan(changeSummary, repositoryRoot);
         if (!plan.RequiresBuild &&
             plan.Checks.Count > 0 &&
             plan.Checks.All(check => check.Command.Count == 0))
         {
-            var generatedArtifactsBlock = plan.Summary.Contains(
-                "Generated artifacts",
-                StringComparison.OrdinalIgnoreCase);
+            var generatedArtifactsBlock = changeSummary.HasGeneratedArtifacts;
             return new PreReviewEvidenceContext(
                 candidateSha,
                 [],
                 null,
                 plan.Summary,
                 NoApplicableTests: !generatedArtifactsBlock,
-                MappingNeedsInput: generatedArtifactsBlock);
+                MappingNeedsInput: generatedArtifactsBlock,
+                SourceCleanupPaths: changeSummary.Files
+                    .Where(file => file.IsGeneratedArtifact)
+                    .Select(file => file.Path)
+                    .ToArray());
         }
 
         var focusedChecks = plan.Checks
@@ -4907,64 +5126,6 @@ internal sealed partial class ConductorDriver
             MappingNeedsInput: requests.Count == 0);
     }
 
-    private PreReviewEvidenceReceipt RecordPreReviewReceipt(
-        Goal goal,
-        TaskSpec reviewerTask,
-        PreReviewEvidenceContext context,
-        int round,
-        PreReviewEvidenceDisposition disposition,
-        IReadOnlyList<AcceptanceCheckResult> checks,
-        IReadOnlyList<string> failingTests,
-        string? evidencePointer)
-    {
-        var receipt = new PreReviewEvidenceReceipt(
-            goal.Id.Value,
-            round,
-            context.CandidateSha!,
-            context.SelectedFocusedTests,
-            disposition,
-            checks.Count(check => check.Passed),
-            checks.Count(check => !check.Passed),
-            checks.Select((check, index) => new PreReviewEvidenceCheckReceipt(
-                check.Name,
-                ResolvePreReviewReceiptTarget(context, index, checks.Count),
-                check.Passed,
-                check.ExitCode,
-                check.ArtifactsPath,
-                check.TestResultPaths)).ToArray(),
-            failingTests,
-            context.MappingReason,
-            evidencePointer,
-            DateTimeOffset.UtcNow);
-        _recordPreReviewEvidence(goal.Id, reviewerTask.Id, receipt);
-        return receipt;
-    }
-
-    private static bool TryValidatePreReviewEvidenceCoverage(
-        PreReviewEvidenceContext context,
-        FocusedEvidenceRunResult evidence,
-        out string failure)
-    {
-        failure = string.Empty;
-        if (evidence.Checks.Count == context.SelectedFocusedTests.Count)
-        {
-            return true;
-        }
-
-        failure = $"cardinality mismatch: planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
-        return false;
-    }
-
-    private static string ResolvePreReviewReceiptTarget(
-        PreReviewEvidenceContext context,
-        int index,
-        int checkCount)
-    {
-        return checkCount == context.SelectedFocusedTests.Count
-            ? context.SelectedFocusedTests[index]
-            : "(unmapped: check/command cardinality mismatch)";
-    }
-
     private static string BuildAddTesterCommand(string goalPrefix, string candidateSha) =>
         $"add-task --goal {goalPrefix} Tester Resolve pre-review mapping for candidate {candidateSha} --before-role Reviewer";
 
@@ -5038,7 +5199,23 @@ internal sealed partial class ConductorDriver
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
         {
             PhaseTimingSink?.Invoke(
-                $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
+                $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)Math.Ceiling(elapsed.TotalMilliseconds)} {detail}");
+        }
+    }
+
+    private void EmitPhaseTiming(string phase, Goal goal, DispatchStartOutcome outcome, TimeSpan elapsed, string detail)
+    {
+        var dispatched = outcome.DispatchedTasks ?? [];
+        if (dispatched.Count == 0)
+        {
+            EmitGoalPhaseTiming(phase, goal, elapsed, detail);
+            return;
+        }
+
+        foreach (var task in dispatched)
+        {
+            PhaseTimingSink?.Invoke(
+                $"phase={phase} goal={goal.Id.Value[..8]} task={task.TaskId.Value[..8]} role={task.Role} elapsed_ms={(long)Math.Ceiling(elapsed.TotalMilliseconds)} {detail}");
         }
     }
 
@@ -5196,20 +5373,41 @@ internal sealed partial class ConductorDriver
             task.RequiredRole == AgentRole.Developer &&
             task.Status == WorkTaskStatus.Assigned &&
             !goal.Tasks.Any(candidate =>
-                GoalManagementCommandService.IsEarlierSdlcStageOf(
+                DispatchReadinessRules.IsEarlierSdlcStageOf(
                     candidate.RequiredRole,
                     task.RequiredRole) &&
                 candidate.Status != WorkTaskStatus.Completed));
 
-    private static string FormatNoRecordedDispatchStartedReason(ProcessBatchPlan plan)
+    private static string FormatPreparedDispatchWithoutStart(SubscriptionStartResult result)
     {
-        var skippedReason = plan.Items
-            .Where(item => item.Status == ProcessBatchItemStatus.Skipped)
-            .Select(item => item.Reason)
-            .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason));
-        return skippedReason is null
-            ? "Dispatch recorded but no process was startable."
-            : $"Dispatch recorded but no process was startable: {skippedReason}";
+        const int maxPreparedDiagnostics = 8;
+        var preparedState = result.Dispatches
+            .Take(maxPreparedDiagnostics)
+            .Select(dispatch =>
+            {
+                var task = dispatch.Task;
+                var admission = task.RetryAdmissionHistory.LastOrDefault(receipt =>
+                    receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt);
+                var admissionState = admission is null
+                    ? "none"
+                    : $"{admission.Decision}/{admission.Route}/{admission.Cause}";
+                return $"{task.Id.Value[..8]}:status={task.Status}:admission={admissionState}";
+            })
+            .ToArray();
+        var omitted = result.Dispatches.Count - preparedState.Length;
+        var omittedSuffix = omitted > 0 ? $",...(+{omitted})" : string.Empty;
+        return $"Prepared {result.Dispatches.Count} dispatch(es) but no process was startable; " +
+               $"{DispatchStartRefusalReasonBuilder.Build(result.Processes, result.Dispatches)}; " +
+               $"prepared=[{string.Join(',', preparedState)}{omittedSuffix}]";
+    }
+
+    private static string FormatSourceCleanupPaths(IReadOnlyList<string>? paths)
+    {
+        const int maxPaths = 20;
+        var available = paths ?? [];
+        var listed = string.Join(", ", available.Take(maxPaths).Select(path => $"'{path}'"));
+        var omitted = available.Count - Math.Min(available.Count, maxPaths);
+        return omitted > 0 ? $"[{listed}, ... (+{omitted})]" : $"[{listed}]";
     }
 
     // Turns an empty subscription dispatch batch into an ACTIONABLE escalation. When the parallel
@@ -5281,7 +5479,7 @@ internal sealed partial class ConductorDriver
         }
 
         var predecessor = goal.Tasks.FirstOrDefault(candidate =>
-            GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+            DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
             candidate.Status != WorkTaskStatus.Completed);
         if (predecessor is not null)
         {
@@ -5305,7 +5503,7 @@ internal sealed partial class ConductorDriver
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
         {
             var predecessor = goal.Tasks.FirstOrDefault(candidate =>
-                GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+                DispatchReadinessRules.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
                 candidate.Status == WorkTaskStatus.Cancelled);
             if (predecessor is null)
             {
@@ -5485,6 +5683,7 @@ internal sealed partial class ConductorDriver
 
     private ReconcileAcceptanceLeaseState? TryGetActiveEvidenceMutationLease(Goal goal)
     {
+        _tryRecoverTerminalDeveloperIntegrationLease?.Invoke(goal);
         var lease = _getEvidenceMutationLease(goal);
         return lease is not null && lease.ExpiresAtUtc > _utcNow()
             ? lease
@@ -5521,29 +5720,6 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private ConductorAdvanceResult? RebaseBeforeAcceptance(
-        Goal goal,
-        string goalPrefix,
-        ConductorAutonomyPolicy policy,
-        bool applySideEffects,
-        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
-    {
-        // Gate 1: rebase the goal branch onto current main FIRST, so every later gate (acceptance,
-        // criteria, landing) operates on the ACTUAL integrated result that will land — not the
-        // pre-integration branch. A goal can pass its own tests yet break once integrated with changes
-        // that landed meanwhile; verifying the un-rebased branch and only rebasing at the end could
-        // land such a textually-clean-but-semantically-broken integration. Rebasing first also avoids
-        // a wasted (expensive) acceptance run when the branch cannot integrate at all.
-        return RebaseOrRetire(goal, goalPrefix, policy, "pre-landing", applySideEffects, out earlyOutcome);
-    }
-
-    private ConductorAdvanceResult? RebaseBeforeMerge(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
-    {
-        // In a parallel acceptance batch, a sibling goal may advance main after this goal's
-        // acceptance finished. Re-check the branch immediately before the serialized merge.
-        return RebaseOrRetire(goal, goalPrefix, policy, "pre-merge", applySideEffects: true, out _);
-    }
-
     internal LandingEscalationRecheckResult RecheckPreLandingRebaseConflict(Goal goal)
         => _recheckPreLandingRebaseConflict(goal);
 
@@ -5553,10 +5729,12 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         string phase,
         bool applySideEffects,
-        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome)
+        out ConductorParallelAcceptanceEarlyOutcome? earlyOutcome,
+        out GoalWorktreeRebaseStatus rebaseStatus)
     {
         earlyOutcome = null;
         var rebase = _rebaseOntoMain(goal);
+        rebaseStatus = rebase.Status;
 
         // No retry here, deliberately. An earlier version of this method retried a non-conflict failure once,
         // on the theory that those failures were transient races against main advancing. That theory was
@@ -5596,19 +5774,39 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        if (acceptance.RequiredUnmetCriteria.Any(check =>
-            string.Equals(
-                check.FailureClassification,
-                AcceptanceFailureClassifications.GateEnvironmentInterference,
-                StringComparison.Ordinal)))
+        // Census the failing tests at the handler's single entry so every gate completion is recorded,
+        // including the apparatus and unattributable early returns below. Lazy keeps the changed-path
+        // git call at exactly one per advance and off gate completions that never need it.
+        var landingFileScopes = new Lazy<IReadOnlyList<string>>(() => _getLandingFileScopes(goal));
+        var apparatusRedReading = _apparatusRedGate?.RecordGateCompletion(goal, acceptance, landingFileScopes);
+        if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
+            var failedChecks = acceptance.FailedChecks is { Count: > 0 }
+                ? acceptance.FailedChecks
+                : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+            var observedHeads = _resolveAcceptanceHeads(goal);
+            var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
+            var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
+            _recordAcceptanceFailure(
+                goal,
+                failedChecks,
+                branchHeadSha,
+                mainHeadSha,
+                acceptance.CheckAttributions,
+                acceptance.BaselineAttestation);
+            var reason =
+                $"Acceptance gate apparatus/environmental failure recorded for unchanged candidate " +
+                $"{FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}. Acceptance will not re-run until " +
+                "the candidate or main HEAD changes, or an operator confirms acceptance-retry; no worker was reopened.";
+            RecordEscalation(goal, GoalLifecycleState.Verified, reason);
             return MakeResult(
                 goal.Id.Value,
                 goalPrefix,
                 policy,
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
-                    "Acceptance gate environmental interference; re-gate on the next conduct tick without dispatching a worker."));
+                    reason,
+                    StableIdentity: $"acceptance-apparatus:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}"));
         }
 
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
@@ -5635,12 +5833,74 @@ internal sealed partial class ConductorDriver
 
         if (acceptance.Passed)
         {
+            goal = GetCurrentGoal(goal);
             _clearAcceptanceFailure(goal);
+            var evidenceCandidateSha = acceptance.BranchHeadSha ?? _resolveAcceptanceHeads(goal).BranchHeadSha;
+            var evidenceHold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, evidenceCandidateSha, _cohortKernel ?? _conductorTickKernel);
+            if (evidenceHold is not null)
+            {
+                return MakeResult(goal.Id.Value, goalPrefix, policy, evidenceHold);
+            }
         }
 
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
-            var criteria = FormatUnmetCriteria(acceptance.RequiredUnmetCriteria);
+            var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
+            if (retryDisposition.ActionableCriteria.Count == 0)
+            {
+                var observedHeads = _resolveAcceptanceHeads(goal);
+                var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
+                var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
+                var failedChecks = acceptance.FailedChecks is { Count: > 0 }
+                    ? acceptance.FailedChecks
+                    : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+                _recordAcceptanceFailure(
+                    goal,
+                    failedChecks,
+                    branchHeadSha,
+                    mainHeadSha,
+                    acceptance.CheckAttributions,
+                    acceptance.BaselineAttestation);
+                var excludedSummary = string.Join(
+                    ", ",
+                    retryDisposition.ExcludedFailures.Select(FormatExcludedAcceptanceFailure));
+                var reason =
+                    $"Acceptance gate failures are all outside this goal's attributable scope: {excludedSummary}. " +
+                    "The candidate remains held at Verified for operator/main-red routing; no worker was reopened.";
+                RecordEscalation(goal, GoalLifecycleState.Verified, reason);
+                return MakeResult(
+                    goal.Id.Value,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        reason,
+                        StableIdentity: BuildUnattributableAcceptanceIdentity(
+                            branchHeadSha,
+                            mainHeadSha,
+                            retryDisposition.ExcludedFailures)));
+            }
+
+            if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
+            {
+                return apparatusRed;
+            }
+
+            if (retryDisposition.ExcludedFailures.Count > 0)
+            {
+                var observedHeads = _resolveAcceptanceHeads(goal);
+                _recordAcceptanceFailure(
+                    goal,
+                    acceptance.FailedChecks is { Count: > 0 }
+                        ? acceptance.FailedChecks
+                        : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray(),
+                    acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha,
+                    acceptance.MainHeadSha ?? observedHeads.MainHeadSha,
+                    acceptance.CheckAttributions,
+                    acceptance.BaselineAttestation);
+            }
+
+            var criteria = FormatUnmetCriteria(retryDisposition.ActionableCriteria);
             var task = SelectTaskForCriterionRetry(goal);
             if (task is null)
             {
@@ -5650,14 +5910,14 @@ internal sealed partial class ConductorDriver
 
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
-                var retryFeedback = FormatCriterionRetryFeedback(acceptance.RequiredUnmetCriteria);
+                var retryFeedback = FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria);
                 var retryCount = _recordCriterionRetryFeedback(
                     goal.Id,
                     task.Id,
                     retryFeedback);
                 var retryMessage = $"Acceptance criteria unmet; retrying task with feedback (attempt {retryCount}/{policy.MaxCriterionRetries}): " +
                     string.Join(Environment.NewLine, retryFeedback);
-                _retryTask(goal.Id, task.Id, retryMessage, null);
+                _retryTask(goal.Id, task.Id, retryMessage, null, RetryCause.CriterionEvidenceOwnerMismatch);
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }
@@ -5672,7 +5932,6 @@ internal sealed partial class ConductorDriver
         }
 
         // Gate 3: land via integration branch (the branch is already rebased onto main by Gate 1).
-        var landingFileScopes = _getLandingFileScopes(goal);
         var mutationBlockReason = LandingMutationBlocker?.Invoke();
         if (!string.IsNullOrWhiteSpace(mutationBlockReason))
         {
@@ -5714,7 +5973,7 @@ internal sealed partial class ConductorDriver
             // Main has already advanced, so losing this receipt would permanently miss the relaunch.
             SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                 goal.Id.Value,
-                landResult.ChangedFiles ?? landingFileScopes,
+                landResult.ChangedFiles ?? landingFileScopes.Value,
                 landResult.MergeCommitSha));
 
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
@@ -5762,6 +6021,13 @@ internal sealed partial class ConductorDriver
         GoalLifecycleState state,
         string reason)
     {
+        RecordEscalation(goal, state, reason);
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Escalated(state, reason));
+    }
+
+    private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason)
+    {
         var escalationClock = Stopwatch.StartNew();
         var sinkResult = LandingEscalationWriteResult.Error;
         try
@@ -5779,8 +6045,6 @@ internal sealed partial class ConductorDriver
                 $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome} " +
                 $"channel_ms={sinkResult.ChannelElapsedMilliseconds} channel={sinkResult.ChannelOutcome}");
         }
-        return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Escalated(state, reason));
     }
 
     private static ConductorAdvanceResult MakeResult(
@@ -5866,6 +6130,95 @@ internal sealed partial class ConductorDriver
             ? $"pid={holder.ProcessId} name={holder.ProcessName}"
             : $"pid={holder.ProcessId} name={holder.ProcessName} command=\"{holder.CommandLine}\"";
 
+    private static AcceptanceRetryDisposition ClassifyAcceptanceRetry(
+        IReadOnlyList<AcceptanceCheckResult> criteria)
+    {
+        var actionable = new List<AcceptanceCheckResult>();
+        var excluded = new List<ExcludedAcceptanceFailure>();
+        foreach (var criterion in criteria)
+        {
+            var failingIdentities = criterion.FailingTestIdentities?
+                .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (failingIdentities is not { Length: > 0 })
+            {
+                // Check-level same-name co-failure is not proof that this exact failure existed at the
+                // merge base. Identity-less failures therefore remain actionable.
+                actionable.Add(criterion);
+                continue;
+            }
+
+            var actionableIdentities = new List<string>();
+            if (criterion.FailingTestAttributions is { Count: > 0 } testAttributions &&
+                failingIdentities is { Length: > 0 })
+            {
+                var byIdentity = testAttributions
+                    .GroupBy(attribution => attribution.TestIdentity, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                foreach (var identity in failingIdentities)
+                {
+                    if (byIdentity.TryGetValue(identity, out var attribution) &&
+                        attribution.Origin == AcceptanceTestFailureOrigin.Inherited)
+                    {
+                        excluded.Add(new ExcludedAcceptanceFailure(
+                            identity,
+                            AcceptanceRetryExclusionKind.Inherited));
+                    }
+                    else
+                    {
+                        actionableIdentities.Add(identity);
+                    }
+                }
+            }
+            else
+            {
+                // Only per-identity merge-base attribution can suppress a retry. Check-level baseline
+                // co-failure does not establish that these identities are inherited.
+                actionableIdentities.AddRange(failingIdentities);
+            }
+
+            if (actionableIdentities.Count > 0)
+            {
+                actionable.Add(criterion with { FailingTestIdentities = actionableIdentities });
+            }
+        }
+
+        return new AcceptanceRetryDisposition(actionable, excluded);
+    }
+
+    private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
+        $"{failure.Identity} (pre-existing/main-red)";
+
+    private static string BuildUnattributableAcceptanceIdentity(
+        string? branchHeadSha,
+        string? mainHeadSha,
+        IReadOnlyList<ExcludedAcceptanceFailure> excludedFailures)
+    {
+        var fingerprintSource = string.Join(
+            "|",
+            excludedFailures
+                .OrderBy(failure => failure.Identity, StringComparer.Ordinal)
+                .ThenBy(failure => failure.Kind)
+                .Select(failure => $"{failure.Kind}:{failure.Identity}"));
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource))).ToLowerInvariant()[..16];
+        return $"acceptance-unattributable:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:{fingerprint}";
+    }
+
+    private sealed record AcceptanceRetryDisposition(
+        IReadOnlyList<AcceptanceCheckResult> ActionableCriteria,
+        IReadOnlyList<ExcludedAcceptanceFailure> ExcludedFailures);
+
+    private sealed record ExcludedAcceptanceFailure(
+        string Identity,
+        AcceptanceRetryExclusionKind Kind);
+
+    private enum AcceptanceRetryExclusionKind
+    {
+        Inherited
+    }
+
     private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)
     {
         var concreteEvidence = ExtractConcreteRetryEvidence(criteria);
@@ -5891,6 +6244,9 @@ internal sealed partial class ConductorDriver
         foreach (var criterion in criteria.Where(criterion => !criterion.Passed))
         {
             var outputEvidence = ExtractConcreteOutputEvidence(criterion).ToArray();
+            var allowedFailingIdentities = criterion.FailingTestIdentities?.
+                Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .ToHashSet(StringComparer.Ordinal);
             var testResultPaths = criterion.TestResultPaths?
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -5942,8 +6298,26 @@ internal sealed partial class ConductorDriver
                     continue;
                 }
 
+                var attributableFailures = allowedFailingIdentities is null or { Count: 0 }
+                    ? receipt.Failures
+                    : receipt.Failures
+                        .Where(failure => allowedFailingIdentities.Contains(failure.TestName))
+                        .ToArray();
+                if (attributableFailures.Count == 0)
+                {
+                    if (!fallbackAdded)
+                    {
+                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        fallbackAdded = true;
+                    }
+
+                    evidence.Add(
+                        $"detail unavailable: readable TRX for partition \"{criterion.Name}\" contained no attributable non-passing results at {receipt.Path}");
+                    continue;
+                }
+
                 var omittedFailures = 0;
-                foreach (var failure in receipt.Failures)
+                foreach (var failure in attributableFailures)
                 {
                     if (string.IsNullOrWhiteSpace(failure.TestName))
                     {

@@ -11,6 +11,45 @@ using System.Xml.Linq;
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact]
+    public void GoalAcceptanceVerifier_resolves_execution_environments_under_each_constructed_storage_root()
+    {
+        var firstDirectory = CreateTempDirectory();
+        var secondDirectory = CreateTempDirectory();
+        var ambientRoot = CreateTempDirectory();
+        try
+        {
+            var firstRoot = new DotnetBuildStorageRoot(firstDirectory);
+            var secondRoot = new DotnetBuildStorageRoot(secondDirectory);
+            var ambientStorageRoot = new DotnetBuildStorageRoot(ambientRoot);
+            using var ambient = DotnetBuildEnvironmentManagerTests.EnvVarScope.ForVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                ambientRoot);
+            var firstVerifier = new GoalAcceptanceVerifier(firstRoot);
+            var secondVerifier = new GoalAcceptanceVerifier(secondRoot);
+            var firstEnvironment = firstVerifier.ResolveExecutionEnvironment(null, "first", null, null);
+            var secondEnvironment = secondVerifier.ResolveExecutionEnvironment(null, "second", null, null);
+
+            foreach (var path in new[] { firstEnvironment.RootPath, firstEnvironment.ArtifactsPath, firstEnvironment.ExecutionLockPath })
+            {
+                Assert.True(firstRoot.ContainsPath(path));
+                Assert.False(ambientStorageRoot.ContainsPath(path));
+            }
+
+            foreach (var path in new[] { secondEnvironment.RootPath, secondEnvironment.ArtifactsPath, secondEnvironment.ExecutionLockPath })
+            {
+                Assert.True(secondRoot.ContainsPath(path));
+                Assert.False(ambientStorageRoot.ContainsPath(path));
+            }
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(firstDirectory);
+            DeleteDirectoryWithRetry(secondDirectory);
+            DeleteDirectoryWithRetry(ambientRoot);
+        }
+    }
+
+    [Xunit.Fact]
     public void EmitShardTimingProgressRecordsTypedLoadContextAndPreservesExistingFields()
     {
         var progress = new List<AcceptanceGateProgress>();
@@ -18,17 +57,17 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 5);
         using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
             () => new GateLoadContextProbe.HostCpuSample(37.5, 16, 425));
-        using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
         var goalId = new GoalId("12345678123456781234567812345678");
         var elapsed = TimeSpan.FromSeconds(12);
-
         GoalAcceptanceVerifier.EmitShardTimingProgress(
             goalId,
             "shard-complete",
             "Process spawning",
             1,
             elapsed,
-            3);
+            3,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+            progress.Add);
 
         var emitted = Assert.Single(progress);
         Assert.Equal(goalId.Value, emitted.GoalId);
@@ -54,7 +93,6 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 0);
         using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
             () => new GateLoadContextProbe.HostCpuSample(0, 8, 250));
-        using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
 
         GoalAcceptanceVerifier.EmitShardTimingProgress(
             null,
@@ -62,7 +100,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "0-infrastructure-shards",
             0,
             TimeSpan.Zero,
-            0);
+            0,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+            progress.Add);
 
         var emitted = Assert.Single(progress);
         Assert.Equal("shards-complete", emitted.Phase);
@@ -87,7 +127,6 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         using var workerProbe = GateLoadContextProbe.PushInFlightWorkerDispatchProbe(() => 4);
         using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
             () => new GateLoadContextProbe.HostCpuSample(25, 8, 500));
-        using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
 
         var exception = Record.Exception(() => GoalAcceptanceVerifier.EmitShardTimingProgress(
             null,
@@ -95,7 +134,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "Cli",
             0,
             TimeSpan.FromSeconds(4),
-            2));
+            2,
+            DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+            progress.Add));
 
         Assert.Null(exception);
         var emitted = Assert.Single(progress);
@@ -397,8 +438,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_build_lock_after_attribution_and_build_server_shutdown")]
-    public async Task GoalAcceptanceVerifierRetriesBuildLockAfterAttributionAndBuildServerShutdown()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_retries_build_lock_after_attribution_and_scoped_recovery")]
+    public async Task GoalAcceptanceVerifierRetriesBuildLockAfterAttributionAndScopedRecovery()
     {
         var root = CreateManifestWorkspace("""
             {
@@ -412,9 +453,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var lockedPath = Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.App.dll");
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(1, $"Csc error CS2012: Cannot open '{lockedPath}' for writing -- The process cannot access the file because it is being used by another process."),
-            new(0, ""),
             new(0, "Build succeeded.")
         ]);
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
@@ -423,7 +462,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "test");
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(responses.Dequeue());
@@ -432,11 +471,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.Equal(4, calls.Count);
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.Equal("dotnet", calls[1][0]);
-            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.Equal("dotnet", calls[3][0]);
+            Assert.Equal(2, calls.Count);
+            Assert.All(calls, call => Assert.Equal("dotnet", call[0]));
             var check = Assert.Single(result.Checks!);
             Assert.True(check.LockRemediationApplied);
             Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
@@ -462,13 +498,12 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var missingPath = Path.Combine(root, "artifacts", "obj", "apphost.exe");
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(1, $"error MSB3030: Could not copy the file '{missingPath}' because it was not found.")
         ]);
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(responses.Dequeue());
@@ -477,7 +512,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.False(result.Passed);
-            Assert.Equal(2, calls.Count);
+            Assert.Single(calls);
             var check = Assert.Single(result.Checks!);
             Assert.False(check.LockRemediationApplied);
             Assert.Contains("was not found", check.OutputTail, StringComparison.Ordinal);
@@ -509,16 +544,16 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var delayCallsWhileHeld = new List<TimeSpan>();
         var timeProvider = new RecordingTimeProvider();
         var lockReleased = false;
-        var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
-        var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
-        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        var previousWindow = TestOverrides.TransientNoHolderBuildLockWaitWindow;
+        var previousPoll = TestOverrides.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
             "handle64-timeout");
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromMilliseconds(30);
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
+        TestOverrides.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromMilliseconds(30);
+        TestOverrides.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = 1;
 
         try
         {
@@ -532,7 +567,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 }
             };
 
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
@@ -559,11 +594,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.True(result!.Passed);
             Assert.True(result.Retried);
             Assert.Equal(2, buildAttempts);
-            Assert.Equal(4, calls.Count);
+            Assert.Equal(2, calls.Count);
             Assert.NotEmpty(delayCallsWhileHeld);
             Assert.Equal(TimeSpan.FromMilliseconds(10), Assert.Single(delayCallsWhileHeld));
-            Assert.True(calls[0].SequenceEqual(["dotnet", "build-server", "shutdown"]));
-            Assert.True(calls[2].SequenceEqual(["dotnet", "build-server", "shutdown"]));
             var check = Assert.Single(result.Checks!);
             Assert.True(check.LockRemediationApplied);
             Assert.Contains("build artifact lock detected", check.ResultSummary, StringComparison.Ordinal);
@@ -589,7 +622,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var stuckCalls = new List<string[]>();
             var stuckTimeProvider = new RecordingTimeProvider();
             var stuckBuildAttempts = 0;
-            var stuckVerifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var stuckVerifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 stuckCalls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
@@ -613,7 +646,6 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Equal(stuckPath, blocked!.Attribution.Path);
             Assert.Equal(1, stuckBuildAttempts);
             Assert.Single(stuckCalls.Where(call => !call.SequenceEqual(["dotnet", "build-server", "shutdown"])));
-            Assert.Contains(stuckCalls, call => call.SequenceEqual(["dotnet", "build-server", "shutdown"]));
             Assert.Equal(3, stuckTimeProvider.Delays.Count);
             Assert.All(stuckTimeProvider.Delays, delay => Assert.Equal(TimeSpan.FromMilliseconds(10), delay));
             Assert.Contains("LOCK_TRANSIENT_WAIT ", stuckOutput, StringComparison.Ordinal);
@@ -624,9 +656,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
         finally
         {
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            TestOverrides.TransientNoHolderBuildLockWaitWindow = previousWindow;
+            TestOverrides.TransientNoHolderBuildLockPollInterval = previousPoll;
+            TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -647,9 +679,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         Directory.CreateDirectory(Path.GetDirectoryName(lockedPath)!);
         File.WriteAllText(lockedPath, "held");
         using var held = new FileStream(lockedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var previousWindow = GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow;
-        var previousPoll = GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval;
-        var previousMaxCycles = GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles;
+        var previousWindow = TestOverrides.TransientNoHolderBuildLockWaitWindow;
+        var previousPoll = TestOverrides.TransientNoHolderBuildLockPollInterval;
+        var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
         LockAttribution.AttributeForTests = (path, _) =>
         {
             Thread.Sleep(120);
@@ -658,13 +690,13 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
                 "handle64-timeout");
         };
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromMilliseconds(80);
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
-        GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = 1;
+        TestOverrides.TransientNoHolderBuildLockWaitWindow = TimeSpan.FromMilliseconds(80);
+        TestOverrides.TransientNoHolderBuildLockPollInterval = TimeSpan.FromMilliseconds(10);
+        TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = 1;
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
                 {
@@ -692,9 +724,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
         finally
         {
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockWaitWindow = previousWindow;
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockPollInterval = previousPoll;
-            GoalAcceptanceVerifier.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
+            TestOverrides.TransientNoHolderBuildLockWaitWindow = previousWindow;
+            TestOverrides.TransientNoHolderBuildLockPollInterval = previousPoll;
+            TestOverrides.TransientNoHolderBuildLockMaxRetryCycles = previousMaxCycles;
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -723,7 +755,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "test");
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
@@ -753,7 +785,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
             Assert.Contains($"holderPid={Environment.ProcessId}", output, StringComparison.Ordinal);
             Assert.Contains("holderName=\"testhost\"", output, StringComparison.Ordinal);
-            Assert.True(calls.Count >= 3);
+            Assert.NotEmpty(calls);
 
             held.Dispose();
             var result = await verifier.RunAsync(root);
@@ -778,7 +810,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             }
             """);
         var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed."));
@@ -805,10 +837,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             """);
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
-            new(0, ""),
             new(0, "src/ok.cs\nbin/Debug/generated.dll\n")
         ]);
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(responses.Dequeue());
@@ -818,8 +849,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 
         Assert.False(result.Passed);
         Assert.Equal(1, result.ExitCode);
-        Assert.Equal(2, calls.Count);
-        Assert.True(calls[1].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
+        Assert.Single(calls);
+        Assert.True(calls[0].SequenceEqual(["git", "diff", "--name-only", "main...HEAD"]));
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("forbidden changed paths", result.Checks![0].Name);
         Assert.Contains("bin/Debug/generated.dll", result.OutputTail!, StringComparison.Ordinal);
@@ -846,7 +877,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
     {
         var root = CreateTrackedManifestShapeWorkspace();
         var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "non-dotnet check passed"));
@@ -878,7 +909,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
     {
         var root = CreateTrackedManifestShapeWorkspace();
         var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             var failed = args.SequenceEqual(["git", "diff", "--check"]);
@@ -915,7 +946,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var root = CreateTrackedManifestShapeWorkspace();
         SetManifestStructuralCoverage(root, enabled: false);
         var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -946,7 +977,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var root = CreateTrackedManifestShapeWorkspace();
         SetManifestStructuralCoverage(root, enabled: false);
         var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -1037,7 +1068,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             ]
             """);
         var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
         {
             calls.Add(args);
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty));
@@ -1089,7 +1120,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var calls = new List<(string[] Args, TimeSpan Timeout)>();
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, timeout, _) =>
             {
                 calls.Add((args, timeout));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -1098,9 +1129,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.Equal(TimeSpan.FromMinutes(25), calls[0].Timeout);
-            Assert.Equal(TimeSpan.FromMinutes(25), calls[1].Timeout);
+            var call = Assert.Single(calls);
+            Assert.Equal(TimeSpan.FromMinutes(25), call.Timeout);
         }
         finally
         {
@@ -1125,7 +1155,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var calls = new List<(string[] Args, TimeSpan Timeout)>();
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, timeout, _) =>
             {
                 calls.Add((args, timeout));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -1134,10 +1164,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             var result = await verifier.RunAsync(root);
 
             Assert.True(result.Passed);
-            Assert.Equal(2, calls.Count);
-            Assert.Equal(TimeSpan.FromMinutes(7), calls[0].Timeout);
-            Assert.Equal(TimeSpan.FromMinutes(2), calls[1].Timeout);
-            Assert.Equal("custom-check", calls[1].Args[0]);
+            var call = Assert.Single(calls);
+            Assert.Equal(TimeSpan.FromMinutes(2), call.Timeout);
+            Assert.Equal("custom-check", call.Args[0]);
         }
         finally
         {
@@ -1168,7 +1197,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 ---
                 Body only is not enough.
                 """);
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
                 Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty)));
 
             var result = await verifier.RunAsync(
@@ -1303,8 +1332,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Path.Combine(root, "build-slots", "build-0.lock"),
             [],
             "goal-long-name");
-        using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
-            Path.Combine(root, "c012c6fc-pre-review-20260731222420370-2a0f855b951b461ab287ba73dfae1a28"));
+        var attemptPrefix = Path.Combine(root,
+            "c012c6fc-pre-review-20260731222420370-2a0f855b951b461ab287ba73dfae1a28");
 
         // The exact shape that crashed a real gate: a focused-evidence check is named after its whole filter
         // expression, so four target classes produced a 324-character file name. Windows rejected it with
@@ -1317,11 +1346,13 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             "FullyQualifiedName~CliCommandTests.GoalLifecycleCommands";
         const string SiblingCheckName = CrashingCheckName + "|FullyQualifiedName~OneMoreDistinguishingClass";
 
-        var trxPath = GoalAcceptanceVerifier.ResolveTrxPathForTests(CrashingCheckName, environment);
-        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(CrashingCheckName, environment);
-        var siblingTrxPath = GoalAcceptanceVerifier.ResolveTrxPathForTests(SiblingCheckName, environment);
+        var trxPath = GoalAcceptanceVerifier.ResolveTrxPathForTests(CrashingCheckName, environment, attemptPrefix);
+        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+            CrashingCheckName, environment, attemptResultsPrefix: attemptPrefix);
+        var siblingTrxPath = GoalAcceptanceVerifier.ResolveTrxPathForTests(SiblingCheckName, environment, attemptPrefix);
         var siblingHeartbeatPath =
-            GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(SiblingCheckName, environment);
+            GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
+                SiblingCheckName, environment, attemptResultsPrefix: attemptPrefix);
 
         var trxFileName = Path.GetFileName(trxPath);
         var heartbeatFileName = Path.GetFileName(heartbeatPath);
@@ -1348,6 +1379,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 
 public abstract class GoalAcceptanceVerifierTestBase
 {
+    internal GoalAcceptanceVerifierTestOverrides TestOverrides { get; } = new();
+
     protected static void AssertAvailable(GateLoadSample sample, double expected)
     {
         Assert.True(sample.IsAvailable);

@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
@@ -46,6 +45,25 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         Console.WriteLine(normalizedDetail);
         goal = normalizedGoal;
         context.CurrentGoal = normalizedGoal;
+    }
+
+    if (goal.Status == GoalStatus.AcceptanceFailed)
+    {
+        var failedWorktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
+        var failedBranchHead = TryResolveGitHead(context, failedWorktreePath);
+        var failedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
+        if (ClearSupersededAcceptanceFailureForCandidate(
+            context,
+            goal,
+            failedBranchHead,
+            failedMainHead))
+        {
+            goal = context.Kernel.GetGoal(goal.Id);
+            context.CurrentGoal = goal;
+            Console.WriteLine(
+                $"Acceptance history: superseded failure is historical for candidate " +
+                $"{FormatAcceptanceCandidate(failedBranchHead, failedMainHead)}.");
+        }
     }
 
     if (goal.Status != GoalStatus.Verified)
@@ -138,7 +156,9 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         var proposedMergeGuard = AcceptanceMergeGuard.Capture(context.Kernel, goal.Id);
         var preflightGuard = context.PrepareAcceptanceMergeGuard(new AcceptanceMergeGuardPreflightRequest(
             goal.Id,
-            proposedMergeGuard));
+            proposedMergeGuard,
+            testedWorktreeHead,
+            testedMainHead));
         expectedMergeGuard = preflightGuard.CurrentGuard;
         if (preflightGuard.GuardAbort is { } preflightMismatch)
         {
@@ -212,7 +232,17 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                     : SelectGoalBuildPermit(
                         goal.Id,
                         context.StableSlotAcquisitionTimeout,
-                        onSlotWait);
+                        onSlotWait,
+                        context.CleanupHooks.BuildStorageRoot);
+                if (context.CleanupHooks.BuildStorageRoot is { } configuredRoot &&
+                    (!configuredRoot.ContainsPath(stableSlotLease.Environment.RootPath) ||
+                     !configuredRoot.ContainsPath(stableSlotLease.Environment.ArtifactsPath) ||
+                     !configuredRoot.ContainsPath(stableSlotLease.Environment.ExecutionLockPath)))
+                {
+                    stableSlotLease.Dispose();
+                    stableSlotLease = null;
+                    throw new InvalidOperationException("Acceptance build lease is outside the configured build storage namespace.");
+                }
                 stableSlotIndex = stableSlotLease.Environment.BuildPermitIndex ??
                     ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
                     ?? throw new IOException($"Build permit did not identify its pool index: {stableSlotLease.Environment.SlotOwnerToken}");
@@ -256,9 +286,33 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                     "Acceptance entered Verifying while the terminal gate runs.");
                 try
                 {
-                    using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
-                        AppendConductEvent(context, "gate-progress", goal.Id, FormatGateProgressConductEvent(progress)));
-                    verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
+                    var executionOptions = new AcceptanceRunExecutionOptions(
+                        ProgressSink: progress => AppendConductEvent(
+                            context,
+                            "gate-progress",
+                            goal.Id,
+                            FormatGateProgressConductEvent(progress)),
+                        RunId: Environment.GetEnvironmentVariable(
+                            AcceptanceAttemptArtifactCustody.AttemptIdVariable),
+                        ResultsPrefix: Environment.GetEnvironmentVariable(
+                            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable),
+                        LivenessCheckHint: Environment.GetEnvironmentVariable(
+                            AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable));
+                    var executionOwner = AcceptanceExecutionOwners.CreateAttempt(
+                        worktreePath,
+                        goal.Id,
+                        stableSlotIndex,
+                        CancellationToken.None,
+                        executionOptions);
+                    verification = AcceptanceExecutionOwnerLifetime.Run(
+                        executionOwner,
+                        () => context.AcceptanceVerifier.RunOwnedAsync(
+                            worktreePath,
+                            goal.Id,
+                            changedFiles,
+                            stableSlotIndex,
+                            stableSlotLease,
+                            executionOwner).GetAwaiter().GetResult());
                 }
                 catch (AcceptanceInfrastructureDeferredException ex)
                 {
@@ -481,6 +535,16 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         return false;
     }
 
+    var preMergeObligations = context.Kernel.GetGoal(goal.Id)
+        .GetOutstandingCriterionEvidenceObligations(testedWorktreeHead);
+    if (preMergeObligations.Count > 0)
+    {
+        Console.WriteLine(
+            "Acceptance evidence: merge blocked by outstanding criterion evidence: " +
+            string.Join(", ", preMergeObligations.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+        return false;
+    }
+
     var mergeStarted = System.Diagnostics.Stopwatch.StartNew();
     var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
             goal.Id,
@@ -584,15 +648,16 @@ private static void RunPostLandingCanary(
 private static DotnetBuildEnvironmentLease SelectGoalBuildPermit(
     GoalId goalId,
     TimeSpan? timeout,
-    Action<DotnetBuildStableSlotWait>? onWait)
+    Action<DotnetBuildStableSlotWait>? onWait,
+    DotnetBuildStorageRoot? storageRoot)
 {
-    var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance");
+    var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance", storageRoot: storageRoot);
     if (environment.BuildPermitIndex is { } permitIndex &&
-        !DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(permitIndex))
+        !DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(permitIndex, storageRoot))
     {
         onWait?.Invoke(new DotnetBuildStableSlotWait(
             permitIndex,
-            DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(permitIndex)));
+            DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(permitIndex, storageRoot)));
     }
 
     return DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, timeout) switch
@@ -755,6 +820,14 @@ private static bool ClearSupersededAcceptanceFailureForCandidate(
         string.Equals(failure.MainHeadSha, mainHeadSha, StringComparison.OrdinalIgnoreCase))
     {
         return false;
+    }
+
+    if (goal.Status == GoalStatus.AcceptanceFailed)
+    {
+        return context.Kernel.RestoreVerifiedForSupersededAcceptanceFailure(
+            goal.Id,
+            branchHeadSha,
+            mainHeadSha);
     }
 
     context.Kernel.ClearAcceptanceFailure(goal.Id);

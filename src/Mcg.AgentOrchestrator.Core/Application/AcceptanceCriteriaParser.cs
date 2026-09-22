@@ -83,6 +83,19 @@ public static class AcceptanceCriteriaParser
         }
     }
 
+    public static string RemoveDeclaredSection(string objectiveText)
+    {
+        var lines = objectiveText.ReplaceLineEndings("\n").Split('\n');
+        var contentStart = FindAcceptanceSection(lines);
+        if (contentStart < 0)
+            return objectiveText;
+
+        var sectionEnd = FindAcceptanceSectionEnd(lines, contentStart);
+        var retainedLines = lines[..(contentStart - 1)]
+            .Concat(lines[sectionEnd..]);
+        return string.Join('\n', retainedLines).Trim();
+    }
+
     private static int FindAcceptanceSection(string[] lines)
     {
         for (var i = 0; i < lines.Length; i++)
@@ -95,6 +108,17 @@ public static class AcceptanceCriteriaParser
         }
 
         return -1;
+    }
+
+    private static int FindAcceptanceSectionEnd(string[] lines, int contentStart)
+    {
+        for (var i = contentStart; i < lines.Length; i++)
+        {
+            if (IsH2Heading(lines[i]) || ObjectiveTrailerHeadings.Contains(lines[i].Trim()))
+                return i;
+        }
+
+        return lines.Length;
     }
 
     private static bool IsH2Heading(string line)

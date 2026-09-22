@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -110,29 +109,166 @@ internal static class RealWorkerProcessGuard
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static IReadOnlyList<RealWorkerProcessMatch> FindCurrentMatches(out bool commandLineEnumerationAvailable)
+    private static IReadOnlyList<RealWorkerProcessMatch> FindCurrentMatches(out bool commandLineEnumerationAvailable) =>
+        FindCurrentMatches(
+            Environment.ProcessId,
+            ProcessCommandLines.Snapshot(),
+            FindOwnedProcessTempRoots(Environment.ProcessId),
+            out commandLineEnumerationAvailable);
+
+    internal static IReadOnlyList<RealWorkerProcessMatch> FindCurrentMatches(
+        int ownerProcessId,
+        ProcessCommandLineSnapshot processSnapshot,
+        IReadOnlyList<string> ownedProcessTempRoots,
+        out bool commandLineEnumerationAvailable)
     {
-        commandLineEnumerationAvailable = ProcessCommandLines.Read([Environment.ProcessId]).ContainsKey(Environment.ProcessId);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ownerProcessId);
+        ArgumentNullException.ThrowIfNull(processSnapshot);
+        ArgumentNullException.ThrowIfNull(ownedProcessTempRoots);
+
+        var ownerFound = processSnapshot.TryGetRecord(ownerProcessId, out var owner);
+        commandLineEnumerationAvailable =
+            processSnapshot.Failure is null &&
+            ownerFound &&
+            owner.Status == ProcessInspectionStatus.Available &&
+            !string.IsNullOrWhiteSpace(owner.CommandLine);
         if (!commandLineEnumerationAvailable)
         {
             return [];
         }
 
-        int[] pids;
-        try
-        {
-            pids = Process.GetProcesses().Select(process => process.Id).ToArray();
-        }
-        catch
+        var descendantProcessIds = SelectConservativeDescendantProcessIdsForRefusal(
+                ownerProcessId,
+                owner.StartedAt ?? DateTimeOffset.MinValue,
+                processSnapshot.Records)
+            .ToHashSet();
+        return processSnapshot.Records.Values
+            .Where(record =>
+                record.ProcessId != ownerProcessId &&
+                (descendantProcessIds.Contains(record.ProcessId) ||
+                    IsWithinOwnedProcessTempRoot(record.CommandLine, ownedProcessTempRoots)) &&
+                record.Status == ProcessInspectionStatus.Available &&
+                !string.IsNullOrWhiteSpace(record.CommandLine) &&
+                IsScopedToTestTempRoot(record.CommandLine) &&
+                LooksLikeRealWorkerCommandLine(record.CommandLine))
+            .Select(record => new RealWorkerProcessMatch(record.ProcessId, record.CommandLine!))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<int> SelectConservativeDescendantProcessIdsForRefusal(
+        int ownerProcessId,
+        DateTimeOffset ownerEarliestPossibleStart,
+        IReadOnlyDictionary<int, ProcessInspectionRecord> records)
+    {
+        if (!records.ContainsKey(ownerProcessId))
         {
             return [];
         }
 
-        var commandLines = ProcessCommandLines.Snapshot().Read(pids);
-        return commandLines
-            .Where(pair => IsScopedToTestTempRoot(pair.Value) && LooksLikeRealWorkerCommandLine(pair.Value))
-            .Select(pair => new RealWorkerProcessMatch(pair.Key, pair.Value))
-            .ToArray();
+        var childrenByParent = records.Values
+            .Where(record =>
+                record.ProcessId > 0 &&
+                record.ParentProcessId > 0 &&
+                record.ProcessId != ownerProcessId)
+            .GroupBy(record => record.ParentProcessId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var candidates = new List<int>();
+        var visited = new HashSet<int> { ownerProcessId };
+        var queue = new Queue<(int ProcessId, DateTimeOffset EarliestPossibleStart)>();
+        queue.Enqueue((ownerProcessId, ownerEarliestPossibleStart));
+        while (queue.TryDequeue(out var parent))
+        {
+            if (!childrenByParent.TryGetValue(parent.ProcessId, out var children))
+            {
+                continue;
+            }
+
+            foreach (var child in children)
+            {
+                if (!visited.Add(child.ProcessId) ||
+                    child.Status == ProcessInspectionStatus.DeadOrRecycled ||
+                    child.StartedAt is { } childStartedAt &&
+                    childStartedAt < parent.EarliestPossibleStart)
+                {
+                    continue;
+                }
+
+                candidates.Add(child.ProcessId);
+                queue.Enqueue((
+                    child.ProcessId,
+                    child.StartedAt ?? parent.EarliestPossibleStart));
+            }
+        }
+
+        return candidates.OrderBy(processId => processId).ToArray();
+    }
+
+    internal static IReadOnlyList<string> FindOwnedProcessTempRoots(int ownerProcessId)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        var expectedName = $"p{ownerProcessId:x}";
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var variable in new[] { "TMP", "TEMP" })
+        {
+            var value = Environment.GetEnvironmentVariable(variable);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            try
+            {
+                var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(value));
+                if (string.Equals(Path.GetFileName(normalized), expectedName, StringComparison.OrdinalIgnoreCase))
+                {
+                    roots.Add(normalized);
+                }
+            }
+            catch
+            {
+                // An invalid ambient temp path is not an ownership token.
+            }
+        }
+
+        return roots.OrderBy(root => root, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool IsWithinOwnedProcessTempRoot(
+        string? commandLine,
+        IReadOnlyList<string> ownedProcessTempRoots)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return false;
+        }
+
+        foreach (var root in ownedProcessTempRoots)
+        {
+            var searchFrom = 0;
+            while (searchFrom < commandLine.Length)
+            {
+                var index = commandLine.IndexOf(root, searchFrom, StringComparison.OrdinalIgnoreCase);
+                if (index < 0)
+                {
+                    break;
+                }
+
+                var after = index + root.Length;
+                if (after == commandLine.Length ||
+                    commandLine[after] is '\\' or '/' or '"' or '\'' or ' ')
+                {
+                    return true;
+                }
+
+                searchFrom = after;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsScopedToTestTempRoot(string commandLine) =>

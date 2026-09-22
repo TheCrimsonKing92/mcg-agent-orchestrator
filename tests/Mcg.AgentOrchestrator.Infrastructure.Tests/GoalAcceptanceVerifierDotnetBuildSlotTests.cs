@@ -9,14 +9,14 @@ using System.Xml.Linq;
 
 public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
-    private protected static void SetPartitionVerdictKeyHooks(string candidateTreeSha, string mainSha, string verifyingCommitSha)
+    private protected void SetPartitionVerdictKeyHooks(string candidateTreeSha, string mainSha, string verifyingCommitSha)
     {
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => candidateTreeSha;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => mainSha;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => verifyingCommitSha;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => candidateTreeSha;
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => mainSha;
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => verifyingCommitSha;
     }
 
-    private protected static async Task<AcceptanceVerificationResult> RunTwoLaneShardScenarioAsync(
+    private protected async Task<AcceptanceVerificationResult> RunTwoLaneShardScenarioAsync(
         int maxConcurrentShards,
         Func<string[], string, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner,
         string goalId)
@@ -24,7 +24,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         var root = CreateTwoLaneShardManifestWorkspace(maxConcurrentShards);
         try
         {
-            var verifier = new GoalAcceptanceVerifier(runner);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, runner);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             return await verifier.RunAsync(
@@ -223,6 +223,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         {
             startInfo.ArgumentList.Add(argument);
         }
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         foreach (var (name, value) in environmentVariables)
         {
             startInfo.Environment[name] = value;
@@ -287,11 +288,11 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
             : throw new InvalidOperationException($"Expected build-pool path, got '{path}'.");
     }
 
-    private protected static void ResetPartitionVerdictKeyHooks()
+    private protected void ResetPartitionVerdictKeyHooks()
     {
-        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
-        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+        TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+        TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
+        TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
     }
 
     private protected static int CountInfrastructurePartitionTestCalls(IEnumerable<string[]> calls) =>
@@ -303,7 +304,8 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
 
     // A partition shard for Infrastructure.Tests appears as exactly one command per shard, in one of
     // two runner shapes depending on how the check was synthesized:
-    //   * runner=mtp (impact-plan / policy-synthesized checks): the self-contained executable with a
+    //   * runner=mtp (impact-plan / policy-synthesized checks): the managed test assembly through the
+    //     shared dotnet host, with a
     //     translated class filter (--filter-class / --filter-not-class). The preceding `dotnet build`
     //     call carries no class filter and is excluded.
     //   * runner=vstest (manifest-loaded checks that omit an explicit runner): `dotnet test <csproj>`
@@ -319,8 +321,10 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
             args.Contains("--filter"));
 
     private protected static bool IsMtpExecutableCall(string[] args, string projectName) =>
-        args.Length > 0 &&
-        Path.GetFileNameWithoutExtension(args[0]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
+        args.Length > 1 &&
+        args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+        args[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+        Path.GetFileNameWithoutExtension(args[1]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
 
     private protected static void AssertArgumentPair(string[] args, string option, string value) =>
         Assert.True(HasArgumentPair(args, option, value), $"Expected {option} {value}.");
@@ -391,10 +395,14 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
                 new XElement("Results", results),
                 new XElement(
                     "ResultSummary",
+                    new XAttribute("outcome", "Completed"),
                     new XElement(
                         "Counters",
                         new XAttribute("total", Math.Max(1, executedTestCount.Value)),
-                        new XAttribute("executed", executedTestCount.Value)))))
+                        new XAttribute("executed", executedTestCount.Value),
+                        new XAttribute("passed", executedTestCount.Value),
+                        new XAttribute("failed", 0),
+                        new XAttribute("notExecuted", 0)))))
             .Save(destinationPath);
     }
 
@@ -410,7 +418,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
         if (sourcePath is null)
         {
-            File.WriteAllText(destinationPath, "<TestRun />");
+            WriteMtpTrx(args, executedTestCount: 1, ["InjectedRunnerFixture.Passed"]);
         }
         else
         {

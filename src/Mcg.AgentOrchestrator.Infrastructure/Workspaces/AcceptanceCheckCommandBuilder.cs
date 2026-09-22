@@ -70,7 +70,8 @@ internal static class AcceptanceCheckCommandBuilder
         // direct MTP test-executable invocation corrupts the run: every post-landing gate produced an empty
         // <TestRun /> core-tests receipt and failed structural coverage (backlog 8af9b957, 2026-07-25).
         if (arguments.Length == 0 ||
-            !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+            arguments.Length >= 2 && arguments[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
         {
             return arguments;
         }

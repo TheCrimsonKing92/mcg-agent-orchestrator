@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -16,12 +17,13 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     public const string CurrentSchemaVersion = "1";
     private const int GoalMetadataTitleMaxChars = 240;
     private const int MaxOptimisticConcurrencyRetries = 6;
-    private static readonly TimeSpan OutboxProcessingLease = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan OutboxProcessingLease = TimeSpan.FromMinutes(15);
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;
     private readonly Action? _beforeOutboxCommit;
     private readonly StateDbConnectionProfile _connectionProfile;
+    private readonly ConcurrentDictionary<TerminalMetadataCacheKey, Lazy<TerminalGoalMetadataValues>> _terminalMetadataCache = new();
     private static readonly AsyncLocal<string?> CurrentWriteOperationTag = new();
     private static readonly string[] CoreSchemaTableNames =
     [
@@ -705,7 +707,19 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                                 request.Current.Id,
                                 GoalSnapshotSaveDisposition.Saved,
                                 state.Goal,
-                                "stored version matched tick baseline")));
+                                "stored version matched tick baseline",
+                                state.HumanInputRequests)));
+                    }
+
+                    if (request.RejectConflict)
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
+                            (false, null, new GoalSnapshotSaveResult(
+                                request.Current.Id,
+                                GoalSnapshotSaveDisposition.Skipped,
+                                storedSnapshot,
+                                "stored version advanced during critical dispatch checkpoint; rejected stale tick snapshot",
+                                storedState!.HumanInputRequests)));
                     }
 
                     if (!TryMergeGoalSnapshots(request.Baseline, storedSnapshot, request.Current, out var merged, out var reason))
@@ -715,7 +729,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                                 request.Current.Id,
                                 GoalSnapshotSaveDisposition.Skipped,
                                 storedSnapshot,
-                                reason)));
+                                reason,
+                                storedState!.HumanInputRequests)));
                     }
 
                     var normalized = NormalizeStoredVerificationStatus(merged, out var normalizedReason);
@@ -728,7 +743,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                             request.Current.Id,
                             GoalSnapshotSaveDisposition.Merged,
                             mergedState.Goal,
-                            resultReason)));
+                            resultReason,
+                            mergedState.HumanInputRequests)));
                 },
                 cancellationToken);
             results.Add(result);
@@ -1478,6 +1494,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 status,
                 objective,
                 updated_at,
+                (
+                    SELECT json_extract(evt.value, '$.OccurredAt')
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
+                    ORDER BY CAST(evt.key AS INTEGER) ASC
+                    LIMIT 1
+                ) AS created_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
@@ -1491,7 +1513,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                Condition: reader.IsDBNull(4) ? null : reader.GetString(4)));
+                CreatedAt: reader.IsDBNull(4)
+                    ? null
+                    : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+                Condition: reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
 
         return results;
@@ -1503,52 +1528,126 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         var results = new List<GoalSummary>();
 
         await using var cmd = conn.CreateCommand();
+        // EXPLAIN QUERY PLAN retains one ordered goals scan with correlated JSON virtual tables;
+        // keeping those tables beneath lazy CASE expressions avoids a second status-index scan and
+        // preserves row order. SQLite evaluates CASE arms on demand, so terminal rows never invoke
+        // json_each (covered by the malformed-JSON sentinel fact).
+        var nonTerminal = ConductLoopGoalStatus.SqlNonTerminalPredicate("status");
         cmd.CommandText = $"""
             SELECT
                 id,
                 status,
                 {GoalMetadataTitleSql()},
                 updated_at,
-                (
+                CASE WHEN {nonTerminal} THEN (
                     SELECT json_extract(task.value, '$.LastDispatch.ResultCommit')
                     FROM json_each(goals.snapshot_json, '$.Tasks') AS task
                     WHERE COALESCE(json_extract(task.value, '$.LastDispatch.ResultCommit'), '') <> ''
                     ORDER BY CAST(task.key AS INTEGER) DESC
                     LIMIT 1
-                ) AS result_commit,
-                (
+                ) END AS result_commit,
+                CASE WHEN {nonTerminal} THEN (
                     SELECT json_extract(evt.value, '$.OccurredAt')
                     FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
                     ORDER BY CAST(evt.key AS INTEGER) ASC
                     LIMIT 1
-                ) AS created_at,
-                (
+                ) END AS created_at,
+                CASE WHEN {nonTerminal} THEN (
                     SELECT json_extract(evt.value, '$.OccurredAt')
                     FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
                     ORDER BY CAST(evt.key AS INTEGER) DESC
                     LIMIT 1
-                ) AS terminated_at,
+                ) END AS terminated_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
             """;
+        _statementObserver?.Invoke(cmd.CommandText);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         while (await reader.ReadAsync(cancellationToken))
         {
+            var id = reader.GetString(0);
+            var status = reader.GetString(1);
+            var updatedAt = reader.GetString(3);
             results.Add(new GoalSummary(
-                reader.GetString(0),
-                reader.GetString(1),
+                id,
+                status,
                 reader.GetString(2),
-                reader.GetString(3),
+                updatedAt,
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
                 reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
-                Condition: reader.IsDBNull(7) ? null : reader.GetString(7)));
+                Condition: reader.IsDBNull(7) ? null : reader.GetString(7),
+                terminalMetadataLoader: ConductLoopGoalStatus.IsTerminal(status)
+                    ? () => LoadTerminalMetadata(id, updatedAt)
+                    : null));
         }
 
         return results;
     }
+
+    private TerminalGoalMetadataValues LoadTerminalMetadata(string id, string updatedAt)
+    {
+        var key = new TerminalMetadataCacheKey(id, updatedAt);
+        return _terminalMetadataCache.GetOrAdd(
+            key,
+            static (cacheKey, repository) => new Lazy<TerminalGoalMetadataValues>(
+                () => repository.ReadTerminalMetadata(cacheKey),
+                LazyThreadSafetyMode.ExecutionAndPublication),
+            this).Value;
+    }
+
+    private TerminalGoalMetadataValues ReadTerminalMetadata(TerminalMetadataCacheKey key)
+    {
+        using var conn = OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT snapshot_json
+            FROM goals
+            WHERE id = $id
+              AND updated_at = $updated_at
+              AND {ConductLoopGoalStatus.SqlTerminalPredicate("status")}
+            """;
+        cmd.Parameters.AddWithValue("$id", key.Id);
+        cmd.Parameters.AddWithValue("$updated_at", key.UpdatedAt);
+        var snapshotJson = cmd.ExecuteScalar() as string ?? throw new InvalidOperationException(
+            $"Terminal goal metadata changed before detail access for goal '{key.Id}'.");
+
+        using var document = JsonDocument.Parse(snapshotJson);
+        var root = document.RootElement;
+        string? resultCommit = null;
+        if (root.TryGetProperty("Tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var task in tasks.EnumerateArray())
+            {
+                if (task.TryGetProperty("LastDispatch", out var dispatch) &&
+                    dispatch.ValueKind == JsonValueKind.Object &&
+                    dispatch.TryGetProperty("ResultCommit", out var commit) &&
+                    !string.IsNullOrEmpty(commit.GetString()))
+                {
+                    resultCommit = commit.GetString();
+                }
+            }
+        }
+
+        DateTimeOffset? createdAt = null;
+        DateTimeOffset? terminatedAt = null;
+        if (root.TryGetProperty("Timeline", out var timeline) &&
+            timeline.ValueKind == JsonValueKind.Array &&
+            timeline.GetArrayLength() > 0)
+        {
+            createdAt = ReadOccurredAt(timeline[0]);
+            terminatedAt = ReadOccurredAt(timeline[timeline.GetArrayLength() - 1]);
+        }
+
+        return new TerminalGoalMetadataValues(resultCommit, createdAt, terminatedAt);
+    }
+
+    private static DateTimeOffset? ReadOccurredAt(JsonElement timelineEvent) =>
+        timelineEvent.TryGetProperty("OccurredAt", out var occurredAt) && occurredAt.ValueKind == JsonValueKind.String
+            ? DateTimeOffset.Parse(occurredAt.GetString()!, CultureInfo.InvariantCulture)
+            : null;
 
     private static string ActiveWithFailedTaskConditionSql() => $"""
         CASE
@@ -1838,6 +1937,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 stored.RefinedSpecVersions,
                 current.RefinedSpecVersions),
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
+            AcceptanceFailureDeferredForRetry = PickStoreOwned(
+                baseline.AcceptanceFailureDeferredForRetry,
+                stored.AcceptanceFailureDeferredForRetry,
+                current.AcceptanceFailureDeferredForRetry),
             AutomaticAcceptanceRetryCount = PickStoreOwned(
                 baseline.AutomaticAcceptanceRetryCount,
                 stored.AutomaticAcceptanceRetryCount,
@@ -1867,7 +1970,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             return snapshot;
         }
 
-        if (snapshot.Status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
+        if (snapshot.Status is GoalStatus.Failed or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded)
         {
             return snapshot;
         }
@@ -1965,9 +2068,18 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             SubscriptionLimitReviewedFailureCount = PickStoreOwned(baseline.SubscriptionLimitReviewedFailureCount, stored.SubscriptionLimitReviewedFailureCount, current.SubscriptionLimitReviewedFailureCount),
             CriterionRetryCount = PickStoreOwned(baseline.CriterionRetryCount, stored.CriterionRetryCount, current.CriterionRetryCount),
             CriterionRetryFeedback = PickStoreOwnedList(baseline.CriterionRetryFeedback, stored.CriterionRetryFeedback, current.CriterionRetryFeedback),
+            AcceptedRetryFeedback = PickStoreOwned(baseline.AcceptedRetryFeedback, stored.AcceptedRetryFeedback, current.AcceptedRetryFeedback),
             EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount),
             LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),
             PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind),
+            PendingRetryCause = PickStoreOwned(baseline.PendingRetryCause, stored.PendingRetryCause, current.PendingRetryCause),
+            RetryAdmissionHistory = MergeRetryAdmissionHistory(
+                stored.RetryAdmissionHistory,
+                current.RetryAdmissionHistory),
+            RetryAdmissionHoldRoute = PickStoreOwned(
+                baseline.RetryAdmissionHoldRoute,
+                stored.RetryAdmissionHoldRoute,
+                current.RetryAdmissionHoldRoute),
             InterruptedDispatchRecoveryId = attemptAuthority is null
                 ? PickTickOwned(baseline.InterruptedDispatchRecoveryId, stored.InterruptedDispatchRecoveryId, current.InterruptedDispatchRecoveryId)
                 : attemptAuthority.InterruptedDispatchRecoveryId,
@@ -1978,6 +2090,28 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             // current-HEAD evidence when an unrelated store mutation advances concurrently.
             PreReviewEvidenceReceipt = PickTickOwned(baseline.PreReviewEvidenceReceipt, stored.PreReviewEvidenceReceipt, current.PreReviewEvidenceReceipt)
         };
+    }
+
+    private static IReadOnlyList<RetryAdmissionReceipt> MergeRetryAdmissionHistory(
+        IReadOnlyList<RetryAdmissionReceipt>? stored,
+        IReadOnlyList<RetryAdmissionReceipt>? current)
+    {
+        var merged = new Dictionary<string, RetryAdmissionReceipt>(StringComparer.Ordinal);
+        foreach (var receipt in stored ?? [])
+            merged[receipt.ReceiptId] = receipt;
+        foreach (var receipt in current ?? [])
+        {
+            if (!merged.TryGetValue(receipt.ReceiptId, out var existing) ||
+                existing.WorkerStartedAt is null && receipt.WorkerStartedAt is not null)
+            {
+                merged[receipt.ReceiptId] = receipt;
+            }
+        }
+
+        return merged.Values
+            .OrderBy(receipt => receipt.RecordedAt)
+            .ThenBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(
@@ -2062,7 +2196,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         if (left is null || right is null)
             return left is null && right is null;
 
-        return left.DispatchedAt == right.DispatchedAt;
+        return left.DispatchedAt == right.DispatchedAt &&
+            (string.IsNullOrWhiteSpace(left.AssignedAgentId) ||
+             string.IsNullOrWhiteSpace(right.AssignedAgentId) ||
+             string.Equals(left.AssignedAgentId, right.AssignedAgentId, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool SameProcessAttempt(TaskProcessSnapshot? left, TaskProcessSnapshot? right)
@@ -2337,7 +2474,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             // load and our CAS write. Treat this as a transient error and retry the full
             // load-mutate-CAS cycle — same retry budget as SQLITE_BUSY.
             if (attempt >= MaxOptimisticConcurrencyRetries)
-                throw new InvalidOperationException(
+                throw new GoalTransactionConflictException(
                     $"TransactGoalAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
             await Task.Delay(versionMismatchDelay, cancellationToken);
@@ -2392,7 +2529,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 return result;
 
             if (attempt >= MaxOptimisticConcurrencyRetries)
-                throw new InvalidOperationException(
+                throw new GoalTransactionConflictException(
                     $"TransactGoalStateAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
             await Task.Delay(versionMismatchDelay, cancellationToken);
@@ -2680,14 +2817,91 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     }
 }
 
-public sealed record GoalSummary(
-    string Id,
-    string Status,
-    string Objective,
-    string UpdatedAt,
-    string? ResultCommit = null,
-    DateTimeOffset? CreatedAt = null,
-    DateTimeOffset? TerminatedAt = null,
-    string? Condition = null);
+internal sealed record TerminalMetadataCacheKey(string Id, string UpdatedAt);
+
+internal sealed record TerminalGoalMetadataValues(
+    string? ResultCommit,
+    DateTimeOffset? CreatedAt,
+    DateTimeOffset? TerminatedAt);
+
+public sealed record GoalSummary
+{
+    private readonly string? _resultCommit;
+    private readonly DateTimeOffset? _createdAt;
+    private readonly DateTimeOffset? _terminatedAt;
+    private readonly Lazy<TerminalGoalMetadataValues>? _terminalMetadata;
+
+    public GoalSummary(
+        string Id,
+        string Status,
+        string Objective,
+        string UpdatedAt,
+        string? ResultCommit = null,
+        DateTimeOffset? CreatedAt = null,
+        DateTimeOffset? TerminatedAt = null,
+        string? Condition = null)
+        : this(Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition, null)
+    {
+    }
+
+    internal GoalSummary(
+        string Id,
+        string Status,
+        string Objective,
+        string UpdatedAt,
+        string? ResultCommit,
+        DateTimeOffset? CreatedAt,
+        DateTimeOffset? TerminatedAt,
+        string? Condition,
+        Func<TerminalGoalMetadataValues>? terminalMetadataLoader)
+    {
+        this.Id = Id;
+        this.Status = Status;
+        this.Objective = Objective;
+        this.UpdatedAt = UpdatedAt;
+        _resultCommit = ResultCommit;
+        _createdAt = CreatedAt;
+        _terminatedAt = TerminatedAt;
+        this.Condition = Condition;
+        _terminalMetadata = terminalMetadataLoader is null
+            ? null
+            : new Lazy<TerminalGoalMetadataValues>(terminalMetadataLoader, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    public string Id { get; init; }
+    public string Status { get; init; }
+    public string Objective { get; init; }
+    public string UpdatedAt { get; init; }
+    public string? ResultCommit => _terminalMetadata?.Value.ResultCommit ?? _resultCommit;
+    public DateTimeOffset? CreatedAt => _terminalMetadata?.Value.CreatedAt ?? _createdAt;
+    public DateTimeOffset? TerminatedAt => _terminalMetadata?.Value.TerminatedAt ?? _terminatedAt;
+    public string? Condition { get; init; }
+
+    public bool Equals(GoalSummary? other) =>
+        other is not null &&
+        Id == other.Id &&
+        Status == other.Status &&
+        Objective == other.Objective &&
+        UpdatedAt == other.UpdatedAt &&
+        ResultCommit == other.ResultCommit &&
+        CreatedAt == other.CreatedAt &&
+        TerminatedAt == other.TerminatedAt &&
+        Condition == other.Condition;
+
+    public override int GetHashCode() => HashCode.Combine(
+        Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition);
+
+    public void Deconstruct(
+        out string Id,
+        out string Status,
+        out string Objective,
+        out string UpdatedAt,
+        out string? ResultCommit,
+        out DateTimeOffset? CreatedAt,
+        out DateTimeOffset? TerminatedAt,
+        out string? Condition) =>
+        (Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition) =
+            (this.Id, this.Status, this.Objective, this.UpdatedAt, this.ResultCommit, this.CreatedAt, this.TerminatedAt, this.Condition);
+}
 
 public sealed record QuarantinedGoalSummary(string Id, string Error);

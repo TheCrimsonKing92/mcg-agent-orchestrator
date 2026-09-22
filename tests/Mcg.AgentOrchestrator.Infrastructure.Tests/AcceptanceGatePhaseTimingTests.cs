@@ -26,10 +26,10 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 time.Advance(TimeSpan.FromSeconds(1));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty));
             }, time);
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
-
-            var result = await verifier.RunAsync(
+            var result = await RunWithProgressAsync(
+                verifier,
                 root,
+                progress.Add,
                 new GoalId("12345678123456781234567812345678"));
 
             Assert.True(result.Passed);
@@ -49,7 +49,6 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             foreach (var phaseName in new[]
             {
                 AcceptanceGatePhaseNames.GatePlan,
-                AcceptanceGatePhaseNames.BuildServerShutdown,
                 AcceptanceGatePhaseNames.PlanConstruction,
                 AcceptanceGatePhaseNames.CheckExecution,
                 AcceptanceGatePhaseNames.PolicySynthesis,
@@ -74,19 +73,14 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
         var root = CreateManifestWorkspace(Manifest);
         var time = new RecordingTimeProvider();
         var progress = new List<AcceptanceGateProgress>();
-        var call = 0;
         try
         {
             var verifier = new GoalAcceptanceVerifier((_, _, _) =>
             {
                 time.Advance(TimeSpan.FromSeconds(1));
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                    call++ == 0 ? 0 : 7,
-                    "deterministic failure"));
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(7, "deterministic failure"));
             }, time);
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
-
-            var result = await verifier.RunAsync(root);
+            var result = await RunWithProgressAsync(verifier, root, progress.Add);
 
             Assert.False(result.Passed);
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
@@ -110,23 +104,24 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             var verifier = new GoalAcceptanceVerifier((_, _, _) =>
                 Task.FromException<GoalAcceptanceVerifier.CommandResult>(
                     new InvalidOperationException("deterministic runner fault")));
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(item =>
+            Action<AcceptanceGateProgress> progressSink = item =>
             {
                 progress.Add(item);
                 throw new InvalidOperationException("observer fault must be swallowed");
-            });
+            };
 
-            var exception = await Assert.ThrowsAsync<AcceptanceGateEngineException>(() => verifier.RunAsync(root));
+            var exception = await Assert.ThrowsAsync<AcceptanceGateEngineException>(() =>
+                RunWithProgressAsync(verifier, root, progressSink));
 
             var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
             Assert.Equal("deterministic runner fault", innerException.Message);
-            Assert.Equal("build-server-shutdown", exception.GatePhase);
-            Assert.Equal("dotnet build-server shutdown", exception.GateTarget);
+            Assert.Equal("check-execution", exception.GatePhase);
+            Assert.Equal("phase seam", exception.GateTarget);
             Assert.Contains("deterministic runner fault", exception.FaultStack, StringComparison.Ordinal);
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
                 Assert.Single(progress, item => item.Phase == "gate-phase-breakdown").PhaseBreakdown);
             Assert.Equal("faulted", breakdown.Outcome);
-            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.BuildServerShutdown);
+            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.CheckExecution);
         }
         finally
         {
@@ -147,20 +142,33 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 cancellation.Cancel();
                 return Task.FromCanceled<GoalAcceptanceVerifier.CommandResult>(token);
             });
-            using var sink = GoalAcceptanceVerifier.PushGateProgressSink(progress.Add);
-
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                verifier.RunAsync(root, cancellationToken: cancellation.Token));
+                RunWithProgressAsync(verifier, root, progress.Add, cancellationToken: cancellation.Token));
 
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
                 Assert.Single(progress, item => item.Phase == "gate-phase-breakdown").PhaseBreakdown);
             Assert.Equal("cancelled", breakdown.Outcome);
             Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.GatePlan);
-            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.BuildServerShutdown);
+            Assert.Contains(breakdown.Phases, phase => phase.Name == AcceptanceGatePhaseNames.CheckExecution);
         }
         finally
         {
             DeleteDirectoryWithRetry(root);
         }
     }
+
+    private static Task<AcceptanceVerificationResult> RunWithProgressAsync(
+        GoalAcceptanceVerifier verifier,
+        string root,
+        Action<AcceptanceGateProgress> progressSink,
+        GoalId? goalId = null,
+        CancellationToken cancellationToken = default) =>
+        verifier.RunOwnedAsync(
+            root,
+            goalId,
+            changedFiles: null,
+            stableSlotIndex: null,
+            stableSlotLease: null,
+            cancellationToken,
+            new AcceptanceRunExecutionOptions(ProgressSink: progressSink));
 }

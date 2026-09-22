@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -5,6 +6,55 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DispatchProcessRecoveryServiceTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-08-22T12:00:00Z");
+    private static readonly DateTimeOffset IdentityStartedAt = DateTimeOffset.Parse("2026-08-22T11:00:00Z");
+
+    [Xunit.Fact]
+    public void DiagnosticReconciliationCreatesOneBoundedCommandLineRead()
+    {
+        var process = ProcessRecord(40, Now.AddMinutes(-1));
+        var task = new TaskSpec(TaskId.New(), "Inspect recovery.", AgentRole.Researcher);
+        var recordProcess = typeof(TaskSpec).GetMethod("RecordProcess", BindingFlags.Instance | BindingFlags.NonPublic);
+        Xunit.Assert.NotNull(recordProcess);
+        recordProcess!.Invoke(task, [process]);
+        var commandLineReads = 0;
+        var writer = new CaptureDiagnosticWriter();
+        var service = CreateService(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            liveProcessIds: new HashSet<int> { process.ProcessId },
+            diagnosticWriter: writer,
+            readProcessIdentity: _ => throw new InvalidOperationException(
+                "diagnostic projection must reuse snapshot identity"));
+        var processSnapshot = new ProcessCommandLineSnapshot(
+            new Dictionary<int, ProcessInspectionRecord>
+            {
+                [process.ProcessId] = new(
+                    process.ProcessId,
+                    1,
+                    "worker",
+                    @"C:\workers\worker.exe",
+                    IdentityStartedAt,
+                    process.Command,
+                    ProcessInspectionStatus.Available)
+            },
+            requestedCount =>
+            {
+                commandLineReads++;
+                Xunit.Assert.Equal(1, requestedCount);
+            });
+
+        service.TryWriteDiagnosticRecord(
+            GoalId.New(),
+            task.Id,
+            task,
+            process,
+            exitCode: 0,
+            standardOutput: string.Empty,
+            standardError: string.Empty,
+            processSnapshot);
+
+        Xunit.Assert.Equal(1, commandLineReads);
+        Xunit.Assert.NotNull(writer.Record);
+    }
 
     [Xunit.Fact]
     public void ValidExitArtifactReturnsCompletedVerdictWithoutRealFilesOrProcesses()
@@ -30,6 +80,109 @@ public sealed class DispatchProcessRecoveryServiceTests
         Xunit.Assert.Equal(
             "Dispatch recovery policy action='mark-stale' evidence='memory/job.exit.txt' reason='test recovery decision'.",
             verdict.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void ValidExitArtifactWithOnlyIdentityLessHeartbeatPidReturnsCompletedVerdict()
+    {
+        var process = ProcessRecord(410, Now.AddMinutes(-5));
+        var unrelatedProcessId = 999;
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [process.ExitCodePath] = "in-memory native exit artifact",
+            [heartbeatPath] = HeartbeatJson(
+                unrelatedProcessId,
+                childProcessId: unrelatedProcessId,
+                lastObservedAt: Now,
+                lastProgressAt: Now,
+                ownedCpuMs: 10,
+                stdoutBytes: 100,
+                stderrBytes: 0,
+                includeIdentity: false)
+        };
+        var killedProcessIds = new List<int>();
+        var service = CreateService(
+            artifacts,
+            liveProcessIds: new HashSet<int> { unrelatedProcessId },
+            killedProcessIds: killedProcessIds,
+            readExitArtifact: _ => new ExitCodeReadResult(
+                ExitCodeReadKind.Valid,
+                0,
+                "origin=Native exit_code=0 reason=completed",
+                DispatchExitArtifactOrigin.Native,
+                "completed"));
+
+        var verdict = Classify(service, process);
+
+        Xunit.Assert.Equal(DispatchProcessVerdictKind.CompletedFromExitFile, verdict.Kind);
+        Xunit.Assert.Equal(0, verdict.ExitCode);
+        Xunit.Assert.Empty(killedProcessIds);
+    }
+
+    [Xunit.Fact]
+    public void LiveTrackedProcessWithoutHeartbeatIdentityStillHoldsNonterminalRecovery()
+    {
+        var process = ProcessRecord(411, Now.AddMinutes(-5));
+        var liveProcessIds = new HashSet<int> { process.ProcessId };
+        var withoutExit = CreateService(new Dictionary<string, string>(StringComparer.Ordinal), liveProcessIds);
+
+        Xunit.Assert.True(withoutExit.AnyTrackedProcessStillRunning(process));
+    }
+
+    [Xunit.Fact]
+    public void LiveTrackedProcessWithUnreadableHeartbeatIdentityDoesNotReapNonterminalDispatch()
+    {
+        var process = ProcessRecord(413, Now.AddMinutes(-5));
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [heartbeatPath] = HeartbeatJson(
+                process.ProcessId,
+                childProcessId: process.ProcessId,
+                lastObservedAt: Now,
+                lastProgressAt: Now,
+                ownedCpuMs: 10,
+                stdoutBytes: 100,
+                stderrBytes: 0,
+                includeIdentity: false)
+        };
+        var killedProcessIds = new List<int>();
+        var service = CreateService(
+            artifacts,
+            liveProcessIds: new HashSet<int> { process.ProcessId },
+            killedProcessIds: killedProcessIds);
+
+        var verdict = Classify(service, process);
+
+        Xunit.Assert.Equal(DispatchProcessVerdictKind.Live, verdict.Kind);
+        Xunit.Assert.Empty(killedProcessIds);
+    }
+
+    [Xunit.Fact]
+    public void ReapingTrackedProcessNeverTargetsHeartbeatOnlyPid()
+    {
+        var process = ProcessRecord(412, Now.AddMinutes(-5));
+        const int unrelatedHeartbeatPid = 999;
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [heartbeatPath] = HeartbeatJson(
+                unrelatedHeartbeatPid,
+                childProcessId: unrelatedHeartbeatPid,
+                lastObservedAt: Now,
+                lastProgressAt: Now,
+                ownedCpuMs: 10,
+                stdoutBytes: 100,
+                stderrBytes: 0,
+                includeIdentity: false)
+        };
+        var killedProcessIds = new List<int>();
+        var service = CreateService(artifacts, killedProcessIds: killedProcessIds);
+
+        service.ReapTrackedProcessJobs(process, waitForExit: false);
+
+        Xunit.Assert.DoesNotContain(unrelatedHeartbeatPid, killedProcessIds);
     }
 
     [Xunit.Fact]
@@ -130,7 +283,9 @@ public sealed class DispatchProcessRecoveryServiceTests
         IReadOnlyDictionary<string, string> artifacts,
         IReadOnlySet<int>? liveProcessIds = null,
         List<int>? killedProcessIds = null,
-        Func<string, ExitCodeReadResult>? readExitArtifact = null)
+        Func<string, ExitCodeReadResult>? readExitArtifact = null,
+        IDispatchDiagnosticWriter? diagnosticWriter = null,
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
     {
         liveProcessIds ??= new HashSet<int>();
         killedProcessIds ??= [];
@@ -154,7 +309,16 @@ public sealed class DispatchProcessRecoveryServiceTests
                 new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing")),
             writeExitArtifact: (_, _, _) => throw new InvalidOperationException("classification must not write an exit artifact"),
             evaluateRecovery: (_, _, _, _) => RecoveryDecision(),
-            diagnosticWriter: new FileDiagnosticWriter());
+            diagnosticWriter: diagnosticWriter ?? new FileDiagnosticWriter(),
+            readProcessIdentity: readProcessIdentity ??
+                (processId => new SpawnProcessIdentity(processId, IdentityStartedAt, @"C:\workers\worker.exe")));
+    }
+
+    private sealed class CaptureDiagnosticWriter : IDispatchDiagnosticWriter
+    {
+        internal DispatchDiagnosticRecord? Record { get; private set; }
+
+        public void WriteRecord(DispatchDiagnosticRecord record) => Record = record;
     }
 
     private static DispatchRecoveryDecision RecoveryDecision() =>
@@ -183,7 +347,8 @@ public sealed class DispatchProcessRecoveryServiceTests
         DateTimeOffset lastProgressAt,
         long ownedCpuMs,
         long stdoutBytes,
-        long stderrBytes) =>
+        long stderrBytes,
+        bool includeIdentity = true) =>
         $$"""
         {
           "pid": {{processId}},
@@ -194,7 +359,10 @@ public sealed class DispatchProcessRecoveryServiceTests
           "stdoutBytes": {{stdoutBytes}},
           "stderrBytes": {{stderrBytes}},
           "ownedCpuMs": {{ownedCpuMs}},
-          "ownedPids": [{{processId}}]
+          "ownedPids": [{{processId}}],
+          "ownedProcessIdentities": {{(includeIdentity
+              ? $"[{{\"processId\":{processId},\"startedAt\":\"{IdentityStartedAt:O}\",\"imagePath\":\"C:\\\\workers\\\\worker.exe\"}}]"
+              : "[]")}}
         }
         """;
 

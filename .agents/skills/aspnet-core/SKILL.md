@@ -17,6 +17,6 @@ Use this skill for web-facing .NET changes in `src/Mcg.AgentOrchestrator.App`.
 
 ## Verification
 
-- Run the narrowest relevant `dotnet test --filter` for changed dashboard/API/rendering behavior.
+- Run `scripts/Invoke-TestSummary.ps1 -Target <test-project> -Filter 'FullyQualifiedName~<class>'` with the narrowest relevant class or method filter; do not run raw `dotnet test`, which launches the generated native test apphost on Windows.
 - For browser behavior, prefer existing dashboard/browser helpers when available.
 - Report the exact test filter and result in `WORKER_RESULT tests`.

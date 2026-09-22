@@ -18,7 +18,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         try
         {
             var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Enqueue(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -81,7 +81,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
             {
                 calls.Add(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -121,8 +121,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_preserve_sequential_mixed_verdicts")]
     public async Task GoalAcceptanceVerifierConcurrentShardsPreserveSequentialMixedVerdicts()
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         SetPartitionVerdictKeyHooks("tree-concurrency", "main-concurrency", "commit-concurrency");
         var alphaStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var remainderFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -133,26 +133,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         var peakShardWorkers = 0;
         try
         {
-            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = parallelBatchChecks.Enqueue;
+            TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = parallelBatchChecks.Enqueue;
             static Task<GoalAcceptanceVerifier.CommandResult> RunSequentialFixedVerdict(
                 string[] args,
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
                 }
 
@@ -170,20 +161,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -221,7 +203,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 }
             }
 
-            static async Task<AcceptanceVerificationResult> RunScenarioAsync(
+            async Task<AcceptanceVerificationResult> RunScenarioAsync(
                 int maxConcurrentShards,
                 Func<string[], string, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner,
                 string goalId)
@@ -271,14 +253,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                     """);
                 try
                 {
-                    var verifier = new GoalAcceptanceVerifier(runner);
+                    var verifier = new GoalAcceptanceVerifier(TestOverrides, runner);
                     using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                         TimeSpan.FromSeconds(2));
-                    return await verifier.RunAsync(
+                    return await verifier.RunOwnedAsync(
                         root,
                         new GoalId(goalId),
+                        changedFiles: null,
                         stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
-                        stableSlotLease: lease);
+                        stableSlotLease: lease,
+                        CancellationToken.None,
+                        new AcceptanceRunExecutionOptions(ProgressSink: timingProgress.Enqueue));
                 }
                 finally
                 {
@@ -288,7 +273,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
 
             using var cpuProbe = GateLoadContextProbe.PushHostCpuProbe(
                 () => throw new InvalidOperationException("deterministic probe failure"));
-            using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(timingProgress.Enqueue);
             var sequential = await RunScenarioAsync(
                 1,
                 RunSequentialFixedVerdict,
@@ -373,9 +357,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
         finally
         {
-            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = null;
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = null;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
         }
     }
@@ -398,8 +382,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_extracted_infrastructure_project_does_not_claim_shard_scheduler_metadata")]
     public async Task GoalAcceptanceVerifierExtractedInfrastructureProjectDoesNotClaimShardSchedulerMetadata()
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         SetPartitionVerdictKeyHooks("tree-extracted", "main-extracted", "commit-extracted");
         var root = CreateManifestWorkspace("""
             {
@@ -459,7 +443,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
             }
             """);
         var acquisitionOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = acquisitionOrder.Enqueue;
+        TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = acquisitionOrder.Enqueue;
         try
         {
             Task<GoalAcceptanceVerifier.CommandResult> RunShardAsync(
@@ -467,38 +451,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
-                {
-                    var artifactsPath = GetArtifactsPath(args);
-                    foreach (var projectName in new[]
-                    {
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic extracted-project fixture",
                         "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                        "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"
-                    })
-                    {
-                        var executable = Path.Combine(
-                            artifactsPath,
-                            "bin",
-                            projectName,
-                            "debug",
-                            projectName + (OperatingSystem.IsWindows() ? ".exe" : string.Empty));
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic extracted-project fixture");
-                    }
-
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
-                }
-
-                if (args.Length > 0 && args[0] == "dotnet")
+                        "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
                 }
 
                 WriteMtpTrx(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunShardAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             var result = await verifier.RunAsync(
@@ -514,9 +480,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
         finally
         {
-            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = null;
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = null;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -525,8 +491,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_exclusive_resource_waiters_do_not_block_disjoint_shards")]
     public async Task GoalAcceptanceVerifierExclusiveResourceWaitersDoNotBlockDisjointShards()
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         SetPartitionVerdictKeyHooks("tree-resources", "main-resources", "commit-resources");
         var root = CreateManifestWorkspace("""
             {
@@ -606,20 +572,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -680,7 +637,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 }
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunShardAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             var result = await verifier.RunAsync(
@@ -697,8 +654,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -707,8 +664,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_cancellation_leaves_pending_resource_keys_unreserved")]
     public async Task GoalAcceptanceVerifierCancellationLeavesPendingResourceKeysUnreserved()
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         SetPartitionVerdictKeyHooks(
             "tree-execution-wait-cancel",
             "main-execution-wait-cancel",
@@ -785,20 +742,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -831,7 +779,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunShardAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             verification = verifier.RunAsync(
@@ -870,8 +818,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                     () => verification.WaitAsync(TimeSpan.FromSeconds(5)));
             }
 
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -883,8 +831,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
     public async Task GoalAcceptanceVerifierReleasesExclusiveResourcesAfterShardFaultOrCancellation(
         bool cancelFirstShard)
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
-        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         SetPartitionVerdictKeyHooks(
             $"tree-release-{cancelFirstShard}",
             $"main-release-{cancelFirstShard}",
@@ -944,20 +892,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -981,7 +920,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunShardAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             var verification = verifier.RunAsync(
@@ -1013,8 +952,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
-            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -1023,7 +962,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_start_longest_estimated_lanes_first")]
     public async Task GoalAcceptanceVerifierConcurrentShardsStartLongestEstimatedLanesFirst()
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
         SetPartitionVerdictKeyHooks("tree-estimates", "main-estimates", "commit-estimates");
         var root = CreateManifestWorkspace("""
             {
@@ -1090,20 +1029,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -1126,7 +1056,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunEstimatedShardAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunEstimatedShardAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             var result = await verifier.RunAsync(
@@ -1153,7 +1083,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
         }
@@ -1409,7 +1339,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         string secondExpectedFilter,
         string? forbiddenChangedPath = null)
     {
-        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
         SetPartitionVerdictKeyHooks($"tree-{hookSuffix}", $"main-{hookSuffix}", $"commit-{hookSuffix}");
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1421,20 +1351,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 string _,
                 CancellationToken _cancellationToken)
             {
-                if (args.Length > 0 && args[0] == "dotnet")
+                if (TryWriteMtpBuildArtifacts(
+                        args,
+                        "deterministic shard fixture",
+                        "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    if (args.Length >= 2 && args[1] == "build")
-                    {
-                        var executable = Path.Combine(
-                            GetArtifactsPath(args),
-                            "bin",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                            "debug",
-                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
-                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
-                        File.WriteAllText(executable, "deterministic shard fixture");
-                    }
-
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
                 }
 
@@ -1462,7 +1383,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                 return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
             }
 
-            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunShardAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
             var result = await verifier.RunAsync(
@@ -1476,9 +1397,43 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         }
         finally
         {
-            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            TestOverrides.ResolveShardCoreBudgetForTests = null;
             ResetPartitionVerdictKeyHooks();
         }
+    }
+
+    private static bool TryWriteMtpBuildArtifacts(
+        string[] arguments,
+        string content,
+        params string[] projectNames)
+    {
+        if (arguments.Length == 0 ||
+            !arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
+            arguments.Length >= 2 && arguments[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (arguments.Length < 2 ||
+            !arguments[1].Equals("build", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var artifactsPath = GetArtifactsPath(arguments);
+        foreach (var projectName in projectNames)
+        {
+            var outputDirectory = Path.Combine(artifactsPath, "bin", projectName, "debug");
+            Directory.CreateDirectory(outputDirectory);
+            File.WriteAllText(
+                Path.Combine(
+                    outputDirectory,
+                    projectName + (OperatingSystem.IsWindows() ? ".exe" : string.Empty)),
+                content);
+            File.WriteAllText(Path.Combine(outputDirectory, $"{projectName}.dll"), content);
+        }
+
+        return true;
     }
 
 }

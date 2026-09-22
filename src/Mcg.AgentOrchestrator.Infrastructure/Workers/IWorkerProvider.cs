@@ -237,6 +237,15 @@ public sealed class WorkerProviderCatalog
                 CanSelfCommit: true,
                 CanSelfVerify: false,
                 SupportsInteractiveSession: false,
+                SupportsPlanMode: true)),
+        new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.HermesAcp, UsesCodexExitFileBehavior: false),
+            "hermes-acp",
+            "Hermes",
+            new WorkerCapabilities(
+                CanSelfCommit: false,
+                CanSelfVerify: false,
+                SupportsInteractiveSession: false,
                 SupportsPlanMode: true))
     ]);
 

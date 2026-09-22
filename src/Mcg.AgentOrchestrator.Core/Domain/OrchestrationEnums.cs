@@ -67,7 +67,13 @@ public enum HumanWaitKind
     ExternalCredential,
     ProviderAuth,
     RecoveryChoice,
-    Other
+    Other,
+    // Prerequisite evidence a Planner could not reach, answered by the operator and required by
+    // later same-goal roles. Serialized as a string, so appending here is persistence-safe.
+    PlannerPrerequisiteEvidence,
+    // Evidence that can only be produced after a candidate exists. It remains an acceptance
+    // obligation but must not pause planning or implementation.
+    ProspectiveAcceptanceEvidence
 }
 
 public enum ProgressKind
@@ -109,7 +115,10 @@ public enum ProgressKind
     HumanInputWorkerResultContradiction = 34,
     FindingEvidenceRequestRecorded = 35,
     FindingEvidenceRunRecorded = 36,
-    GoalBriefRevised = 37
+    GoalBriefRevised = 37,
+    NoProgressRedispatchPrevented = 38,
+    FindingEvidenceSuppressed = 39,
+    TaskRetryFeedbackUpdated = 40
 }
 
 public enum HumanInputAnswerOrigin

@@ -3,14 +3,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal enum AcceptanceQueueDisposition
+public enum AcceptanceQueueDisposition
 {
     Ready,
     Held,
     Blocked
 }
 
-internal sealed record AcceptanceQueuePlan(
+public sealed record AcceptanceQueuePlan(
     AutonomyPolicy Policy,
     IReadOnlyList<AcceptanceQueueItem> Items)
 {
@@ -19,7 +19,7 @@ internal sealed record AcceptanceQueuePlan(
     public int BlockedCount => Items.Count(item => item.Disposition == AcceptanceQueueDisposition.Blocked);
 }
 
-internal sealed record AcceptanceQueueItem(
+public sealed record AcceptanceQueueItem(
     GoalId GoalId,
     string GoalPrefix,
     string Objective,
@@ -34,7 +34,7 @@ internal sealed record AcceptanceQueueItem(
     string Reason,
     string SuggestedCommand);
 
-internal static class AcceptanceQueuePlanner
+public static class AcceptanceQueuePlanner
 {
     public static AcceptanceQueuePlan Build(
         AgentOrchestratorKernel kernel,

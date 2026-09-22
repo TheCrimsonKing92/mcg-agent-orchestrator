@@ -16,11 +16,13 @@
   .\scripts\Invoke-RepoScript.ps1 scripts\Find-OrchestratorLocks.ps1
 
 .EXAMPLE
-  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-IsolatedDotnet.ps1 -GoalPrefix abc12345 test Mcg.AgentOrchestrator.sln --verbosity minimal
+  .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-TestSummary.ps1 -Target .\Mcg.AgentOrchestrator.sln
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$ScriptPath,
+
+    [string]$Pipeline,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [object[]]$ScriptArguments
@@ -35,6 +37,11 @@ $ScriptArguments = if ($null -eq $ScriptArguments -or $ScriptArguments.Count -eq
     @()
 } else {
     @($ScriptArguments | ForEach-Object { [string]$_ })
+}
+if ($PSBoundParameters.ContainsKey('Pipeline')) {
+    # PowerShell otherwise abbreviates --pipeline to the common
+    # -PipelineVariable parameter and removes it before the target script sees it.
+    $ScriptArguments += @('--pipeline', $Pipeline)
 }
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))

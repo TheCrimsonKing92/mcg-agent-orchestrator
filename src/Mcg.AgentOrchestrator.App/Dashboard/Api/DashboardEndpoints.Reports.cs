@@ -11,7 +11,7 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
-        var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(services.Workspace, goal));
+        var lifecycle = GoalLifecycle.ResolveState(goal, DashboardApplicationServices.ReadLifecycleFacts(services.Workspace, goal));
         return Json(DashboardResponseMapper.ToMonitorDto(current.BuildMonitor(goal.Id), lifecycle));
     }
 
@@ -19,7 +19,7 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
-        var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(services.Workspace, goal));
+        var lifecycle = GoalLifecycle.ResolveState(goal, DashboardApplicationServices.ReadLifecycleFacts(services.Workspace, goal));
         var summary = GoalAcceptanceStatusProjector.Build(current, goal, services.Workspace.ExecutionDirectory);
         return Json(DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, summary, lifecycle));
     }
@@ -75,15 +75,15 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services, context.RequestAborted);
         var agents = services.LoadAgentCatalog().Agents;
         var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
-        var goalPrefix = DashboardRequestParser.GetQueryValue(context.Request, "goal");
-        var includeAcknowledged = IsTrue(DashboardRequestParser.GetQueryValue(context.Request, "includeAcknowledged"));
-        var report = OperatorInbox.Build(current, agents, workerProfiles, services.Workspace, goalPrefix, includeAcknowledged);
+        var goalPrefix = DashboardHttpRequestParser.GetQueryValue(context.Request, "goal");
+        var includeAcknowledged = IsTrue(DashboardHttpRequestParser.GetQueryValue(context.Request, "includeAcknowledged"));
+        var report = DashboardApplicationServices.BuildOperatorInbox(current, agents, workerProfiles, services.Workspace, goalPrefix, includeAcknowledged);
         return Json(DashboardResponseMapper.ToOperatorInboxReportDto(report));
     }
 
     private static async Task<IResult> AcknowledgeOperatorInboxItemAsync(HttpContext context, DashboardEndpointServices services)
     {
-        var itemId = DashboardRequestParser.GetQueryValue(context.Request, "itemId");
+        var itemId = DashboardHttpRequestParser.GetQueryValue(context.Request, "itemId");
         if (string.IsNullOrWhiteSpace(itemId))
         {
             throw new ArgumentException("operator inbox acknowledgement requires itemId.");
@@ -92,16 +92,16 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services, context.RequestAborted);
         var agents = services.LoadAgentCatalog().Agents;
         var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
-        var goalPrefix = DashboardRequestParser.GetQueryValue(context.Request, "goal");
-        var note = DashboardRequestParser.GetQueryValue(context.Request, "note");
-        var report = OperatorInbox.Acknowledge(current, agents, workerProfiles, services.Workspace, itemId, note, goalPrefix);
+        var goalPrefix = DashboardHttpRequestParser.GetQueryValue(context.Request, "goal");
+        var note = DashboardHttpRequestParser.GetQueryValue(context.Request, "note");
+        var report = DashboardApplicationServices.AcknowledgeOperatorInbox(current, agents, workerProfiles, services.Workspace, itemId, note, goalPrefix);
         return Json(DashboardResponseMapper.ToOperatorInboxReportDto(report));
     }
 
     private static IResult GetBacklogGoalPlan(HttpContext context, DashboardEndpointServices services)
     {
-        var heading = DashboardRequestParser.GetQueryValue(context.Request, "heading");
-        var maxValue = DashboardRequestParser.GetQueryValue(context.Request, "max");
+        var heading = DashboardHttpRequestParser.GetQueryValue(context.Request, "heading");
+        var maxValue = DashboardHttpRequestParser.GetQueryValue(context.Request, "max");
         var maxItems = string.IsNullOrWhiteSpace(maxValue)
             ? 10
             : int.TryParse(maxValue, out var parsedMax) && parsedMax > 0
@@ -124,8 +124,8 @@ internal static partial class DashboardEndpoints
         HttpContext context,
         DashboardEndpointServices services)
     {
-        var heading = DashboardRequestParser.GetQueryValue(context.Request, "heading");
-        var maxValue = DashboardRequestParser.GetQueryValue(context.Request, "max");
+        var heading = DashboardHttpRequestParser.GetQueryValue(context.Request, "heading");
+        var maxValue = DashboardHttpRequestParser.GetQueryValue(context.Request, "max");
         var maxItems = string.IsNullOrWhiteSpace(maxValue)
             ? 10
             : int.TryParse(maxValue, out var parsedMax) && parsedMax > 0
@@ -142,16 +142,16 @@ internal static partial class DashboardEndpoints
 
         var current = await LoadAsync(services, context.RequestAborted);
         var lifecycleCandidates = intake.Items
-            .SelectMany(item => GoalScopeCollisionAdvisor.SelectComparisonCandidates(current.Goals, item.Id))
+            .SelectMany(item => DashboardApplicationServices.SelectScopeComparisonCandidates(current.Goals, item.Id))
             .DistinctBy(goal => goal.Id)
             .ToArray();
-        var lifecycleObservations = GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservations(
+        var lifecycleObservations = DashboardApplicationServices.ReadScopeCollisionLifecycleObservations(
             services.Workspace,
             lifecycleCandidates);
         var reports = intake.Items
             .Select(item => (
                 Item: item,
-                Report: GoalScopeCollisionAdvisor.Build(
+                Report: DashboardApplicationServices.BuildScopeCollisionReport(
                     [item.SuggestedObjective],
                     current.Goals,
                     item.Id,
@@ -165,7 +165,7 @@ internal static partial class DashboardEndpoints
         var current = await LoadAsync(services, context.RequestAborted);
         var agents = services.LoadAgentCatalog().Agents;
         var workerProfiles = WorkerProfileStore.Load(services.WorkerProfilePath);
-        var confirmed = IsTrue(DashboardRequestParser.GetQueryValue(context.Request, "confirmCostRisk"));
+        var confirmed = IsTrue(DashboardHttpRequestParser.GetQueryValue(context.Request, "confirmCostRisk"));
         var plan = CrossGoalSubscriptionStartPlanner.Build(current, agents, workerProfiles, confirmed);
         var drainPolicy = GoalDrainPolicyStore.LoadOrDefault(services.Workspace);
         return Json(DashboardResponseMapper.ToCrossGoalStartPlanDto(plan, drainPolicy));
@@ -182,7 +182,7 @@ internal static partial class DashboardEndpoints
     {
         var current = await LoadAsync(services, context.RequestAborted);
         var goal = ResolveGoal(context.Request, current);
-        var query = DashboardRequestParser.ParseTaskQueryFromRequest(context.Request);
+        var query = DashboardHttpRequestParser.ParseTaskQueryFromRequest(context.Request);
         var result = current.QueryTasks(goal.Id, query);
         return Json(DashboardResponseMapper.ToTaskQueryDto(goal, result));
     }
@@ -215,7 +215,7 @@ internal static partial class DashboardEndpoints
         AgentOrchestratorKernel kernel,
         string taskId)
     {
-        var goalQuery = DashboardRequestParser.GetQueryValue(request, "goal");
+        var goalQuery = DashboardHttpRequestParser.GetQueryValue(request, "goal");
         if (!string.IsNullOrWhiteSpace(goalQuery))
         {
             var scopedGoal = ResolveGoal(kernel, goalQuery);
@@ -243,7 +243,7 @@ internal static partial class DashboardEndpoints
 
     private static int ParseSourceSurveyMaxFiles(HttpRequest request, DashboardHostArgs hostArgs)
     {
-        var value = DashboardRequestParser.GetQueryValue(request, "max");
+        var value = DashboardHttpRequestParser.GetQueryValue(request, "max");
         if (string.IsNullOrWhiteSpace(value))
         {
             return hostArgs.EnableOperatorControls

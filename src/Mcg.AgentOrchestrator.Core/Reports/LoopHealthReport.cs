@@ -6,6 +6,14 @@ public sealed record JudgeVerdictDistribution(
     int NotMetCount,
     int NoVerdictCount);
 
+public sealed record RetryCauseDistribution(RetryCause Cause, int Count);
+
+public sealed record RoleFirstPassCompletion(
+    AgentRole Role,
+    int PresentTaskCount,
+    int FirstPassCompletedCount,
+    double? CompletionRate);
+
 public sealed record LoopHealthSnapshot(
     int GoalCount,
     int CompletedGoalCount,
@@ -20,7 +28,22 @@ public sealed record LoopHealthSnapshot(
     IReadOnlyList<JudgeVerdictDistribution> JudgeVerdictDistributions,
     double InterJudgeAgreementRate,
     double FalseBlockRate,
-    double FalsePassRate);
+    double FalsePassRate,
+    int PaidRetryDispatchCount = 0,
+    double PaidRetryDispatchesPerLandedGoal = 0,
+    int SameFingerprintPreventedCount = 0,
+    int LegacyObservedSameFingerprintRepeatCount = 0,
+    IReadOnlyList<RetryCauseDistribution>? RetryCauseDistribution = null,
+    double? MedianRetryResolutionHours = null,
+    IReadOnlyList<RoleFirstPassCompletion>? FirstPassCompletionByRole = null,
+    int FiveRoleFirstPassGoalCount = 0,
+    int FiveRoleGoalCount = 0,
+    int RetryFingerprintUnavailableCount = 0,
+    int RetryPaidAuthorityUnknownCount = 0,
+    int RetryCauseUnavailableCount = 0,
+    int EvidenceAttemptCount = 0,
+    long? EvidenceElapsedMilliseconds = null,
+    int EvidenceProviderUsageUnavailableCount = 0);
 
 public static class LoopHealthReport
 {
@@ -91,6 +114,55 @@ public static class LoopHealthReport
         var judgeDistributions = BuildJudgeVerdictDistributions(receiptList);
         var agreementRate = ComputeInterJudgeAgreementRate(receiptList);
         var (falseBlockRate, falsePassRate) = ComputeFalseBlockPassRates(receiptList, goalStatusById);
+        var admissions = allTasks.SelectMany(task => task.RetryAdmissionHistory).ToList();
+        var landedAdmissions = completedGoals
+            .SelectMany(goal => goal.Tasks.SelectMany(task =>
+                task.RetryAdmissionHistory.Select(receipt => (TaskId: task.Id, Receipt: receipt))))
+            .ToList();
+        var paidRetryDispatchCount = landedAdmissions
+            .Where(attempt =>
+                attempt.Receipt.PaidRoute == PaidRouteClassification.Paid &&
+                attempt.Receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+                attempt.Receipt.PriorAttemptAt is not null &&
+                attempt.Receipt.WorkerStartedAt is not null)
+            .Select(attempt => (attempt.TaskId, attempt.Receipt.LinkedDispatchAt))
+            .Distinct()
+            .Count();
+        var paidRetriesPerLandedGoal = completedGoals.Count == 0
+            ? 0.0
+            : (double)paidRetryDispatchCount / completedGoals.Count;
+        var preventedSameFingerprint = admissions.Count(receipt =>
+            receipt.Decision == RetryAdmissionDecision.Prevented);
+        var legacyObservedSameFingerprint = allTasks.Sum(CountLegacyObservedSameFingerprintRepeats);
+        var legacyCauseUnavailable = allTasks.Sum(CountLegacyRetryAttemptsWithoutAdmission);
+        var causeDistribution = Enum.GetValues<RetryCause>()
+            .Select(cause => new RetryCauseDistribution(
+                cause,
+                admissions.Count(receipt =>
+                    receipt.PaidRoute == PaidRouteClassification.Paid &&
+                    receipt.PriorAttemptAt is not null &&
+                    receipt.Cause == cause) +
+                (cause == RetryCause.Unknown ? legacyCauseUnavailable : 0)))
+            .ToArray();
+        var retryResolutionDurations = window
+            .SelectMany(goal => goal.Tasks.Select(task => ComputeRetryResolutionHours(goal, task)))
+            .Where(duration => duration.HasValue)
+            .Select(duration => duration!.Value)
+            .OrderBy(duration => duration)
+            .ToList();
+        var firstPassByRole = BuildFirstPassCompletion(window);
+        var fiveRoleFirstPassGoals = CountFiveRoleFirstPassGoals(window);
+        var fiveRoleGoals = CountFiveRoleGoals(window);
+        var fingerprintUnavailable = allTasks.Sum(task => task.DispatchHistory
+            .Skip(1)
+            .Count(dispatch => dispatch.RetryContextFingerprint is null));
+        var paidAuthorityUnknown = allTasks.Sum(task => task.DispatchHistory
+            .Skip(1)
+            .Count(dispatch => dispatch.PaidRoute == PaidRouteClassification.Unknown));
+        var evidenceAttemptCount = allTasks.Sum(task => task.PreReviewEvidenceAttemptCount);
+        // Focused receipts do not carry provider usage or elapsed time. Null is deliberately
+        // distinguishable from a measured zero until the attempt artifact contract supplies it.
+        long? evidenceElapsedMilliseconds = null;
 
         return new LoopHealthSnapshot(
             window.Count,
@@ -106,7 +178,22 @@ public static class LoopHealthReport
             judgeDistributions,
             agreementRate,
             falseBlockRate,
-            falsePassRate);
+            falsePassRate,
+            paidRetryDispatchCount,
+            paidRetriesPerLandedGoal,
+            preventedSameFingerprint,
+            legacyObservedSameFingerprint,
+            causeDistribution,
+            retryResolutionDurations.Count == 0 ? null : ComputeMedian(retryResolutionDurations),
+            firstPassByRole,
+            fiveRoleFirstPassGoals,
+            fiveRoleGoals,
+            fingerprintUnavailable,
+            paidAuthorityUnknown,
+            legacyCauseUnavailable,
+            evidenceAttemptCount,
+            evidenceElapsedMilliseconds,
+            evidenceAttemptCount);
     }
 
     // Emitted by BackgroundDispatchRunner when a dispatch exits 0 but the file-change guard fires.
@@ -222,5 +309,152 @@ public static class LoopHealthReport
         return n % 2 == 1
             ? sorted[n / 2]
             : (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
+    }
+
+    private static int CountLegacyObservedSameFingerprintRepeats(TaskSpec task)
+    {
+        var receiptAttempts = task.RetryAdmissionHistory
+            .Select(receipt => receipt.LinkedDispatchAt)
+            .ToHashSet();
+        return task.DispatchHistory
+            .Where(dispatch =>
+                dispatch.PaidRoute == PaidRouteClassification.Paid &&
+                dispatch.RetryContextFingerprint is not null &&
+                !receiptAttempts.Contains(dispatch.DispatchedAt))
+            .GroupBy(dispatch => dispatch.RetryContextFingerprint!.Value, StringComparer.Ordinal)
+            .Sum(group => Math.Max(0, group.Count() - 1));
+    }
+
+    private static int CountLegacyRetryAttemptsWithoutAdmission(TaskSpec task)
+    {
+        var receiptAttempts = task.RetryAdmissionHistory
+            .Select(receipt => receipt.LinkedDispatchAt)
+            .ToHashSet();
+        return task.DispatchHistory
+            .Skip(1)
+            .Count(dispatch =>
+                dispatch.PaidRoute == PaidRouteClassification.Paid &&
+                !receiptAttempts.Contains(dispatch.DispatchedAt));
+    }
+
+    private static double? ComputeRetryResolutionHours(Goal goal, TaskSpec task)
+    {
+        var retryReceipts = task.RetryAdmissionHistory
+            .Where(receipt =>
+                receipt.PaidRoute == PaidRouteClassification.Paid &&
+                receipt.PriorAttemptAt is not null)
+            .OrderBy(receipt => receipt.RecordedAt)
+            .ToArray();
+        if (retryReceipts.Length == 0)
+            return null;
+
+        var priorAttemptAt = retryReceipts[0].PriorAttemptAt!.Value;
+        var resolutionEligibleAt = retryReceipts[0].RecordedAt;
+        var unsuccessfulVerificationAt = task.VerificationHistory
+            .Where(verification =>
+                !verification.Succeeded &&
+                verification.CompletedAt >= priorAttemptAt &&
+                verification.CompletedAt <= resolutionEligibleAt)
+            .OrderBy(verification => verification.CompletedAt)
+            .FirstOrDefault()?.CompletedAt;
+        var unsuccessfulTaskAt = goal.Timeline
+            .Where(evt =>
+                evt.TaskId == task.Id &&
+                evt.OccurredAt >= priorAttemptAt &&
+                evt.OccurredAt <= resolutionEligibleAt &&
+                evt.Kind is ProgressKind.TaskFailed or ProgressKind.TaskCancelled)
+            .OrderBy(evt => evt.OccurredAt)
+            .FirstOrDefault()?.OccurredAt;
+        var start = new[] { unsuccessfulVerificationAt, unsuccessfulTaskAt }
+            .Where(candidate => candidate is not null)
+            .Min() ?? resolutionEligibleAt;
+        var successfulVerification = task.VerificationHistory
+            .Where(verification => verification.Succeeded && verification.CompletedAt >= resolutionEligibleAt)
+            .OrderBy(verification => verification.CompletedAt)
+            .FirstOrDefault()?.CompletedAt;
+        var taskTimeline = goal.Timeline
+            .Where(evt => evt.TaskId == task.Id)
+            .ToArray();
+        var terminalTaskAt = taskTimeline
+            .Select((evt, index) => (Event: evt, Index: index))
+            .Where(candidate =>
+                candidate.Event.OccurredAt >= resolutionEligibleAt &&
+                candidate.Event.Kind is ProgressKind.TaskCompleted or ProgressKind.TaskFailed or ProgressKind.TaskCancelled &&
+                !taskTimeline.Skip(candidate.Index + 1).Any(later => later.Kind == ProgressKind.TaskRetried))
+            .OrderBy(candidate => candidate.Event.OccurredAt)
+            .FirstOrDefault().Event?.OccurredAt;
+        var terminalGoalAt = goal.Timeline
+            .Where(evt =>
+                evt.OccurredAt >= resolutionEligibleAt &&
+                evt.Kind is ProgressKind.GoalCancelled or ProgressKind.GoalSuperseded)
+            .OrderBy(evt => evt.OccurredAt)
+            .FirstOrDefault()?.OccurredAt;
+        var terminalResolution = new[] { terminalTaskAt, terminalGoalAt }
+            .Where(candidate => candidate is not null)
+            .Min();
+        var end = new[] { successfulVerification, terminalResolution }
+            .Where(candidate => candidate is not null)
+            .Min();
+        return end is not null && end >= start
+            ? (end.Value - start).TotalHours
+            : null;
+    }
+
+    private static IReadOnlyList<RoleFirstPassCompletion> BuildFirstPassCompletion(IReadOnlyList<Goal> goals)
+    {
+        var roles = new[]
+        {
+            AgentRole.Researcher,
+            AgentRole.Planner,
+            AgentRole.Developer,
+            AgentRole.Tester,
+            AgentRole.Reviewer
+        };
+        return roles.Select(role =>
+        {
+            var tasks = goals.SelectMany(goal => goal.Tasks).Where(task => task.RequiredRole == role).ToArray();
+            var completed = tasks.Count(task => IsFirstPassCompleted(goals, task));
+            return new RoleFirstPassCompletion(
+                role,
+                tasks.Length,
+                completed,
+                tasks.Length == 0 ? null : (double)completed / tasks.Length);
+        }).ToArray();
+    }
+
+    private static int CountFiveRoleFirstPassGoals(IReadOnlyList<Goal> goals)
+    {
+        var roles = new HashSet<AgentRole>
+        {
+            AgentRole.Researcher,
+            AgentRole.Planner,
+            AgentRole.Developer,
+            AgentRole.Tester,
+            AgentRole.Reviewer
+        };
+        return goals.Count(goal =>
+            roles.All(role => goal.Tasks.Any(task => task.RequiredRole == role)) &&
+            goal.Tasks.Where(task => roles.Contains(task.RequiredRole)).All(task => IsFirstPassCompleted([goal], task)));
+    }
+
+    private static int CountFiveRoleGoals(IReadOnlyList<Goal> goals)
+    {
+        var roles = new HashSet<AgentRole>
+        {
+            AgentRole.Researcher,
+            AgentRole.Planner,
+            AgentRole.Developer,
+            AgentRole.Tester,
+            AgentRole.Reviewer
+        };
+        return goals.Count(goal => roles.All(role => goal.Tasks.Any(task => task.RequiredRole == role)));
+    }
+
+    private static bool IsFirstPassCompleted(IEnumerable<Goal> goals, TaskSpec task)
+    {
+        var goal = goals.Single(candidate => candidate.Tasks.Contains(task));
+        return task.Status == WorkTaskStatus.Completed &&
+            task.DispatchHistory.Count <= 1 &&
+            !goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
     }
 }

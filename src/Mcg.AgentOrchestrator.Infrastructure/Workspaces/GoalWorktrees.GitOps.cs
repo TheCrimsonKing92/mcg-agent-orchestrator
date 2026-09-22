@@ -238,12 +238,7 @@ public static partial class GoalWorktrees
         }
         if (rebase.ExitCode == 0)
         {
-            return new GoalWorktreeRebaseResult(
-                GoalWorktreeRebaseStatus.Rebased,
-                branch,
-                $"Rebased {branch} onto {baseBranch}; acceptance can now fast-forward after review.",
-                [],
-                $"acceptance {Prefix(goalId)}");
+            return ValidatePostRebaseMaterialization(worktreePath, branch, baseBranch, goalId);
         }
 
         var conflictFiles = GetConflictFiles(worktreePath);
@@ -353,7 +348,7 @@ public static partial class GoalWorktrees
             message.Contains("...", StringComparison.Ordinal);
     }
 
-    private static GitCli.GitResult RunGitDirect(string workingDirectory, params string[] args)
+    internal static GitCli.GitResult RunGitDirect(string workingDirectory, params string[] args)
     {
         try
         {
@@ -380,18 +375,33 @@ public static partial class GoalWorktrees
                 return new GitCli.GitResult(1, string.Empty, "failed to start git process");
             }
 
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
+            var outputDrain = PipeDrain.Start(process.StandardOutput, "worktree-git-stdout-drain");
+            var errorDrain = PipeDrain.Start(process.StandardError, "worktree-git-stderr-drain");
             if (!process.WaitForExit(GitCli.DefaultTimeoutMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return new GitCli.GitResult(-1, string.Empty, $"git {string.Join(' ', args)} timed out after {GitCli.DefaultTimeoutMilliseconds}ms");
+                return new GitCli.GitResult(-1, outputDrain.Text, $"git {string.Join(' ', args)} timed out after {GitCli.DefaultTimeoutMilliseconds}ms");
             }
 
-            Task.WaitAll([outputTask, errorTask], 5_000);
-            var output = outputTask.Status == TaskStatus.RanToCompletion ? outputTask.Result : string.Empty;
-            var error = errorTask.Status == TaskStatus.RanToCompletion ? errorTask.Result : string.Empty;
-            return new GitCli.GitResult(process.ExitCode, output, error);
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var outputDrained = outputDrain.Join(drainDeadline);
+            var errorDrained = errorDrain.Join(drainDeadline);
+            if (!outputDrained || !errorDrained)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                var diagnostic = PipeDrain.DescribeTimeout(
+                    "worktree git",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    outputDrain,
+                    errorDrain);
+                return new GitCli.GitResult(
+                    process.ExitCode,
+                    outputDrain.Text,
+                    PipeDrain.AppendDiagnostic(errorDrain.Text, diagnostic),
+                    DrainTimedOut: true);
+            }
+
+            return new GitCli.GitResult(process.ExitCode, outputDrain.Text, errorDrain.Text);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
@@ -442,11 +452,34 @@ public static partial class GoalWorktrees
 
     private static void RequireGitWorkTree(string executionDirectory, int gitTimeoutMilliseconds)
     {
-        if (!IsGitWorkTree(executionDirectory, gitTimeoutMilliseconds))
+        // Carry the probe evidence into the diagnostic. A bare "not a work tree" message cannot
+        // distinguish a genuinely non-git directory from a probe that exited 0 with empty output,
+        // timed out, or never started - and those have different causes and different fixes.
+        var result = GitCli.Run(executionDirectory, gitTimeoutMilliseconds, "rev-parse", "--is-inside-work-tree");
+        if (result.ExitCode == 0 && result.Output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException(
-                $"Goal workspaces require '{executionDirectory}' to be inside a git work tree.");
+            return;
         }
+
+        var stdout = result.Output ?? string.Empty;
+        var shownStdout = stdout.Trim();
+        if (shownStdout.Length > 60)
+        {
+            shownStdout = shownStdout[..60];
+        }
+
+        var stderr = (result.Error ?? string.Empty).Trim();
+        if (stderr.Length > 200)
+        {
+            stderr = stderr[..200];
+        }
+
+        throw new InvalidOperationException(
+            $"Goal workspaces require '{executionDirectory}' to be inside a git work tree. " +
+            $"probe='git rev-parse --is-inside-work-tree'; exit={result.ExitCode}; " +
+            $"processStarted={result.ProcessStarted}; drainTimedOut={result.DrainTimedOut}; " +
+            $"stdoutBytes={stdout.Length}; stdout='{shownStdout}'; stderr='{stderr}'; " +
+            $"directoryExists={Directory.Exists(executionDirectory)}");
     }
 
 }

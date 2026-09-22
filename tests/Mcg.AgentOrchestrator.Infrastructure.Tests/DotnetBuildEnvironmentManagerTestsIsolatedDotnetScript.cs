@@ -39,6 +39,18 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
                 >> "%DOTNET_SHIM_LOG%" echo sandbox=%MCG_WORKER_SANDBOX%
                 >> "%DOTNET_SHIM_LOG%" echo account=%MCG_WORKER_ACCOUNT%
                 >> "%DOTNET_SHIM_LOG%" echo target=%MCG_WORKER_CREDENTIAL_TARGET%
+                if /I not "%~1"=="build" exit /b 0
+                set "ARTIFACTS="
+                :parse_artifacts
+                if "%~1"=="" goto create_artifacts
+                if /I "%~1"=="--artifacts-path" set "ARTIFACTS=%~2"
+                shift
+                goto parse_artifacts
+                :create_artifacts
+                set "TEST_DIR=%ARTIFACTS%\bin\Fake.Tests\debug"
+                mkdir "%TEST_DIR%" >nul 2>nul
+                > "%TEST_DIR%\Fake.Tests.dll" echo managed
+                > "%TEST_DIR%\Fake.Tests.exe" echo apphost
                 exit /b 0
                 """);
 
@@ -88,13 +100,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
 
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
-            Assert.True(log.Contains("args=test --project Fake.Tests.csproj --no-restore --property:McgIsolatedArtifactsPath=", StringComparison.Ordinal));
-            Assert.True(log.Contains("--property:BuildInParallel=false -- --filter-class *FocusedTests* --no-ansi --progress off", StringComparison.Ordinal));
-            Assert.DoesNotContain("-maxcpucount:", log, StringComparison.Ordinal);
+            Assert.True(log.Contains("args=build Fake.Tests.csproj --no-restore --artifacts-path ", StringComparison.Ordinal));
+            Assert.True(log.Contains("-maxcpucount:7 -p:BuildInParallel=false", StringComparison.Ordinal));
+            Assert.Contains("args=", log, StringComparison.Ordinal);
+            Assert.Contains("Fake.Tests.dll --filter-class *FocusedTests* --no-ansi --progress off", log, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("args=test", log, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("--filter FullyQualifiedName~FocusedTests", log, StringComparison.Ordinal);
-            Assert.DoesNotContain("--artifacts-path", log, StringComparison.Ordinal);
             Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
-            Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
+            Assert.DoesNotContain("args=build-server shutdown", log, StringComparison.Ordinal);
             Assert.DoesNotContain("--disable-build-servers", log);
             Assert.DoesNotContain("-p:UseSharedCompilation=false", log);
             Assert.DoesNotContain("sandbox=1", log);
@@ -102,8 +115,99 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             Assert.DoesNotContain("target=sandbox-target", log);
             Assert.True(File.Exists(Path.Combine(root, "isolated-dotnet", "build-slots", "build-0.lock")));
             Assert.False(File.Exists(Path.Combine(root, "isolated-dotnet", "build-slots", "build-1.lock")));
-            Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
+            Assert.Contains("Running managed test assembly", stdout, StringComparison.Ordinal);
             Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort.
+            }
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "InvokeIsolatedDotnet_rejects_unowned_managed_test_execution_before_build")]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.sln", false, "explicit test project path")]
+    [Xunit.InlineData("Fake.Tests.csproj", true, "--no-build requires -ReuseArtifacts")]
+    public void InvokeIsolatedDotnetRejectsUnownedManagedTestExecutionBeforeBuild(
+        string target,
+        bool noBuild,
+        string expectedError)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        try
+        {
+            var logPath = Path.Combine(root, "dotnet.log");
+            File.WriteAllText(
+                Path.Combine(shimDirectory, "dotnet.cmd"),
+                "@echo off" + Environment.NewLine +
+                ">> \"%DOTNET_SHIM_LOG%\" echo args=%*" + Environment.NewLine +
+                "exit /b 0" + Environment.NewLine);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = workDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (var argument in new[]
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-InputFormat",
+                "None",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                scriptPath,
+                "-GoalPrefix",
+                "feedbeef",
+                "test",
+                target
+            })
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+            if (noBuild)
+            {
+                startInfo.ArgumentList.Add("--no-build");
+            }
+            startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator +
+                (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+                Path.Combine(root, "isolated-dotnet");
+            startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.Contains(expectedError, stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(logPath), "The dotnet shim must not run before request validation.");
+            Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
         }
         finally
         {
@@ -153,7 +257,25 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
                 machineName = Environment.MachineName,
                 acquiredAt = DateTimeOffset.UtcNow
             }));
-        File.WriteAllText(Path.Combine(shimDirectory, "dotnet.cmd"), "@echo off\r\nexit /b 0\r\n");
+        File.WriteAllText(
+            Path.Combine(shimDirectory, "dotnet.cmd"),
+            """
+            @echo off
+            if "%~1"=="build-server" exit /b 0
+            if /I not "%~1"=="build" exit /b 0
+            set "ARTIFACTS="
+            :parse_artifacts
+            if "%~1"=="" goto create_artifacts
+            if /I "%~1"=="--artifacts-path" set "ARTIFACTS=%~2"
+            shift
+            goto parse_artifacts
+            :create_artifacts
+            set "TEST_DIR=%ARTIFACTS%\bin\Fake.Tests\debug"
+            mkdir "%TEST_DIR%" >nul 2>nul
+            > "%TEST_DIR%\Fake.Tests.dll" echo managed
+            > "%TEST_DIR%\Fake.Tests.exe" echo apphost
+            exit /b 0
+            """);
 
         try
         {
@@ -250,6 +372,18 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
                 """
                 @echo off
                 if "%~1"=="build-server" exit /b 0
+                if /I not "%~1"=="build" exit /b 0
+                set "ARTIFACTS="
+                :parse_artifacts
+                if "%~1"=="" goto create_artifacts
+                if /I "%~1"=="--artifacts-path" set "ARTIFACTS=%~2"
+                shift
+                goto parse_artifacts
+                :create_artifacts
+                set "TEST_DIR=%ARTIFACTS%\bin\Fake.Tests\debug"
+                mkdir "%TEST_DIR%" >nul 2>nul
+                > "%TEST_DIR%\Fake.Tests.dll" echo managed
+                > "%TEST_DIR%\Fake.Tests.exe" echo apphost
                 set "APP_DIR=%CD%\src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0"
                 mkdir "%APP_DIR%" >nul 2>nul
                 echo rebuilt>"%APP_DIR%\Mcg.AgentOrchestrator.App.dll"
@@ -361,6 +495,19 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
                 shimPath,
                 """
                 @echo off
+                if "%~1"=="build-server" exit /b 0
+                if /I not "%~1"=="build" exit /b 0
+                set "ARTIFACTS="
+                :parse_artifacts
+                if "%~1"=="" goto create_artifacts
+                if /I "%~1"=="--artifacts-path" set "ARTIFACTS=%~2"
+                shift
+                goto parse_artifacts
+                :create_artifacts
+                set "TEST_DIR=%ARTIFACTS%\bin\Fake.Tests\debug"
+                mkdir "%TEST_DIR%" >nul 2>nul
+                > "%TEST_DIR%\Fake.Tests.dll" echo managed
+                > "%TEST_DIR%\Fake.Tests.exe" echo apphost
                 exit /b 0
                 """);
 
