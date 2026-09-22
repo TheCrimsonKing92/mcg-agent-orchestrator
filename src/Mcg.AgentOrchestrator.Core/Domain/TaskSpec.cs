@@ -50,6 +50,8 @@ public sealed class TaskSpec
 
     public RetryCause PendingRetryCause { get; private set; } = RetryCause.Unknown;
 
+    public PreDispatchIntegrationReceipt? PendingPreDispatchIntegrationReceipt { get; private set; }
+
     public WorkTaskStatus Status { get; private set; } = WorkTaskStatus.Pending;
 
     public AgentId? AssignedAgentId { get; private set; }
@@ -252,7 +254,8 @@ public sealed class TaskSpec
             _preReviewEvidenceHistory.ToArray(),
             PreReviewEvidenceAttemptCount,
             PendingInterruptedWorkCheckpoint,
-            ConductorRoutingRevision);
+            ConductorRoutingRevision,
+            PendingPreDispatchIntegrationReceipt);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -474,6 +477,7 @@ public sealed class TaskSpec
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
+        task.PendingPreDispatchIntegrationReceipt = snapshot.PendingPreDispatchIntegrationReceipt;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
         task._preReviewEvidenceHistory.AddRange(
             snapshot.PreReviewEvidenceHistory ??
@@ -695,7 +699,14 @@ public sealed class TaskSpec
             ? ReviewFindingRepairCheckpoint.Create(priorVerification)
             : null;
         PendingRetryCause = retryCause;
+        PendingPreDispatchIntegrationReceipt = null;
         RetryAdmissionHoldRoute = null;
+    }
+
+    internal void RecordPreDispatchIntegrationReceipt(PreDispatchIntegrationReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        PendingPreDispatchIntegrationReceipt = receipt;
     }
 
     internal bool RecordRetryAdmission(RetryAdmissionReceipt receipt)
@@ -847,6 +858,7 @@ public sealed class TaskSpec
         SubscriptionRetryAfter = null;
         LastDispatch = dispatch;
         _dispatchHistory.Add(dispatch);
+        PendingPreDispatchIntegrationReceipt = null;
         LastProcess = null;
     }
 
@@ -994,7 +1006,9 @@ public sealed class TaskSpec
         dispatch.ClaudeCredentialSourceDirectory,
         dispatch.ClaudeCredentialSourceIsExplicit,
         dispatch.AssignedAgentId,
-        dispatch.ConductorRoutingRevision);
+        dispatch.ConductorRoutingRevision,
+        dispatch.PreDispatchIntegrationReceipt,
+        dispatch.GoalId);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1031,7 +1045,9 @@ public sealed class TaskSpec
         dispatch.ClaudeCredentialSourceDirectory,
         dispatch.ClaudeCredentialSourceIsExplicit,
         dispatch.AssignedAgentId,
-        dispatch.ConductorRoutingRevision);
+        dispatch.ConductorRoutingRevision,
+        dispatch.PreDispatchIntegrationReceipt,
+        dispatch.GoalId);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

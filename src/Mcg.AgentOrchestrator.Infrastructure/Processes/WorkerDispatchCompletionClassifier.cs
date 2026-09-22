@@ -358,19 +358,32 @@ internal sealed class WorkerDispatchCompletionClassifier
             return HasExplicitNoChangeRationale(standardOutput, standardError);
         }
 
-        var receipt = task.LastDispatch?.ContextPackageReceipt;
-        if (!HasExplicitNoChangeRationale(standardOutput, standardError) ||
+        var dispatch = task.LastDispatch;
+        var integrationSatisfied = dispatch?.PreDispatchIntegrationReceipt?.Matches(
+            dispatch.GoalId,
+            task,
+            dispatch.BaseCommit) == true;
+        var earlyConvergenceSatisfied = dispatch?.ContextPackageReceipt?.HasEarlyConvergenceEvidenceFor(
+            dispatch.BaseCommit) == true;
+        if ((!integrationSatisfied && !HasExplicitNoChangeRationale(standardOutput, standardError)) ||
             (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0) ||
-            receipt is null ||
-            !receipt.HasEarlyConvergenceEvidenceFor(task.LastDispatch?.BaseCommit))
+            (!integrationSatisfied && !earlyConvergenceSatisfied))
         {
             return false;
         }
 
-        return (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
-                WorkerResultParser.TryParseResult(standardError, out result, out _)) &&
-            result.BlockersStatus == WorkerResultParser.BlockersStatus.None &&
-            result.TestsStatus == WorkerResultParser.TestsStatus.Pass;
+        if (!(WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
+              WorkerResultParser.TryParseResult(standardError, out result, out _)) ||
+            result.BlockersStatus != WorkerResultParser.BlockersStatus.None ||
+            result.TestsStatus != WorkerResultParser.TestsStatus.Pass ||
+            WorkerResultParser.TestsReportFailure(result, out _))
+        {
+            return false;
+        }
+
+        return !integrationSatisfied ||
+            (result.Fields.TryGetValue("tests", out var tests) &&
+             FreshVerificationEvidence.HasNonZeroTestCount(tests));
     }
 
     internal string? ClassifyReconciliationOriginRule(

@@ -40,7 +40,10 @@ internal enum DeveloperBranchIntegrationStatus
 internal sealed record DeveloperBranchIntegrationResult(
     DeveloperBranchIntegrationStatus Status,
     string Message,
-    IReadOnlyList<string> ConflictPaths)
+    IReadOnlyList<string> ConflictPaths,
+    string? OriginalCandidateSha = null,
+    string? IntegratedMainSha = null,
+    string? ResultingCandidateSha = null)
 {
     internal bool CanDispatch =>
         Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
@@ -97,6 +100,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
     private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
+    private readonly Action<Goal, DeveloperBranchIntegrationResult> _recordPreDispatchIntegrationReceipt;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Func<Goal, TaskId, bool> _reconcileExitedDispatch;
@@ -868,6 +872,7 @@ internal sealed partial class ConductorDriver
             var result = IntegrateMainBeforeDeveloperDispatch(dir, goal);
             return result;
         };
+        _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
         _recheckPreLandingRebaseConflict = goal =>
         {
@@ -1181,7 +1186,10 @@ internal sealed partial class ConductorDriver
         return new DeveloperBranchIntegrationResult(
             DeveloperBranchIntegrationStatus.Integrated,
             $"Conductor integrated main {mainRevision[..12]} into {branch} before Developer dispatch at {integratedHead.Output.Trim()[..12]}.",
-            []);
+            [],
+            OriginalCandidateSha: branchRevision,
+            IntegratedMainSha: mainRevision,
+            ResultingCandidateSha: integratedHead.Output.Trim());
     }
 
     private static DeveloperBranchIntegrationResult DeveloperIntegrationFailure(string message) =>
@@ -1290,7 +1298,8 @@ internal sealed partial class ConductorDriver
         Func<Goal, GoalEvidenceLeaseFact?>? tryRecoverTerminalDeveloperIntegrationLease = null,
         Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
         ApparatusRedGate? apparatusRedGate = null,
-        Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null)
+        Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null,
+        Action<Goal, DeveloperBranchIntegrationResult>? recordPreDispatchIntegrationReceipt = null)
     {
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
@@ -1301,6 +1310,7 @@ internal sealed partial class ConductorDriver
                 DeveloperBranchIntegrationStatus.Current,
                 "Goal branch is current with main.",
                 []));
+        _recordPreDispatchIntegrationReceipt = recordPreDispatchIntegrationReceipt ?? ((_, _) => { });
         _dispatchAndStart = (goal, _) => dispatchAndStart(goal);
         _startRecordedDispatches = startRecordedDispatches is null
             ? _dispatchAndStart
@@ -4312,6 +4322,7 @@ internal sealed partial class ConductorDriver
                     try
                     {
                         integration = _integrateMainBeforeDeveloperDispatch(goal);
+                        _recordPreDispatchIntegrationReceipt(goal, integration);
                     }
                     catch (OperationCanceledException ex)
                     {
@@ -4352,6 +4363,7 @@ internal sealed partial class ConductorDriver
                 }
 
                 var integration = _integrateMainBeforeDeveloperDispatch(goal);
+                _recordPreDispatchIntegrationReceipt(goal, integration);
                 if (!integration.CanDispatch)
                 {
                     return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
