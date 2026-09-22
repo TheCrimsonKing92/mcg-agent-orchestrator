@@ -39,7 +39,8 @@ internal static class AcceptanceStableSlotTestSupport
             stableSlotSelector: (_, _) =>
             {
                 Interlocked.Increment(ref selection.Count);
-                return CreateFakeStableSlotLease(workspace.ExecutionDirectory);
+                return CreateFakeStableSlotLease(
+                    acceptanceCleanupContext?.Hooks.BuildStorageRoot?.RootPath ?? workspace.ExecutionDirectory);
             });
     }
 
