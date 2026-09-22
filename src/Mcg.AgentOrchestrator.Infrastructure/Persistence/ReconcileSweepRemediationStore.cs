@@ -26,6 +26,7 @@ public interface IReconcileSweepRemediationStore
     void CompleteAttempt(string stateKey, string owner, int exitStatus, string output, bool consumeAttempt = true);
     bool TryMarkEscalationEmitted(string stateKey);
     bool TryClaimAcceptanceLease(string goalId, string owner, TimeSpan staleAfter);
+    bool TryReplaceAcceptanceLease(string goalId, string expectedOwner, string successorOwner);
     IDisposable? TryAcquireAcceptanceLease(string goalId, string owner, TimeSpan staleAfter);
     ReconcileAcceptanceLeaseState? TryGetAcceptanceLease(string goalId, TimeSpan staleAfter);
     string? TryGetAcceptanceLeaseOwner(string goalId);
@@ -330,6 +331,50 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         }
     }
 
+    public static ReconcileAcceptanceLeaseState? ReadAcceptanceLease(
+        string dbPath,
+        string goalId,
+        TimeSpan staleAfter)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(dbPath),
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString());
+        connection.Open();
+        return GetAcceptanceLease(connection, goalId, staleAfter);
+    }
+
+    public bool TryReplaceAcceptanceLease(string goalId, string expectedOwner, string successorOwner)
+    {
+        var activeTransactionResult = false;
+        if (StateDbWriteSession.TryExecute(
+                _dbPath,
+                connection => activeTransactionResult = TryReplaceAcceptanceLease(
+                    connection,
+                    goalId,
+                    expectedOwner,
+                    successorOwner)))
+        {
+            return activeTransactionResult;
+        }
+
+        using var connection = Open();
+        BeginImmediate(connection);
+        try
+        {
+            var replaced = TryReplaceAcceptanceLease(connection, goalId, expectedOwner, successorOwner);
+            Commit(connection);
+            return replaced;
+        }
+        catch
+        {
+            Rollback(connection);
+            throw;
+        }
+    }
+
     private static bool TryClaimAcceptanceLease(
         SqliteConnection connection,
         string goalId,
@@ -339,7 +384,14 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
     {
         using (var delete = connection.CreateCommand())
         {
-            delete.CommandText = "DELETE FROM reconcile_acceptance_leases WHERE goal_id = $goal AND acquired_at < $stale";
+            // v1 owners are bound to exact operation-journal instances. Older goal-evidence
+            // owners predate that binding and retain the generic stale-lease compatibility path.
+            delete.CommandText = """
+                DELETE FROM reconcile_acceptance_leases
+                WHERE goal_id = $goal
+                  AND acquired_at < $stale
+                  AND substr(owner, 1, length('goal-evidence:v1:')) <> 'goal-evidence:v1:'
+                """;
             delete.Parameters.AddWithValue("$goal", goalId);
             delete.Parameters.AddWithValue("$stale", now.Subtract(staleAfter).ToString("O"));
             delete.ExecuteNonQuery();
@@ -351,6 +403,32 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         insert.Parameters.AddWithValue("$owner", owner);
         insert.Parameters.AddWithValue("$at", now.ToString("O"));
         return insert.ExecuteNonQuery() == 1;
+    }
+
+    private static bool TryReplaceAcceptanceLease(
+        SqliteConnection connection,
+        string goalId,
+        string expectedOwner,
+        string successorOwner)
+    {
+        using (var delete = connection.CreateCommand())
+        {
+            delete.CommandText = "DELETE FROM reconcile_acceptance_leases WHERE goal_id = $goal AND owner = $expected";
+            delete.Parameters.AddWithValue("$goal", goalId);
+            delete.Parameters.AddWithValue("$expected", expectedOwner);
+            if (delete.ExecuteNonQuery() != 1)
+            {
+                return false;
+            }
+        }
+
+        using var insert = connection.CreateCommand();
+        insert.CommandText = "INSERT INTO reconcile_acceptance_leases (goal_id, owner, acquired_at) VALUES ($goal, $owner, $at)";
+        insert.Parameters.AddWithValue("$goal", goalId);
+        insert.Parameters.AddWithValue("$owner", successorOwner);
+        insert.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
+        insert.ExecuteNonQuery();
+        return true;
     }
 
     private bool RenewAcceptanceLease(string goalId, string owner)
