@@ -16,6 +16,7 @@ internal sealed record ReviewFindingContextProjection(
 
 internal static class ReviewFindingContextProjector
 {
+    private const int EvidenceSummarySelectionLimit = 12;
     private sealed record RoundSource(TaskSpec Task, TaskVerificationRecord Verification, int HistoryIndex);
     private sealed record FindingSource(TaskSpec Task, TaskVerificationRecord Verification, ReviewFinding Finding, ReviewFindingContentReference Round, int HistoryIndex);
     private sealed record CanonicalEntryProjection(CanonicalReviewFindingEntry Entry, string? FallbackReason);
@@ -128,7 +129,7 @@ internal static class ReviewFindingContextProjector
                 new FindingSource(source.Task, source.Verification, finding, roundReferenceBySource[source], source.HistoryIndex))).ToArray();
         var entryProjections = findingSources
             .GroupBy(source => source.Finding.StableId, StringComparer.Ordinal)
-            .Select(BuildCanonicalEntry)
+            .Select(group => BuildCanonicalEntry(group, currentCandidateSha))
             .ToArray();
         var canonicalEntries = entryProjections
             .Select(projection => projection.Entry)
@@ -244,7 +245,9 @@ internal static class ReviewFindingContextProjector
             activeRoundHashes.Concat(activeReceiptHashes).ToHashSet(StringComparer.Ordinal));
     }
 
-    private static CanonicalEntryProjection BuildCanonicalEntry(IGrouping<string, FindingSource> group)
+    private static CanonicalEntryProjection BuildCanonicalEntry(
+        IGrouping<string, FindingSource> group,
+        string? currentCandidateSha)
     {
         var latestAt = group.Max(source => source.Verification.CompletedAt);
         var latest = group.Where(source => source.Verification.CompletedAt == latestAt).ToArray();
@@ -272,9 +275,24 @@ internal static class ReviewFindingContextProjector
         }
         var finding = selected.Finding;
         var selectedReceipts = selected.Verification.FindingEvidenceReceipts ?? [];
+        var evidenceReceipts = FindCandidateBoundEvidenceReceipts(
+            finding,
+            currentCandidateSha,
+            selectedReceipts,
+            out var requestedIdentity,
+            out var evidenceSummaryReceipt);
+        var evidenceReceipt = FindCandidateBoundEvidenceReceipt(
+            finding,
+            selected.Verification.ReviewedCommit,
+            selectedReceipts);
+        var referencedReceiptIds = finding.EvidenceOutcome?.SourceReceiptIds is { Count: > 0 } sourceReceiptIds
+            ? sourceReceiptIds
+            : finding.EvidenceOutcome?.ReceiptId is { Length: > 0 } receiptId
+                ? [receiptId]
+                : [];
         var receiptReferences = selectedReceipts
-            .Where(receipt => finding.EvidenceOutcome?.ReceiptId is null ||
-                              string.Equals(receipt.ReceiptId, finding.EvidenceOutcome.ReceiptId, StringComparison.Ordinal))
+            .Where(receipt => referencedReceiptIds.Count == 0 ||
+                referencedReceiptIds.Contains(receipt.ReceiptId, StringComparer.Ordinal))
             .Select(receipt =>
             {
                 var bytes = JsonSerializer.SerializeToUtf8Bytes(receipt);
@@ -301,10 +319,6 @@ internal static class ReviewFindingContextProjector
             }
             else
             {
-                var evidenceReceipt = FindCandidateBoundEvidenceReceipt(
-                    finding,
-                    selected.Verification.ReviewedCommit,
-                    selectedReceipts);
                 if (evidenceReceipt is not null)
                 {
                     var bytes = JsonSerializer.SerializeToUtf8Bytes(evidenceReceipt);
@@ -331,6 +345,10 @@ internal static class ReviewFindingContextProjector
         var evidenceIdentity = receiptReferences.Length == 0
             ? null
             : WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(string.Join("\n", receiptReferences.Select(reference => reference.Sha256))));
+        var evidenceSummary = BuildEvidenceSummary(
+            evidenceSummaryReceipt,
+            evidenceReceipts,
+            requestedIdentity);
         return new CanonicalEntryProjection(
             new CanonicalReviewFindingEntry(
                 finding.StableId,
@@ -350,8 +368,138 @@ internal static class ReviewFindingContextProjector
                 selected.Round,
                 receiptReferences,
                 resolutionProof,
-                anchorProof),
+                anchorProof,
+                evidenceSummary),
             fallbackReason);
+    }
+
+    private static ReviewFindingEvidenceSummary? BuildEvidenceSummary(
+        FindingEvidenceReceipt? primaryReceipt,
+        IReadOnlyList<FindingEvidenceReceipt> receipts,
+        string? requestedIdentity)
+    {
+        if (primaryReceipt is null ||
+            receipts.Count == 0 ||
+            string.IsNullOrWhiteSpace(requestedIdentity) ||
+            string.IsNullOrWhiteSpace(primaryReceipt.ExecutionBasisIdentity))
+        {
+            return null;
+        }
+
+        var requested = requestedIdentity
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(item => item, StringComparer.Ordinal)
+            .ToArray();
+        var covered = receipts
+            .SelectMany(receipt => receipt.Request.Selections)
+            .Where(selection =>
+                !string.IsNullOrWhiteSpace(selection.TestProject) &&
+                !string.IsNullOrWhiteSpace(selection.TestClass))
+            .Select(selection => $"{selection.TestProject}:{selection.TestClass}")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(item => item, StringComparer.Ordinal)
+            .ToArray();
+        if (requested.Length == 0 ||
+            !requested.All(item => covered.Contains(item, StringComparer.Ordinal)))
+        {
+            return null;
+        }
+
+        var candidateArms = receipts.Select(receipt =>
+        {
+            var matches = (receipt.Arms ?? [])
+                .Where(arm => arm.Arm == FindingEvidenceArm.Candidate)
+                .Take(2)
+                .ToArray();
+            return matches.Length == 1
+                ? matches[0]
+                : throw PreparationFailure(
+                    "finding-evidence-candidate-arm-invalid",
+                    $"Focused evidence receipt '{receipt.ReceiptId}' must contain exactly one candidate arm.");
+        }).ToArray();
+        var retainedPaths = candidateArms.Sum(arm =>
+            (arm.ReceiptPaths ?? []).Count(path => !string.IsNullOrWhiteSpace(path)));
+        if (retainedPaths == 0 || candidateArms.Any(arm => arm.ExecutedTestCount is null))
+        {
+            return null;
+        }
+
+        return new ReviewFindingEvidenceSummary(
+            primaryReceipt.ReceiptId,
+            primaryReceipt.CandidateSha,
+            primaryReceipt.ExecutionBasisIdentity,
+            receipts.All(receipt => receipt.Passed) ? "passed" : "failed",
+            requested.Length == covered.Length ? "exact" : "subset",
+            requested.Take(EvidenceSummarySelectionLimit).ToArray(),
+            covered.Take(EvidenceSummarySelectionLimit).ToArray(),
+            Math.Max(0, requested.Length - EvidenceSummarySelectionLimit),
+            Math.Max(0, covered.Length - EvidenceSummarySelectionLimit),
+            candidateArms.Sum(arm => arm.ExecutedTestCount!.Value),
+            retainedPaths);
+    }
+
+    private static IReadOnlyList<FindingEvidenceReceipt> FindCandidateBoundEvidenceReceipts(
+        ReviewFinding finding,
+        string? candidateSha,
+        IReadOnlyList<FindingEvidenceReceipt> receipts,
+        out string? requestedIdentity,
+        out FindingEvidenceReceipt? primaryReceipt)
+    {
+        requestedIdentity = null;
+        primaryReceipt = null;
+        if (string.IsNullOrWhiteSpace(candidateSha) ||
+            finding.EvidenceOutcome is not { Honoured: true, ReceiptId.Length: > 0 } outcome ||
+            outcome.ResultReason is not (
+                FindingEvidenceOutcomeReason.ValidEvidence or
+                FindingEvidenceOutcomeReason.CandidateRed))
+        {
+            return [];
+        }
+
+        var validatedPrimaryReceipt = receipts.FirstOrDefault(receipt =>
+            string.Equals(receipt.ReceiptId, outcome.ReceiptId, StringComparison.Ordinal) &&
+            string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+            IsCurrentEvidenceSummaryPrimary(receipt, candidateSha, outcome.ResultReason));
+        if (validatedPrimaryReceipt is null || string.IsNullOrWhiteSpace(validatedPrimaryReceipt.ExecutionBasisIdentity))
+        {
+            return [];
+        }
+
+        requestedIdentity = outcome.RequestedSelectionIdentity ??
+            (validatedPrimaryReceipt.RequestDispositions ?? [])
+                .LastOrDefault(disposition =>
+                    string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal))
+                ?.RequestIdentity;
+        if (string.IsNullOrWhiteSpace(requestedIdentity))
+        {
+            return [];
+        }
+
+        var sourceIds = outcome.SourceReceiptIds is { Count: > 0 }
+            ? outcome.SourceReceiptIds
+            : [validatedPrimaryReceipt.ReceiptId];
+        var sources = sourceIds
+            .Distinct(StringComparer.Ordinal)
+            .Select(sourceId => receipts.FirstOrDefault(receipt =>
+                string.Equals(receipt.ReceiptId, sourceId, StringComparison.Ordinal)))
+            .ToArray();
+        if (sources.Any(receipt => receipt is null) ||
+            sources.Cast<FindingEvidenceReceipt>().Any(receipt =>
+                !IsCurrentEvidenceSummarySource(
+                    receipt,
+                    candidateSha,
+                    validatedPrimaryReceipt.ExecutionBasisIdentity)) ||
+            (outcome.ResultReason == FindingEvidenceOutcomeReason.ValidEvidence &&
+                sources.Cast<FindingEvidenceReceipt>().Any(receipt => !receipt.Passed)))
+        {
+            requestedIdentity = null;
+            primaryReceipt = null;
+            return [];
+        }
+
+        primaryReceipt = validatedPrimaryReceipt;
+        return sources.Cast<FindingEvidenceReceipt>().ToArray();
     }
 
     private static FindingEvidenceReceipt? FindCandidateBoundEvidenceReceipt(
@@ -375,6 +523,51 @@ internal static class ReviewFindingContextProjector
             string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
             receipt.Accepted &&
             receipt.Passed);
+    }
+
+    private static bool IsCurrentEvidenceSummarySource(
+        FindingEvidenceReceipt receipt,
+        string candidateSha,
+        string executionBasisIdentity) =>
+        receipt.Accepted &&
+        string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) &&
+        (receipt.Arms ?? []).Any(arm =>
+            arm is
+            {
+                Arm: FindingEvidenceArm.Candidate,
+                Accepted: true,
+                ExecutedTestCount: > 0
+            } &&
+            arm.Disposition is FindingEvidenceArmDisposition.Green or FindingEvidenceArmDisposition.Red &&
+            string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+            (arm.ReceiptPaths ?? []).Any(path => !string.IsNullOrWhiteSpace(path)));
+
+    private static bool IsCurrentEvidenceSummaryPrimary(
+        FindingEvidenceReceipt receipt,
+        string candidateSha,
+        FindingEvidenceOutcomeReason? resultReason)
+    {
+        if (!receipt.Accepted ||
+            !string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var candidateArm = (receipt.Arms ?? []).FirstOrDefault(arm =>
+            arm.Arm == FindingEvidenceArm.Candidate &&
+            arm.Accepted &&
+            string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
+        return resultReason switch
+        {
+            FindingEvidenceOutcomeReason.ValidEvidence =>
+                receipt.Passed &&
+                candidateArm is { Disposition: FindingEvidenceArmDisposition.Green, Passed: true },
+            FindingEvidenceOutcomeReason.CandidateRed =>
+                !receipt.Passed &&
+                candidateArm is { Disposition: FindingEvidenceArmDisposition.Red, Passed: false },
+            _ => false
+        };
     }
 
     private static string? DetermineFallbackReason(

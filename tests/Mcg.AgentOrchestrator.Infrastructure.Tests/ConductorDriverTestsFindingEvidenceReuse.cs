@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -6,8 +7,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 
 [Xunit.Collection("IsolatedProcessSpawning")]
-public sealed class ConductorDriverTestsFindingEvidenceReuse
+public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
 {
+    private readonly string _artifactRoot = InfrastructureTestSupport.CreateTempDirectory();
+
     [Xunit.Fact]
     public void TesterReopenedSameCandidateFindingReusesAndProjectsCompletedProcessReceipt()
     {
@@ -26,7 +29,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
@@ -62,7 +65,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
                 .Single(candidate => candidate.StableId == finding.StableId)
                 .EvidenceOutcome?.ReceiptId);
         Assert.Contains(goal.Timeline, item =>
-            item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal));
+            item.Message.Contains("finding-evidence disposition=reused-covered-green", StringComparison.Ordinal));
         var projection = ReviewFindingContextProjector.Project(goal, tester, candidateSha);
         var packagedReceipt = Assert.Single(projection.ReceiptBodies);
         Assert.Contains(receipt.ReceiptId, System.Text.Encoding.UTF8.GetString(packagedReceipt.Bytes), StringComparison.Ordinal);
@@ -88,38 +91,33 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         FailReviewerNeedsWork(kernel, goal, reviewer, "seed", findings: [finding]);
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
-            runFocusedEvidence: (_, request) => DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha),
+            runFocusedEvidence: (_, request) => RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha),
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, kind) => kernel.RetryTask(goalId, taskId, message, retryRoundKind: kind),
             recordFindingEvidenceRequest: (goalId, taskId, message) => kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, id, outcome, receipt) => kernel.RecordFindingEvidenceOutcome(goalId, taskId, id, outcome, receipt));
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
         Assert.NotEmpty(reviewer.VerificationHistory.SelectMany(verification => verification.FindingEvidenceReceipts ?? []));
-        var method = typeof(ConductorDriver).GetMethod("TryGetReusableGreenFindingEvidenceReceipt",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-        object?[] arguments = [reviewer, finding.EvidenceRequest! with { Selections = [] }, candidateSha, null, null];
-        Assert.Equal(false, method.Invoke(null, arguments));
-        Assert.Null(arguments[3]);
-        Assert.Null(arguments[4]);
+        var method = typeof(ConductorDriver).GetMethod("TryResolveFindingEvidenceCoverage",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        object?[] arguments =
+            [reviewer, finding.EvidenceRequest! with { Selections = [] }, candidateSha, "basis", null, null, null];
+        Assert.Equal(false, method.Invoke(driver, arguments));
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<FindingEvidenceReceipt>>(arguments[4]));
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("executed-dual-arm", true)]
-    [Xunit.InlineData("suppressed-budget", false)]
-    [Xunit.InlineData("not-executed", false)]
-    public void ExplicitNonExecutionCannotBecomeReusableGreenEvidence(string disposition, bool expected)
+    [Xunit.InlineData("suppressed-budget")]
+    [Xunit.InlineData("not-executed")]
+    public void ExplicitNonExecutionCannotBecomeReusableGreenEvidence(string disposition)
     {
         var request = EvidenceFindingWithRequest("control", id: "control").EvidenceRequest!;
         var receipt = new FindingEvidenceReceipt("receipt", "candidate-a", request, true, true, "control",
             Arms: [new(FindingEvidenceArm.Candidate, "candidate-a", FindingEvidenceArmDisposition.Green, true, true, "control")],
             RequestDispositions: [new("control", "request-identity", disposition)]);
-        IReadOnlyDictionary<string, FindingEvidenceOutcome> outcomes = new Dictionary<string, FindingEvidenceOutcome>
-        {
-            ["receipt"] = new(Honoured: true, ReceiptId: "receipt", ResultReason: FindingEvidenceOutcomeReason.ValidEvidence)
-        };
-        var method = typeof(ConductorDriver).GetMethod("IsReusableGreenReceipt",
+        var method = typeof(ConductorDriver).GetMethod("IsReusableGreenFindingEvidenceReceipt",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-        Assert.Equal(expected, method.Invoke(null, [receipt, "candidate-a", outcomes]));
+        Assert.Equal(false, method.Invoke(null, [receipt, "candidate-a", "basis"]));
     }
 
     [Xunit.Fact]
@@ -143,7 +141,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -173,7 +171,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             receipt.ReceiptId,
             Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!).ReceiptId);
         Assert.Contains(goal.Timeline, item =>
-            item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal));
+            item.Message.Contains("finding-evidence disposition=reused-covered-green", StringComparison.Ordinal));
     }
 
     [Xunit.Theory]
@@ -199,7 +197,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -229,7 +227,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         Assert.True(latestFinding.EvidenceOutcome?.Honoured);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, latestFinding.EvidenceOutcome?.ResultReason);
         Assert.Contains(goal.Timeline, item =>
-            item.Message.Contains("finding-evidence disposition=reused-green", StringComparison.Ordinal) &&
+            item.Message.Contains("finding-evidence disposition=reused-covered-green", StringComparison.Ordinal) &&
             item.Message.Contains($"finding_id={mergedId}", StringComparison.Ordinal));
     }
 
@@ -262,7 +260,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -285,10 +283,11 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             .Single(item => item.StableId == union.StableId);
         Assert.True(latestFinding.EvidenceOutcome?.Honoured);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, latestFinding.EvidenceOutcome?.ResultReason);
-        Assert.StartsWith("finding-evidence-reuse-", latestFinding.EvidenceOutcome?.ReceiptId);
-        var dispositions = reviewer.VerificationHistory.Last().FindingEvidenceReceipts!.Single().RequestDispositions;
-        Assert.NotEmpty(dispositions!);
-        Assert.All(dispositions!, disposition => Assert.StartsWith("executed-", disposition.Disposition));
+        Assert.Equal("reused-covered-green:composite", latestFinding.EvidenceOutcome?.DecisionReason);
+        Assert.Equal(2, latestFinding.EvidenceOutcome?.SourceReceiptIds?.Count);
+        Assert.Contains(
+            latestFinding.EvidenceOutcome!.ReceiptId!,
+            latestFinding.EvidenceOutcome.SourceReceiptIds!);
     }
 
     [Xunit.Fact]
@@ -316,7 +315,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -362,7 +361,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -403,7 +402,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRequests.Add(request);
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -486,6 +485,352 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             receipt => Assert.False(receipt.Passed));
     }
 
+    [Xunit.Fact]
+    public void RequestedCoverageWithoutMatchingExecutedCoverageDoesNotReuse()
+    {
+        const string candidateSha = "abc1234";
+        var artifactRoot = InfrastructureTestSupport.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SoftwareGoal();
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            {
+                PassVerification(kernel, goal, task);
+            }
+
+            var source = EvidenceFindingWithRequest(
+                "The request names two classes but retained execution covers only one.",
+                id: "coverage-source",
+                classes: ["ConductorDriverTests", "GoalAcceptanceVerifierTests"]);
+            var uncovered = EvidenceFindingWithRequest(
+                "The class omitted by the retained execution must run.",
+                id: "coverage-uncovered",
+                classes: ["GoalAcceptanceVerifierTests"]);
+            var focusedRuns = 0;
+            var driver = MakeDriver(
+                getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+                runFocusedEvidence: (_, request) =>
+                {
+                    focusedRuns++;
+                    return RetainedEvidenceWithExecutedClasses(
+                        artifactRoot,
+                        request,
+                        candidateSha,
+                        ["ConductorDriverTests"]);
+                },
+                dispatchAndStart: _ => DispatchStartOutcome.Started(),
+                retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                    kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+                recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                    kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+                recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+            FailReviewerNeedsWork(kernel, goal, reviewer, "coverage source", findings: [source]);
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            FailReviewerNeedsWork(kernel, goal, reviewer, "uncovered selection", findings: [uncovered]);
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(2, focusedRuns);
+        }
+        finally
+        {
+            Directory.Delete(artifactRoot, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void NewestReceiptPerSelectionRemainsAuthoritativeAcrossCoverageReuse()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        var source = EvidenceFindingWithRequest(
+            "Initial green coverage.",
+            id: "authority-source",
+            classes: ["GoalAcceptanceVerifierTests", "ConductorDriverTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "initial green", findings: [source]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var green = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!);
+
+        var redFinding = EvidenceFindingWithRequest(
+            "A newer RED applies only to one selection.",
+            id: "authority-red",
+            classes: ["GoalAcceptanceVerifierTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "newer red", findings: [redFinding]);
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(
+            reviewer.LastVerification,
+            out var redRound,
+            out _));
+        var red = green with
+        {
+            ReceiptId = "newer-red-receipt",
+            Request = redFinding.EvidenceRequest!,
+            Passed = false,
+            Arms = green.Arms!.Select(arm => arm.Arm == FindingEvidenceArm.Candidate
+                ? arm with { Disposition = FindingEvidenceArmDisposition.Red, Passed = false }
+                : arm).ToArray(),
+            RequestDispositions =
+            [
+                new FindingEvidenceRequestDisposition(
+                    redFinding.StableId,
+                    "Infrastructure.Tests:GoalAcceptanceVerifierTests",
+                    "executed-standalone")
+            ],
+            FindingRoundFingerprint = ConductorDriver.BuildFindingRoundFingerprint(reviewer, redRound)
+        };
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            redFinding.StableId,
+            new FindingEvidenceOutcome(
+                Honoured: true,
+                ReceiptId: red.ReceiptId,
+                ResultReason: FindingEvidenceOutcomeReason.CandidateRed),
+            red);
+        kernel.RetryTask(goal.Id, reviewer.Id, "Continue after recording newer red evidence.");
+
+        var stillGreen = EvidenceFindingWithRequest(
+            "The unaffected selection can reuse its green.",
+            id: "authority-green-selection",
+            classes: ["ConductorDriverTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "unaffected selection", findings: [stillGreen]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(1, focusedRuns);
+
+        var invalidated = EvidenceFindingWithRequest(
+            "The newer RED selection must execute again.",
+            id: "authority-invalidated-selection",
+            classes: ["GoalAcceptanceVerifierTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "invalidated selection", findings: [invalidated]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(2, focusedRuns);
+
+        var restored = EvidenceFindingWithRequest(
+            "The later authoritative green restores reuse.",
+            id: "authority-restored-selection",
+            classes: ["GoalAcceptanceVerifierTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "restored selection", findings: [restored]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(2, focusedRuns);
+    }
+
+    [Xunit.Fact]
+    public void ChangedExecutionBasisDoesNotReuseCoveredReceipt()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var basisMarker = "basis-a";
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            getFindingEvidenceEngineSettings: _ => BasisSettings(basisMarker));
+
+        var source = EvidenceFindingWithRequest(
+            "Establish evidence under the first basis.",
+            id: "basis-source",
+            classes: ["ConductorDriverTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "basis source", findings: [source]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        basisMarker = "basis-b";
+        var repeated = source with { StableId = "basis-repeat", Description = "The basis changed." };
+        FailReviewerNeedsWork(kernel, goal, reviewer, "changed basis", findings: [repeated]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
+    }
+
+    [Xunit.Fact]
+    public void CanonicalEquivalentNewFindingAndSubsetReuseWhileOnlyUncoveredSelectionRuns()
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var focusedRequests = new List<string>();
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRequests.Add(request);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        var initial = EvidenceFindingWithRequest(
+            "Initial focused selection.",
+            id: "canonical-source",
+            classes: ["GoalAcceptanceVerifierTests", "ConductorDriverTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "initial", findings: [initial]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var sourceReceipt = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!);
+
+        var equivalent = EvidenceFindingWithRequest(
+            "Equivalent alias and order under a new finding.",
+            id: "canonical-equivalent",
+            project: "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            classes: ["ConductorDriverTests", "GoalAcceptanceVerifierTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "equivalent", findings: [equivalent]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Single(focusedRequests);
+
+        var subset = EvidenceFindingWithRequest(
+            "Covered subset under another finding.",
+            id: "canonical-subset",
+            classes: ["ConductorDriverTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "subset", findings: [subset]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Single(focusedRequests);
+        var subsetOutcome = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(finding => finding.StableId == subset.StableId)
+            .EvidenceOutcome!;
+        Assert.Equal(sourceReceipt.ReceiptId, subsetOutcome.ReceiptId);
+        Assert.Equal("Infrastructure.Tests:ConductorDriverTests", subsetOutcome.RequestedSelectionIdentity);
+        Assert.Equal("reused-covered-green:subset", subsetOutcome.DecisionReason);
+        Assert.Equal([sourceReceipt.ReceiptId], subsetOutcome.SourceReceiptIds);
+
+        var partial = EvidenceFindingWithRequest(
+            "One covered and one genuinely uncovered class.",
+            id: "canonical-partial",
+            classes: ["ConductorDriverTests", "WorkerProcessJobsTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "partial", findings: [partial]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRequests.Count);
+        Assert.Equal("Infrastructure.Tests:WorkerProcessJobsTests", focusedRequests[1]);
+        var partialOutcome = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(finding => finding.StableId == partial.StableId)
+            .EvidenceOutcome!;
+        Assert.Equal("executed-uncovered-after-reuse:partial", partialOutcome.DecisionReason);
+        Assert.Equal(2, partialOutcome.SourceReceiptIds!.Count);
+    }
+
+    internal static FocusedEvidenceRunResult RetainedEvidenceWithExecutedClasses(
+        string artifactRoot,
+        string request,
+        string candidateSha,
+        IReadOnlyList<string>? executedClasses = null)
+    {
+        var source = DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+        executedClasses ??= request
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(selection => selection.Split(':', 2)[1])
+            .ToArray();
+        var trxPath = Path.Combine(artifactRoot, $"{Guid.NewGuid():N}.trx");
+        XNamespace trx = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+        var tests = executedClasses.Select((testClass, index) => new
+        {
+            Id = $"test-{index}",
+            ClassName = $"Mcg.AgentOrchestrator.Infrastructure.Tests.{testClass}"
+        }).ToArray();
+        new XDocument(
+            new XElement(
+                trx + "TestRun",
+                new XElement(
+                    trx + "TestDefinitions",
+                    tests.Select(test => new XElement(
+                        trx + "UnitTest",
+                        new XAttribute("id", test.Id),
+                        new XElement(
+                            trx + "TestMethod",
+                            new XAttribute("className", test.ClassName),
+                            new XAttribute("name", "Runs"))))),
+                new XElement(
+                    trx + "Results",
+                    tests.Select(test => new XElement(
+                        trx + "UnitTestResult",
+                        new XAttribute("testId", test.Id),
+                        new XAttribute("outcome", "Passed")))),
+                new XElement(
+                    trx + "ResultSummary",
+                    new XElement(
+                        trx + "Counters",
+                        new XAttribute("total", tests.Length),
+                        new XAttribute("executed", tests.Length),
+                        new XAttribute("passed", tests.Length),
+                        new XAttribute("failed", 0)))))
+            .Save(trxPath);
+        var sourceCandidate = source.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
+        var candidateCheck = sourceCandidate.Checks.Single() with
+        {
+            ArtifactsPath = artifactRoot,
+            TestResultPaths = [trxPath],
+            ExecutedTestCount = executedClasses.Count
+        };
+        var candidate = sourceCandidate with { Checks = [candidateCheck] };
+        return source with
+        {
+            Checks = [candidateCheck],
+            Arms = source.Arms.Select(arm =>
+                arm.Arm == FindingEvidenceArm.Candidate ? candidate : arm).ToArray()
+        };
+    }
+
+    private static AcceptanceGateEngineSettings BasisSettings(string marker) =>
+        new()
+        {
+            MtpInvocations =
+            [
+                new AcceptanceMtpInvocation
+                {
+                    Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    ExecutablePathTemplate = marker,
+                    Arguments = ["--marker", marker]
+                }
+            ]
+        };
+
     private static void RecordTesterEvidenceOnlyFinding(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -537,7 +882,7 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red, candidateSha);
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
             },
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -551,4 +896,6 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse
         Assert.Equal(0, focusedRuns);
         Assert.Equal(developer.Id, retriedTaskId);
     }
+
+    public void Dispose() => Directory.Delete(_artifactRoot, recursive: true);
 }

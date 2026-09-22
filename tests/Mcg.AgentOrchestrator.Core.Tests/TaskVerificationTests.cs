@@ -696,7 +696,17 @@ public sealed class TaskVerificationTests
                             true,
                             "candidate passed",
                             ["candidate.trx"],
-                            []),
+                            [],
+                            ExecutedTestCount: 7,
+                            TestResultPaths: ["candidate.trx"],
+                            ReceiptArtifacts:
+                            [
+                                new AcceptanceCohortEvidenceArtifact(
+                                    "trx",
+                                    "candidate.trx",
+                                    new string('a', 64),
+                                    123)
+                            ]),
                         new FindingEvidenceArmReceipt(
                             FindingEvidenceArm.Baseline,
                             "baseline-sha",
@@ -720,7 +730,8 @@ public sealed class TaskVerificationTests
                             "superseded",
                             "superseded-by-actionable-red")
                     ],
-                    FindingRoundFingerprint: "finding-round-contract-1")
+                    FindingRoundFingerprint: "finding-round-contract-1",
+                    ExecutionBasisIdentity: "focused-v1-sha256:contract")
             ]));
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
@@ -729,6 +740,7 @@ public sealed class TaskVerificationTests
 
         Assert.Equal("receipt-dual-arm", receipt.ReceiptId);
         Assert.Equal("finding-round-contract-1", receipt.FindingRoundFingerprint);
+        Assert.Equal("focused-v1-sha256:contract", receipt.ExecutionBasisIdentity);
         Assert.Collection(
             receipt.Arms!,
             arm =>
@@ -736,6 +748,9 @@ public sealed class TaskVerificationTests
                 Assert.Equal(FindingEvidenceArm.Candidate, arm.Arm);
                 Assert.Equal(FindingEvidenceArmDisposition.Green, arm.Disposition);
                 Assert.Equal(["candidate.trx"], arm.ReceiptPaths);
+                Assert.Equal(7, arm.ExecutedTestCount);
+                Assert.Equal(["candidate.trx"], arm.TestResultPaths);
+                Assert.Equal(new string('a', 64), Assert.Single(arm.ReceiptArtifacts!).Sha256);
             },
             arm =>
             {

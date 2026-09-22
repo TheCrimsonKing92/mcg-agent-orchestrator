@@ -1846,12 +1846,16 @@ public sealed partial class ConductorDriverTestsFindingEvidence
                     classes: ["FullyQualifiedName~GoalAcceptanceVerifierTests"])
             ]);
         var requests = new List<string>();
+        var artifactRoot = InfrastructureTestSupport.CreateTempDirectory();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
             runFocusedEvidence: (_, request) =>
             {
                 requests.Add(request);
-                return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Green);
+                return ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                    artifactRoot,
+                    request,
+                    "abc1234");
             },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
@@ -1883,6 +1887,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             disposition.FindingStableId == "expression" &&
             disposition.Disposition == "executed-standalone" &&
             disposition.Reason == "single-request");
+        Directory.Delete(artifactRoot, recursive: true);
     }
 
     [Xunit.Fact]

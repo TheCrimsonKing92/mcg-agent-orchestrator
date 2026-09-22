@@ -595,6 +595,86 @@ public sealed class ReviewFindingContextProjectorTests
     }
 
     [Xunit.Fact]
+    public void CurrentCandidateReceiptProjectsBoundedMachineDerivedEvidenceSummary()
+    {
+        var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Project current focused evidence", [reviewer]);
+        var candidateSha = new string('a', 40);
+        var selections = Enumerable.Range(1, 14)
+            .Select(index => new FindingEvidenceSelection("Infrastructure.Tests", $"EvidenceClass{index:D2}Tests"))
+            .ToArray();
+        var request = new FindingEvidenceRequest(selections);
+        var requestedIdentity = string.Join('|', selections.Select(selection =>
+            $"{selection.TestProject}:{selection.TestClass}"));
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-current-summary",
+            candidateSha,
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed",
+            Arms:
+            [
+                new FindingEvidenceArmReceipt(
+                    FindingEvidenceArm.Candidate,
+                    candidateSha,
+                    FindingEvidenceArmDisposition.Green,
+                    Accepted: true,
+                    Passed: true,
+                    "candidate passed",
+                    ReceiptPaths: [@"C:\retained\result.trx"],
+                    ExecutedTestCount: 14,
+                    TestResultPaths: [@"C:\retained\result.trx"])
+            ],
+            RequestDispositions:
+            [
+                new FindingEvidenceRequestDisposition(
+                    "summary-finding",
+                    requestedIdentity,
+                    "executed-standalone")
+            ],
+            ExecutionBasisIdentity: "focused-v1-sha256:basis");
+        var finding = new ReviewFinding(
+            "summary-finding",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Summary.cs", "Summary.Run"),
+            "Current focused evidence is available.",
+            FindingSeverity.Blocking,
+            FindingCategory.TestEvidence,
+            request,
+            new FindingEvidenceOutcome(
+                Honoured: true,
+                ReceiptId: receipt.ReceiptId,
+                ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
+                RequestedSelectionIdentity: requestedIdentity,
+                DecisionReason: "reused-covered-green:exact",
+                SourceReceiptIds: [receipt.ReceiptId]));
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, Verification(
+            DateTimeOffset.Parse("2026-09-22T00:00:00Z"),
+            candidateSha,
+            [finding],
+            receipts: [receipt]));
+
+        var currentProjection = ReviewFindingContextProjector.Project(goal, reviewer, candidateSha);
+        using var currentLedger = JsonDocument.Parse(currentProjection.LedgerBytes);
+        var currentFinding = Assert.Single(currentLedger.RootElement.GetProperty("findings").EnumerateArray());
+        var summary = currentFinding.GetProperty("evidence_summary");
+        Assert.Equal(receipt.ReceiptId, summary.GetProperty("receipt_id").GetString());
+        Assert.Equal("passed", summary.GetProperty("result").GetString());
+        Assert.Equal("exact", summary.GetProperty("coverage").GetString());
+        Assert.Equal(12, summary.GetProperty("requested").GetArrayLength());
+        Assert.Equal(2, summary.GetProperty("requested_truncated").GetInt32());
+        Assert.Equal(14, summary.GetProperty("executed_test_count").GetInt32());
+        Assert.Single(currentFinding.GetProperty("receipt_bodies").EnumerateArray());
+
+        var changedProjection = ReviewFindingContextProjector.Project(goal, reviewer, new string('b', 40));
+        using var changedLedger = JsonDocument.Parse(changedProjection.LedgerBytes);
+        var changedFinding = Assert.Single(changedLedger.RootElement.GetProperty("findings").EnumerateArray());
+        Assert.Equal(JsonValueKind.Null, changedFinding.GetProperty("evidence_summary").ValueKind);
+    }
+
+    [Xunit.Fact]
     public void RestoredDuplicateDurableRoundKeepsLatestEnrichmentWithoutDuplicatingRoundIndex()
     {
         var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
