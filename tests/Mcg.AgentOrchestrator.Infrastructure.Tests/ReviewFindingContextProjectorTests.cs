@@ -672,6 +672,40 @@ public sealed class ReviewFindingContextProjectorTests
         using var changedLedger = JsonDocument.Parse(changedProjection.LedgerBytes);
         var changedFinding = Assert.Single(changedLedger.RootElement.GetProperty("findings").EnumerateArray());
         Assert.Equal(JsonValueKind.Null, changedFinding.GetProperty("evidence_summary").ValueKind);
+
+        var missingReceiptReviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var missingReceiptKernel = new AgentOrchestratorKernel();
+        var missingReceiptGoal = missingReceiptKernel.CreateGoal(
+            "Do not project an outcome without its retained receipt",
+            [missingReceiptReviewer]);
+        var missingReceiptFinding = finding with
+        {
+            EvidenceOutcome = finding.EvidenceOutcome! with
+            {
+                ReceiptId = "receipt-not-retained",
+                SourceReceiptIds = ["receipt-not-retained"]
+            }
+        };
+        missingReceiptKernel.RecordTaskVerification(
+            missingReceiptGoal.Id,
+            missingReceiptReviewer.Id,
+            Verification(
+                DateTimeOffset.Parse("2026-09-22T00:00:00Z"),
+                candidateSha,
+                [missingReceiptFinding],
+                receipts: []));
+
+        var missingReceiptProjection = ReviewFindingContextProjector.Project(
+            missingReceiptGoal,
+            missingReceiptReviewer,
+            candidateSha);
+        using var missingReceiptLedger = JsonDocument.Parse(missingReceiptProjection.LedgerBytes);
+        var projectedMissingReceiptFinding = Assert.Single(
+            missingReceiptLedger.RootElement.GetProperty("findings").EnumerateArray());
+        Assert.Equal(
+            JsonValueKind.Null,
+            projectedMissingReceiptFinding.GetProperty("evidence_summary").ValueKind);
+        Assert.Empty(projectedMissingReceiptFinding.GetProperty("receipt_bodies").EnumerateArray());
     }
 
     [Xunit.Fact]

@@ -120,6 +120,112 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         Assert.Equal(false, method.Invoke(null, [receipt, "candidate-a", "basis"]));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("legacy-no-arms")]
+    [Xunit.InlineData("missing-custody")]
+    [Xunit.InlineData("invalid-custody")]
+    public void LegacyOrUntrustedReceiptCannotBecomeReusableGreenEvidence(string control)
+    {
+        const string candidateSha = "abc1234";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest("Establish a content-bound receipt.", id: "custody-source");
+        FailReviewerNeedsWork(kernel, goal, reviewer, "custody source", findings: [finding]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return RetainedEvidenceWithExecutedClasses(_artifactRoot, request, candidateSha);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        var receipt = Assert.Single(reviewer.VerificationHistory.Last().FindingEvidenceReceipts!);
+        Assert.Equal(1, focusedRuns);
+        var untrustedFinding = finding with
+        {
+            StableId = $"custody-{control}",
+            Description = $"A newer {control} receipt must not authorize reuse."
+        };
+        FailReviewerNeedsWork(kernel, goal, reviewer, control, findings: [untrustedFinding]);
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(
+            reviewer.LastVerification,
+            out var untrustedRound,
+            out _));
+        var untrustedReceipt = control switch
+        {
+            "legacy-no-arms" => receipt with
+            {
+                ReceiptId = $"untrusted-{control}",
+                Arms = null
+            },
+            "missing-custody" => receipt with
+            {
+                ReceiptId = $"untrusted-{control}",
+                Arms = receipt.Arms!.Select(arm => arm.Arm == FindingEvidenceArm.Candidate
+                    ? arm with { ReceiptArtifacts = null }
+                    : arm).ToArray()
+            },
+            "invalid-custody" => receipt with
+            {
+                ReceiptId = $"untrusted-{control}",
+                Arms = receipt.Arms!.Select(arm => arm.Arm == FindingEvidenceArm.Candidate
+                    ? arm with
+                    {
+                        ReceiptArtifacts = arm.ReceiptArtifacts!
+                            .Select(artifact => artifact with { Sha256 = new string('0', 64) })
+                            .ToArray()
+                    }
+                    : arm).ToArray()
+            },
+            _ => throw new InvalidOperationException($"Unknown control '{control}'.")
+        };
+        untrustedReceipt = untrustedReceipt with
+        {
+            FindingRoundFingerprint = ConductorDriver.BuildFindingRoundFingerprint(reviewer, untrustedRound),
+            RequestDispositions =
+            [
+                new FindingEvidenceRequestDisposition(
+                    untrustedFinding.StableId,
+                    receipt.RequestDispositions!.Single().RequestIdentity,
+                    "executed-standalone")
+            ]
+        };
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            untrustedFinding.StableId,
+            new FindingEvidenceOutcome(
+                Honoured: true,
+                ReceiptId: untrustedReceipt.ReceiptId,
+                ResultReason: FindingEvidenceOutcomeReason.ValidEvidence),
+            untrustedReceipt);
+        kernel.RetryTask(goal.Id, reviewer.Id, "Continue after recording untrusted evidence.");
+
+        var repeated = finding with
+        {
+            StableId = $"custody-repeat-{control}",
+            Description = $"The request after {control} evidence must execute again."
+        };
+        FailReviewerNeedsWork(kernel, goal, reviewer, $"repeat after {control}", findings: [repeated]);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
+    }
+
     [Xunit.Fact]
     public void ChangedFindingRoundAtSameCandidateReusesCandidateAndRequestBoundReceipt()
     {
