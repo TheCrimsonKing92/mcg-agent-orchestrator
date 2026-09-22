@@ -950,6 +950,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         var root = CreateTempDirectory("mcg-conduct-loop-runtime-handoff");
         var appAssembly = typeof(ConductorBatchLoop).Assembly.Location;
         Process? parent = null;
+        PipeDrain? stdoutDrain = null;
+        PipeDrain? stderrDrain = null;
         int? successorPid = null;
         try
         {
@@ -993,26 +995,33 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_WAIT_SECONDS"] = "5";
 
             parent = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start parent conductor process.");
-            var stdoutTask = parent.StandardOutput.ReadToEndAsync();
-            var stderrTask = parent.StandardError.ReadToEndAsync();
+            stdoutDrain = PipeDrain.Start(parent.StandardOutput, "self-handoff-parent-stdout");
+            stderrDrain = PipeDrain.Start(parent.StandardError, "self-handoff-parent-stderr");
             using (var parentJob = OwnedProcessGroup.Attach(parent))
             {
-                if (!parent.WaitForExit(ParentExitFailsafeMilliseconds))
-                {
-                    // Failsafe expiry, not a verdict on handoff behaviour. The redirected pipes
-                    // stay open while the parent tree lives, so end the job first and then read
-                    // whatever text reached them, to make the failure diagnosable.
-                    parentJob.Dispose();
-                    Assert.Fail(
-                        $"Parent conductor did not reach max-duration handoff within the {ParentExitFailsafeMilliseconds / 1000}-second failsafe. " +
-                        DescribeCapturedHandoffOutput(stdoutTask, stderrTask));
-                }
-
+                var parentExited = WaitForHandoffParentExit(parent, stdoutDrain, stderrDrain, out var parentExitWaitFailure);
+                var phaseSnapshot = CaptureHandoffPhaseSnapshot(root, parent, stdoutDrain, stderrDrain);
+                _output.WriteLine(phaseSnapshot);
+                Assert.True(parentExited, $"{parentExitWaitFailure} {phaseSnapshot}");
                 parentJob.Dispose();
             }
 
-            var stdout = stdoutTask.GetAwaiter().GetResult();
-            var stderr = stderrTask.GetAwaiter().GetResult();
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var stdoutJoined = stdoutDrain.Join(drainDeadline);
+            var stderrJoined = stderrDrain.Join(drainDeadline);
+            var drainsJoined = stdoutJoined && stderrJoined;
+            var stdout = stdoutDrain.Text;
+            var stderr = stderrDrain.Text;
+            if (!drainsJoined)
+            {
+                var diagnostic = PipeDrain.DescribeTimeout(
+                    "Parent conductor handoff",
+                    PipeDrain.DefaultTimeoutMilliseconds,
+                    stdoutDrain,
+                    stderrDrain);
+                stdout = PipeDrain.AppendDiagnostic(stdout, diagnostic);
+                stderr = PipeDrain.AppendDiagnostic(stderr, diagnostic);
+            }
             Assert.True(parent.ExitCode == 0, $"Parent conductor exited {parent.ExitCode}. stdout={stdout} stderr={stderr}");
             successorPid = ParseHandoffProcessId(stdout);
 
@@ -1053,25 +1062,160 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         }
     }
 
-    private static string DescribeCapturedHandoffOutput(Task<string> stdoutTask, Task<string> stderrTask)
+    [Xunit.Fact(
+        Skip = "Requires Windows process semantics.",
+        SkipUnless = nameof(IsWindows))]
+    public void HandoffParentExitWaitFailsFastOnHandoffFailureMarker()
     {
-        // Called only after the parent job has been disposed, so both pipes should close
-        // promptly. The short bound keeps a stuck pipe from swallowing the failure report.
-        var drainBound = TimeSpan.FromSeconds(5);
-        return DescribeCapturedStream("stdout", stdoutTask, drainBound) +
-            " " +
-            DescribeCapturedStream("stderr", stderrTask, drainBound);
+        var root = CreateTempDirectory("mcg-conduct-loop-failed-handoff-wait");
+        Process? parent = null;
+        PipeDrain? stdoutDrain = null;
+        PipeDrain? stderrDrain = null;
+        try
+        {
+            var marker = "LOOP_HANDOFF_FAILED synthetic-failure-" + Guid.NewGuid().ToString("N");
+            var scriptPath = Path.Combine(root, "failed-handoff.cmd");
+            File.WriteAllText(scriptPath, $"@echo {marker}{Environment.NewLine}@ping -n 31 127.0.0.1 >nul{Environment.NewLine}");
+            var cmdPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "cmd.exe");
+            var startInfo = new ProcessStartInfo(cmdPath)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = root
+            };
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(scriptPath);
+
+            parent = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start synthetic failed-handoff parent.");
+            stdoutDrain = PipeDrain.Start(parent.StandardOutput, "failed-handoff-parent-stdout");
+            stderrDrain = PipeDrain.Start(parent.StandardError, "failed-handoff-parent-stderr");
+
+            var parentExited = WaitForHandoffParentExit(parent, stdoutDrain, stderrDrain, out var failure);
+
+            Assert.False(parentExited, $"Synthetic failed-handoff parent unexpectedly exited. failure={failure}");
+            Assert.Contains(marker, failure, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (parent is not null)
+            {
+                TryKillProcess(parent.Id);
+                parent.Dispose();
+            }
+
+            if (stdoutDrain is not null || stderrDrain is not null)
+            {
+                var deadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+                stdoutDrain?.Join(deadline);
+                stderrDrain?.Join(deadline);
+            }
+
+            TryDeleteDirectory(root);
+        }
     }
 
-    private static string DescribeCapturedStream(string label, Task<string> readToEnd, TimeSpan drainBound)
+    private static string CaptureHandoffPhaseSnapshot(
+        string root,
+        Process parent,
+        PipeDrain stdoutDrain,
+        PipeDrain stderrDrain)
     {
-        if (!readToEnd.Wait(drainBound))
+        var parentState = parent.HasExited
+            ? $"exited(code={parent.ExitCode})"
+            : $"running(pid={parent.Id})";
+        var logDirectory = Path.Combine(root, ".orchestrator", "logs");
+        var eventsPath = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
+        var handoffDirectory = Path.Combine(root, ".orchestrator", "handoff");
+        var eventTail = ReadFileTail(eventsPath);
+        var handoffFiles = DescribeFiles(handoffDirectory, "*");
+        var successorLogs = DescribeFiles(logDirectory, "operator-batch99-*.*.log");
+
+        return $"HANDOFF_PHASE_SNAPSHOT parent={parentState}; stdout={Tail(stdoutDrain.Text)}; " +
+            $"stderr={Tail(stderrDrain.Text)}; conductEvents={eventTail}; handoffFiles={handoffFiles}; successorLogs={successorLogs}";
+    }
+
+    private static bool WaitForHandoffParentExit(
+        Process parent,
+        PipeDrain stdoutDrain,
+        PipeDrain stderrDrain,
+        out string failure)
+    {
+        // The incumbent is entitled to the production successor-readiness budget. The additional
+        // slack covers the two managed-host boots and this test's three-second max-duration.
+        var deadline = Environment.TickCount64 + (long)(
+            ConductorLoopHandoff.DefaultVerificationTimeout + TimeSpan.FromSeconds(30)).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
-            return $"{label}=<unavailable: redirected pipe did not close within {drainBound.TotalSeconds:0} seconds of ending the parent process tree>";
+            var output = stdoutDrain.Text + Environment.NewLine + stderrDrain.Text;
+            if (TryDescribeHandoffFailure(output, out failure))
+            {
+                return false;
+            }
+
+            if (parent.WaitForExit(250))
+            {
+                output = stdoutDrain.Text + Environment.NewLine + stderrDrain.Text;
+                if (TryDescribeHandoffFailure(output, out failure))
+                {
+                    return false;
+                }
+
+                failure = string.Empty;
+                return true;
+            }
         }
 
-        var text = readToEnd.GetAwaiter().GetResult();
-        return text.Length == 0 ? $"{label}=<empty>" : $"{label}={text}";
+        failure = $"Parent conductor did not exit within the successor-readiness budget of " +
+            $"{ConductorLoopHandoff.DefaultVerificationTimeout + TimeSpan.FromSeconds(30)}.";
+        return false;
+    }
+
+    private static bool TryDescribeHandoffFailure(string output, out string failure)
+    {
+        var marker = TryGetLineContaining(output, "LOOP_HANDOFF_FAILED");
+        if (marker is not null)
+        {
+            failure = $"Parent conductor reported LOOP_HANDOFF_FAILED before exiting. marker={marker}; outputTail={Tail(output)}";
+            return true;
+        }
+
+        failure = string.Empty;
+        return false;
+    }
+
+    private static string? TryGetLineContaining(string output, string marker)
+    {
+        var markerStart = output.IndexOf(marker, StringComparison.Ordinal);
+        if (markerStart < 0)
+        {
+            return null;
+        }
+
+        var lineStart = output.LastIndexOf('\n', markerStart);
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        var lineEnd = output.IndexOf('\n', markerStart);
+        lineEnd = lineEnd < 0 ? output.Length : lineEnd;
+        return output[lineStart..lineEnd].TrimEnd('\r');
+    }
+
+    private static string ReadFileTail(string path) =>
+        File.Exists(path) ? Tail(TryReadAllTextShared(path)) : "missing";
+
+    private static string DescribeFiles(string directory, string pattern) =>
+        !Directory.Exists(directory)
+            ? "missing"
+            : string.Join(",", Directory.GetFiles(directory, pattern)
+                .Select(path => $"{Path.GetFileName(path)}={ReadFileTail(path)}"));
+
+    private static string Tail(string text)
+    {
+        const int maximumCharacters = 4_000;
+        return text.Length <= maximumCharacters ? text : text[^maximumCharacters..];
     }
 
     private static int ParseHandoffProcessId(string output)
