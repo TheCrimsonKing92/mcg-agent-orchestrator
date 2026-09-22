@@ -3110,7 +3110,6 @@ internal sealed partial class ConductorBatchLoop
                     $"ACCEPTANCE_COHORT_ENTRY tick={tick} goal={markerGoal} members={memberIds}");
                 ConductorAcceptanceCohortRunResult cohortRun;
                 ConductorAcceptanceCohortGateFault? gateFault;
-                CohortAdmissionFairnessTransition? fairnessTransition = null;
                 var exitOutcome = "exception";
                 var exitReason = string.Empty;
                 try
@@ -3119,7 +3118,8 @@ internal sealed partial class ConductorBatchLoop
                         cohortSelection,
                         cohortEligible,
                         policy,
-                        onGateAdmitted: () => fairnessTransition = driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
+                        onGateAdmitted: () => EmitAcceptanceCohortFairnessTransition(
+                            driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection)),
                         runGateInBackground: true);
                     cohortRun = cohortOutcome.Run;
                     gateFault = cohortOutcome.Fault;
@@ -3152,7 +3152,6 @@ internal sealed partial class ConductorBatchLoop
                 }
                 finally
                 {
-                    EmitAcceptanceCohortFairnessTransition(fairnessTransition);
                     EmitProgress(
                         $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}{exitReason}");
                 }

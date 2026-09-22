@@ -537,6 +537,10 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             Assert.StartsWith("ACCEPTANCE_COHORT_ENTRY", cohortEvents[0].Detail, StringComparison.Ordinal);
             Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal));
             Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal));
+            var fairnessTransition = Assert.Single(cohortEvents.Where(record =>
+                record.Detail.StartsWith("ACCEPTANCE_COHORT_FAIRNESS_TRANSITION", StringComparison.Ordinal)));
+            Assert.Contains($"oldest={firstGoal.Id.Value}", fairnessTransition.Detail, StringComparison.Ordinal);
+            Assert.Contains("previous=1 resulting=0 oldest_admitted=True", fairnessTransition.Detail, StringComparison.Ordinal);
             var inFlightTicks = cohortEvents
                 .Where(record => record.Detail.StartsWith("ACCEPTANCE_COHORT_INFLIGHT", StringComparison.Ordinal))
                 .Select(record => record.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries)
