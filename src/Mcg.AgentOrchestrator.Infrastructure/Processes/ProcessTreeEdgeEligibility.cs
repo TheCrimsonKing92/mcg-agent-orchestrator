@@ -83,12 +83,16 @@ internal static class ProcessTreeEdgeEligibility
         DateTimeOffset? childStartedAt,
         ProcessInspectionStatus childStatus)
     {
+        // A readable start time can prove an inversion even when the child exited after
+        // enumeration. DeadOrRecycled never establishes a current child identity.
         var decision = parentAnchor is null ||
             childStartedAt is null ||
-            childStatus is ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled
-                ? ProcessTreeEdgeDecision.IdentityUnavailable
-                : childStartedAt.Value < parentAnchor.Value.StartedAt
-                    ? ProcessTreeEdgeDecision.TemporalInversion
+            childStatus == ProcessInspectionStatus.DeadOrRecycled
+            ? ProcessTreeEdgeDecision.IdentityUnavailable
+            : childStartedAt.Value < parentAnchor.Value.StartedAt
+                ? ProcessTreeEdgeDecision.TemporalInversion
+                : childStatus == ProcessInspectionStatus.Exited
+                    ? ProcessTreeEdgeDecision.IdentityUnavailable
                     : ProcessTreeEdgeDecision.Eligible;
 
         return new ProcessTreeEdgeVerdict(

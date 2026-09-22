@@ -129,6 +129,39 @@ public sealed class WindowsNativeProcessInspectionTests
     }
 
     [Xunit.Fact]
+    public void ConservativeRefusalDescendantsPruneExitedOlderChildAndSubtree()
+    {
+        const int exitedWrapperPid = 6_001;
+        const int exitedOlderChildPid = 6_200;
+        const int allegedGrandchildPid = 6_201;
+        var wrapperStartedAt = DateTimeOffset.Parse("2026-08-30T05:48:32Z");
+        WindowsNativeProcessInspection.ProcessInspectionSeed[] seeds =
+        [
+            new(exitedOlderChildPid, exitedWrapperPid, "exited-older-child"),
+            new(allegedGrandchildPid, exitedOlderChildPid, "alleged-grandchild")
+        ];
+
+        var candidates = WindowsNativeProcessInspection.ListConservativeDescendantProcessIdsForRefusal(
+            exitedWrapperPid,
+            wrapperStartedAt,
+            () => WindowsNativeProcessInspection.ProcessEnumerationResult.Success(seeds),
+            seed => new ProcessInspectionRecord(
+                seed.ProcessId,
+                seed.ParentProcessId,
+                seed.Name,
+                Path.Combine("fixture", seed.Name + ".exe"),
+                seed.ProcessId == exitedOlderChildPid
+                    ? wrapperStartedAt.AddDays(-3)
+                    : wrapperStartedAt.AddSeconds(1),
+                seed.Name,
+                seed.ProcessId == exitedOlderChildPid
+                    ? ProcessInspectionStatus.Exited
+                    : ProcessInspectionStatus.Available));
+
+        Assert.Empty(candidates);
+    }
+
+    [Xunit.Fact]
     public void ConservativeRefusalTreatsApproximateRecordedRootStartAsUnknownInsteadOfRecycled()
     {
         const int wrapperPid = 6_001;
