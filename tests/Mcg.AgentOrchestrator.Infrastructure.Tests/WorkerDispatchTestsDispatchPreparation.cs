@@ -4743,8 +4743,27 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains(new string('d', 400), brief.Content, StringComparison.Ordinal);
 }
 
+    [Xunit.Theory(DisplayName = "UsesTypedContextPackage_pins_supported_models_provider_and_roles")]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
+    [Xunit.InlineData(AgentCatalog.OpenAiSolSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
+    [Xunit.InlineData(AgentCatalog.OpenAiTerraSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
+    [Xunit.InlineData(AgentCatalog.OpenAiLunaSubscriptionModelAlias, "OpenAI", AgentRole.Developer, false)]
+    [Xunit.InlineData(AgentCatalog.OpenAiSubscriptionModelAlias, "OpenAI", AgentRole.Developer, false)]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "Anthropic", AgentRole.Developer, false)]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "OpenAI", AgentRole.Ideation, false)]
+    public void UsesTypedContextPackagePinsSupportedModelsProviderAndRoles(
+        string modelAlias,
+        string providerName,
+        AgentRole role,
+        bool expected)
+    {
+        Assert.Equal(expected, WorkerContextHelpers.UsesTypedContextPackage(role, providerName, modelAlias));
+    }
+
     // Both model aliases are exercised because they select different assembly paths:
-    // WorkerContextHelpers.UsesTypedContextPackage is true only for the Sol/Terra aliases, and that
+    // WorkerContextHelpers.UsesTypedContextPackage is false for GPT-5.5 and true for GPT-5.6 Sol, and the typed
     // path re-renders the brief through WorkerContextPackageBuilder. The evidence section must
     // survive the typed projection as well as the plain brief.
     [Xunit.Theory(DisplayName = "ProfileDispatch_emits_answered_prerequisite_evidence_to_a_later_role_without_starting_a_worker")]

@@ -65,6 +65,9 @@ internal static class DashboardAgentOptionCatalog
                     new(AgentCatalog.OpenAiTerraSubscriptionModelAlias, "GPT-5.6 Terra"),
                     new(AgentCatalog.OpenAiLunaSubscriptionModelAlias, "GPT-5.6 Luna"),
                     new(AgentCatalog.OpenAiSubscriptionModelAlias, "GPT-5.5"),
+                    new(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "GPT-6 Sol"),
+                    new(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "GPT-6 Luna"),
+                    new(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "GPT-6 Astra"),
                     UseApiModel
                 ],
                 SubscriptionReasoning: OpenAiSubscriptionReasoning,
@@ -72,14 +75,20 @@ internal static class DashboardAgentOptionCatalog
                 {
                     [AgentCatalog.OpenAiSolSubscriptionModelAlias] = OpenAiSubscriptionReasoning,
                     [AgentCatalog.OpenAiTerraSubscriptionModelAlias] = OpenAiSubscriptionReasoning,
-                    [AgentCatalog.OpenAiLunaSubscriptionModelAlias] = OpenAiLunaSubscriptionReasoning
+                    [AgentCatalog.OpenAiLunaSubscriptionModelAlias] = OpenAiLunaSubscriptionReasoning,
+                    [AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias] = OpenAiSubscriptionReasoning,
+                    [AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias] = OpenAiLunaSubscriptionReasoning,
+                    [AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias] = OpenAiSubscriptionReasoning
                 },
                 DefaultSubscriptionReasoningByModel: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     [AgentCatalog.OpenAiSubscriptionModelAlias] = AgentCatalog.RoutineSubscriptionReasoningEffort,
                     [AgentCatalog.OpenAiSolSubscriptionModelAlias] = AgentCatalog.RoutineSubscriptionReasoningEffort,
                     [AgentCatalog.OpenAiTerraSubscriptionModelAlias] = "medium",
-                    [AgentCatalog.OpenAiLunaSubscriptionModelAlias] = "medium"
+                    [AgentCatalog.OpenAiLunaSubscriptionModelAlias] = "medium",
+                    [AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias] = "medium",
+                    [AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias] = "medium",
+                    [AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias] = "medium"
                 },
                 DefaultSubscriptionModel: AgentCatalog.OpenAiSubscriptionModelAlias,
                 PreferredProfile: "codex-cli"),
