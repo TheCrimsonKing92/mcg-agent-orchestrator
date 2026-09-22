@@ -220,29 +220,41 @@ public sealed class AcceptanceAttemptExecutionOwnerTests
     {
         var root = CreateTempRoot();
         var storageRoot = new DotnetBuildStorageRoot(Path.Combine(root, "dotnet"));
-        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0, storageRoot: storageRoot);
-        var attemptId = $"attempt-custody-{Guid.NewGuid():N}";
-        var metadataPath = Path.Combine(root, $"{attemptId}.attempt.json");
-        await using var owner = CreateOwner(
-            root,
-            attemptId,
-            "candidate",
-            "main",
-            options: new AcceptanceRunExecutionOptions(LivenessCheckHint: metadataPath));
-        AcceptanceAttemptArtifactCustody.Write(
-            environment.ArtifactsPath,
-            attemptId,
-            metadataPath,
-            Environment.ProcessId);
+        var stateDbPath = Path.Combine(root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(stateDbPath);
+        var priorRegistrar = DotnetBuildEnvironmentManager.SetOwnedRunRootRegistrarForTests(
+            storageRoot,
+            new OwnedRunRootRegistry(stateDbPath));
+        try
+        {
+            var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0, storageRoot: storageRoot);
+            var attemptId = $"attempt-custody-{Guid.NewGuid():N}";
+            var metadataPath = Path.Combine(root, $"{attemptId}.attempt.json");
+            await using var owner = CreateOwner(
+                root,
+                attemptId,
+                "candidate",
+                "main",
+                options: new AcceptanceRunExecutionOptions(LivenessCheckHint: metadataPath));
+            AcceptanceAttemptArtifactCustody.Write(
+                environment.ArtifactsPath,
+                attemptId,
+                metadataPath,
+                Environment.ProcessId);
 
-        using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-            environment,
-            timeProvider: TimeProvider.System,
-            artifactCustody: owner.ArtifactCustody);
+            using var lease = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
+                environment,
+                timeProvider: TimeProvider.System,
+                artifactCustody: owner.ArtifactCustody);
 
-        var markerPath = AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath);
-        Assert.True(File.Exists(markerPath));
-        Assert.Contains(attemptId, File.ReadAllText(markerPath), StringComparison.Ordinal);
+            var markerPath = AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath);
+            Assert.True(File.Exists(markerPath));
+            Assert.Contains(attemptId, File.ReadAllText(markerPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.SetOwnedRunRootRegistrarForTests(storageRoot, priorRegistrar);
+        }
     }
 
     private static AcceptanceAttemptExecutionOwner CreateOwner(

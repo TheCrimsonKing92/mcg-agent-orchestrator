@@ -76,10 +76,13 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DotnetBuildEnvironment> _environments =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DotnetBuildEnvironment> _ownedRootEnvironments =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime;
     private readonly AcceptanceRunExecutionOptions _options;
     private long _nextChildId;
     private int _successful;
+    private int _releaseOutcome = (int)OwnedRunRootReleaseOutcome.Failed;
     private int _disposed;
     private int _resourcesReleased;
 
@@ -154,10 +157,25 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
         if (environment.LeaseMetadataPath is null)
         {
             _environments.TryAdd(environment.RootPath, environment);
+            TrackOwnedRootEnvironment(environment);
         }
     }
 
-    public void MarkSuccessful() => Interlocked.Exchange(ref _successful, 1);
+    internal void TrackOwnedRootEnvironment(DotnetBuildEnvironment environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        if (environment.OwnedRootRegistrar is not null)
+            _ownedRootEnvironments.TryAdd(environment.RootPath, environment);
+    }
+
+    public void MarkSuccessful()
+    {
+        Interlocked.Exchange(ref _releaseOutcome, (int)OwnedRunRootReleaseOutcome.Succeeded);
+        Interlocked.Exchange(ref _successful, 1);
+    }
+
+    internal void MarkCancelled() =>
+        Interlocked.Exchange(ref _releaseOutcome, (int)OwnedRunRootReleaseOutcome.Cancelled);
 
     public void ReportProgress(AcceptanceGateProgress progress) => _options.ProgressSink?.Invoke(progress);
 
@@ -239,6 +257,9 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     {
         if (Interlocked.Exchange(ref _resourcesReleased, 1) != 0)
             return;
+        var releaseOutcome = (OwnedRunRootReleaseOutcome)Volatile.Read(ref _releaseOutcome);
+        foreach (var environment in _ownedRootEnvironments.Values)
+            DotnetBuildEnvironmentManager.RecordOwnedRunRootRelease(environment, releaseOutcome);
         if (Volatile.Read(ref _successful) != 0)
             foreach (var environment in _environments.Values)
                 DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(environment);
@@ -293,29 +314,41 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease)
     {
+        if (stableSlotLease is not null)
+            TrackOwnedRootEnvironment(stableSlotLease.Environment);
         var scopedVerifier = new GoalAcceptanceVerifier(verifier, this);
-        var result = await scopedVerifier.RunOwnedAcceptanceAsync(
-            worktreePath,
-            goalId,
-            changedFiles,
-            stableSlotIndex,
-            stableSlotLease,
-            CancellationToken).ConfigureAwait(false);
-        if (Identity.CandidateTreeSha != "unavailable" &&
-            Identity.MainSha != "unavailable" &&
-            Identity.VerifyingCommitSha != "unavailable")
+        try
         {
-            EnsureIdentityCurrent(
-                _identityResolvers.ResolveCandidateTreeSha(worktreePath),
-                _identityResolvers.ResolveMainSha(worktreePath),
-                _identityResolvers.ResolveVerifyingCommitSha(worktreePath));
-        }
-        if (result.Passed)
-        {
-            MarkSuccessful();
-        }
+            var result = await scopedVerifier.RunOwnedAcceptanceAsync(
+                worktreePath,
+                goalId,
+                changedFiles,
+                stableSlotIndex,
+                stableSlotLease,
+                CancellationToken).ConfigureAwait(false);
+            if (Identity.CandidateTreeSha != "unavailable" &&
+                Identity.MainSha != "unavailable" &&
+                Identity.VerifyingCommitSha != "unavailable")
+            {
+                EnsureIdentityCurrent(
+                    _identityResolvers.ResolveCandidateTreeSha(worktreePath),
+                    _identityResolvers.ResolveMainSha(worktreePath),
+                    _identityResolvers.ResolveVerifyingCommitSha(worktreePath));
+            }
+            if (result.Passed)
+            {
+                stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Succeeded);
+                MarkSuccessful();
+            }
 
-        return result;
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Cancelled);
+            MarkCancelled();
+            throw;
+        }
     }
 
     internal async Task<(AcceptanceCheckResult Result, bool Retried)> RunInvocationForTestsAsync(
@@ -378,21 +411,33 @@ internal sealed class AcceptanceFocusedVerificationOwner : AcceptanceRunExecutio
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm)
     {
+        if (stableSlotLease is not null)
+            TrackOwnedRootEnvironment(stableSlotLease.Environment);
         var scopedVerifier = new GoalAcceptanceVerifier(verifier, this);
-        var result = await scopedVerifier.RunOwnedFocusedEvidenceAsync(
-            worktreePath,
-            goalId,
-            request,
-            stableSlotIndex,
-            stableSlotLease,
-            runBaselineArm,
-            CancellationToken).ConfigureAwait(false);
-        if (result.Passed)
+        try
         {
-            MarkSuccessful();
-        }
+            var result = await scopedVerifier.RunOwnedFocusedEvidenceAsync(
+                worktreePath,
+                goalId,
+                request,
+                stableSlotIndex,
+                stableSlotLease,
+                runBaselineArm,
+                CancellationToken).ConfigureAwait(false);
+            if (result.Passed)
+            {
+                stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Succeeded);
+                MarkSuccessful();
+            }
 
-        return result;
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Cancelled);
+            MarkCancelled();
+            throw;
+        }
     }
 }
 

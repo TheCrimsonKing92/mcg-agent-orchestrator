@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
-    private const int CurrentMigrationNumber = 12;
+    private const int CurrentMigrationNumber = 13;
 
     /// <summary>
     /// Reports whether the published state store already has every numbered migration.
@@ -124,7 +124,8 @@ public static class StateDbMigrations
                 new(9, "source-backlog-authoritative-claims", ApplySourceBacklogClaimSchema),
                 new(10, "goal-replacement-fingerprint-inputs", ApplyGoalReplacementFingerprintInputSchema),
                 new(11, "goal-replacement-assigned-agent-fingerprint-inputs", ApplyGoalReplacementAssignedAgentFingerprintInputSchema),
-                new(12, "goal-intake-request-ledger", ApplyGoalIntakeRequestSchema)
+                new(12, "goal-intake-request-ledger", ApplyGoalIntakeRequestSchema),
+                new(13, "owned-build-run-roots", ApplyOwnedRunRootsSchema)
             };
             ValidateMigrationSequence(migrations);
 
@@ -250,6 +251,34 @@ public static class StateDbMigrations
         ExecuteNonQuery(
             connection,
             "ALTER TABLE spawn_registry ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'Owned'",
+            statementObserver: null);
+    }
+
+    private static void ApplyOwnedRunRootsSchema(SqliteConnection connection)
+    {
+        ExecuteNonQuery(connection, """
+            CREATE TABLE IF NOT EXISTS owned_roots (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_path           TEXT NOT NULL UNIQUE,
+                purpose                  TEXT NOT NULL,
+                owner_process_id         INTEGER NOT NULL,
+                owner_process_started_at TEXT NOT NULL,
+                owner_process_image_path TEXT NOT NULL,
+                goal_id                  TEXT NULL,
+                dispatch_id              TEXT NULL,
+                created_at               TEXT NOT NULL,
+                last_used_at             TEXT NOT NULL,
+                released_at              TEXT NULL,
+                release_outcome           TEXT NULL,
+                cleanup_state             TEXT NOT NULL DEFAULT 'Pending',
+                cleanup_attempt_count     INTEGER NOT NULL DEFAULT 0,
+                last_cleanup_holder       TEXT NULL,
+                next_attempt_after        TEXT NULL
+            )
+            """, statementObserver: null);
+        ExecuteNonQuery(
+            connection,
+            "CREATE INDEX IF NOT EXISTS ix_owned_roots_reap ON owned_roots(cleanup_state, id)",
             statementObserver: null);
     }
 

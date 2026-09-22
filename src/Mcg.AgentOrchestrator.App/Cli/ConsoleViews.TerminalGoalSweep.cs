@@ -19,6 +19,11 @@ internal static partial class ConsoleViews
             Console.WriteLine($"Resolved attention items: {result.ResolvedAttentionItemCount}");
         }
 
+        foreach (var ownedRootEvent in result.OwnedRoots?.OperatorEvents ?? [])
+        {
+            Console.WriteLine(ownedRootEvent);
+        }
+
         foreach (var goal in result.Goals)
         {
             if (includeRepairs)
