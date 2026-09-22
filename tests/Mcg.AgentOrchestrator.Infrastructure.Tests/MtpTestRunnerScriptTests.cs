@@ -1152,6 +1152,161 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Equal(0, document.RootElement.GetProperty("exitCode").GetInt32());
     }
 
+    [Xunit.Fact(DisplayName = "MTP_startup_hook_cache_uses_extended_filesystem_paths_at_pinned_long_lengths")]
+    public void MtpStartupHookCacheUsesExtendedFilesystemPathsAtPinnedLongLengths()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var exactBoundaryTemp = sandbox.CreateStartupHookTempRoot(assemblyPathLength: 264);
+        var adjacentBoundaryTemp = sandbox.CreateStartupHookTempRoot(assemblyPathLength: 265);
+        var longerMarkerTemp = sandbox.CreateStartupHookTempRoot(assemblyPathLength: 300);
+        var approvedParents = new[]
+        {
+            Path.GetTempPath(),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+        }.Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)) + Path.DirectorySeparatorChar)
+            .ToArray();
+        foreach (var fixturePath in new[] { exactBoundaryTemp, adjacentBoundaryTemp, longerMarkerTemp })
+        {
+            Xunit.Assert.True(
+                approvedParents.Any(parent => fixturePath.StartsWith(parent, StringComparison.OrdinalIgnoreCase)),
+                $"Startup-hook fixture escaped the approved test-temp/user-data parents: '{fixturePath}'.");
+        }
+
+        var exactBoundary = sandbox.RunModuleAndReportEnvironmentWithTempRoot(exactBoundaryTemp);
+        Xunit.Assert.True(exactBoundary.ExitCode == 0, exactBoundary.Stdout + exactBoundary.Stderr);
+        var exactHook = StartupHookPathFromStubOutput(exactBoundary.Stdout);
+        Xunit.Assert.Equal(264, exactHook.Length);
+        Xunit.Assert.False(exactHook.StartsWith(@"\\?\", StringComparison.Ordinal));
+        Xunit.Assert.True(File.Exists(exactHook), $"Expected startup-hook assembly at '{exactHook}'.");
+        AssertReportedCallerEnvironment(exactBoundary, exactBoundaryTemp, sandbox.LocalApplicationDataRoot);
+        Xunit.Assert.Equal(
+            "Mcg.AgentOrchestrator.FaultDialogStartupHook",
+            System.Reflection.Assembly.Load(File.ReadAllBytes(exactHook)).GetName().Name);
+        Xunit.Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(exactHook)!, ".mcg-startup-hook.json")));
+        Xunit.Assert.Contains($"stub temp={exactBoundaryTemp} tmp={exactBoundaryTemp} tmpdir={exactBoundaryTemp}", exactBoundary.Stdout, StringComparison.Ordinal);
+
+        var adjacentBoundary = sandbox.RunModuleAndReportEnvironmentWithTempRoot(adjacentBoundaryTemp);
+        Xunit.Assert.True(adjacentBoundary.ExitCode == 0, adjacentBoundary.Stdout + adjacentBoundary.Stderr);
+        Xunit.Assert.Equal(265, StartupHookPathFromStubOutput(adjacentBoundary.Stdout).Length);
+        AssertReportedCallerEnvironment(adjacentBoundary, adjacentBoundaryTemp, sandbox.LocalApplicationDataRoot);
+
+        var longerMarker = sandbox.RunModuleAndReportEnvironmentWithTempRoot(longerMarkerTemp);
+        Xunit.Assert.True(longerMarker.ExitCode == 0, longerMarker.Stdout + longerMarker.Stderr);
+        var longerHook = StartupHookPathFromStubOutput(longerMarker.Stdout);
+        var longerMarkerPath = Path.Combine(Path.GetDirectoryName(longerHook)!, ".mcg-startup-hook.json");
+        Xunit.Assert.Equal(300, longerHook.Length);
+        Xunit.Assert.True(longerMarkerPath.Length > 260, longerMarkerPath);
+        Xunit.Assert.True(File.Exists(longerMarkerPath));
+        AssertReportedCallerEnvironment(longerMarker, longerMarkerTemp, sandbox.LocalApplicationDataRoot);
+
+        var reused = sandbox.RunModuleAndReportEnvironmentWithTempRoot(exactBoundaryTemp);
+        Xunit.Assert.True(reused.ExitCode == 0, reused.Stdout + reused.Stderr);
+        Xunit.Assert.Equal(exactHook, StartupHookPathFromStubOutput(reused.Stdout));
+        AssertReportedCallerEnvironment(reused, exactBoundaryTemp, sandbox.LocalApplicationDataRoot);
+        var remainingDirectories = Directory.EnumerateDirectories(exactBoundaryTemp, "*", SearchOption.AllDirectories)
+            .Select(Path.GetFileName)
+            .ToArray();
+        Xunit.Assert.DoesNotContain(remainingDirectories, name => name!.StartsWith(".staging-", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_startup_hook_cache_refuses_invalid_long_path_entries")]
+    public void MtpStartupHookCacheRefusesInvalidLongPathEntries()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var tempRoot = sandbox.CreateStartupHookTempRoot(assemblyPathLength: 300);
+        var run = sandbox.RunModuleAndReportEnvironmentWithTempRoot(tempRoot);
+        Xunit.Assert.True(run.ExitCode == 0, run.Stdout + run.Stderr);
+
+        var assemblyPath = StartupHookPathFromStubOutput(run.Stdout);
+        var cacheDirectory = Path.GetDirectoryName(assemblyPath)!;
+        var markerPath = Path.Combine(cacheDirectory, ".mcg-startup-hook.json");
+        var sourceDigest = Path.GetFileName(cacheDirectory);
+        var assemblyBytes = File.ReadAllBytes(assemblyPath);
+        var markerText = File.ReadAllText(markerPath);
+        using var markerDocument = JsonDocument.Parse(markerText);
+        var assemblyDigest = markerDocument.RootElement.GetProperty("assemblyDigest").GetString();
+        Xunit.Assert.NotNull(assemblyDigest);
+
+        File.WriteAllText(markerPath, "{");
+        AssertStartupHookCacheRejected(sandbox.Root, cacheDirectory, sourceDigest, "marker is invalid");
+        File.WriteAllText(markerPath, markerText);
+
+        File.WriteAllText(markerPath, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 2,
+            sourceDigest,
+            assemblyDigest
+        }));
+        AssertStartupHookCacheRejected(sandbox.Root, cacheDirectory, sourceDigest, "marker does not match the current source");
+        File.WriteAllText(markerPath, markerText);
+
+        File.WriteAllText(markerPath, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            sourceDigest = sourceDigest + "0",
+            assemblyDigest
+        }));
+        AssertStartupHookCacheRejected(sandbox.Root, cacheDirectory, sourceDigest, "marker does not match the current source");
+        File.WriteAllText(markerPath, markerText);
+
+        File.Delete(markerPath);
+        AssertStartupHookCacheRejected(sandbox.Root, cacheDirectory, sourceDigest, "cache is incomplete");
+        File.WriteAllText(markerPath, markerText);
+
+        File.WriteAllBytes(assemblyPath, assemblyBytes.Concat([(byte)0]).ToArray());
+        AssertStartupHookCacheRejected(sandbox.Root, cacheDirectory, sourceDigest, "assembly digest does not match its marker");
+        File.WriteAllBytes(assemblyPath, assemblyBytes);
+
+        File.Delete(assemblyPath);
+        AssertStartupHookCacheRejected(sandbox.Root, cacheDirectory, sourceDigest, "cache is incomplete");
+
+        Directory.CreateDirectory(assemblyPath);
+        AssertStartupHookCacheRejected(sandbox.Root, cacheDirectory, sourceDigest, "cache is incomplete");
+    }
+
+    [Xunit.Theory(DisplayName = "MTP_startup_hook_cache_filesystem_converter_normalizes_supported_windows_paths")]
+    [Xunit.InlineData(@"C:\mtp-cache\segment\..\hook.dll", @"\\?\C:\mtp-cache\hook.dll")]
+    [Xunit.InlineData(@"\\?\C:\mtp-cache\segment\..\hook.dll", @"\\?\C:\mtp-cache\hook.dll")]
+    [Xunit.InlineData(@"\\server\share\mtp-cache\segment\..\hook.dll", @"\\?\UNC\server\share\mtp-cache\hook.dll")]
+    [Xunit.InlineData(@"\\?\UNC\server\share\mtp-cache\segment\..\hook.dll", @"\\?\UNC\server\share\mtp-cache\hook.dll")]
+    public void MtpStartupHookCacheFilesystemConverterNormalizesSupportedWindowsPaths(string input, string expected)
+    {
+        if (!OperatingSystem.IsWindows()) Xunit.Assert.Skip("Windows filesystem converter.");
+        using var sandbox = ScriptSandbox.Create("success");
+        var module = Path.Combine(sandbox.Root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var escapedInput = input.Replace("'", "''", StringComparison.Ordinal);
+        var start = sandbox.SandboxPowerShellStartInfo();
+        start.ArgumentList.Add("-Command");
+        start.ArgumentList.Add($"$ErrorActionPreference='Stop'; $m=Import-Module '{module}' -Force -PassThru; & $m {{ ConvertTo-MtpStartupHookCacheFileSystemPath -Path '{escapedInput}' }}");
+
+        var result = Run(start);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Equal(expected, result.Stdout.Trim());
+    }
+
+    [Xunit.Theory(DisplayName = "MTP_startup_hook_cache_filesystem_converter_rejects_nonqualified_paths")]
+    [Xunit.InlineData(@"relative\hook.dll")]
+    [Xunit.InlineData(@"C:relative\hook.dll")]
+    [Xunit.InlineData(@"\rooted-but-not-qualified\hook.dll")]
+    [Xunit.InlineData(@"\\.\pipe\hook.dll")]
+    public void MtpStartupHookCacheFilesystemConverterRejectsNonqualifiedPaths(string input)
+    {
+        if (!OperatingSystem.IsWindows()) Xunit.Assert.Skip("Windows filesystem converter.");
+        using var sandbox = ScriptSandbox.Create("success");
+        var module = Path.Combine(sandbox.Root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var escapedInput = input.Replace("'", "''", StringComparison.Ordinal);
+        var start = sandbox.SandboxPowerShellStartInfo();
+        start.ArgumentList.Add("-Command");
+        start.ArgumentList.Add($"$ErrorActionPreference='Stop'; $m=Import-Module '{module}' -Force -PassThru; & $m {{ ConvertTo-MtpStartupHookCacheFileSystemPath -Path '{escapedInput}' }}");
+
+        var result = Run(start);
+
+        Xunit.Assert.NotEqual(0, result.ExitCode);
+        Xunit.Assert.Contains("must be a fully qualified drive or UNC path", result.Stderr, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_public_scripts_have_no_VSTest_or_discarded_runner_path")]
     public void MtpPublicScriptsHaveNoVstestOrDiscardedRunnerPath()
     {
@@ -1469,6 +1624,43 @@ public sealed class MtpTestRunnerScriptTests
                 _index++;
             }
         }
+    private static string StartupHookPathFromStubOutput(string stdout)
+    {
+        var line = stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Single(line => line.StartsWith("stub hook=", StringComparison.Ordinal));
+        return line["stub hook=".Length..];
+    }
+
+    private static void AssertReportedCallerEnvironment(
+        ProcessResult result,
+        string expectedTempRoot,
+        string expectedLocalApplicationData)
+    {
+        var json = result.Stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Last(line => line.StartsWith('{'));
+        using var document = JsonDocument.Parse(json);
+        Xunit.Assert.Equal(expectedTempRoot, document.RootElement.GetProperty("temp").GetString());
+        Xunit.Assert.Equal(expectedTempRoot, document.RootElement.GetProperty("tmp").GetString());
+        Xunit.Assert.Equal(expectedTempRoot, document.RootElement.GetProperty("tmpdir").GetString());
+        Xunit.Assert.Equal(expectedLocalApplicationData, document.RootElement.GetProperty("localAppData").GetString());
+    }
+
+    private static void AssertStartupHookCacheRejected(
+        string workingDirectory,
+        string cacheDirectory,
+        string sourceDigest,
+        string expectedMessage)
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var path = cacheDirectory.Replace("'", "''", StringComparison.Ordinal);
+        var digest = sourceDigest.Replace("'", "''", StringComparison.Ordinal);
+        var command =
+            $"Import-Module '{module}' -Force; $module = Get-Module MtpTestRunner; " +
+            $"try {{ & $module {{ param($cache, $expected) Assert-MtpFaultDialogStartupHook -Path $cache -ExpectedSourceDigest $expected }} '{path}' '{digest}'; exit 0 }} " +
+            "catch { Write-Output $_.Exception.Message; exit 1 }";
+        var result = RunPowerShellCommand(workingDirectory, command);
+        Xunit.Assert.Equal(1, result.ExitCode);
+        Xunit.Assert.Contains(expectedMessage, result.Stdout, StringComparison.Ordinal);
     }
 
     private static ProcessStartInfo PowerShellStartInfo(string workingDirectory) => new()
@@ -1686,6 +1878,8 @@ public sealed class MtpTestRunnerScriptTests
 
     internal sealed class ScriptSandbox : IDisposable
     {
+        private readonly List<string> _startupHookTempRoots = [];
+
         private ScriptSandbox(
             string root,
             string localApplicationDataRoot,
@@ -1826,6 +2020,7 @@ public sealed class MtpTestRunnerScriptTests
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
                 Write-Output 'stub stdout'
                 Write-Output "stub temp=$env:TEMP tmp=$env:TMP tmpdir=$env:TMPDIR"
+                Write-Output "stub hook=$env:DOTNET_STARTUP_HOOKS"
                 [Console]::Error.WriteLine('stub stderr')
                 if ('{{behavior}}' -eq 'hang') {
                     $lock = [System.IO.File]::Open('{{escapedLockPath}}', 'OpenOrCreate', 'ReadWrite', 'None')
@@ -2136,16 +2331,107 @@ public sealed class MtpTestRunnerScriptTests
             return Run(startInfo);
         }
 
-        private ProcessStartInfo SandboxPowerShellStartInfo()
+        public string CreateStartupHookTempRoot(int assemblyPathLength)
+        {
+            const string assemblyLeaf = "Mcg.AgentOrchestrator.FaultDialogStartupHook.dll";
+            var fixtureId = $".mtp-hook-{Guid.NewGuid():N}";
+            foreach (var parent in EnumerateStartupHookFixtureParents())
+            {
+                var cacheRoot = Path.Combine(parent, fixtureId);
+                var fixedAssemblyPath = Path.Combine(
+                    cacheRoot,
+                    "p",
+                    "mcg-mtp-startup-hook",
+                    "v1",
+                    new string('0', 64),
+                    assemblyLeaf);
+                var paddingLength = assemblyPathLength - fixedAssemblyPath.Length + 1;
+                if (paddingLength <= 0)
+                {
+                    continue;
+                }
+
+                var tempRoot = Path.Combine(cacheRoot, new string('p', paddingLength));
+                // Creation can fail after creating intermediate directories. Own the attempt
+                // before touching the filesystem so disposal also covers partial failures.
+                _startupHookTempRoots.Add(cacheRoot);
+                try
+                {
+                    Directory.CreateDirectory(tempRoot);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    continue;
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+
+                var actualAssemblyPath = Path.Combine(
+                    tempRoot,
+                    "mcg-mtp-startup-hook",
+                    "v1",
+                    new string('0', 64),
+                    assemblyLeaf);
+                Xunit.Assert.Equal(assemblyPathLength, actualAssemblyPath.Length);
+                return tempRoot;
+            }
+
+            throw new InvalidOperationException(
+                $"No writable fixture root could construct a {assemblyPathLength}-character startup-hook assembly path.");
+        }
+
+        private static IEnumerable<string> EnumerateStartupHookFixtureParents()
+        {
+            // Prefer the test host's owned temp root. If it is too long for the
+            // requested boundary, use the per-user application-data directory.
+            // Never walk ancestors into shared user directories or the drive root.
+            return new[]
+            {
+                Path.GetTempPath(),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            }
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+        }
+
+        public ProcessResult RunModuleAndReportEnvironmentWithTempRoot(string tempRoot)
+        {
+            var module = Path.Combine(Root, "scripts", "MtpTestRunner.psm1").Replace("'", "''");
+            var manifest = Path.Combine(Root, "config", "acceptance-manifest.json").Replace("'", "''");
+            var root = Root.Replace("'", "''");
+            var resultsRoot = ResultsRoot.Replace("'", "''");
+            var runner = RunnerPath.Replace("'", "''");
+            var command =
+                $"Import-Module '{module}' -Force; " +
+                $"$manifest = Read-MtpTestManifest '{manifest}'; " +
+                $"$run = Invoke-MtpTestRun -RepositoryRoot '{root}' -Manifest $manifest " +
+                "-Target 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj' " +
+                $"-Filters 'FullyQualifiedName~GoalWorktreeTests' -RunLabel 'environment' -NoBuild -ResultsRoot '{resultsRoot}' -RunnerPath '{runner}'; " +
+                "$result = [ordered]@{ exitCode = $run.ExitCode; temp = $env:TEMP; tmp = $env:TMP; tmpdir = $env:TMPDIR; localAppData = $env:LOCALAPPDATA }; " +
+                "$result | ConvertTo-Json -Compress";
+            var startInfo = SandboxPowerShellStartInfo();
+            startInfo.Environment["TEMP"] = tempRoot;
+            startInfo.Environment["TMP"] = tempRoot;
+            startInfo.Environment["TMPDIR"] = tempRoot;
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(command);
+            return Run(startInfo);
+        }
+
+        internal ProcessStartInfo SandboxPowerShellStartInfo()
         {
             var startInfo = PowerShellStartInfo(Root);
             startInfo.Environment["LOCALAPPDATA"] = LocalApplicationDataRoot;
+            startInfo.Environment["DOTNET_STARTUP_HOOKS"] = string.Empty;
             return startInfo;
         }
 
         public void Dispose()
         {
-            ScriptSandboxCleanup.DeleteOrThrow([Root, LocalApplicationDataRoot]);
+            ScriptSandboxCleanup.DeleteOrThrow([Root, LocalApplicationDataRoot, .. _startupHookTempRoots]);
         }
 
         private static string TrxBody(int total, int passed, int failed) => $"""
