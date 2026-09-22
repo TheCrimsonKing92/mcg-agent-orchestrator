@@ -178,6 +178,9 @@ public sealed record OrchestratorWorkspace(
     // forkKind reuses the recorded choice rather than re-asking.
     public string SpecRefinerPrecedentsPath => Path.Combine(OrchestratorDirectory, "spec-refiner-precedents.json");
 
+    public string SpecRefinementLaunchAttemptsDirectory =>
+        Path.Combine(OrchestratorDirectory, "spec-refinement-launch-attempts");
+
     // Goal work runs in the goal's worktree when one exists so concurrent
     // goals do not contend for the shared execution directory.
     public string ResolveExecutionDirectory(GoalId goalId)

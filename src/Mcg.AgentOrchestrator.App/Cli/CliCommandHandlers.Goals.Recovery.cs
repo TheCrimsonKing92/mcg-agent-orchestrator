@@ -28,6 +28,12 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     var goal = context.CurrentGoal;
     var note = ResolveTextArgument(parts, inlineIndex: 2, "recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>", "--text-file");
     EnsurePolicyAllows(context, goal, policy, AutonomyAction.Retry, "recover");
+    var actions = 0;
+    if (SpecRefinementLaunchAttemptStore.ForWorkspace(context.Workspace).Reset(goal.Id))
+    {
+        Console.WriteLine("recover: cleared spec-refinement failed-claim escalation.");
+        actions++;
+    }
 
     var sweep = TerminalGoalSweep.Run(
         context.Kernel,
@@ -39,7 +45,6 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
     goal = context.Kernel.GetGoal(goal.Id);
     context.CurrentGoal = goal;
-    var actions = 0;
     if (sweep.Changed)
     {
         actions++;

@@ -17,7 +17,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     public const string CurrentSchemaVersion = "1";
     private const int GoalMetadataTitleMaxChars = 240;
     private const int MaxOptimisticConcurrencyRetries = 6;
-    private static readonly TimeSpan OutboxProcessingLease = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan OutboxProcessingLease = TimeSpan.FromMinutes(15);
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;

@@ -78,7 +78,8 @@ internal static partial class CliPersistentStateRunner
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli,
-        WorktreeCleanupContext? acceptanceCleanupContext = null)
+        WorktreeCleanupContext? acceptanceCleanupContext = null,
+        Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null)
     {
         if (CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
@@ -181,7 +182,8 @@ internal static partial class CliPersistentStateRunner
                 channel,
                 acceptanceVerifier,
                 persistOnlyCurrentGoal: true,
-                cleanupContext: acceptanceCleanupContext);
+                cleanupContext: acceptanceCleanupContext,
+                stableSlotSelector: stableSlotSelector);
         }
 
         if (IsAcceptanceCommand(args))
@@ -196,7 +198,8 @@ internal static partial class CliPersistentStateRunner
                 ref currentGoal,
                 channel,
                 acceptanceVerifier,
-                cleanupContext: acceptanceCleanupContext);
+                cleanupContext: acceptanceCleanupContext,
+                stableSlotSelector: stableSlotSelector);
         }
 
         if (IsProcessRefreshCommand(args))
@@ -3676,9 +3679,7 @@ internal static partial class CliPersistentStateRunner
             .GetResult();
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = kernel.Goals.FirstOrDefault(goal => goal.Id.Value.Equals(args[1], StringComparison.Ordinal));
-        Console.WriteLine(
-            $"SPEC_REFINEMENT_WORK_COMPLETE goal={result.GoalId} " +
-            $"claimed={result.Claimed.ToString().ToLowerInvariant()} attached={result.Attached.ToString().ToLowerInvariant()}");
+        GoalRefinementWorkOutcomeReporter.Report(result, workspace);
         return false;
     }
 
@@ -3942,7 +3943,8 @@ internal static partial class CliPersistentStateRunner
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
         bool persistOnlyCurrentGoal = false,
-        WorktreeCleanupContext? cleanupContext = null)
+        WorktreeCleanupContext? cleanupContext = null,
+        Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null)
     {
         if (args.Count > 0 && args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase))
         {
@@ -4140,6 +4142,7 @@ internal static partial class CliPersistentStateRunner
             prepareAcceptanceMergeGuard: PrepareAcceptanceMergeGuard,
             persistCriticalGoalKernel: PersistCriticalCurrentGoal,
             recordDurableGoalBaseline: snapshot => conductTickBaselines[snapshot.Id] = snapshot,
+            stableSlotSelector: stableSlotSelector,
             cleanupContext: cleanupContext);
 
         currentGoal = updatedCurrentGoal;

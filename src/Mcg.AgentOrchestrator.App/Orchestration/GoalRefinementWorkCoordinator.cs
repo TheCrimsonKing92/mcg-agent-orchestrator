@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
@@ -30,9 +29,10 @@ internal static class GoalRefinementWorkCoordinator
         "spec_refinement outcome=pending owner=durable-outbox consumers_held=true researcher_allowed=true";
     private const int ReceiptVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly ConcurrentDictionary<string, DateTimeOffset> RecoveryLaunches = new(StringComparer.Ordinal);
     internal static readonly TimeSpan RecoveryLaunchCadence = TimeSpan.FromMinutes(15);
+    internal const int ConsecutiveFailedClaimLimit = 3;
     internal const string CadenceDeferredDetail = "executor-launch-deferred-cadence";
+    internal const string ClaimInProgressDetail = "executor-claim-in-progress";
 
     private static readonly AsyncLocal<Func<OrchestratorWorkspace, GoalId, GoalRefinementWorkLaunchResult>?> LaunchOverrideLocal = new();
     internal static Func<OrchestratorWorkspace, GoalId, GoalRefinementWorkLaunchResult>? LaunchOverride
@@ -42,7 +42,10 @@ internal static class GoalRefinementWorkCoordinator
     }
     internal static Func<DateTimeOffset>? UtcNowOverride { get; set; }
 
-    internal static void ResetRecoveryLaunchesForTests() => RecoveryLaunches.Clear();
+    internal static void ResetRecoveryLaunchesForTests()
+    {
+        // Launch attempts are workspace-scoped durable records now; temp workspaces isolate tests.
+    }
 
     private static DateTimeOffset UtcNow() => UtcNowOverride?.Invoke() ?? DateTimeOffset.UtcNow;
 
@@ -217,6 +220,9 @@ internal static class GoalRefinementWorkCoordinator
             },
             cancellationToken).ConfigureAwait(false);
 
+        if (claimed)
+            SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Reset(goalId);
+
         return new GoalRefinementWorkProcessResult(goalId.Value, claimed, attached);
     }
 
@@ -238,19 +244,87 @@ internal static class GoalRefinementWorkCoordinator
             goalId);
     }
 
-    public static GoalRefinementWorkLaunchResult TryLaunchIfDue(OrchestratorWorkspace workspace, GoalId goalId)
+    public static GoalRefinementWorkLaunchResult TryLaunchIfDue(
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        OrchestratorStateOutboxStatus outboxStatus = OrchestratorStateOutboxStatus.Pending,
+        DateTimeOffset? processingStartedAt = null)
     {
         var now = UtcNow();
-        if (RecoveryLaunches.TryGetValue(goalId.Value, out var lastLaunch) &&
-            now - lastLaunch < RecoveryLaunchCadence)
+        var store = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace);
+        if (outboxStatus == OrchestratorStateOutboxStatus.Processing &&
+            processingStartedAt is { } startedAt &&
+            now - startedAt < SqliteOrchestratorStateRepository.OutboxProcessingLease)
+        {
+            store.Reset(goalId);
+            return new GoalRefinementWorkLaunchResult(false, null, ClaimInProgressDetail);
+        }
+
+        var attempt = store.Get(goalId);
+        var decision = SpecRefinementLaunchPolicy.Decide(
+            attempt,
+            now,
+            RecoveryLaunchCadence,
+            ConsecutiveFailedClaimLimit);
+        if (decision.Kind == SpecRefinementLaunchDecisionKind.DeferCadence)
         {
             return new GoalRefinementWorkLaunchResult(false, null, CadenceDeferredDetail);
         }
 
+        var messageId = MessageId(goalId);
+        var statePath = Path.GetFullPath(workspace.SqliteStatePath);
+        if (decision.Kind == SpecRefinementLaunchDecisionKind.Escalated)
+        {
+            if (attempt?.EscalatedAt is null)
+            {
+                attempt = new SpecRefinementLaunchAttempt(
+                    attempt?.LastLaunchAt ?? now,
+                    decision.ConsecutiveFailedClaims,
+                    now,
+                    messageId,
+                    statePath);
+                store.Save(goalId, attempt);
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).AppendGoalEscalated(
+                    goalId,
+                    GoalLifecycleState.WorkspaceReady,
+                    BuildEscalationDetail(goalId, decision.ConsecutiveFailedClaims, messageId, statePath),
+                    "spec-refinement-launch");
+            }
+
+            return new GoalRefinementWorkLaunchResult(
+                false,
+                null,
+                BuildEscalationDetail(goalId, decision.ConsecutiveFailedClaims, messageId, statePath));
+        }
+
         var launch = TryLaunch(workspace, goalId);
         if (launch.Started)
-            RecoveryLaunches[goalId.Value] = now;
+        {
+            store.Save(
+                goalId,
+                new SpecRefinementLaunchAttempt(
+                    now,
+                    decision.ConsecutiveFailedClaims,
+                    EscalatedAt: null,
+                    messageId,
+                    statePath));
+        }
         return launch;
+    }
+
+    internal static int GetConsecutiveFailedClaims(OrchestratorWorkspace workspace, GoalId goalId) =>
+        SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Get(goalId)?.ConsecutiveFailedClaims ?? 0;
+
+    internal static string FormatPendingAge(DateTimeOffset createdAt)
+    {
+        var age = UtcNow() - createdAt;
+        if (age < TimeSpan.Zero)
+            age = TimeSpan.Zero;
+        if (age.TotalHours >= 1)
+            return $"{(long)age.TotalHours}h{age.Minutes:D2}m";
+        if (age.TotalMinutes >= 1)
+            return $"{(long)age.TotalMinutes}m{age.Seconds:D2}s";
+        return $"{(long)age.TotalSeconds}s";
     }
 
     public static GoalRefinementWorkLaunchResult TryLaunch(OrchestratorWorkspace workspace, GoalId goalId)
@@ -326,7 +400,12 @@ internal static class GoalRefinementWorkCoordinator
         try
         {
             var receipt = Deserialize(pending);
-            _ = TryLaunchIfDue(workspace, new GoalId(receipt.GoalId));
+            var state = repository.GetOutboxStateAsync(pending.Id).GetAwaiter().GetResult();
+            _ = TryLaunchIfDue(
+                workspace,
+                new GoalId(receipt.GoalId),
+                state?.Status ?? OrchestratorStateOutboxStatus.Pending,
+                state?.ProcessingStartedAt);
         }
         catch (JsonException)
         {
@@ -355,6 +434,14 @@ internal static class GoalRefinementWorkCoordinator
 
     private static string SingleLine(string value) =>
         string.Concat(value.Select(character => char.IsWhiteSpace(character) ? ' ' : character)).Trim();
+
+    private static string BuildEscalationDetail(
+        GoalId goalId,
+        int failures,
+        string messageId,
+        string statePath) =>
+        $"SPEC_REFINEMENT_OPERATOR_RECOVERY goal={goalId.Value} reason=claim-miss " +
+        $"message_id={messageId} store_path={statePath} consecutive_failed_claims={failures}";
 
     private static GoalRefinementService CreateService(
         OrchestratorWorkspace workspace,
