@@ -42,3 +42,17 @@ transition after the tick has already returned `CohortInFlight`, so no typed fai
 is present. Restoring emission inside the gate-admitted callback must execute one test and pass with
 exactly one event naming the oldest goal and the `previous=1 resulting=0 oldest_admitted=True`
 transition. Acceptance owns both executable receipts.
+
+## Fairness decision durable classification
+
+Remove only the `ACCEPTANCE_COHORT_FAIRNESS` arm from `TryClassifyConductEvent`, then run:
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-TestSummary.ps1 -Target tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj -Filter 'Name~ConductLog_FairnessYield_PersistsTypedDecision'
+```
+
+The RED arm must execute one test and fail `Assert.Single` with an empty collection because the
+yield decision was emitted but dropped before the durable conduct-event write. Restoring the arm
+must execute one test and persist one `acceptance-cohort` record containing the blocked head,
+selected younger goal, typed conflict holder/key, and overtake count. Acceptance owns the final
+candidate-SHA RED/GREEN receipts.
