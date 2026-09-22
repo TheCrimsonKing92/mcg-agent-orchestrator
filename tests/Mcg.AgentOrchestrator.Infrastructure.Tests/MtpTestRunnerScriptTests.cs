@@ -1624,6 +1624,8 @@ public sealed class MtpTestRunnerScriptTests
                 _index++;
             }
         }
+    }
+
     private static string StartupHookPathFromStubOutput(string stdout)
     {
         var line = stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
