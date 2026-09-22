@@ -1529,6 +1529,13 @@ public static class DispatchFailureClassifier
             ? $"; tests: {TruncateEvidence(tests)}"
             : string.Empty;
 
+        var integration = task.LastDispatch?.PreDispatchIntegrationReceipt;
+        if (integration?.Matches(task.LastDispatch?.GoalId, task, task.LastDispatch?.BaseCommit) == true)
+        {
+            return $"pre-dispatch integration satisfied retry: original {integration.OriginalCandidateSha}; " +
+                $"main {integration.IntegratedMainSha}; candidate {integration.ResultingCandidateSha}{testsEvidence}";
+        }
+
         return $"verified-no-change-round: candidate {task.LastDispatch!.BaseCommit}{testsEvidence}";
     }
 
@@ -1738,41 +1745,54 @@ public static class DispatchFailureClassifier
         bool workerResultPresent,
         bool hasCommittedChanges)
     {
+        var dispatch = task.LastDispatch;
+        var integrationSatisfied = dispatch?.PreDispatchIntegrationReceipt?.Matches(
+            dispatch.GoalId,
+            task,
+            dispatch.BaseCommit) == true;
+        var earlyConvergenceSatisfied = dispatch?.ContextPackageReceipt?.HasEarlyConvergenceEvidenceFor(
+            dispatch.BaseCommit) == true;
         if (task.RequiredRole != AgentRole.Developer ||
             hasCommittedChanges ||
             !workerResultPresent ||
             !WasRedispatchedByAnyRoute(task) ||
-            string.IsNullOrWhiteSpace(task.LastDispatch?.BaseCommit) ||
-            task.LastDispatch.ContextPackageReceipt is not { } contextReceipt ||
-            !contextReceipt.HasEarlyConvergenceEvidenceFor(task.LastDispatch.BaseCommit) ||
+            string.IsNullOrWhiteSpace(dispatch?.BaseCommit) ||
+            (!integrationSatisfied && !earlyConvergenceSatisfied) ||
             !HasPopulatedStandardOutput(verification) ||
-            !DispatchRejectionDiagnosticMarker.TryParse(
-                verification.StandardError,
-                out var verificationRecognized,
-                out var reason,
-                out var postDispatchCommits,
-                out var changedPaths) ||
-            !verificationRecognized ||
-            !string.Equals(reason, DispatchRejectionDiagnosticMarker.NoChangeEvidence, StringComparison.Ordinal) ||
-            postDispatchCommits != 0 ||
-            !(string.IsNullOrWhiteSpace(changedPaths) ||
-              string.Equals(changedPaths, "none", StringComparison.OrdinalIgnoreCase)) ||
-            !TryGetOrchestratorAuthoredFailure(verification, out var authoredFailure) ||
-            !string.Equals(
-                authoredFailure.Rule.Token,
-                TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
-                StringComparison.Ordinal) ||
             !WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) ||
             blockersStatus != WorkerResultBlockers.BlockersStatus.None ||
             WorkerResultBlockers.TryFindBlocker(verification, out _) ||
             !WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) ||
             testsStatus != WorkerResultBlockers.TestsStatus.Pass ||
-            HasStructuredFailingTests(verification))
+            HasStructuredFailingTests(verification) ||
+            (integrationSatisfied &&
+             (!WorkerResultBlockers.TryFindTests(verification, out var tests) ||
+              !FreshVerificationEvidence.HasNonZeroTestCount(tests))))
         {
             return false;
         }
 
-        return true;
+        if (integrationSatisfied && verification.Succeeded)
+        {
+            return true;
+        }
+
+        return DispatchRejectionDiagnosticMarker.TryParse(
+                verification.StandardError,
+                out var verificationRecognized,
+                out var reason,
+                out var postDispatchCommits,
+                out var changedPaths) &&
+            verificationRecognized &&
+            string.Equals(reason, DispatchRejectionDiagnosticMarker.NoChangeEvidence, StringComparison.Ordinal) &&
+            postDispatchCommits == 0 &&
+            (string.IsNullOrWhiteSpace(changedPaths) ||
+             string.Equals(changedPaths, "none", StringComparison.OrdinalIgnoreCase)) &&
+            TryGetOrchestratorAuthoredFailure(verification, out var authoredFailure) &&
+            string.Equals(
+                authoredFailure.Rule.Token,
+                TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
+                StringComparison.Ordinal);
     }
 
     // The verified-no-change allowance is gated on re-dispatch, not on the reason for it. Operator

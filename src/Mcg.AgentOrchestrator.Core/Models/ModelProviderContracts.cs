@@ -301,7 +301,9 @@ public sealed record TaskDispatchRecord(
     string? ClaudeCredentialSourceDirectory = null,
     bool ClaudeCredentialSourceIsExplicit = false,
     string? AssignedAgentId = null,
-    int ConductorRoutingRevision = 0)
+    int ConductorRoutingRevision = 0,
+    PreDispatchIntegrationReceipt? PreDispatchIntegrationReceipt = null,
+    GoalId? GoalId = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
@@ -310,6 +312,8 @@ public sealed record TaskDispatchRecord(
     public string? AssignedAgentId { get; internal set; } = AssignedAgentId;
 
     public int ConductorRoutingRevision { get; internal set; } = ConductorRoutingRevision;
+
+    public GoalId? GoalId { get; internal set; } = GoalId;
 }
 
 public sealed record ReviewRetryCapReceipt(int Round, int StopRound)

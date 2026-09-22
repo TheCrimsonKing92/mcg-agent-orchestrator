@@ -1388,10 +1388,35 @@ public sealed partial class AgentOrchestratorKernel
         dispatch.BriefSnapshot = goal.Objective;
         dispatch.AssignedAgentId ??= task.AssignedAgentId?.Value;
         dispatch.ConductorRoutingRevision = task.ConductorRoutingRevision;
+        dispatch.GoalId = goalId;
+        dispatch = dispatch with
+        {
+            PreDispatchIntegrationReceipt = task.PendingPreDispatchIntegrationReceipt ??
+                (allowPendingRecordedDispatchRefresh ? task.LastDispatch?.PreDispatchIntegrationReceipt : null)
+        };
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}{FormatDispatchTimelineModelSelection(dispatch)}: {dispatch.Command}");
+    }
+
+    public void RecordPreDispatchIntegrationReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        PreDispatchIntegrationReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (task.RequiredRole != AgentRole.Developer ||
+            task.Status != WorkTaskStatus.Assigned ||
+            !receipt.IsBoundTo(goalId, task))
+        {
+            throw new InvalidOperationException(
+                $"Pre-dispatch integration receipt is not bound to assigned Developer retry '{taskId}'.");
+        }
+
+        task.RecordPreDispatchIntegrationReceipt(receipt);
     }
 
     public RetryAdmissionResult RecordPreparedRetryAdmission(

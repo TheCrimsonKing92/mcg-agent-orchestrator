@@ -25,11 +25,16 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
             File.WriteAllText(Path.Combine(repo, "main.txt"), "main change");
             RunGit(repo, "add", "main.txt");
             RunGit(repo, "commit", "-m", "Main change");
+            var originalCandidate = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+            var integratedMain = RunGitOutput(repo, "rev-parse", "main").Trim();
 
             var result = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal);
 
             Assert.Equal(DeveloperBranchIntegrationStatus.Integrated, result.Status);
             Assert.Empty(result.ConflictPaths);
+            Assert.Equal(originalCandidate, result.OriginalCandidateSha);
+            Assert.Equal(integratedMain, result.IntegratedMainSha);
+            Assert.Equal(RunGitOutput(worktree, "rev-parse", "HEAD").Trim(), result.ResultingCandidateSha);
             Assert.Equal(string.Empty, RunGitOutput(worktree, "status", "--short").Trim());
             RunGitOutput(
                 repo,
