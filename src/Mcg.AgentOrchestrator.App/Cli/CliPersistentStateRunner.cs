@@ -3948,7 +3948,7 @@ internal static partial class CliPersistentStateRunner
     {
         if (args.Count > 0 && args[0].Equals("acceptance-queue", StringComparison.OrdinalIgnoreCase))
         {
-            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier, cleanupContext);
+            return ExecuteAcceptanceQueueOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceVerifier, cleanupContext, stableSlotSelector);
         }
 
         var phaseTimings = new CliPhaseTimingRecorder("acceptance");
@@ -4263,7 +4263,8 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null,
-        WorktreeCleanupContext? cleanupContext = null)
+        WorktreeCleanupContext? cleanupContext = null,
+        Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
@@ -4289,7 +4290,8 @@ internal static partial class CliPersistentStateRunner
                 initialGoalSnapshots[request.GoalId.Value],
                 kernel,
                 request),
-            cleanupContext: cleanupContext);
+            cleanupContext: cleanupContext,
+            stableSlotSelector: stableSlotSelector);
 
         if (shouldSave)
         {
