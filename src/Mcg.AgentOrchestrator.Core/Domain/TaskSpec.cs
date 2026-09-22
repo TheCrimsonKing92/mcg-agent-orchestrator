@@ -228,7 +228,8 @@ public sealed class TaskSpec
                     LastProcess.ExitArtifactOrigin,
                     LastProcess.ExitArtifactReason,
                     LastProcess.WasGracefullyDetachedByConductor,
-                    LastProcess.NonBlockingProcessIds),
+                    LastProcess.NonBlockingProcessIds,
+                    LastProcess.ProcessIdentityStartedAt),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -457,7 +458,8 @@ public sealed class TaskSpec
                 snapshot.LastProcess.ExitArtifactOrigin,
                 snapshot.LastProcess.ExitArtifactReason,
                 snapshot.LastProcess.WasGracefullyDetachedByConductor,
-                snapshot.LastProcess.NonBlockingProcessIds));
+                snapshot.LastProcess.NonBlockingProcessIds,
+                snapshot.LastProcess.ProcessIdentityStartedAt));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);

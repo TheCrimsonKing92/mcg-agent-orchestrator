@@ -83,8 +83,8 @@ public sealed class ProcessSpawningCollectionSplitTests
             Xunit.Assert.Contains($"FullyQualifiedName~{type.Name}", parallelLane.Filter, StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "WorkerDispatchFixtures_lane_split_partitions_the_original_class_entries_exactly")]
-    public void WorkerDispatchFixturesLaneSplitPartitionsTheOriginalClassEntriesExactly()
+    [Xunit.Fact(DisplayName = "WorkerDispatchFixtures_lane_split_preserves_original_entries_and_declares_additions")]
+    public void WorkerDispatchFixturesLaneSplitPreservesOriginalEntriesAndDeclaresAdditions()
     {
         var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
         var shardEntries = WorkerDispatchFixtureLaneNames
@@ -97,9 +97,15 @@ public sealed class ProcessSpawningCollectionSplitTests
         Xunit.Assert.DoesNotContain(
             settings.InfrastructureTestLanes,
             lane => lane.Name == "Worker dispatch fixtures");
+        var allEntries = shardEntries.SelectMany(shard => shard.Entries).ToArray();
         Xunit.Assert.Equal(
             OriginalWorkerDispatchFixtureClasses.Order(StringComparer.Ordinal),
-            shardEntries.SelectMany(shard => shard.Entries).Order(StringComparer.Ordinal));
+            allEntries.Where(entry => OriginalWorkerDispatchFixtureClasses.Contains(entry, StringComparer.Ordinal))
+                .Order(StringComparer.Ordinal));
+        Xunit.Assert.Equal(
+            AdditionalWorkerDispatchFixtureClasses.Order(StringComparer.Ordinal),
+            allEntries.Where(entry => !OriginalWorkerDispatchFixtureClasses.Contains(entry, StringComparer.Ordinal))
+                .Order(StringComparer.Ordinal));
         foreach (var left in shardEntries)
         {
             foreach (var right in shardEntries.Where(other =>
@@ -129,6 +135,11 @@ public sealed class ProcessSpawningCollectionSplitTests
         "WorkerDispatchTestsSubscriptionPreflight",
         "WorkerDispatchTestsWorkerResultClassification",
         "WorkerProcessJobsTests"
+    ];
+
+    private static readonly string[] AdditionalWorkerDispatchFixtureClasses =
+    [
+        "DispatchHostLifetimeHandoffTests"
     ];
 
     private static string[] FilterClassEntries(string filter) =>

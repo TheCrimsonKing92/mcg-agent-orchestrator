@@ -36,7 +36,9 @@ internal sealed record DispatchHeartbeat(
     string? ProviderSessionId = null,
     string? WorktreeHeadSha = null,
     string? DirtyStateHash = null,
-    IReadOnlyList<SpawnProcessIdentity>? OwnedProcessIdentities = null)
+    IReadOnlyList<SpawnProcessIdentity>? OwnedProcessIdentities = null,
+    long? OwnedPeakMemoryBytes = null,
+    long? OwnedIoBytes = null)
 {
     public static DispatchHeartbeat Empty { get; } =
         new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
@@ -465,7 +467,9 @@ internal sealed class DispatchProcessRecoveryService
                 GetNullableString(root, "providerSessionId"),
                 GetNullableString(root, "worktreeHeadSha"),
                 GetNullableString(root, "dirtyStateHash"),
-                DispatchProcessIdentityEvidence.Read(root));
+                DispatchProcessIdentityEvidence.Read(root),
+                GetNullableInt64(root, "ownedPeakMemoryBytes"),
+                GetNullableInt64(root, "ownedIoBytes"));
             return true;
         }
         catch (IOException)
@@ -729,13 +733,16 @@ internal sealed class DispatchProcessRecoveryService
             return null;
         }
 
-        var peakMemoryBytes = 0L;
+        var peakMemoryBytes = Math.Max(0L, heartbeat.OwnedPeakMemoryBytes ?? 0L);
         foreach (var processId in processRecord.TrackedProcessIds.Distinct())
         {
             peakMemoryBytes = Math.Max(peakMemoryBytes, _getPeakMemoryBytes(processId) ?? 0L);
         }
 
-        if (heartbeat.OwnedCpuMs is null && peakMemoryBytes <= 0)
+        if (heartbeat.OwnedCpuMs is null &&
+            heartbeat.OwnedPeakMemoryBytes is null &&
+            heartbeat.OwnedIoBytes is null &&
+            peakMemoryBytes <= 0)
         {
             return null;
         }
@@ -743,7 +750,7 @@ internal sealed class DispatchProcessRecoveryService
         return new TaskProcessResourceAccounting(
             Math.Max(0L, heartbeat.OwnedCpuMs ?? 0L),
             peakMemoryBytes,
-            0L,
+            Math.Max(0L, heartbeat.OwnedIoBytes ?? 0L),
             AccountingSource: "snapshot");
     }
 

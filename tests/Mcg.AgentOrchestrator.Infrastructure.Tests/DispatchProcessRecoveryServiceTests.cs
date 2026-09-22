@@ -57,6 +57,35 @@ public sealed class DispatchProcessRecoveryServiceTests
     }
 
     [Xunit.Fact]
+    public void SnapshotAccounting_TerminalHeartbeat_RetainsJobMetrics()
+    {
+        var process = ProcessRecord(42, Now.AddMinutes(-5));
+        var heartbeatPath = DispatchProcessRecoveryService.GetHeartbeatPath(process);
+        var artifacts = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [heartbeatPath] = HeartbeatJson(
+                process.ProcessId,
+                childProcessId: null,
+                lastObservedAt: Now,
+                lastProgressAt: Now,
+                ownedCpuMs: 123,
+                stdoutBytes: 0,
+                stderrBytes: 0,
+                ownedPeakMemoryBytes: 456,
+                ownedIoBytes: 789)
+        };
+        var service = CreateService(artifacts);
+
+        var accounting = Xunit.Assert.IsType<TaskProcessResourceAccounting>(
+            service.SnapshotTrackedProcessAccounting(process));
+
+        Xunit.Assert.Equal(123, accounting.CpuMilliseconds);
+        Xunit.Assert.Equal(456, accounting.PeakMemoryBytes);
+        Xunit.Assert.Equal(789, accounting.IoBytes);
+        Xunit.Assert.Equal("snapshot", accounting.AccountingSource);
+    }
+
+    [Xunit.Fact]
     public void ValidExitArtifactReturnsCompletedVerdictWithoutRealFilesOrProcesses()
     {
         var process = ProcessRecord(41, Now.AddMinutes(-5));
@@ -348,7 +377,9 @@ public sealed class DispatchProcessRecoveryServiceTests
         long ownedCpuMs,
         long stdoutBytes,
         long stderrBytes,
-        bool includeIdentity = true) =>
+        bool includeIdentity = true,
+        long? ownedPeakMemoryBytes = null,
+        long? ownedIoBytes = null) =>
         $$"""
         {
           "pid": {{processId}},
@@ -359,6 +390,8 @@ public sealed class DispatchProcessRecoveryServiceTests
           "stdoutBytes": {{stdoutBytes}},
           "stderrBytes": {{stderrBytes}},
           "ownedCpuMs": {{ownedCpuMs}},
+          "ownedPeakMemoryBytes": {{(ownedPeakMemoryBytes?.ToString() ?? "null")}},
+          "ownedIoBytes": {{(ownedIoBytes?.ToString() ?? "null")}},
           "ownedPids": [{{processId}}],
           "ownedProcessIdentities": {{(includeIdentity
               ? $"[{{\"processId\":{processId},\"startedAt\":\"{IdentityStartedAt:O}\",\"imagePath\":\"C:\\\\workers\\\\worker.exe\"}}]"
