@@ -464,6 +464,45 @@ internal sealed partial class ConductorDriver
             .ToLowerInvariant();
     }
 
+    private static int? TryGetExecutedTestCount(IReadOnlyList<AcceptanceCheckResult> checks) =>
+        checks.Count > 0 && checks.All(check => check.ExecutedTestCount.HasValue)
+            ? checks.Sum(check => check.ExecutedTestCount!.Value)
+            : null;
+
+    internal static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
+        => BuildFindingRoundFingerprint(
+            requestingTask.Id,
+            requestingTask.LastVerification?.CompletedAt,
+            round);
+
+    private static string BuildFindingRoundFingerprint(
+        TaskId requestingTaskId,
+        DateTimeOffset? verificationCompletedAt,
+        ReviewFindingRound round)
+    {
+        var verificationTicks = verificationCompletedAt?.ToUniversalTime().Ticks ?? 0;
+        var findings = round.Findings
+            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .Select(finding => string.Join(
+                "\u001f",
+                finding.StableId,
+                finding.State,
+                finding.Severity,
+                finding.Category,
+                finding.Location.File,
+                finding.Location.Region,
+                finding.Description,
+                string.Join(
+                    "\u001e",
+                    (finding.EvidenceRequest?.Selections ?? [])
+                        .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
+                        .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
+                        .Select(selection => $"{selection.TestProject}:{selection.TestClass}"))));
+        var payload = $"{requestingTaskId.Value}\u001d{verificationTicks}\u001d{string.Join("\u001d", findings)}";
+        return "finding-round-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))
+            .ToLowerInvariant()[..24];
+    }
+
     private static bool TryGetFindingEvidenceCoverage(
         FindingEvidenceRequest request,
         out HashSet<string> coverage)
