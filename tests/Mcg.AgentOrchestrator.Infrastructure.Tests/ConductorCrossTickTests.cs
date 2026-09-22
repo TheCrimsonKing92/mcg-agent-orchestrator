@@ -7,6 +7,70 @@ using System.Text.Json;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorCrossTickTests
 {
+    private const string FairnessMainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void CohortFairness_BlockedHeadYieldDebtPrioritizesHeadAfterRelease()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cohort-fairness-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = new CohortAcceptanceStore(Path.Combine(root, "cohort.db"));
+            var blockedHead = FairnessReady(
+                "11111111111111111111111111111111",
+                "src/Blocked.cs",
+                "resource:head");
+            var younger = FairnessReady("22222222222222222222222222222222", "src/Younger.cs", "resource:younger");
+            var peer = FairnessReady("33333333333333333333333333333333", "src/Peer.cs", "resource:peer");
+            var holder = new ConductorAcceptanceHeldResource(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ["src/Blocked.cs"],
+                ["resource:holder"]);
+            store.RecordOvertake(blockedHead.GoalId);
+
+            var yielded = ConductorAcceptanceCohortSelector.Select(
+                [blockedHead, younger, peer],
+                blockedHead.GoalId,
+                fairnessContext: new ConductorAcceptanceCohortFairnessContext(
+                    blockedHead.GoalId,
+                    store.ReadOvertakeCount(blockedHead.GoalId),
+                    [holder]));
+            var yieldedSelection = Assert.IsType<ConductorAcceptanceCohortSelection>(yielded.Selection);
+            Assert.Equal([younger.GoalId, peer.GoalId], yieldedSelection.Members.Select(member => member.GoalId));
+
+            var yieldedTransition = store.ApplyAdmissionFairness(
+                yieldedSelection.Members.Select(member => member.GoalId).ToArray(),
+                blockedHead.GoalId);
+            Assert.False(yieldedTransition.OldestAdmitted);
+            Assert.Equal(1, yieldedTransition.PreviousOvertakeCount);
+            Assert.Equal(2, yieldedTransition.ResultingOvertakeCount);
+
+            var afterRelease = ConductorAcceptanceCohortSelector.Select(
+                [blockedHead, younger, peer],
+                blockedHead.GoalId,
+                fairnessContext: new ConductorAcceptanceCohortFairnessContext(
+                    blockedHead.GoalId,
+                    store.ReadOvertakeCount(blockedHead.GoalId),
+                    []));
+            var releasedSelection = Assert.IsType<ConductorAcceptanceCohortSelection>(afterRelease.Selection);
+            Assert.Equal(blockedHead.GoalId, releasedSelection.Members[0].GoalId);
+
+            var releasedTransition = store.ApplyAdmissionFairness(
+                releasedSelection.Members.Select(member => member.GoalId).ToArray(),
+                blockedHead.GoalId);
+            Assert.True(releasedTransition.OldestAdmitted);
+            Assert.Equal(2, releasedTransition.PreviousOvertakeCount);
+            Assert.Equal(0, releasedTransition.ResultingOvertakeCount);
+            Assert.Equal(0, store.ReadOvertakeCount(blockedHead.GoalId));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks()
@@ -218,6 +282,30 @@ public sealed class ConductorCrossTickTests
 
     private static Goal CreateGoal(AgentOrchestratorKernel kernel, string objective) =>
         GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, objective);
+
+    private static ConductorSpeculativeAcceptanceCandidate FairnessReady(
+        string goalValue,
+        string path,
+        string resource)
+    {
+        var goalId = new GoalId(goalValue);
+        return new ConductorSpeculativeAcceptanceCandidate(
+            goalId,
+            new GateReadyCandidateProjectionResult.Ready(
+                new GateReadyCandidateProjection(
+                    goalId,
+                    GoalLifecycleState.Verified,
+                    GateReadyVerificationState.Satisfied,
+                    ChangeRiskTier.Behavior,
+                    ConductorTransitionDecision.Auto,
+                    [path],
+                    [resource],
+                    new GateReadyMergeEvidence(
+                        goalValue.PadRight(40, 'f')[..40],
+                        FairnessMainRevision,
+                        GateReadyMergeStatus.Clean,
+                        GateReadyMergeReason.NoConflictsDetected))));
+    }
 
     private static void PassVerification(
         AgentOrchestratorKernel kernel,

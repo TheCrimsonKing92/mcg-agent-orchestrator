@@ -6,6 +6,13 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public sealed record CohortAdmissionFairnessTransition(
+    GoalId OldestEligibleGoalId,
+    int PreviousOvertakeCount,
+    int ResultingOvertakeCount,
+    bool OldestAdmitted,
+    IReadOnlyList<GoalId> AdmittedGoalIds);
+
 public sealed record AcceptanceCohortCoverage(
     GoalId GoalId,
     string CohortId,
@@ -513,7 +520,7 @@ public sealed class CohortAcceptanceStore
     public void CompleteLandingEffects(string cohortId, string receiptId) =>
         MarkLandingIntentState(cohortId, receiptId, "finalized", expectedState: "prepared");
 
-    public void ApplyAdmissionFairness(
+    public CohortAdmissionFairnessTransition ApplyAdmissionFairness(
         IReadOnlyCollection<GoalId> admittedGoalIds,
         GoalId oldestEligibleGoalId)
     {
@@ -524,6 +531,7 @@ public sealed class CohortAcceptanceStore
         }
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
+        var previousOvertakeCount = ReadOvertakeCount(connection, transaction, oldestEligibleGoalId);
         foreach (var goalId in admittedGoalIds)
         {
             using var reset = connection.CreateCommand();
@@ -536,7 +544,14 @@ public sealed class CohortAcceptanceStore
         {
             IncrementOvertake(connection, transaction, oldestEligibleGoalId);
         }
+        var resultingOvertakeCount = ReadOvertakeCount(connection, transaction, oldestEligibleGoalId);
         transaction.Commit();
+        return new CohortAdmissionFairnessTransition(
+            oldestEligibleGoalId,
+            previousOvertakeCount,
+            resultingOvertakeCount,
+            admittedGoalIds.Contains(oldestEligibleGoalId),
+            admittedGoalIds.OrderBy(goalId => goalId.Value, StringComparer.Ordinal).ToArray());
     }
 
     public int ReadOvertakeCount(GoalId goalId)

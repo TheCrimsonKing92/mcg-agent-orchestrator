@@ -51,6 +51,99 @@ public sealed class ConductorAcceptanceCohortTests
     }
 
     [Fact]
+    public void Selector_BlockedForcedHeadYieldsToOldestRunnableDisjointCandidate()
+    {
+        var blockedHead = Ready("11111111111111111111111111111111", "src/Blocked.cs", "resource:head");
+        var younger = Ready("22222222222222222222222222222222", "src/Younger.cs", "resource:younger");
+        var peer = Ready("33333333333333333333333333333333", "src/Peer.cs", "resource:peer");
+        var holder = new ConductorAcceptanceHeldResource(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ["src/Blocked.cs"],
+            ["resource:holder"]);
+
+        var decision = ConductorAcceptanceCohortSelector.Select(
+            [blockedHead, younger, peer],
+            blockedHead.GoalId,
+            fairnessContext: new ConductorAcceptanceCohortFairnessContext(
+                blockedHead.GoalId,
+                OvertakeCount: 1,
+                [holder]));
+
+        var selection = Assert.IsType<ConductorAcceptanceCohortSelection>(decision.Selection);
+        Assert.Equal([younger.GoalId, peer.GoalId], selection.Members.Select(member => member.GoalId));
+        var fairness = Assert.IsType<ConductorAcceptanceCohortFairnessDecision>(decision.FairnessDecision);
+        Assert.Equal(ConductorAcceptanceCohortFairnessOutcome.YieldedToRunnableYounger, fairness.Outcome);
+        Assert.Equal(blockedHead.GoalId, fairness.BlockedHeadGoalId);
+        Assert.Equal(younger.GoalId, fairness.SelectedGoalId);
+        Assert.Equal(holder.HolderGoalId, fairness.HeadConflict.HolderGoalId);
+        Assert.Equal("path:src/Blocked.cs:src/Blocked.cs", fairness.HeadConflict.ConflictKey);
+        Assert.Equal(1, fairness.OvertakeCount);
+    }
+
+    [Fact]
+    public void Selector_YoungerWithSameHeldFileRemainsBlockedWithTypedConflict()
+    {
+        var blockedHead = Ready("11111111111111111111111111111111", "src/Blocked.cs", "resource:head");
+        var conflictingYounger = Ready(
+            "22222222222222222222222222222222",
+            "src/Blocked.cs",
+            "resource:younger");
+        var disjointYounger = Ready(
+            "33333333333333333333333333333333",
+            "tests/Disjoint.cs",
+            "resource:disjoint");
+        var holder = new ConductorAcceptanceHeldResource(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ["src/Blocked.cs"],
+            ["resource:holder"]);
+
+        var decision = ConductorAcceptanceCohortSelector.Select(
+            [blockedHead, conflictingYounger, disjointYounger],
+            blockedHead.GoalId,
+            fairnessContext: new ConductorAcceptanceCohortFairnessContext(
+                blockedHead.GoalId,
+                OvertakeCount: 2,
+                [holder]));
+
+        Assert.Null(decision.Selection);
+        var fairness = Assert.IsType<ConductorAcceptanceCohortFairnessDecision>(decision.FairnessDecision);
+        Assert.Equal(ConductorAcceptanceCohortFairnessOutcome.NoRunnableYounger, fairness.Outcome);
+        var conflict = Assert.Single(fairness.CandidateConflicts);
+        Assert.Equal(conflictingYounger.GoalId, conflict.CandidateGoalId);
+        Assert.Equal(holder.HolderGoalId, conflict.HolderGoalId);
+        Assert.Equal(ConductorAcceptanceHeldConflictKind.LandingPath, conflict.Kind);
+        Assert.Equal("path:src/Blocked.cs:src/Blocked.cs", conflict.ConflictKey);
+    }
+
+    [Fact]
+    public void Selector_UnknownHeldResourceIdentityFailsClosed()
+    {
+        var blockedHead = Ready("11111111111111111111111111111111", "src/Head.cs", "resource:head");
+        var younger = Ready("22222222222222222222222222222222", "src/Younger.cs", "resource:younger");
+        var peer = Ready("33333333333333333333333333333333", "src/Peer.cs", "resource:peer");
+
+        var decision = ConductorAcceptanceCohortSelector.Select(
+            [blockedHead, younger, peer],
+            blockedHead.GoalId,
+            fairnessContext: new ConductorAcceptanceCohortFairnessContext(
+                blockedHead.GoalId,
+                OvertakeCount: 1,
+                [new ConductorAcceptanceHeldResource(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    [],
+                    [RepositoryLandingScopeNormalization.UnknownAcceptanceScopeResourceKey])]));
+
+        Assert.Null(decision.Selection);
+        var fairness = Assert.IsType<ConductorAcceptanceCohortFairnessDecision>(decision.FairnessDecision);
+        Assert.Equal(ConductorAcceptanceHeldConflictKind.UnknownResourceIdentity, fairness.HeadConflict.Kind);
+        Assert.Equal(2, fairness.CandidateConflicts.Count);
+        Assert.All(fairness.CandidateConflicts, conflict =>
+            Assert.Equal(
+                RepositoryLandingScopeNormalization.UnknownAcceptanceScopeResourceKey,
+                conflict.ConflictKey));
+    }
+
+    [Fact]
     public void Selector_ForcedCandidateWithoutReadyProjection_DoesNotAdmitLaterPair()
     {
         var forcedGoal = new GoalId("11111111111111111111111111111111");

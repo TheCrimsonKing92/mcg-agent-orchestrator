@@ -3253,26 +3253,8 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    internal GoalId? SelectForcedCohortCandidate(IReadOnlyList<Goal> orderedGoals)
-    {
-        if (_cohortAcceptanceStore is null) return null;
-        return orderedGoals.FirstOrDefault(goal =>
-            _cohortAcceptanceStore.ReadOvertakeCount(goal.Id) >=
-            ConductorBatchLoop.ParallelAcceptanceBoundedOvertakeLimit)?.Id;
-    }
-
     internal IReadOnlySet<string> ReadSuppressedCohortPairs() =>
         _cohortAcceptanceStore?.ReadSuppressedPairs() ?? new HashSet<string>(StringComparer.Ordinal);
-
-    internal void RecordCohortAdmissionFairness(
-        IReadOnlyList<Goal> orderedGoals,
-        ConductorAcceptanceCohortSelection selection)
-    {
-        if (_cohortAcceptanceStore is null || orderedGoals.Count == 0) return;
-        var admitted = selection.Members.Select(member => member.GoalId).ToHashSet();
-        var oldest = orderedGoals[0].Id;
-        _cohortAcceptanceStore.ApplyAdmissionFairness(admitted, oldest);
-    }
 
     internal void ResetCohortFairness(GoalId goalId) =>
         _cohortAcceptanceStore?.ResetOvertake(goalId);

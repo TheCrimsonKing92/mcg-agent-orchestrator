@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -8,6 +9,70 @@ using Microsoft.Data.Sqlite;
 
 public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : AcceptanceCohortWorkflowTests
 {
+
+    [Fact]
+    public void ConductLog_FairnessYield_PersistsTypedDecision()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cohort-fairness-decision-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var blockedHead = new GoalId("11111111111111111111111111111111");
+            var selected = new GoalId("22222222222222222222222222222222");
+            const string holder = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            var decision = new ConductorAcceptanceCohortFairnessDecision(
+                ConductorAcceptanceCohortFairnessOutcome.YieldedToRunnableYounger,
+                blockedHead,
+                selected,
+                new ConductorAcceptanceHeldConflict(
+                    blockedHead,
+                    holder,
+                    ConductorAcceptanceHeldConflictKind.LandingPath,
+                    "path:src/Blocked.cs:src/Blocked.cs"),
+                OvertakeCount: 1,
+                CandidateConflicts: []);
+            var conductLogPath = Path.Combine(root, "fairness-decision.jsonl");
+            var writer = new ConductEventLogWriter(conductLogPath);
+            var loop = new ConductorBatchLoop();
+            var emit = typeof(ConductorBatchLoop).GetMethod(
+                "EmitAcceptanceCohortFairnessDecision",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(emit);
+            var writerContextField = typeof(ConductorBatchLoop).GetField(
+                "CurrentConductEventLogWriter",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var writerContext = Assert.IsType<AsyncLocal<ConductEventLogWriter?>>(writerContextField?.GetValue(null));
+            var previousWriter = writerContext.Value;
+            try
+            {
+                writerContext.Value = writer;
+                emit.Invoke(loop, [decision]);
+            }
+            finally
+            {
+                writerContext.Value = previousWriter;
+            }
+
+            var records = (File.Exists(conductLogPath) ? File.ReadAllLines(conductLogPath) : [])
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .Where(record =>
+                    record.EventKind == "acceptance-cohort" &&
+                    record.Detail.StartsWith("ACCEPTANCE_COHORT_FAIRNESS ", StringComparison.Ordinal))
+                .ToArray();
+            var fairness = Assert.Single(records);
+            Assert.Contains($"blocked={blockedHead.Value} selected={selected.Value}", fairness.Detail, StringComparison.Ordinal);
+            Assert.Contains(
+                $"holder={holder} conflict_kind=LandingPath conflict=path:src/Blocked.cs:src/Blocked.cs overtakes=1",
+                fairness.Detail,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
 
     [Fact]
     public void CohortProgressEvents_AreStructuredForBothMembersWithoutUnknownGoal()
@@ -537,6 +602,10 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             Assert.StartsWith("ACCEPTANCE_COHORT_ENTRY", cohortEvents[0].Detail, StringComparison.Ordinal);
             Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal));
             Assert.Contains(cohortEvents, record => record.Detail.StartsWith("ACCEPTANCE_COHORT_EXIT", StringComparison.Ordinal));
+            var fairnessTransition = Assert.Single(cohortEvents.Where(record =>
+                record.Detail.StartsWith("ACCEPTANCE_COHORT_FAIRNESS_TRANSITION", StringComparison.Ordinal)));
+            Assert.Contains($"oldest={firstGoal.Id.Value}", fairnessTransition.Detail, StringComparison.Ordinal);
+            Assert.Contains("previous=1 resulting=0 oldest_admitted=True", fairnessTransition.Detail, StringComparison.Ordinal);
             var inFlightTicks = cohortEvents
                 .Where(record => record.Detail.StartsWith("ACCEPTANCE_COHORT_INFLIGHT", StringComparison.Ordinal))
                 .Select(record => record.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries)
