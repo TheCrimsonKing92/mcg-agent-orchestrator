@@ -1450,6 +1450,37 @@ function Get-MtpSha256File {
     }
 }
 
+function ConvertTo-MtpStartupHookCacheFileSystemPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    # Keep the cache's public identity ordinary. Windows PowerShell 5.1's
+    # provider and ordinary System.IO paths cannot address a completed cache
+    # once its assembly path reaches MAX_PATH, so only cache I/O uses this
+    # normalized extended form.
+    if (-not (Test-MtpWindows)) {
+        return $Path
+    }
+
+    $pathToNormalize = $Path
+    if ($pathToNormalize.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $pathToNormalize = '\\' + $pathToNormalize.Substring(8)
+    }
+    elseif ($pathToNormalize.StartsWith('\\?\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $pathToNormalize = $pathToNormalize.Substring(4)
+    }
+    if ($pathToNormalize -notmatch '^(?:[a-zA-Z]:\\|\\\\(?![.?]\\)[^\\]+\\[^\\]+(?:\\|$))') {
+        throw "Fault-dialog startup-hook cache path must be a fully qualified drive or UNC path: $Path"
+    }
+    $fullPath = [System.IO.Path]::GetFullPath($pathToNormalize)
+    if ($fullPath.StartsWith('\\', [System.StringComparison]::Ordinal)) {
+        return '\\?\UNC\' + $fullPath.Substring(2)
+    }
+    if (-not ($fullPath -match '^[a-zA-Z]:\\')) {
+        throw "Fault-dialog startup-hook cache path did not resolve to a fully qualified drive or UNC path: $Path"
+    }
+    return '\\?\' + $fullPath
+}
+
 function Assert-MtpFaultDialogStartupHook {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -1458,12 +1489,14 @@ function Assert-MtpFaultDialogStartupHook {
 
     $assemblyPath = Join-Path $Path $script:MtpStartupHookAssemblyName
     $markerPath = Join-Path $Path $script:MtpStartupHookMarkerName
-    if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+    $assemblyFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $assemblyPath
+    $markerFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $markerPath
+    if (-not [System.IO.File]::Exists($assemblyFileSystemPath) -or
+        -not [System.IO.File]::Exists($markerFileSystemPath)) {
         throw "Fault-dialog startup-hook cache is incomplete: $Path"
     }
     try {
-        $marker = Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $marker = [System.IO.File]::ReadAllText($markerFileSystemPath) | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
         throw "Fault-dialog startup-hook marker is invalid at '$markerPath': $($_.Exception.Message)"
@@ -1472,11 +1505,74 @@ function Assert-MtpFaultDialogStartupHook {
         -not ([string]$marker.sourceDigest).Equals($ExpectedSourceDigest, [System.StringComparison]::Ordinal)) {
         throw "Fault-dialog startup-hook marker does not match the current source: $markerPath"
     }
-    $assemblyDigest = Get-MtpSha256File -Path $assemblyPath
+    $assemblyDigest = Get-MtpSha256File -Path $assemblyFileSystemPath
     if (-not $assemblyDigest.Equals([string]$marker.assemblyDigest, [System.StringComparison]::Ordinal)) {
         throw "Fault-dialog startup-hook assembly digest does not match its marker: $assemblyPath"
     }
     return $assemblyPath
+}
+
+function Write-MtpFaultDialogStartupHookAssembly {
+    param([Parameter(Mandatory = $true)][string]$Destination)
+
+    if (-not (Test-MtpWindows)) {
+        Add-Type -TypeDefinition $script:MtpStartupHookSource -OutputAssembly $Destination -OutputType Library -ErrorAction Stop
+        return
+    }
+
+    # Compiler frontends need an ordinary output path. Desktop PowerShell
+    # also needs bounded intermediate paths. Neither changes cache identity.
+    $localRoot = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    if ([string]::IsNullOrWhiteSpace($localRoot)) {
+        $localRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+    }
+    if ([string]::IsNullOrWhiteSpace($localRoot)) {
+        throw 'Startup-hook compilation requires a writable per-user LocalApplicationData directory.'
+    }
+    $compilerDirectory = [IO.Path]::GetFullPath((Join-Path $localRoot (Join-Path 'Temp/mcg-mtp-compile' ([Guid]::NewGuid().ToString('N')))))
+    $compilerAssembly = Join-Path $compilerDirectory $script:MtpStartupHookAssemblyName
+    if ($compilerAssembly.Length -gt 240) {
+        throw "Startup-hook compilation path exceeds the 240-character compiler budget: $compilerAssembly"
+    }
+    $provider = $null
+    try {
+        try {
+            [void][IO.Directory]::CreateDirectory($compilerDirectory)
+        }
+        catch {
+            throw [IO.IOException]::new("Startup-hook compilation directory is unavailable or unwritable at '$compilerDirectory': $($_.Exception.Message)", $_.Exception)
+        }
+        if ($PSVersionTable.PSVersion.Major -gt 5) {
+            Add-Type -TypeDefinition $script:MtpStartupHookSource -OutputAssembly $compilerAssembly -OutputType Library -ErrorAction Stop
+        }
+        else {
+            $parameters = New-Object System.CodeDom.Compiler.CompilerParameters
+            $parameters.GenerateExecutable = $false
+            $parameters.GenerateInMemory = $false
+            $parameters.OutputAssembly = $compilerAssembly
+            $parameters.TempFiles = New-Object System.CodeDom.Compiler.TempFileCollection($compilerDirectory, $false)
+            [void]$parameters.ReferencedAssemblies.Add('System.dll')
+            $provider = New-Object Microsoft.CSharp.CSharpCodeProvider
+            $result = $provider.CompileAssemblyFromSource($parameters, [string[]]@($script:MtpStartupHookSource))
+            if ($result.Errors.HasErrors) {
+                $messages = @($result.Errors | Where-Object { -not $_.IsWarning } | ForEach-Object { $_.ToString() })
+                throw "Startup-hook compilation failed: $($messages -join [Environment]::NewLine)"
+            }
+        }
+        [IO.File]::Copy($compilerAssembly, $Destination, $false)
+    }
+    finally {
+        if ($null -ne $provider) { $provider.Dispose() }
+        try {
+            if ([IO.Directory]::Exists($compilerDirectory)) {
+                [IO.Directory]::Delete($compilerDirectory, $true)
+            }
+        }
+        catch {
+            # Disposable intermediates cannot invalidate a copied assembly or mask compilation failure.
+            [Console]::Error.WriteLine("Startup-hook compiler cleanup failed at '{0}': {1}", $compilerDirectory, $_.Exception.Message)
+        }
+    }
 }
 
 function Resolve-MtpFaultDialogStartupHook {
@@ -1487,38 +1583,55 @@ function Resolve-MtpFaultDialogStartupHook {
     $sourceDigest = Get-MtpSha256Text -Text $script:MtpStartupHookSource
     $cacheParent = Join-Path ([System.IO.Path]::GetTempPath()) 'mcg-mtp-startup-hook\v1'
     $publishedDirectory = Join-Path $cacheParent $sourceDigest
-    if (Test-Path -LiteralPath $publishedDirectory) {
+    $cacheParentFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $cacheParent
+    $publishedFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $publishedDirectory
+    if ([System.IO.Directory]::Exists($publishedFileSystemPath)) {
         return Assert-MtpFaultDialogStartupHook -Path $publishedDirectory -ExpectedSourceDigest $sourceDigest
     }
 
-    [void](New-Item -ItemType Directory -Force -Path $cacheParent)
+    [System.IO.Directory]::CreateDirectory($cacheParentFileSystemPath) | Out-Null
     $stagingDirectory = Join-Path $cacheParent ".staging-$PID-$([Guid]::NewGuid().ToString('N'))"
     try {
-        [void](New-Item -ItemType Directory -Path $stagingDirectory -ErrorAction Stop)
+        $stagingFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $stagingDirectory
+        [System.IO.Directory]::CreateDirectory($stagingFileSystemPath) | Out-Null
         $stagingAssembly = Join-Path $stagingDirectory $script:MtpStartupHookAssemblyName
-        Add-Type -TypeDefinition $script:MtpStartupHookSource -OutputAssembly $stagingAssembly -OutputType Library -ErrorAction Stop
-        $assemblyDigest = Get-MtpSha256File -Path $stagingAssembly
+        $stagingAssemblyFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $stagingAssembly
+
+        Write-MtpFaultDialogStartupHookAssembly -Destination $stagingAssemblyFileSystemPath
+        $assemblyDigest = Get-MtpSha256File -Path $stagingAssemblyFileSystemPath
         $marker = [ordered]@{
             schemaVersion = $script:MtpStartupHookSchemaVersion
             sourceDigest = $sourceDigest
             assemblyDigest = $assemblyDigest
         }
-        $marker | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $stagingDirectory $script:MtpStartupHookMarkerName) -Encoding UTF8 -ErrorAction Stop
+        [System.IO.File]::WriteAllText(
+            (ConvertTo-MtpStartupHookCacheFileSystemPath -Path (Join-Path $stagingDirectory $script:MtpStartupHookMarkerName)),
+            ($marker | ConvertTo-Json -Compress),
+            [System.Text.Encoding]::UTF8)
 
         try {
-            [System.IO.Directory]::Move($stagingDirectory, $publishedDirectory)
+            [System.IO.Directory]::Move($stagingFileSystemPath, $publishedFileSystemPath)
             $stagingDirectory = $null
         }
         catch [System.IO.IOException] {
-            if (-not (Test-Path -LiteralPath $publishedDirectory)) {
+            if (-not [System.IO.Directory]::Exists($publishedFileSystemPath)) {
                 throw
             }
         }
         return Assert-MtpFaultDialogStartupHook -Path $publishedDirectory -ExpectedSourceDigest $sourceDigest
     }
     finally {
-        if ($null -ne $stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory)) {
-            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        if ($null -ne $stagingDirectory) {
+            try {
+                $stagingFileSystemPath = ConvertTo-MtpStartupHookCacheFileSystemPath -Path $stagingDirectory
+                if ([System.IO.Directory]::Exists($stagingFileSystemPath)) {
+                    [System.IO.Directory]::Delete($stagingFileSystemPath, $true)
+                }
+            }
+            catch {
+                # Preserve the compiler error or the validated winning publication.
+                [Console]::Error.WriteLine("Startup-hook staging cleanup failed at '{0}': {1}", $stagingDirectory, $_.Exception.Message)
+            }
         }
     }
 }
