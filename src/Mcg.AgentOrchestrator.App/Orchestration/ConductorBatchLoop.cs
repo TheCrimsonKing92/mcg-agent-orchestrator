@@ -3101,32 +3101,7 @@ internal sealed partial class ConductorBatchLoop
                 _acceptanceEngineCircuit?.Read())))
         {
             forcedCohortPriority = driver.SelectForcedCohortCandidate(cohortEligible);
-            var fairnessContext = forcedCohortPriority is null
-                ? null
-                : new ConductorAcceptanceCohortFairnessContext(
-                    forcedCohortPriority.GoalId,
-                    forcedCohortPriority.OvertakeCount,
-                    BuildAcceptanceHeldResources(liveAttempts));
-            var cohortDecision = ConductorAcceptanceCohortSelector.Select(
-                productionCandidates,
-                forcedCohortPriority?.GoalId,
-                driver.ReadSuppressedCohortPairs(),
-                fairnessContext);
-            if (cohortDecision.FairnessDecision is { } fairnessDecision)
-            {
-                var candidateConflicts = fairnessDecision.CandidateConflicts.Count == 0
-                    ? "none"
-                    : string.Join(',', fairnessDecision.CandidateConflicts.Select(conflict =>
-                        $"{conflict.CandidateGoalId.Value}:{conflict.HolderGoalId}:{conflict.Kind}:{SanitizeReason(conflict.ConflictKey)}"));
-                EmitProgress(
-                    $"ACCEPTANCE_COHORT_FAIRNESS outcome={fairnessDecision.Outcome} " +
-                    $"blocked={fairnessDecision.BlockedHeadGoalId.Value} " +
-                    $"selected={fairnessDecision.SelectedGoalId?.Value ?? "none"} " +
-                    $"holder={fairnessDecision.HeadConflict.HolderGoalId} " +
-                    $"conflict_kind={fairnessDecision.HeadConflict.Kind} " +
-                    $"conflict={SanitizeReason(fairnessDecision.HeadConflict.ConflictKey)} " +
-                    $"overtakes={fairnessDecision.OvertakeCount} candidate_conflicts={candidateConflicts}");
-            }
+            var cohortDecision = SelectAndReportAcceptanceCohort(productionCandidates, liveAttempts, forcedCohortPriority, driver);
             if (cohortDecision.Selection is { } cohortSelection)
             {
                 var memberIds = string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]));
@@ -3144,8 +3119,7 @@ internal sealed partial class ConductorBatchLoop
                         cohortSelection,
                         cohortEligible,
                         policy,
-                        onGateAdmitted: () => fairnessTransition =
-                            driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
+                        onGateAdmitted: () => fairnessTransition = driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
                         runGateInBackground: true);
                     cohortRun = cohortOutcome.Run;
                     gateFault = cohortOutcome.Fault;
@@ -3178,15 +3152,7 @@ internal sealed partial class ConductorBatchLoop
                 }
                 finally
                 {
-                    if (fairnessTransition is not null)
-                    {
-                        EmitProgress(
-                            $"ACCEPTANCE_COHORT_FAIRNESS_TRANSITION oldest={fairnessTransition.OldestEligibleGoalId.Value} " +
-                            $"previous={fairnessTransition.PreviousOvertakeCount} " +
-                            $"resulting={fairnessTransition.ResultingOvertakeCount} " +
-                            $"oldest_admitted={fairnessTransition.OldestAdmitted} " +
-                            $"admitted={string.Join(',', fairnessTransition.AdmittedGoalIds.Select(goalId => goalId.Value))}");
-                    }
+                    EmitAcceptanceCohortFairnessTransition(fairnessTransition);
                     EmitProgress(
                         $"ACCEPTANCE_COHORT_EXIT tick={tick} goal={markerGoal} members={memberIds} outcome={exitOutcome}{exitReason}");
                 }
@@ -3636,24 +3602,6 @@ internal sealed partial class ConductorBatchLoop
 
         return results;
     }
-
-    private static IReadOnlyList<ConductorAcceptanceHeldResource> BuildAcceptanceHeldResources(
-        IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts) =>
-        liveAttempts
-            .Where(attempt => attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
-            .OrderBy(attempt => attempt.GoalId, StringComparer.Ordinal)
-            .ThenBy(attempt => attempt.AttemptId, StringComparer.Ordinal)
-            .Select(attempt =>
-            {
-                var scope = RepositoryLandingScopeNormalization.Normalize(
-                    attempt.ScopePaths ?? [],
-                    reserveUnknownScope: true);
-                return new ConductorAcceptanceHeldResource(
-                    attempt.GoalId,
-                    scope.ConflictPaths,
-                    scope.ResourceKeys);
-            })
-            .ToArray();
 
     internal static void ReconcileParallelAcceptanceTerminalState(
         AgentOrchestratorKernel kernel,

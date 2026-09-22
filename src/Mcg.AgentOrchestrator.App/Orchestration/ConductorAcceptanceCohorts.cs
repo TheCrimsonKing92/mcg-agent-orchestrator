@@ -439,6 +439,71 @@ internal static class ConductorAcceptanceCohortAttribution
 
 internal sealed partial class ConductorBatchLoop
 {
+    private ConductorAcceptanceCohortSelectionResult SelectAndReportAcceptanceCohort(
+        IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
+        IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts,
+        ConductorAcceptanceCohortFairnessPriority? fairnessPriority,
+        ConductorDriver driver)
+    {
+        var fairnessContext = fairnessPriority is null
+            ? null
+            : new ConductorAcceptanceCohortFairnessContext(
+                fairnessPriority.GoalId,
+                fairnessPriority.OvertakeCount,
+                BuildAcceptanceHeldResources(liveAttempts));
+        var decision = ConductorAcceptanceCohortSelector.Select(
+            candidates,
+            fairnessPriority?.GoalId,
+            driver.ReadSuppressedCohortPairs(),
+            fairnessContext);
+        EmitAcceptanceCohortFairnessDecision(decision.FairnessDecision);
+        return decision;
+    }
+
+    private void EmitAcceptanceCohortFairnessDecision(
+        ConductorAcceptanceCohortFairnessDecision? decision)
+    {
+        if (decision is null) return;
+        var candidateConflicts = decision.CandidateConflicts.Count == 0
+            ? "none"
+            : string.Join(',', decision.CandidateConflicts.Select(conflict =>
+                $"{conflict.CandidateGoalId.Value}:{conflict.HolderGoalId}:{conflict.Kind}:{SanitizeReason(conflict.ConflictKey)}"));
+        EmitProgress(
+            $"ACCEPTANCE_COHORT_FAIRNESS outcome={decision.Outcome} " +
+            $"blocked={decision.BlockedHeadGoalId.Value} selected={decision.SelectedGoalId?.Value ?? "none"} " +
+            $"holder={decision.HeadConflict.HolderGoalId} conflict_kind={decision.HeadConflict.Kind} " +
+            $"conflict={SanitizeReason(decision.HeadConflict.ConflictKey)} " +
+            $"overtakes={decision.OvertakeCount} candidate_conflicts={candidateConflicts}");
+    }
+
+    private void EmitAcceptanceCohortFairnessTransition(CohortAdmissionFairnessTransition? transition)
+    {
+        if (transition is null) return;
+        EmitProgress(
+            $"ACCEPTANCE_COHORT_FAIRNESS_TRANSITION oldest={transition.OldestEligibleGoalId.Value} " +
+            $"previous={transition.PreviousOvertakeCount} resulting={transition.ResultingOvertakeCount} " +
+            $"oldest_admitted={transition.OldestAdmitted} " +
+            $"admitted={string.Join(',', transition.AdmittedGoalIds.Select(goalId => goalId.Value))}");
+    }
+
+    private static IReadOnlyList<ConductorAcceptanceHeldResource> BuildAcceptanceHeldResources(
+        IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts) =>
+        liveAttempts
+            .Where(attempt => attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
+            .OrderBy(attempt => attempt.GoalId, StringComparer.Ordinal)
+            .ThenBy(attempt => attempt.AttemptId, StringComparer.Ordinal)
+            .Select(attempt =>
+            {
+                var scope = RepositoryLandingScopeNormalization.Normalize(
+                    attempt.ScopePaths ?? [],
+                    reserveUnknownScope: true);
+                return new ConductorAcceptanceHeldResource(
+                    attempt.GoalId,
+                    scope.ConflictPaths,
+                    scope.ResourceKeys);
+            })
+            .ToArray();
+
     // The infrastructure faults the background attempt path treats as transient (IsRetryableAcceptanceRun).
     // A cohort gate that fails this way is retried on a later tick, not turned into a candidate verdict.
     private static bool IsTransientCohortGateFault(Exception exception) =>
@@ -503,6 +568,39 @@ internal sealed partial class ConductorBatchLoop
 
 internal sealed partial class ConductorDriver
 {
+    internal ConductorAcceptanceCohortFairnessPriority? SelectForcedCohortCandidate(
+        IReadOnlyList<Goal> orderedGoals)
+    {
+        if (_cohortAcceptanceStore is null) return null;
+        foreach (var goal in orderedGoals)
+        {
+            var count = _cohortAcceptanceStore.ReadOvertakeCount(goal.Id);
+            if (count >= ConductorBatchLoop.ParallelAcceptanceBoundedOvertakeLimit)
+            {
+                return new ConductorAcceptanceCohortFairnessPriority(goal.Id, count);
+            }
+        }
+
+        return null;
+    }
+
+    internal CohortAdmissionFairnessTransition RecordCohortAdmissionFairness(
+        IReadOnlyList<Goal> orderedGoals,
+        ConductorAcceptanceCohortSelection selection)
+    {
+        if (_cohortAcceptanceStore is null)
+        {
+            throw new InvalidOperationException("Cohort admission fairness store is unavailable.");
+        }
+        if (orderedGoals.Count == 0)
+        {
+            throw new InvalidOperationException("Cohort admission fairness requires an ordered eligible goal.");
+        }
+        var admitted = selection.Members.Select(member => member.GoalId).ToHashSet();
+        var oldest = orderedGoals[0].Id;
+        return _cohortAcceptanceStore.ApplyAdmissionFairness(admitted, oldest);
+    }
+
     // A background cohort gate that faulted is parked here as a typed fault instead of being rethrown
     // into the conduct tick, and drained by the next RunAcceptanceCohort call for the same member pair.
     private readonly ConcurrentDictionary<string, ConductorAcceptanceCohortGateFault> _cohortGateFaults =
