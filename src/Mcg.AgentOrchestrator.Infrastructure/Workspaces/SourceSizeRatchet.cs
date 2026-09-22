@@ -135,7 +135,11 @@ internal static class SourceSizeRatchet
             // DispatchProcessCompletionState construction; moving that construction would split
             // the completion contract the runner owns rather than extract independent behavior.
             // 2684 is the measured post-change size of that contract-preserving handoff.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2684),
+            // Goal cd39be97 raised this row for the bounded runtime-ownership handoff. The runner must
+            // fail and checkpoint before releasing the worker start gate when any owned process cannot
+            // detach. 2707 is the measured size after integrating that handoff with the rows above; the
+            // branch measured 2678 against a main that has since grown this file to 2684.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2707),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and

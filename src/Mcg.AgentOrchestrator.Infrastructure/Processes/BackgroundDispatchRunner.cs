@@ -384,6 +384,11 @@ public sealed class BackgroundDispatchRunner
             return DispatchProcessStartResult.Failed(registrationFailure);
         }
 
+        // A registry-free runner has no durable process-identity reader. Registration still owns
+        // the live process through its job, so preserve that supported degraded path; durable
+        // registries continue to supply the identity later used by successor recovery.
+        _ = WorkerProcessJobs.TryGetRegisteredIdentity(process.Id, out var dispatchHostIdentity);
+
         var sampleArtifacts = task.RequiredRole == AgentRole.Planner
             ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount)
             : [];
@@ -405,6 +410,24 @@ public sealed class BackgroundDispatchRunner
             throw;
         }
 
+        foreach (var ownedProcess in sampleLaunches.Select(launch => launch.Process).Prepend(process))
+        {
+            if (WorkerProcessJobs.TryHandOffToRuntimeOwnership(ownedProcess.Id, out var handoffFailure))
+            {
+                continue;
+            }
+
+            TerminateUnreleasedDispatchHost(process);
+            PlannerSampleDispatcher.TerminateUnreleased(sampleLaunches);
+            kernel.ReportTaskProgress(goalId, taskId, WorkTaskStatus.Failed, handoffFailure);
+            checkpointBeforeWorkerStart?.Invoke(
+                kernel,
+                goalId,
+                taskId,
+                DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
+            return DispatchProcessStartResult.Failed(handoffFailure);
+        }
+
         var record = new TaskProcessRecord(
             process.Id,
             dispatch.Command,
@@ -417,7 +440,8 @@ public sealed class BackgroundDispatchRunner
             null,
             OwnedProcessIds: sampleLaunches.Select(launch => launch.Process.Id).Prepend(process.Id).ToArray(),
             ChildExitRecordPath: childExitRecordPath,
-            NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray());
+            NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray(),
+            ProcessIdentityStartedAt: dispatchHostIdentity?.StartedAt);
 
         try
         {
@@ -2282,7 +2306,7 @@ public sealed class BackgroundDispatchRunner
                         ChildExitCode: null
                     } detachedFailure &&
                     (detachedFailure.WasGracefullyDetachedByConductor ||
-                     WorkerProcessJobs.WasGracefullyDetached(
+                     WorkerProcessJobs.WasDetachedByConductor(
                          $"{goal.Id.Value}:{task.Id.Value}",
                          detachedFailure.ProcessId,
                          detachedFailure.StartedAt)) &&

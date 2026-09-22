@@ -20,18 +20,36 @@ internal static class GracefulDispatchDetacher
                 continue;
             }
 
-            if (WorkerProcessJobs.TryDetachForGracefulStop(process.ProcessId, out var detachFailure))
+            if (WorkerProcessJobs.TryDetachForGracefulStop(
+                    process,
+                    $"{goalId.Value}:{task.Id.Value}",
+                    out var detachedProcess,
+                    out var safeToCancelOnFailure,
+                    out var detachFailure))
             {
                 kernel.RecordTaskProcessGracefullyDetached(
                     goalId,
                     task.Id,
-                    process with { WasGracefullyDetachedByConductor = true });
+                    detachedProcess with { WasGracefullyDetachedByConductor = true });
                 evictProcessLogCache(process);
                 detached++;
                 continue;
             }
 
-            cancelAfterDetachFailure(task.Id);
+            if (safeToCancelOnFailure)
+            {
+                cancelAfterDetachFailure(task.Id);
+            }
+            else
+            {
+                kernel.ReportTaskProgress(
+                    goalId,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    $"{detachFailure}; refusing cancellation because durable ownership could not be proved.");
+                continue;
+            }
+
             kernel.RecordTaskNote(
                 goalId,
                 task.Id,

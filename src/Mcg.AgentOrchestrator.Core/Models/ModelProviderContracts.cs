@@ -444,7 +444,8 @@ public sealed record TaskProcessRecord(
     DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
-    IReadOnlyList<int>? NonBlockingProcessIds = null)
+    IReadOnlyList<int>? NonBlockingProcessIds = null,
+    DateTimeOffset? ProcessIdentityStartedAt = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 

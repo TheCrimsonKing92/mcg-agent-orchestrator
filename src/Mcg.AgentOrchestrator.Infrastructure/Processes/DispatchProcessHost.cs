@@ -1517,7 +1517,10 @@ public static void DropToLow() {
             var stdoutBytes = FileLength(parameters.StdoutPath);
             var stderrBytes = FileLength(parameters.StderrPath);
             var (ownedPids, ownedProcessIdentities) = CaptureHeartbeatOwnership();
-            var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
+            var ownedAccounting = ReadHeartbeatOwnedAccounting(workerGroup);
+            var ownedCpuMs = ownedAccounting?.CpuMilliseconds ?? SumOwnedCpuMs(ownedPids);
+            var ownedPeakMemoryBytes = ownedAccounting?.PeakMemoryBytes;
+            var ownedIoBytes = ownedAccounting?.IoBytes;
             var childPid = SelectHeartbeatChildPid(worker, ownedPids);
             ObserveSelectedChild(childPid);
             providerSessionId ??= TryCaptureProviderSessionId(
@@ -1554,6 +1557,8 @@ public static void DropToLow() {
                 stdoutBytes,
                 stderrBytes,
                 ownedCpuMs,
+                ownedPeakMemoryBytes,
+                ownedIoBytes,
                 providerSessionId,
                 sessionCaptureStdoutOffset = stdoutSessionCapture.Offset,
                 sessionCaptureStderrOffset = stderrSessionCapture.Offset,
@@ -2092,13 +2097,11 @@ public static void DropToLow() {
 
     internal static long ReadHeartbeatOwnedCpuMs(OwnedProcessGroup? workerGroup, IReadOnlyList<int> ownedPids)
     {
-        if (workerGroup?.TryReadAccounting(out var accounting) == true)
-        {
-            return accounting.CpuMilliseconds;
-        }
-
-        return SumOwnedCpuMs(ownedPids);
+        return ReadHeartbeatOwnedAccounting(workerGroup)?.CpuMilliseconds ?? SumOwnedCpuMs(ownedPids);
     }
+
+    private static WorkerProcessJobAccounting? ReadHeartbeatOwnedAccounting(OwnedProcessGroup? workerGroup) =>
+        workerGroup?.TryReadAccounting(out var accounting) == true ? accounting : null;
 
     internal static int? SelectHeartbeatChildPid(Process? worker, IReadOnlyList<int> ownedPids)
     {

@@ -884,8 +884,8 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
 
             Xunit.Assert.NotNull(start.ProcessRecord);
             Xunit.Assert.Equal(3, invocation);
-            Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(start.ProcessRecord.ProcessId));
-            Xunit.Assert.True(WorkerProcessJobs.HasRegisteredJob(startedProcessIds[1]));
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(start.ProcessRecord.ProcessId));
+            Xunit.Assert.False(WorkerProcessJobs.HasRegisteredJob(startedProcessIds[1]));
             Xunit.Assert.Equal(startedProcessIds, start.ProcessRecord.TrackedProcessIds);
             Xunit.Assert.Equal(new[] { startedProcessIds[1] }, start.ProcessRecord.NonBlockingProcessIds);
             simulatedLiveProcessIds.Add(startedProcessIds[1]);
@@ -1271,6 +1271,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     [Xunit.Fact]
     public void UnresolvedSampleTimesOutAndPrimarySucceeds()
     {
+        WorkerProcessJobs.ClearRegistryForTests();
         var root = CreateSeededDispatchRepository();
         var logRoot = Path.Combine(root, "logs");
         SeedFixtureCitationTargets(root);
@@ -1364,6 +1365,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                 try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
             foreach (var process in processes)
                 try { process.Dispose(); } catch { }
+            WorkerProcessJobs.ClearRegistryForTests();
         }
     }
 

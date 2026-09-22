@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
+using Mcg.AgentOrchestrator.Core;
 using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -311,7 +312,7 @@ public static class WorkerProcessJobs
         var sweeper = BuildSweeperEvidence(sweepStartedAt);
         foreach (var entry in registry.ListActive())
         {
-            if (entry.Lifecycle == SpawnRegistryLifecycle.GracefullyDetached)
+            if (entry.Lifecycle != SpawnRegistryLifecycle.Owned)
             {
                 var detachedVictimStatus = SpawnProcessIdentityReader.EvaluateTrackedProcess(
                     entry,
@@ -1404,14 +1405,14 @@ public static class WorkerProcessJobs
         return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: false, out _);
     }
 
-    internal static bool WasGracefullyDetached(
+    internal static bool WasDetachedByConductor(
         string ownerId,
         int processId,
         DateTimeOffset processRecordedAt)
     {
         try
         {
-            return Registry?.WasGracefullyDetached(ownerId, processId, processRecordedAt) == true;
+            return Registry?.WasDetachedByConductor(ownerId, processId, processRecordedAt) == true;
         }
         catch
         {
@@ -1586,6 +1587,18 @@ public static class WorkerProcessJobs
             $"worker-process-registration-missing: pid={processId}; stage=owned-child-transfer");
     }
 
+    internal static bool TryGetRegisteredIdentity(int processId, out SpawnProcessIdentity identity)
+    {
+        if (Jobs.TryGetValue(processId, out var job) && job.Identity is { } registeredIdentity)
+        {
+            identity = registeredIdentity;
+            return true;
+        }
+
+        identity = default!;
+        return false;
+    }
+
     internal static bool TryGetActiveProcessIds(int processId, out IReadOnlyList<int> processIds)
     {
         processIds = [];
@@ -1627,14 +1640,142 @@ public static class WorkerProcessJobs
         }
     }
 
+    internal static bool TryHandOffToRuntimeOwnership(int processId, out string failure)
+    {
+        return TryDetach(
+            processId,
+            "worker-process-handoff-failed",
+            "spawn_registry: runtime-owned",
+            SpawnRegistryLifecycle.RuntimeOwned,
+            expectedOwnerId: null,
+            expectedProcessStartedAt: null,
+            out _,
+            out failure);
+    }
+
     internal static bool TryDetachForGracefulStop(int processId, out string failure)
     {
-        failure = string.Empty;
+        return TryDetach(
+            processId,
+            "worker-process-detach-failed",
+            "spawn_registry: gracefully-detached",
+            SpawnRegistryLifecycle.ConductorDetached,
+            expectedOwnerId: null,
+            expectedProcessStartedAt: null,
+            out _,
+            out failure);
+    }
+
+    internal static bool TryDetachForGracefulStop(
+        TaskProcessRecord expectedProcess,
+        string expectedOwnerId,
+        out TaskProcessRecord detachedProcess,
+        out bool safeToCancelOnFailure,
+        out string failure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedOwnerId);
+        detachedProcess = expectedProcess;
+        if (expectedProcess.ProcessIdentityStartedAt is not { } expectedProcessStartedAt &&
+            !TryResolveLegacyDispatchIdentity(
+                expectedProcess.ProcessId,
+                expectedOwnerId,
+                out expectedProcessStartedAt,
+                out failure))
+        {
+            safeToCancelOnFailure = false;
+            return false;
+        }
+
+        detachedProcess = expectedProcess with { ProcessIdentityStartedAt = expectedProcessStartedAt };
+
+        return TryDetach(
+            expectedProcess.ProcessId,
+            "worker-process-detach-failed",
+            "spawn_registry: gracefully-detached",
+            SpawnRegistryLifecycle.ConductorDetached,
+            expectedOwnerId,
+            expectedProcessStartedAt,
+            out safeToCancelOnFailure,
+            out failure);
+    }
+
+    private static bool TryResolveLegacyDispatchIdentity(
+        int processId,
+        string expectedOwnerId,
+        out DateTimeOffset processStartedAt,
+        out string failure)
+    {
+        processStartedAt = default;
+        failure = $"worker-process-detach-failed: pid={processId}; stage=expected-dispatch-identity-missing";
         var registry = Registry;
+        if (registry is null)
+        {
+            return false;
+        }
+
+        SpawnRegistryEntry[] entries;
+        try
+        {
+            entries = registry.ListActive()
+                .Where(entry => entry.ProcessId == processId)
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-identity-read; error={ex.GetType().Name}";
+            return false;
+        }
+
+        if (entries.Length != 1)
+        {
+            failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-identity-ambiguous";
+            return false;
+        }
+
+        var entry = entries[0];
+        if (!string.Equals(entry.OwnerId, expectedOwnerId, StringComparison.Ordinal))
+        {
+            failure = $"worker-process-detach-failed: pid={processId}; stage=durable-owner-mismatch; expected_owner={expectedOwnerId}";
+            return false;
+        }
+
+        if (entry.Lifecycle is not (SpawnRegistryLifecycle.RuntimeOwned or SpawnRegistryLifecycle.GracefullyDetached))
+        {
+            failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-lifecycle-unexpected";
+            return false;
+        }
+
+        processStartedAt = entry.ProcessStartedAt;
+        return true;
+    }
+
+    private static bool TryDetach(
+        int processId,
+        string failurePrefix,
+        string lifecycleDiagnostic,
+        SpawnRegistryLifecycle detachedLifecycle,
+        string? expectedOwnerId,
+        DateTimeOffset? expectedProcessStartedAt,
+        out bool safeToCancelOnFailure,
+        out string failure)
+    {
+        failure = string.Empty;
+        safeToCancelOnFailure = true;
+        var registry = Registry;
+        if (expectedProcessStartedAt is { } expectedStartedAt &&
+            Jobs.TryGetValue(processId, out var currentJob) &&
+            (currentJob.Identity is not { } currentIdentity ||
+             currentIdentity.StartedAt != expectedStartedAt))
+        {
+            safeToCancelOnFailure = false;
+            failure = $"{failurePrefix}: pid={processId}; stage=expected-dispatch-attempt-mismatch";
+            return false;
+        }
+
         var removal = TryRemoveStaticRegistration(processId, out var job);
         if (removal == StaticRegistrationRemoval.OwnedByReturnedChild)
         {
-            failure = $"worker-process-detach-failed: pid={processId}; stage=owned-child-authority";
+            failure = $"{failurePrefix}: pid={processId}; stage=owned-child-authority";
             return false;
         }
 
@@ -1650,16 +1791,58 @@ public static class WorkerProcessJobs
             catch (Exception ex)
             {
                 failure =
-                    $"worker-process-detach-failed: pid={processId}; stage=durable-lifecycle-read; error={ex.GetType().Name}";
+                    $"{failurePrefix}: pid={processId}; stage=durable-lifecycle-read; error={ex.GetType().Name}";
                 return false;
             }
 
-            if (entries.Length == 0 || entries.All(entry => entry.Lifecycle == SpawnRegistryLifecycle.GracefullyDetached))
+            if (entries.Length == 0)
             {
                 return true;
             }
 
-            failure = $"worker-process-detach-failed: pid={processId}; stage=in-memory-ownership-missing";
+            if (entries.Length != 1)
+            {
+                failure = $"{failurePrefix}: pid={processId}; stage=durable-lifecycle-ambiguous";
+                return false;
+            }
+
+            var entry = entries[0];
+            if (!string.IsNullOrWhiteSpace(expectedOwnerId))
+            {
+                if (!string.Equals(entry.OwnerId, expectedOwnerId, StringComparison.Ordinal))
+                {
+                    safeToCancelOnFailure = false;
+                    failure =
+                        $"{failurePrefix}: pid={processId}; stage=durable-owner-mismatch; expected_owner={expectedOwnerId}";
+                    return false;
+                }
+
+                if (expectedProcessStartedAt is { } expectedEntryStartedAt &&
+                    entry.ProcessStartedAt != expectedEntryStartedAt)
+                {
+                    safeToCancelOnFailure = false;
+                    failure = $"{failurePrefix}: pid={processId}; stage=durable-dispatch-attempt-mismatch";
+                    return false;
+                }
+            }
+
+            if (entry.Lifecycle == detachedLifecycle ||
+                (detachedLifecycle == SpawnRegistryLifecycle.RuntimeOwned &&
+                 entry.Lifecycle == SpawnRegistryLifecycle.GracefullyDetached))
+            {
+                return true;
+            }
+
+            if (detachedLifecycle == SpawnRegistryLifecycle.ConductorDetached &&
+                registry is not null &&
+                registry.TryMarkConductorDetached(
+                    entry,
+                    $"{lifecycleDiagnostic} pid={processId}"))
+            {
+                return true;
+            }
+
+            failure = $"{failurePrefix}: pid={processId}; stage=in-memory-ownership-missing";
             return false;
         }
 
@@ -1670,21 +1853,12 @@ public static class WorkerProcessJobs
             if (registry is not null && job.RequiresDurableDetach)
             {
                 var identity = job.Identity;
-                var matches = identity is null
-                    ? Array.Empty<SpawnRegistryEntry>()
-                    : registry.ListActive()
-                        .Where(entry =>
-                            entry.ProcessId == identity.ProcessId &&
-                            entry.ProcessStartedAt == identity.StartedAt &&
-                            string.Equals(entry.ImagePath, identity.ImagePath, StringComparison.OrdinalIgnoreCase))
-                        .ToArray();
-                if (matches.Length != 1 ||
-                    (matches[0].Lifecycle == SpawnRegistryLifecycle.Owned &&
-                     !registry.TryMarkGracefullyDetached(
-                         matches[0],
-                         $"spawn_registry: gracefully-detached pid={processId}")))
+                if (identity is null ||
+                    !(detachedLifecycle == SpawnRegistryLifecycle.RuntimeOwned
+                        ? registry.TryMarkRuntimeOwned(identity, $"{lifecycleDiagnostic} pid={processId}")
+                        : registry.TryMarkConductorDetached(identity, $"{lifecycleDiagnostic} pid={processId}")))
                 {
-                    failure = $"worker-process-detach-failed: pid={processId}; stage={failureStage}";
+                    failure = $"{failurePrefix}: pid={processId}; stage={failureStage}";
                     return false;
                 }
             }
@@ -1692,7 +1866,7 @@ public static class WorkerProcessJobs
             failureStage = "os-process-group-detach";
             if (!TryDetachAndDispose(job))
             {
-                failure = $"worker-process-detach-failed: pid={processId}; stage={failureStage}";
+                failure = $"{failurePrefix}: pid={processId}; stage={failureStage}";
                 return false;
             }
 
@@ -1702,7 +1876,7 @@ public static class WorkerProcessJobs
         catch (Exception ex)
         {
             failure =
-                $"worker-process-detach-failed: pid={processId}; stage={failureStage}; error={ex.GetType().Name}";
+                $"{failurePrefix}: pid={processId}; stage={failureStage}; error={ex.GetType().Name}";
             return false;
         }
         finally

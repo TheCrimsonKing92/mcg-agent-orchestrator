@@ -22,7 +22,11 @@ internal sealed record SpawnRegistryEntry(
 internal enum SpawnRegistryLifecycle
 {
     Owned,
-    GracefullyDetached
+    // Written by older builds for both runtime transfer and conductor interruption.
+    // It is retained for startup-sweep compatibility but is not retry authority.
+    GracefullyDetached,
+    RuntimeOwned,
+    ConductorDetached
 }
 
 internal sealed record SpawnProcessIdentity(int ProcessId, DateTimeOffset StartedAt, string ImagePath);
@@ -220,7 +224,7 @@ internal sealed class SpawnRegistry
         return updated;
     }
 
-    public bool WasGracefullyDetached(string ownerId, int processId, DateTimeOffset processRecordedAt)
+    public bool WasDetachedByConductor(string ownerId, int processId, DateTimeOffset processRecordedAt)
     {
         if (!File.Exists(_dbPath))
             return false;
@@ -241,11 +245,50 @@ internal sealed class SpawnRegistry
         cmd.Parameters.AddWithValue("$process_recorded_at", processRecordedAt.ToString("O", CultureInfo.InvariantCulture));
         return string.Equals(
             cmd.ExecuteScalar() as string,
-            SpawnRegistryLifecycle.GracefullyDetached.ToString(),
+            SpawnRegistryLifecycle.ConductorDetached.ToString(),
             StringComparison.Ordinal);
     }
 
-    public bool TryMarkGracefullyDetached(SpawnRegistryEntry entry, string diagnostic)
+    public bool TryMarkConductorDetached(SpawnRegistryEntry entry, string diagnostic)
+    {
+        var updated = false;
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET lifecycle = $conductor_detached,
+                    last_diagnostic = $diagnostic
+                WHERE id = $id
+                  AND process_id = $process_id
+                  AND process_started_at = $process_started_at
+                  AND image_path = $image_path
+                  AND released_at IS NULL
+                  AND lifecycle IN ($runtime_owned, $legacy_detached)
+                """;
+            cmd.Parameters.AddWithValue("$conductor_detached", SpawnRegistryLifecycle.ConductorDetached.ToString());
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$id", entry.Id);
+            cmd.Parameters.AddWithValue("$process_id", entry.ProcessId);
+            cmd.Parameters.AddWithValue("$process_started_at", entry.ProcessStartedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("$image_path", entry.ImagePath);
+            cmd.Parameters.AddWithValue("$runtime_owned", SpawnRegistryLifecycle.RuntimeOwned.ToString());
+            cmd.Parameters.AddWithValue("$legacy_detached", SpawnRegistryLifecycle.GracefullyDetached.ToString());
+            updated = cmd.ExecuteNonQuery() == 1;
+        });
+        return updated;
+    }
+
+    public bool TryMarkRuntimeOwned(SpawnProcessIdentity identity, string diagnostic) =>
+        TryMarkDetached(identity, SpawnRegistryLifecycle.RuntimeOwned, diagnostic);
+
+    public bool TryMarkConductorDetached(SpawnProcessIdentity identity, string diagnostic) =>
+        TryMarkDetached(identity, SpawnRegistryLifecycle.ConductorDetached, diagnostic);
+
+    private bool TryMarkDetached(
+        SpawnProcessIdentity identity,
+        SpawnRegistryLifecycle detachedLifecycle,
+        string diagnostic)
     {
         var updated = false;
         WithWriteConnection(conn =>
@@ -255,19 +298,17 @@ internal sealed class SpawnRegistry
                 UPDATE spawn_registry
                 SET lifecycle = $detached,
                     last_diagnostic = $diagnostic
-                WHERE id = $id
-                  AND process_id = $process_id
+                WHERE process_id = $process_id
                   AND process_started_at = $process_started_at
                   AND image_path = $image_path
                   AND released_at IS NULL
                   AND lifecycle = $owned
                 """;
-            cmd.Parameters.AddWithValue("$detached", SpawnRegistryLifecycle.GracefullyDetached.ToString());
+            cmd.Parameters.AddWithValue("$detached", detachedLifecycle.ToString());
             cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
-            cmd.Parameters.AddWithValue("$id", entry.Id);
-            cmd.Parameters.AddWithValue("$process_id", entry.ProcessId);
-            cmd.Parameters.AddWithValue("$process_started_at", entry.ProcessStartedAt.ToString("O"));
-            cmd.Parameters.AddWithValue("$image_path", entry.ImagePath);
+            cmd.Parameters.AddWithValue("$process_id", identity.ProcessId);
+            cmd.Parameters.AddWithValue("$process_started_at", identity.StartedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("$image_path", identity.ImagePath);
             cmd.Parameters.AddWithValue("$owned", SpawnRegistryLifecycle.Owned.ToString());
             updated = cmd.ExecuteNonQuery() == 1;
         });

@@ -431,7 +431,9 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
             Assert.Equal("dotnet", rootElement.GetProperty("testExecutable").GetString());
             Assert.Equal(0, rootElement.GetProperty("testProcessExitCode").GetInt32());
             var childProcess = rootElement.GetProperty("childProcess");
-            Assert.Equal("confirmed", childProcess.GetProperty("identityStatus").GetString());
+            Assert.True(
+                childProcess.GetProperty("identityStatus").GetString() == "confirmed",
+                $"Focused runner child identity was not confirmed. Retained child-process receipt: {childProcess.GetRawText()}");
             Assert.Equal(
                 "dotnet.exe",
                 Path.GetFileName(childProcess.GetProperty("executable").GetString()),
