@@ -901,6 +901,34 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
     }
 
     [Xunit.Fact]
+    public void FocusedRunner_TransientIdentityFailureIsRetriedOnlyWhileChildLives()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var supervisionLoop = source.IndexOf(
+            "while (-not $completed -and [DateTime]::UtcNow -lt $Deadline)",
+            StringComparison.Ordinal);
+        Assert.True(supervisionLoop >= 0, "Focused child supervision loop must remain present.");
+
+        var waitForExit = source.IndexOf("$completed = $process.WaitForExit", supervisionLoop, StringComparison.Ordinal);
+        Assert.True(waitForExit > supervisionLoop, "Identity retry must observe the child's exit signal first.");
+
+        var retryGuard = source.IndexOf(
+            "$identityCaptureAttempts -lt $maximumIdentityCaptureAttempts",
+            waitForExit,
+            StringComparison.Ordinal);
+        Assert.True(retryGuard > waitForExit, "A transient identity failure must be retried only for a live child and within a fixed attempt cap.");
+
+        var retryCapture = source.IndexOf(
+            "Get-FocusedChildProcessIdentity -Process $process",
+            retryGuard,
+            StringComparison.Ordinal);
+        Assert.True(retryCapture > retryGuard, "The live-child retry guard must recapture process identity.");
+
+        var termination = source.IndexOf("$process.Kill($true)", retryCapture, StringComparison.Ordinal);
+        Assert.True(termination > retryCapture, "Identity recapture must occur before bounded tree termination.");
+    }
+
+    [Xunit.Fact]
     public void FocusedRunner_AllSlotsHeld_ReportsNoSlotWithoutStartingDotnet()
     {
         if (!OperatingSystem.IsWindows())
