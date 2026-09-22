@@ -1680,9 +1680,9 @@ public static class WorkerProcessJobs
                 expectedProcess.ProcessId,
                 expectedOwnerId,
                 out expectedProcessStartedAt,
+                out safeToCancelOnFailure,
                 out failure))
         {
-            safeToCancelOnFailure = false;
             return false;
         }
 
@@ -1703,9 +1703,11 @@ public static class WorkerProcessJobs
         int processId,
         string expectedOwnerId,
         out DateTimeOffset processStartedAt,
+        out bool safeToCancelOnFailure,
         out string failure)
     {
         processStartedAt = default;
+        safeToCancelOnFailure = true;
         failure = $"worker-process-detach-failed: pid={processId}; stage=expected-dispatch-identity-missing";
         var registry = Registry;
         if (registry is null)
@@ -1722,12 +1724,19 @@ public static class WorkerProcessJobs
         }
         catch (Exception ex)
         {
+            safeToCancelOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-identity-read; error={ex.GetType().Name}";
+            return false;
+        }
+
+        if (entries.Length == 0)
+        {
             return false;
         }
 
         if (entries.Length != 1)
         {
+            safeToCancelOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-identity-ambiguous";
             return false;
         }
@@ -1735,12 +1744,14 @@ public static class WorkerProcessJobs
         var entry = entries[0];
         if (!string.Equals(entry.OwnerId, expectedOwnerId, StringComparison.Ordinal))
         {
+            safeToCancelOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=durable-owner-mismatch; expected_owner={expectedOwnerId}";
             return false;
         }
 
         if (entry.Lifecycle is not (SpawnRegistryLifecycle.RuntimeOwned or SpawnRegistryLifecycle.GracefullyDetached))
         {
+            safeToCancelOnFailure = false;
             failure = $"worker-process-detach-failed: pid={processId}; stage=legacy-dispatch-lifecycle-unexpected";
             return false;
         }

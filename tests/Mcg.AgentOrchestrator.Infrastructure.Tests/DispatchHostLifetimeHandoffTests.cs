@@ -285,6 +285,65 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact]
+    public async Task StartDispatch_SuccessorDetach_LegacyProcessWithoutActiveDurableEntryCancelsAndRequeues()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var fixture = await CreateFixtureAsync();
+        await using var unrelated = UnrelatedSleeper.Start();
+        AppCaller? caller = null;
+        try
+        {
+            caller = AppCaller.Start(
+                fixture.Root,
+                BuildArguments(
+                    "start-dispatch", "--goal", fixture.Goal.Id.Value, "1", "--confirm-dispatch-start"));
+            var start = await caller.WaitForExitAsync();
+            Assert.True(start.ExitCode == 0, start.StandardError + start.StandardOutput);
+
+            var ownership = await WaitForOwnershipAsync(fixture.Workspace.SqliteStatePath, caller.ProcessId);
+            var successorKernel = await WaitForPersistedProcessAsync(fixture, ownership.ProcessId);
+            var persistedProcess = Assert.IsType<TaskProcessRecord>(
+                successorKernel.GetTask(fixture.Goal.Id, fixture.Task.Id).LastProcess);
+            successorKernel.RecordTaskProcessRefreshed(
+                fixture.Goal.Id,
+                fixture.Task.Id,
+                persistedProcess with { ProcessIdentityStartedAt = null },
+                verification: null);
+            new SpawnRegistry(fixture.Workspace.SqliteStatePath).MarkReleasedEntry(
+                ownership.Id,
+                "test: simulate released durable entry before legacy detach");
+
+            WorkerProcessJobs.ConfigureRegistry(fixture.Workspace.SqliteStatePath);
+            Assert.DoesNotContain(
+                WorkerProcessJobs.ListActiveRegistryEntriesForTests(),
+                entry => entry.ProcessId == ownership.ProcessId);
+            var successorRunner = new BackgroundDispatchRunner();
+
+            Assert.Equal(0, successorRunner.DetachRunningProcessesForGoal(successorKernel, fixture.Goal.Id));
+            var cancelledTask = successorKernel.GetTask(fixture.Goal.Id, fixture.Task.Id);
+            Assert.Equal(WorkTaskStatus.Cancelled, cancelledTask.Status);
+            Assert.True(cancelledTask.LastProcess!.WasCancelledByConductor);
+            Assert.True(await WaitUntilNotRunningAsync(ownership.ProcessId, TimeSpan.FromSeconds(5)));
+            Assert.Equal(1, successorRunner.RequeueInterruptedDispatches(successorKernel));
+            Assert.Equal(WorkTaskStatus.Assigned, successorKernel.GetTask(fixture.Goal.Id, fixture.Task.Id).Status);
+            Assert.False(unrelated.HasExited);
+        }
+        finally
+        {
+            if (caller is not null)
+            {
+                await caller.DisposeAsync();
+            }
+
+            await CleanupFixtureAsync(fixture);
+        }
+    }
+
     private static async Task<ArmReceipt> RunArmAsync(bool holdCaller)
     {
         var fixture = await CreateFixtureAsync();
