@@ -196,6 +196,147 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
 
         Assert.Equal(ReviewFindingConvergence.NoOpenFindingsForTargetViolationCode, exception.Code);
         Assert.Contains("none are owned by retry target Developer", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("findings_read=[ACCEPTANCE:Open/Blocking]", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void BuildConvergenceBriefNeedsWorkWithoutBlockingFindingReportsDeterministicInventory()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Repair.", AgentRole.Developer);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Keep the guard loud", [developer, reviewer]);
+        var findings = new[]
+        {
+            new ReviewFinding(
+                "Z-RESOLVED",
+                ReviewFindingState.Resolved,
+                new ReviewFindingLocation("src/Z.cs", "Z.Run"),
+                "Resolved finding."),
+            new ReviewFinding(
+                "A-ADVISORY",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "A.Run"),
+                "Advisory finding.",
+                Severity: FindingSeverity.Advisory)
+        };
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                @"C:\tmp",
+                1,
+                ReviewerOutput("needs-work", findings),
+                string.Empty,
+                DateTimeOffset.Parse("2026-09-21T21:27:54Z"),
+                WorkerResultPresent: true,
+                MergedReviewFindings: findings));
+
+        var exception = Assert.Throws<ReviewFindingConvergenceException>(() =>
+            AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+                goal,
+                developer,
+                reviewer,
+                "No blocking finding.",
+                "verdict=needs-work",
+                AgentRole.Developer,
+                1,
+                @"C:\logs\reviewer.out",
+                []));
+
+        Assert.Equal(ReviewFindingConvergence.NeedsWorkWithoutOpenFindingsViolationCode, exception.Code);
+        Assert.Contains(
+            "findings_read=[A-ADVISORY:Open/Advisory, Z-RESOLVED:Resolved/Blocking]",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void BuildConvergenceBriefUsesTriggeringRoundLedgerWhenHistoryContainsLaterRound()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Repair.", AgentRole.Developer);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Keep the triggering Reviewer ledger", [developer, reviewer]);
+        var firstCompletedAt = DateTimeOffset.Parse("2026-09-21T21:27:54Z");
+        var triggeringFindings = new[]
+        {
+            new ReviewFinding(
+                "criterion1-detached-claim-unproven",
+                ReviewFindingState.Resolved,
+                new ReviewFindingLocation("src/A.cs", "A.Run"),
+                "Prior finding A."),
+            new ReviewFinding(
+                "focused-class-receipts",
+                ReviewFindingState.Resolved,
+                new ReviewFindingLocation("tests/A.Tests.cs", "A.Tests"),
+                "Prior finding B."),
+            new ReviewFinding(
+                "stale-processing-lease-silent-hold",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/Coordinator.cs", "TryLaunchIfDue"),
+                "New blocking finding.")
+        };
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                @"C:\tmp",
+                1,
+                ReviewerOutput("needs-work", triggeringFindings),
+                string.Empty,
+                firstCompletedAt,
+                WorkerResultPresent: true,
+                MergedReviewFindings: triggeringFindings));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review-later",
+                @"C:\tmp",
+                0,
+                ReviewerOutput("pass", triggeringFindings[..2]),
+                string.Empty,
+                firstCompletedAt.AddMinutes(35),
+                WorkerResultPresent: true,
+                MergedReviewFindings: triggeringFindings[..2]));
+
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var reviewerSnapshot = snapshot.Tasks.Single(task => task.Id == reviewer.Id.Value);
+        var triggeringRound = reviewerSnapshot.VerificationHistory![0];
+        var restoredKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [snapshot with
+            {
+                Tasks = snapshot.Tasks
+                    .Select(task => task.Id == reviewer.Id.Value
+                        ? task with
+                        {
+                            Status = WorkTaskStatus.Failed,
+                            LastVerification = triggeringRound
+                        }
+                        : task)
+                    .ToArray()
+            }],
+            []));
+        var restoredGoal = restoredKernel.GetGoal(goal.Id);
+        var restoredDeveloper = restoredGoal.Tasks.Single(task => task.Id == developer.Id);
+        var restoredReviewer = restoredGoal.Tasks.Single(task => task.Id == reviewer.Id);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            restoredGoal,
+            restoredDeveloper,
+            restoredReviewer,
+            "New blocking finding.",
+            "verdict=needs-work",
+            AgentRole.Developer,
+            1,
+            @"C:\logs\reviewer.out",
+            ["src/Coordinator.cs"]);
+
+        Assert.Contains("open_count: 1", brief, StringComparison.Ordinal);
+        Assert.Contains("stable_id: stale-processing-lease-silent-hold", brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_orders_spec_findings_and_preserves_legacy_shape")]
