@@ -1975,6 +1975,7 @@ internal sealed partial class ConductorBatchLoop
             "ACCEPTANCE_COHORT_ENTRY" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_EXIT" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_INFLIGHT" => "acceptance-cohort",
+            "ACCEPTANCE_COHORT_FAIRNESS_TRANSITION" => "acceptance-cohort",
             "SWEEP_BLOCKER" => "sweep-blocker",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
