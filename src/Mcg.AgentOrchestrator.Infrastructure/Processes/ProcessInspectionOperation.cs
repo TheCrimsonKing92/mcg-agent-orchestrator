@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal sealed class ProcessInspectionOperation
 {
+    private const int MaxEdgeVerdicts = 8;
     private readonly IReadOnlyList<WindowsNativeProcessInspection.ProcessInspectionSeed> _seeds;
     private readonly IReadOnlyDictionary<int, WindowsNativeProcessInspection.ProcessInspectionSeed> _seedsById;
     private readonly Func<WindowsNativeProcessInspection.ProcessInspectionSeed, ProcessInspectionRecord> _readOne;
@@ -61,9 +62,11 @@ internal sealed class ProcessInspectionOperation
             .Where(seed => query.ProcessNames.Any(pattern => MatchesName(pattern, seed.Name)))
             .Select(seed => seed.ProcessId));
 
+        IReadOnlyList<ProcessTreeEdgeVerdict> edgeVerdicts = [];
+        var truncatedEdgeVerdictCount = 0;
         if (query.IncludeChildren)
         {
-            AddDescendants(selected);
+            (edgeVerdicts, truncatedEdgeVerdictCount) = AddDescendants(selected);
         }
 
         foreach (var processId in query.AncestorProcessIds)
@@ -73,7 +76,11 @@ internal sealed class ProcessInspectionOperation
 
         return ReadSeeds(
             selected.OrderBy(id => id).Select(id => _seedsById[id]),
-            query.ProcessIds);
+            query.ProcessIds) with
+        {
+            EdgeVerdicts = edgeVerdicts,
+            TruncatedEdgeVerdictCount = truncatedEdgeVerdictCount
+        };
     }
 
     private static bool MatchesName(string pattern, string processName) =>
@@ -93,13 +100,7 @@ internal sealed class ProcessInspectionOperation
         var result = new Dictionary<int, ProcessInspectionRecord>();
         foreach (var seed in seeds)
         {
-            if (!_records.TryGetValue(seed.ProcessId, out var record))
-            {
-                record = _readOne(seed);
-                _records[seed.ProcessId] = record;
-            }
-
-            result[seed.ProcessId] = record;
+            result[seed.ProcessId] = ReadSeed(seed);
         }
 
         if (includeMissingIds is not null)
@@ -123,29 +124,84 @@ internal sealed class ProcessInspectionOperation
         return WindowsNativeProcessInspection.ProcessInspectionResult.Success(result);
     }
 
-    private void AddDescendants(HashSet<int> selected)
+    private (IReadOnlyList<ProcessTreeEdgeVerdict> Verdicts, int TruncatedCount) AddDescendants(
+        HashSet<int> selected)
     {
         var childrenByParent = _seeds
             .Where(seed => seed.ParentProcessId > 0)
             .GroupBy(seed => seed.ParentProcessId)
-            .ToDictionary(group => group.Key, group => group.Select(seed => seed.ProcessId).ToArray());
-        var queue = new Queue<int>(selected);
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        var queue = new Queue<(int ProcessId, ProcessTreeIdentityAnchor? Anchor)>(selected.Select(processId =>
+        {
+            var record = ReadSeed(_seedsById[processId]);
+            return (processId, IdentityAnchor(record));
+        }));
+        var verdicts = new List<ProcessTreeEdgeVerdict>();
+        var truncatedCount = 0;
         while (queue.TryDequeue(out var parentId))
         {
-            if (!childrenByParent.TryGetValue(parentId, out var children))
+            if (!childrenByParent.TryGetValue(parentId.ProcessId, out var children))
             {
                 continue;
             }
 
-            foreach (var childId in children)
+            foreach (var childSeed in children)
             {
-                if (selected.Add(childId))
+                var child = ReadSeed(childSeed);
+                var verdict = ProcessTreeEdgeEligibility.Evaluate(
+                    parentId.ProcessId,
+                    parentId.Anchor,
+                    child);
+                // Unverified edges remain visible and are diagnosed by the CLI from the
+                // retained records. Rejected edges must be carried because the child and
+                // its subtree are intentionally absent from the returned snapshot.
+                if (verdict.Decision == ProcessTreeEdgeDecision.TemporalInversion)
                 {
-                    queue.Enqueue(childId);
+                    if (verdicts.Count < MaxEdgeVerdicts)
+                    {
+                        verdicts.Add(verdict);
+                    }
+                    else
+                    {
+                        truncatedCount++;
+                    }
+                }
+
+                if (verdict.Decision == ProcessTreeEdgeDecision.TemporalInversion)
+                {
+                    continue;
+                }
+
+                if (selected.Add(childSeed.ProcessId))
+                {
+                    var childAnchor = verdict.Decision == ProcessTreeEdgeDecision.Eligible
+                        ? IdentityAnchor(child)
+                        : parentId.Anchor;
+                    queue.Enqueue((childSeed.ProcessId, childAnchor));
                 }
             }
         }
+
+        return (verdicts, truncatedCount);
     }
+
+    private ProcessInspectionRecord ReadSeed(WindowsNativeProcessInspection.ProcessInspectionSeed seed)
+    {
+        if (!_records.TryGetValue(seed.ProcessId, out var record))
+        {
+            record = _readOne(seed);
+            _records[seed.ProcessId] = record;
+        }
+
+        return record;
+    }
+
+    private static ProcessTreeIdentityAnchor? IdentityAnchor(ProcessInspectionRecord record) =>
+        record.Status is ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled
+            ? null
+            : record.StartedAt is { } startedAt
+                ? new ProcessTreeIdentityAnchor(record.ProcessId, startedAt)
+                : null;
 
     private void AddAncestors(int processId, HashSet<int> selected)
     {
