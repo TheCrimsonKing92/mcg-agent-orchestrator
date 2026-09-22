@@ -126,7 +126,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             stableProjectionChanged = BuildTaskStatusProjectionJson(before) != BuildTaskStatusProjectionJson(after);
         };
 
-        CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             repository,
             CreateRefinedWorkspace(root),
@@ -168,7 +168,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             verifierObservedUnlockedState = true;
         });
 
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
             ["acceptance", "--keep-workspace"],
             repository,
             CreateRefinedWorkspace(root),
@@ -178,6 +178,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             ref currentGoal,
             acceptanceVerifier: verifier));
 
+        Xunit.Assert.Equal(1, AcceptanceStableSlotTestSupport.LastSelectionCount);
         Xunit.Assert.True(verifierObservedUnlockedState);
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(2, repository.TransactionCount);
@@ -196,7 +197,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
         Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=workspace-merge", output);
         Xunit.Assert.Matches(@"PHASE_TIMING command=acceptance phase=verification-check elapsedMs=\d+ .*name=""probe verifier""", output);
     }
-
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_target_scoped_reconcile_preserves_target_dispatch_refresh")]
     public async Task PersistentRunnerAcceptanceTargetScopedReconcilePreservesTargetDispatchRefresh()
@@ -220,7 +220,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             File.WriteAllText(targetTask.LastProcess.StandardOutputPath, "done");
             var repository = new InMemoryTransactionalStateRepository(kernel);
 
-            var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                 ["acceptance", target.Id.Value[..8], "--skip-verify", "--keep-workspace", "--no-record"],
                 repository,
                 CreateRefinedWorkspace(root),
@@ -279,7 +279,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             var repository = new InMemoryTransactionalStateRepository(kernel);
 
             var changed = false;
-            var output = CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            var output = CaptureConsole(() => changed = AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                 ["acceptance", "--skip-verify", "--keep-workspace"],
                 repository,
                 CreateRefinedWorkspace(root),
@@ -333,7 +333,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             CommitGoalWork(root, closedGoal.Id, "closed-item.txt", "goal work");
             var closedRepository = new InMemoryTransactionalStateRepository(closedKernel);
 
-            var closedOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            var closedOutput = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                 ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
                 closedRepository,
                 workspace,
@@ -370,7 +370,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             CommitGoalWork(root, missingGoal.Id, "missing-item.txt", "goal work");
             var missingRepository = new InMemoryTransactionalStateRepository(missingKernel);
 
-            var missingOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            var missingOutput = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                 ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
                 missingRepository,
                 workspace,
@@ -412,7 +412,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
         repository.BeforeNextTransaction = stored =>
             stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Task moved during acceptance.");
 
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             repository,
             CreateRefinedWorkspace(root),
@@ -464,7 +464,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             stored.ReconcileGoalAcceptanceVerified(goal.Id, "Keep the goal status Verified so the task field is reported.");
         };
 
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
             ["acceptance", "--keep-workspace"],
             repository,
             CreateRefinedWorkspace(root),
@@ -519,7 +519,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
 
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
             ["acceptance", "--keep-workspace"],
             repository,
             CreateRefinedWorkspace(root),
@@ -563,7 +563,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             Goal? currentGoal = goal;
             var repository = new InMemoryTransactionalStateRepository(kernel);
 
-            var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                 ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
                 repository,
                 CreateRefinedWorkspace(root),
@@ -604,7 +604,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             Goal? currentGoal = goal;
             var repository = new InMemoryTransactionalStateRepository(kernel);
 
-            var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                 ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
                 repository,
                 CreateRefinedWorkspace(root),
@@ -653,7 +653,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
             RunGit(worktree, "commit", "-m", "Concurrent acceptance change");
         };
 
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
             ["acceptance", "--skip-verify", "--keep-workspace"],
             repository,
             CreateRefinedWorkspace(root),

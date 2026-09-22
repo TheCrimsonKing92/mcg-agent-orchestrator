@@ -215,7 +215,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
             var changed = false;
             var output = CaptureConsole(() =>
             {
-                changed = CliPersistentStateRunner.ExecuteCommand(
+                changed = AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                     ["acceptance-queue", "--apply", "--confirm-acceptance-queue"],
                     stateRepository,
                     workspace,
@@ -228,6 +228,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
             });
 
             Assert.True(changed);
+            Assert.Equal(1, AcceptanceStableSlotTestSupport.LastSelectionCount);
             Assert.True(output.Contains("Acceptance evidence bundle: passed", StringComparison.Ordinal), output);
             Assert.True(File.Exists(Path.Combine(repo, "queue-persist.txt")));
             Assert.NotNull(GoalWorktrees.TryResolve(repo, goal.Id));
