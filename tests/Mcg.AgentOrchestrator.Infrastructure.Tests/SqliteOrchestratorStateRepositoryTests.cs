@@ -302,6 +302,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                 "human_input_requests",
                 "meta",
                 "model_fit_history",
+                "owned_roots",
                 "schema_migrations",
                 "source_backlog_claims",
                 "spawn_registry",
@@ -321,7 +322,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason", "processing_token", "processing_started_at"],
             QueryStrings(conn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
         Xunit.Assert.Equal(
-            Enumerable.Range(1, 12).Select(number => number.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            Enumerable.Range(1, 13).Select(number => number.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             QueryStrings(conn, "SELECT CAST(migration_number AS TEXT) FROM schema_migrations ORDER BY migration_number"));
     }
 

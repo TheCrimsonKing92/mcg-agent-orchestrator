@@ -4,9 +4,22 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public abstract class DotnetBuildEnvironmentManagerRootedTestBase : IDisposable
 {
     protected DotnetBuildStorageRoot StorageRoot { get; } = new(CreateTempDirectory());
+    private readonly IOwnedRunRootRegistrar? _priorRegistrar;
+
+    protected DotnetBuildEnvironmentManagerRootedTestBase()
+    {
+        var stateDirectory = Path.Combine(StorageRoot.RootPath, ".orchestrator");
+        Directory.CreateDirectory(stateDirectory);
+        var stateDbPath = Path.Combine(stateDirectory, "state.db");
+        StateDbMigrations.EnsureUpToDate(stateDbPath);
+        _priorRegistrar = DotnetBuildEnvironmentManager.SetOwnedRunRootRegistrarForTests(
+            StorageRoot,
+            new OwnedRunRootRegistry(stateDbPath));
+    }
 
     public void Dispose()
     {
+        DotnetBuildEnvironmentManager.SetOwnedRunRootRegistrarForTests(StorageRoot, _priorRegistrar);
         try
         {
             if (Directory.Exists(StorageRoot.RootPath))
