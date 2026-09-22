@@ -9,6 +9,7 @@ internal static class GracefulDispatchDetacher
         GoalId goalId,
         Action<TaskProcessRecord> evictProcessLogCache,
         Action<TaskId> cancelAfterDetachFailure,
+        Func<int, bool> isStillRunning,
         DateTimeOffset interruptedAt)
     {
         var goal = kernel.GetGoal(goalId);
@@ -38,7 +39,16 @@ internal static class GracefulDispatchDetacher
                 continue;
             }
 
-            if (safeToCancelOnFailure)
+            if (requeueWithoutTerminationOnFailure && !isStillRunning(process.ProcessId))
+            {
+                kernel.RecordTaskProcessGracefullyDetached(
+                    goalId,
+                    task.Id,
+                    process with { WasGracefullyDetachedByConductor = true });
+                evictProcessLogCache(process);
+                detached++;
+            }
+            else if (safeToCancelOnFailure)
             {
                 cancelAfterDetachFailure(task.Id);
                 kernel.RecordTaskNote(

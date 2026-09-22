@@ -2266,7 +2266,7 @@ public sealed class BackgroundDispatchRunner
                 goalId,
                 taskId,
                 cancelledByConductor: true,
-                bypassTrackedJobRegistry: true), _clock.UtcNow);
+                bypassTrackedJobRegistry: true), _isStillRunning, _clock.UtcNow);
 
     public int RequeueInterruptedDispatches(
         AgentOrchestratorKernel kernel,
