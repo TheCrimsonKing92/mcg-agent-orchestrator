@@ -147,7 +147,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         {
             Name = "complex subscription launch profile",
             Agent = agent,
-            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+            Selection = new WorkerSubscriptionModelResolver.SubscriptionModelSelection(
                 TaskComplexity.Complex,
                 complexModel,
                 UsesComplexModel: true,
@@ -158,7 +158,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         {
             Name = "simple subscription launch profile",
             Agent = agent,
-            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+            Selection = new WorkerSubscriptionModelResolver.SubscriptionModelSelection(
                 TaskComplexity.Simple,
                 baseModel,
                 UsesComplexModel: false,
@@ -169,7 +169,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         {
             Name = "complex non-subscription launch profile",
             Agent = agent,
-            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+            Selection = new WorkerSubscriptionModelResolver.SubscriptionModelSelection(
                 TaskComplexity.Complex,
                 complexModel,
                 UsesComplexModel: true,
@@ -180,7 +180,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         {
             Name = "simple non-subscription launch profile",
             Agent = agent,
-            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+            Selection = new WorkerSubscriptionModelResolver.SubscriptionModelSelection(
                 TaskComplexity.Simple,
                 baseModel,
                 UsesComplexModel: false,
@@ -191,7 +191,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         {
             Name = "null subscription launch profile",
             Agent = agentWithoutSubscription,
-            Selection = new WorkerProfileDispatcher.SubscriptionModelSelection(
+            Selection = new WorkerSubscriptionModelResolver.SubscriptionModelSelection(
                 TaskComplexity.Complex,
                 complexModel,
                 UsesComplexModel: true,
