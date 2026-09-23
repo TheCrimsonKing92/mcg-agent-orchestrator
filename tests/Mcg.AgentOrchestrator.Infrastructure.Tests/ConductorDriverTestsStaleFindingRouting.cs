@@ -9,6 +9,244 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsStaleFindingRouting
 {
+    [Xunit.Fact(DisplayName = "Completed Developer repair reconciles a retained failed Reviewer across reload")]
+    public void CompletedDeveloperRepairReconcilesRetainedFailedReviewerAcrossReload()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var priorCandidate = new string('a', 40);
+        var repairedCandidate = new string('b', 40);
+
+        foreach (var task in goal.Tasks.Where(task =>
+                     task.RequiredRole is not AgentRole.Developer and
+                     not AgentRole.Tester and
+                     not AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        DispatchTask(kernel, goal, developer, "develop-1", baseCommit: new string('0', 40));
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, priorCandidate);
+        kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+            "develop-1",
+            "C:\\tmp",
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow.AddMinutes(-10),
+            WorkerResultPresent: true,
+            HasCommittedChanges: true));
+        PassVerification(kernel, goal, tester);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "Historical repair obligation.",
+            findings:
+            [
+                new ReviewFinding(
+                    "historical-repair-obligation",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/Repair.cs", "Repair.Run"),
+                    "Historical repair obligation.")
+            ],
+            reviewedCommit: priorCandidate);
+
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Repair the historical Reviewer finding.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        kernel.RetryTask(
+            goal.Id,
+            tester.Id,
+            "Re-admit Tester after the repair.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.NotNull(reviewer.LastVerification?.MergedReviewFindings);
+
+        DispatchTask(kernel, goal, developer, "develop-2", baseCommit: priorCandidate);
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, repairedCandidate);
+        kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+            "develop-2",
+            "C:\\tmp",
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true,
+            HasCommittedChanges: true));
+
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Null(reviewer.LastVerification);
+        Assert.Contains(reviewer.VerificationHistory, verification =>
+            verification.MergedReviewFindings?.Any(finding =>
+                finding.StableId == "historical-repair-obligation") is true);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredReviewer = restored.GetTask(goal.Id, reviewer.Id);
+        Assert.Equal(WorkTaskStatus.Assigned, restoredReviewer.Status);
+        Assert.Null(restoredReviewer.LastVerification);
+        Assert.Contains(restoredReviewer.VerificationHistory, verification =>
+            verification.MergedReviewFindings?.Any(finding =>
+                finding.StableId == "historical-repair-obligation") is true);
+
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var reviewerSnapshot = goalSnapshot.Tasks.Single(task => task.Id == reviewer.Id.Value);
+        var historicalReview = reviewerSnapshot.VerificationHistory!.Single(verification =>
+            verification.MergedReviewFindings?.Any(finding =>
+                finding.StableId == "historical-repair-obligation") is true);
+        var retainedFailureSnapshot = snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Status = GoalStatus.Failed,
+                    Tasks = goalSnapshot.Tasks
+                        .Select(task => task.Id == reviewer.Id.Value
+                            ? task with
+                            {
+                                Status = WorkTaskStatus.Failed,
+                                LastVerification = historicalReview
+                            }
+                            : task)
+                        .ToArray()
+                }
+            ]
+        };
+        var reloadedKernel = AgentOrchestratorKernel.FromSnapshot(retainedFailureSnapshot);
+        var reloadedGoal = reloadedKernel.GetGoal(goal.Id);
+        Assert.Equal(WorkTaskStatus.Assigned, reloadedKernel.GetTask(goal.Id, tester.Id).Status);
+        Assert.Equal(WorkTaskStatus.Failed, reloadedKernel.GetTask(goal.Id, reviewer.Id).Status);
+        Assert.NotNull(reloadedKernel.GetTask(goal.Id, reviewer.Id).LastVerification?.MergedReviewFindings);
+        var scheduledRoles = new List<AgentRole>();
+        var developerRetryCount = 0;
+        var escalations = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: currentGoal =>
+            {
+                var nextTask = currentGoal.Tasks.First(task => task.Status == WorkTaskStatus.Assigned);
+                scheduledRoles.Add(nextTask.RequiredRole);
+                DispatchTask(
+                    reloadedKernel,
+                    currentGoal,
+                    nextTask,
+                    $"fresh-{nextTask.RequiredRole}",
+                    baseCommit: repairedCandidate);
+                return DispatchStartOutcome.Started();
+            },
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                if (taskId == developer.Id)
+                {
+                    developerRetryCount++;
+                }
+
+                return reloadedKernel.RetryTask(goalId, taskId, message, cause, retryRoundKind: roundKind);
+            },
+            writeEscalation: (_, _, message) => escalations.Add(message),
+            normalizeLifecycleState: (currentGoal, reason) =>
+                reloadedKernel.NormalizeGoalLifecycleState(currentGoal.Id, reason));
+
+        var testerAdvance = driver.AdvanceOnce(reloadedGoal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(testerAdvance.Outcome);
+        Assert.Equal([AgentRole.Tester], scheduledRoles);
+        var reloadedTester = reloadedKernel.GetTask(goal.Id, tester.Id);
+        reloadedKernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+            reloadedTester.LastDispatch!.Command,
+            reloadedTester.LastDispatch.WorkingDirectory,
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow));
+        var freshReviewerBrief = reloadedKernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("historical-repair-obligation", freshReviewerBrief, StringComparison.Ordinal);
+
+        var reviewerAdvance = driver.AdvanceOnce(reloadedGoal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(reviewerAdvance.Outcome);
+        Assert.Equal([AgentRole.Tester, AgentRole.Reviewer], scheduledRoles);
+        Assert.Equal(0, developerRetryCount);
+        Assert.Empty(escalations);
+        Assert.Equal(WorkTaskStatus.Running, reloadedKernel.GetTask(goal.Id, reviewer.Id).Status);
+    }
+
+    [Xunit.Theory(DisplayName = "Reviewer finding currency requires a proven changed completed repair")]
+    [Xunit.InlineData(false, true, true)]
+    [Xunit.InlineData(true, false, true)]
+    [Xunit.InlineData(true, true, false)]
+    public void ReviewerFindingCurrencyRequiresProvenChangedCompletedRepair(
+        bool candidateChanged,
+        bool reviewedCandidateKnown,
+        bool developerCompleted)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var priorCandidate = new string('c', 40);
+        var resultCandidate = candidateChanged ? new string('d', 40) : priorCandidate;
+
+        DispatchTask(kernel, goal, developer, "develop-initial", baseCommit: new string('0', 40));
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, priorCandidate);
+        kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+            "develop-initial", "C:\\tmp", 0, "ok", string.Empty, DateTimeOffset.UtcNow.AddMinutes(-10),
+            WorkerResultPresent: true,
+            HasCommittedChanges: true));
+        PassVerification(kernel, goal, tester);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "Current obligation must remain actionable.",
+            reviewedCommit: reviewedCandidateKnown ? priorCandidate : null);
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Attempt repair.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        kernel.RetryTask(
+            goal.Id,
+            tester.Id,
+            "Re-admit Tester.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        DispatchTask(kernel, goal, developer, "develop-current", baseCommit: priorCandidate);
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, resultCandidate);
+        if (developerCompleted)
+        {
+            kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+                "develop-current", "C:\\tmp", 0, "ok", string.Empty, DateTimeOffset.UtcNow,
+                WorkerResultPresent: true,
+                HasCommittedChanges: candidateChanged));
+        }
+        else
+        {
+            kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "Repair failed.");
+        }
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.NotNull(reviewer.LastVerification);
+        Assert.Equal(
+            VerifyingFindingDisposition.Current,
+            VerifyingFindingCurrency.Classify(goal, reviewer, reviewer.LastVerification!));
+
+        kernel.NormalizeGoalLifecycleState(goal.Id, "Conductor tick normalization.");
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.NotNull(reviewer.LastVerification?.MergedReviewFindings);
+    }
+
     // Before the currency fix, the first two fixtures retried the Developer because the
     // convergence brief resurrected the Tester's superseded findings from verification history.
     [Xunit.Fact]
@@ -74,11 +312,16 @@ public sealed class ConductorDriverTestsStaleFindingRouting
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         var startedAt = new DateTimeOffset(2026, 9, 4, 22, 45, 0, TimeSpan.Zero);
 
-        RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
-        RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3));
+        var reviewedCandidate = RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
+        RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3), reviewedCandidate);
         kernel.RetryTask(goal.Id, developer.Id, "Reviewer requested an upstream correction.");
         Assert.Null(tester.LastVerification);
-        RecordCommittedDeveloperPass(kernel, goal, developer, startedAt.AddMinutes(28));
+        RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            developer,
+            startedAt.AddMinutes(28),
+            baseCommit: reviewedCandidate);
         RecordUnparseableReviewerNeedsWork(kernel, goal, reviewer, startedAt.AddMinutes(38));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
@@ -158,14 +401,452 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             finding.StableId == "owned-exit-200x-saturation-test-missing");
     }
 
-    private static void RecordCommittedDeveloperPass(
+    [Xunit.Fact]
+    public void RetriedVerifierDoesNotResurrectClearedFinding()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var startedAt = new DateTimeOffset(2026, 9, 7, 8, 0, 0, TimeSpan.Zero);
+        var candidate = RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
+        RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(1), candidate);
+        var historicalFinding = tester.LastVerification!;
+
+        kernel.RetryTask(
+            goal.Id,
+            tester.Id,
+            "Retry the invalidated Tester.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+
+        Assert.Null(tester.LastVerification);
+        Assert.Equal(
+            VerifyingFindingDisposition.InvalidatedByTaskRetry,
+            VerifyingFindingCurrency.Classify(goal, tester, historicalFinding));
+        Assert.Empty(AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(
+            goal,
+            AgentRole.Tester,
+            historicalFinding.CompletedAt));
+    }
+
+    [Xunit.Fact]
+    public void InterveningMergeCandidateDoesNotHideCompletedRepair()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var reviewedCandidate = RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "Repair this current finding.",
+            findings:
+            [
+                new ReviewFinding(
+                    "merge-intervened-repair",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/Repair.cs", "Repair.Run"),
+                    "Repair this current finding.",
+                    FindingSeverity.Blocking,
+                    FindingCategory.Correctness)
+            ],
+            reviewedCommit: reviewedCandidate);
+        var historicalReview = reviewer.LastVerification!;
+
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Repair after merging current main.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            developer,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            baseCommit: "intervening-merge-candidate",
+            resultCommit: "repaired-candidate");
+
+        Assert.Equal(
+            VerifyingFindingDisposition.InvalidatedByTaskRetry,
+            VerifyingFindingCurrency.Classify(goal, reviewer, historicalReview));
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Null(reviewer.LastVerification);
+    }
+
+    [Xunit.Fact]
+    public void OtherManualDeveloperDoesNotBreakRepairReconciliation()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var repairingDeveloper = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var manualDeveloper = kernel.AddTask(
+            goal.Id,
+            AgentRole.Developer,
+            "Manually verified unrelated Developer task",
+            beforeRole: AgentRole.Developer);
+        var reviewedCandidate = RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            repairingDeveloper,
+            DateTimeOffset.UtcNow.AddMinutes(-2));
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            "Repair the reviewed candidate.",
+            reviewedCommit: reviewedCandidate);
+        var historicalReview = reviewer.LastVerification!;
+        kernel.RetryTask(goal.Id, manualDeveloper.Id, "Record a manual completion.");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            manualDeveloper.Id,
+            ManualVerificationRecorder.Create(
+                true,
+                "Operator verified unrelated work.",
+                "C:\\tmp",
+                historicalReview.CompletedAt.AddTicks(1)));
+        kernel.RetryTask(
+            goal.Id,
+            repairingDeveloper.Id,
+            "Repair the reviewed candidate.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            repairingDeveloper,
+            historicalReview.CompletedAt.AddTicks(2),
+            baseCommit: reviewedCandidate,
+            resultCommit: "repaired-candidate");
+
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var historicalReviewSnapshot = goalSnapshot.Tasks
+            .Single(task => task.Id == reviewer.Id.Value)
+            .VerificationHistory!
+            .Single(verification => verification.CompletedAt == historicalReview.CompletedAt);
+        var retainedFailureSnapshot = snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Status = GoalStatus.Failed,
+                    Tasks = goalSnapshot.Tasks.Select(task => task.Id == reviewer.Id.Value
+                        ? task with
+                        {
+                            Status = WorkTaskStatus.Failed,
+                            LastVerification = historicalReviewSnapshot
+                        }
+                        : task).ToArray()
+                }
+            ]
+        };
+        var restored = AgentOrchestratorKernel.FromSnapshot(retainedFailureSnapshot);
+        var restoredReviewer = restored.GetTask(goal.Id, reviewer.Id);
+        var repairDecision = VerifyingFindingCurrency.Evaluate(
+            restored.GetGoal(goal.Id),
+            restoredReviewer,
+            restoredReviewer.LastVerification!);
+
+        Assert.Equal(VerifyingFindingDisposition.SupersededByCompletedRepair, repairDecision.Disposition);
+        Assert.Equal(repairingDeveloper.Id, repairDecision.RepairTaskId);
+
+        var exception = Record.Exception(() =>
+            restored.NormalizeGoalLifecycleState(goal.Id, "Reconcile persisted lifecycle state."));
+
+        Assert.Null(exception);
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, reviewer.Id).Status);
+    }
+
+    [Xunit.Fact]
+    public void FreshReviewerReaffirmationRoutesToDeveloper()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var originalCandidate = RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            developer,
+            DateTimeOffset.UtcNow.AddMinutes(-10));
+        var reaffirmed = new ReviewFinding(
+            "reaffirmed-correctness-finding",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Repair.cs", "Repair.Run"),
+            "The fresh candidate still contains the defect.",
+            FindingSeverity.Blocking,
+            FindingCategory.Correctness);
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            reaffirmed.Description,
+            findings: [reaffirmed],
+            reviewedCommit: originalCandidate);
+        var historicalReview = reviewer.LastVerification!;
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Repair the original finding.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        const string repairedCandidate = "repaired-candidate";
+        RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            developer,
+            historicalReview.CompletedAt.AddTicks(1),
+            baseCommit: originalCandidate,
+            resultCommit: repairedCandidate);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        Assert.Null(reviewer.LastVerification);
+        Assert.Contains(reviewer.VerificationHistory, verification =>
+            verification.MergedReviewFindings?.Any(finding => finding.StableId == reaffirmed.StableId) is true);
+
+        FailReviewerNeedsWork(
+            kernel,
+            goal,
+            reviewer,
+            reaffirmed.Description,
+            findings: [reaffirmed],
+            reviewedCommit: repairedCandidate);
+        Assert.Equal(
+            VerifyingFindingDisposition.Current,
+            VerifyingFindingCurrency.Classify(goal, reviewer, reviewer.LastVerification!));
+        TaskId? retriedTask = null;
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTask = taskId;
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.Equal(developer.Id, retriedTask);
+        Assert.Contains(reaffirmed.StableId, retryMessage, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void NormalizationPreservesRunningProcessForSupersededFailedReviewer()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var originalCandidate = RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            developer,
+            DateTimeOffset.UtcNow.AddMinutes(-10));
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Repair this finding.", reviewedCommit: originalCandidate);
+        var historicalReview = reviewer.LastVerification!;
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Repair the finding.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            developer,
+            historicalReview.CompletedAt.AddTicks(1),
+            baseCommit: originalCandidate,
+            resultCommit: "repaired-candidate");
+
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var historicalReviewSnapshot = goalSnapshot.Tasks
+            .Single(task => task.Id == reviewer.Id.Value)
+            .VerificationHistory!
+            .Single(verification => verification.CompletedAt == historicalReview.CompletedAt);
+        var process = new TaskProcessSnapshot(
+            4242,
+            "review",
+            "C:\\tmp",
+            "review.out.log",
+            "review.err.log",
+            "review.exit.txt",
+            DateTimeOffset.UtcNow,
+            null,
+            null);
+        var staleSnapshot = snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Status = GoalStatus.Failed,
+                    Tasks = goalSnapshot.Tasks.Select(task => task.Id == reviewer.Id.Value
+                        ? task with
+                        {
+                            Status = WorkTaskStatus.Failed,
+                            LastVerification = historicalReviewSnapshot,
+                            LastProcess = process
+                        }
+                        : task).ToArray()
+                }
+            ]
+        };
+        var restored = AgentOrchestratorKernel.FromSnapshot(staleSnapshot);
+        var restoredGoal = restored.GetGoal(goal.Id);
+        var retriesBefore = restoredGoal.Timeline.Count(evt =>
+            evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskRetried);
+
+        var changed = restored.NormalizeGoalLifecycleState(goal.Id, "Conductor normalization.");
+
+        var restoredReviewer = restored.GetTask(goal.Id, reviewer.Id);
+        Assert.True(changed);
+        Assert.Equal(GoalStatus.Active, restoredGoal.Status);
+        Assert.Equal(WorkTaskStatus.Failed, restoredReviewer.Status);
+        Assert.Equal(process.ProcessId, restoredReviewer.LastProcess?.ProcessId);
+        Assert.True(restoredReviewer.LastProcess?.IsRunning);
+        Assert.Equal(retriesBefore, restoredGoal.Timeline.Count(evt =>
+            evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskRetried));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(GoalStatus.Parked)]
+    [Xunit.InlineData(GoalStatus.WaitingForHuman)]
+    public void ParkedGoalDoesNotReconcileFailedReviewer(GoalStatus parkedStatus)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var candidate = RecordCommittedDeveloperPass(kernel, goal, developer, DateTimeOffset.UtcNow.AddMinutes(-2));
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Repair this finding.", reviewedCommit: candidate);
+        var historicalReview = reviewer.LastVerification!;
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Repair the finding.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        RecordCommittedDeveloperPass(
+            kernel,
+            goal,
+            developer,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            baseCommit: candidate,
+            resultCommit: "repaired-candidate");
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var historicalReviewSnapshot = goalSnapshot.Tasks
+            .Single(task => task.Id == reviewer.Id.Value)
+            .VerificationHistory!
+            .Single(verification => verification.CompletedAt == historicalReview.CompletedAt);
+        var parkedSnapshot = snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Status = parkedStatus,
+                    Tasks = goalSnapshot.Tasks.Select(task => task.Id == reviewer.Id.Value
+                        ? task with
+                        {
+                            Status = WorkTaskStatus.Failed,
+                            LastVerification = historicalReviewSnapshot
+                        }
+                        : task).ToArray()
+                }
+            ]
+        };
+        var restored = AgentOrchestratorKernel.FromSnapshot(parkedSnapshot);
+
+        var changed = restored.NormalizeGoalLifecycleState(goal.Id, "Conductor normalization.");
+
+        Assert.False(changed);
+        Assert.Equal(parkedStatus, restored.GetGoal(goal.Id).Status);
+        Assert.Equal(WorkTaskStatus.Failed, restored.GetTask(goal.Id, reviewer.Id).Status);
+    }
+
+    [Xunit.Fact]
+    public void LaterVerificationReAdmitsRetainedFailedReviewer()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var candidate = RecordCommittedDeveloperPass(kernel, goal, developer, DateTimeOffset.UtcNow.AddMinutes(-2));
+        FailReviewerNeedsWork(kernel, goal, reviewer, "First review finding.", reviewedCommit: candidate);
+        var earlierReview = reviewer.LastVerification!;
+        kernel.RetryTask(
+            goal.Id,
+            reviewer.Id,
+            "Run a later review.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "Later review finding.", reviewedCommit: candidate);
+
+        kernel.RetryTask(
+            goal.Id,
+            developer.Id,
+            "Verified no-change Developer round.",
+            RetryCause.CriterionEvidenceOwnerMismatch,
+            invalidateDownstream: false);
+        DispatchTask(kernel, goal, developer, "develop-no-change", baseCommit: candidate);
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, candidate);
+        kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+            "develop-no-change",
+            "C:\\tmp",
+            0,
+            "ok",
+            string.Empty,
+            DateTimeOffset.UtcNow.AddMinutes(1),
+            WorkerResultPresent: true,
+            HasCommittedChanges: false));
+
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var reviewerSnapshot = goalSnapshot.Tasks.Single(task => task.Id == reviewer.Id.Value);
+        var earlierReviewSnapshot = reviewerSnapshot.VerificationHistory!
+            .Single(verification => verification.CompletedAt == earlierReview.CompletedAt);
+        var staleSnapshot = snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Status = GoalStatus.Failed,
+                    Tasks = goalSnapshot.Tasks.Select(task => task.Id == reviewer.Id.Value
+                        ? task with
+                        {
+                            Status = WorkTaskStatus.Failed,
+                            LastVerification = earlierReviewSnapshot
+                        }
+                        : task).ToArray()
+                }
+            ]
+        };
+        var restored = AgentOrchestratorKernel.FromSnapshot(staleSnapshot);
+
+        var changed = restored.NormalizeGoalLifecycleState(goal.Id, "Conductor normalization.");
+
+        Assert.True(changed);
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, reviewer.Id).Status);
+        Assert.Contains(restored.GetTask(goal.Id, reviewer.Id).VerificationHistory, verification =>
+            verification.CompletedAt > earlierReview.CompletedAt);
+    }
+
+    private static string RecordCommittedDeveloperPass(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec developer,
-        DateTimeOffset completedAt)
+        DateTimeOffset completedAt,
+        string? baseCommit = null,
+        string? resultCommit = null)
     {
-        DispatchTask(kernel, goal, developer, baseCommit: "base-commit");
-        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, $"result-{completedAt.ToUnixTimeSeconds()}");
+        var effectiveResultCommit = resultCommit ?? $"result-{completedAt.ToUnixTimeSeconds()}";
+        DispatchTask(kernel, goal, developer, baseCommit: baseCommit ?? "base-commit");
+        kernel.RecordDispatchResultCommit(goal.Id, developer.Id, effectiveResultCommit);
         kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
             "develop",
             "C:\\tmp",
@@ -175,13 +856,15 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             completedAt,
             WorkerResultPresent: true,
             HasCommittedChanges: true));
+        return effectiveResultCommit;
     }
 
     private static void RecordTesterFindings(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec tester,
-        DateTimeOffset completedAt)
+        DateTimeOffset completedAt,
+        string? reviewedCommit = null)
     {
         var findings = new[]
         {
@@ -216,7 +899,7 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             "confidence: high",
             "END_WORKER_RESULT");
 
-        DispatchTask(kernel, goal, tester, "test");
+        DispatchTask(kernel, goal, tester, "test", baseCommit: reviewedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
             "test",
             "C:\\tmp",
@@ -225,7 +908,8 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             string.Empty,
             completedAt,
             StandardOutputPath: "C:\\tmp\\tester.out.log",
-            WorkerResultPresent: true));
+            WorkerResultPresent: true,
+            ReviewedCommit: reviewedCommit));
         Assert.Equal(2, tester.LastVerification!.MergedReviewFindings?.Count);
     }
 

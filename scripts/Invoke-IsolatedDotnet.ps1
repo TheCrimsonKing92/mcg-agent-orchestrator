@@ -1174,6 +1174,28 @@ function Enter-FocusedBuildSlot {
     return $null
 }
 
+function Get-FocusedChildProcessIdentity {
+    param([System.Diagnostics.Process]$Process)
+
+    try {
+        return [pscustomobject]@{
+            StartedAt = $Process.StartTime.ToUniversalTime().ToString('o')
+            Executable = $Process.MainModule.FileName
+            Status = "confirmed"
+            Error = $null
+        }
+    }
+    catch {
+        # A pid without start time and image path is diagnostic context, not a trusted identity.
+        return [pscustomobject]@{
+            StartedAt = $null
+            Executable = $null
+            Status = "pid-only"
+            Error = "{0}: {1}" -f $_.Exception.GetType().FullName, $_.Exception.Message
+        }
+    }
+}
+
 function Invoke-FocusedChildProcess {
     param(
         [string]$FileName,
@@ -1202,6 +1224,8 @@ function Invoke-FocusedChildProcess {
     $childExecutable = $FileName
     $identityStatus = "unavailable"
     $identityError = $null
+    $identityCaptureAttempts = 0
+    $maximumIdentityCaptureAttempts = 9
     $terminationRequested = $false
     $terminationSucceeded = $null
     $terminationError = $null
@@ -1212,16 +1236,12 @@ function Invoke-FocusedChildProcess {
         }
         $childProcessId = $process.Id
         $processStateAfter = "running"
-        try {
-            $childStartedAt = $process.StartTime.ToUniversalTime().ToString('o')
-            $childExecutable = $process.MainModule.FileName
-            $identityStatus = "confirmed"
-        }
-        catch {
-            # A pid without start time and image path is diagnostic context, not a trusted identity.
-            $identityStatus = "pid-only"
-            $identityError = "{0}: {1}" -f $_.Exception.GetType().FullName, $_.Exception.Message
-        }
+        $identityCaptureAttempts++
+        $identity = Get-FocusedChildProcessIdentity -Process $process
+        $childStartedAt = $identity.StartedAt
+        $childExecutable = if ($null -ne $identity.Executable) { $identity.Executable } else { $FileName }
+        $identityStatus = $identity.Status
+        $identityError = $identity.Error
         if (-not [string]::IsNullOrWhiteSpace($HeartbeatPath)) {
             try {
                 $heartbeat = Get-Content -LiteralPath $HeartbeatPath -Raw | ConvertFrom-Json
@@ -1241,6 +1261,16 @@ function Invoke-FocusedChildProcess {
         while (-not $completed -and [DateTime]::UtcNow -lt $Deadline) {
             $remainingMilliseconds = [int][Math]::Max(1, [Math]::Min(250, ($Deadline - [DateTime]::UtcNow).TotalMilliseconds))
             $completed = $process.WaitForExit($remainingMilliseconds)
+            if (-not $completed -and
+                $identityStatus -ne "confirmed" -and
+                $identityCaptureAttempts -lt $maximumIdentityCaptureAttempts) {
+                $identityCaptureAttempts++
+                $identity = Get-FocusedChildProcessIdentity -Process $process
+                $childStartedAt = $identity.StartedAt
+                $childExecutable = if ($null -ne $identity.Executable) { $identity.Executable } else { $FileName }
+                $identityStatus = $identity.Status
+                $identityError = $identity.Error
+            }
             if (-not $completed -and -not [string]::IsNullOrWhiteSpace($AcceptancePriorityPath)) {
                 $priorityProbe = $null
                 $priorityProbeHeld = $false
