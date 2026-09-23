@@ -239,8 +239,8 @@ internal static class SourceSizeRatchet
             // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
             // Goal aab291fd extracted manifest-declared project resolution controls to their own partial.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
-            // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1299),
+            // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1431),
             // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1228),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),

@@ -1296,4 +1296,136 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             CliArgumentParser.SplitCommand(command));
     }
 
+    [Xunit.Fact]
+    public void BuildPreReviewEvidenceContext_SplitsOversizedFocusedFilterAtClauseBoundaries()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        string[] changedFiles =
+        [
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchOutcomeClassifyTests.cs"
+        ];
+        var plan = RepositoryTestImpactPlanner.Plan(changedFiles, root);
+        var infrastructureCheck = Assert.Single(
+            plan.Checks,
+            check => check.TestProject == RepositoryTestProject.Infrastructure);
+        var originalFilter = infrastructureCheck.Command[^1];
+
+        var context = ConductorDriver.BuildPreReviewEvidenceContext("wide-impact-sha", changedFiles, root);
+        var emitted = context.SelectedFocusedTests
+            .Where(item => item.StartsWith("Infrastructure.Tests: ", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.False(context.MappingNeedsInput);
+        Assert.True(emitted.Length >= 2);
+        Assert.All(emitted, item => Assert.True(
+            item.Length <= PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength,
+            $"Focused request item was {item.Length} characters."));
+        Assert.Equal(
+            originalFilter.Split('|'),
+            emitted.SelectMany(item => item[(item.IndexOf(": ", StringComparison.Ordinal) + 2)..].Split('|')));
+    }
+
+    [Xunit.Fact]
+    public void PremiseInfrastructureSelection_SplitItemsPassBrokerValidation()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = RepositoryTestImpactPlanner.Plan(
+            ["src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            root);
+        var classNames = Assert.Single(
+            plan.Checks,
+            check => check.TestProject == RepositoryTestProject.Infrastructure).TestClassSelections!;
+        Assert.Equal(36, classNames.Count);
+        var filter = string.Join('|', classNames.Select(name => $"FullyQualifiedName~{name}"));
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", filter, out var items));
+
+        var accepted = GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            string.Join("; ", items),
+            AcceptanceGateEngineSettings.Load(root),
+            root,
+            out var checks,
+            out _,
+            out var rejection);
+
+        Assert.True(accepted, $"{rejection.Code}: {rejection.Detail}");
+        Assert.NotEqual(FocusedEvidenceRejectionCode.OversizedFilter, rejection.Code);
+        Assert.Equal(items.Count, checks.Count);
+    }
+
+    [Xunit.Fact]
+    public void SplitFocusedItems_RequireOneGreenEvidenceCheckPerItem()
+    {
+        var filter = string.Join('|', Enumerable.Range(1, 60)
+            .Select(index => $"FullyQualifiedName~SplitCoverageClass{index:D2}"));
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", filter, out var items));
+        var context = new PreReviewEvidenceContext(
+            "coverage-sha",
+            items,
+            string.Join("; ", items),
+            "Split focused coverage.",
+            NoApplicableTests: false,
+            MappingNeedsInput: false);
+        var allChecks = items
+            .Select(item => new AcceptanceCheckResult(item, true, 0, null))
+            .ToArray();
+        var complete = new FocusedEvidenceRunResult(
+            context.FocusedRequest!, true, true, "all split checks passed", allChecks);
+        var partial = complete with { Checks = allChecks[..^1] };
+
+        Assert.True(PreReviewEvidenceReceipts.ValidateCoverage(context, complete, out var completeFailure));
+        Assert.Equal(string.Empty, completeFailure);
+        Assert.False(PreReviewEvidenceReceipts.ValidateCoverage(context, partial, out var partialFailure));
+        Assert.Equal($"cardinality mismatch: planned={items.Count} actual={items.Count - 1}", partialFailure);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRequestSplitter_PreservesUnderLimitItemAndRefusesUnsafeOversizedShapes()
+    {
+        const string underLimit = "FullyQualifiedName~ConductorDriverTestsPreReviewEvidence";
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", underLimit, out var unchanged));
+        Assert.Equal(["Infrastructure.Tests: " + underLimit], unchanged);
+
+        var oversizedClause = "FullyQualifiedName~" + new string('A', 1100);
+        var withFittingSibling = $"FullyQualifiedName~SmallTests|{oversizedClause}";
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", withFittingSibling, out var unsplittable));
+        Assert.Equal(["Infrastructure.Tests: " + withFittingSibling], unsplittable);
+
+        var positivePrefix = string.Join('|', Enumerable.Range(1, 50)
+            .Select(index => $"FullyQualifiedName~ShapeClass{index:D2}"));
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", $"{positivePrefix}&FullyQualifiedName~Required", out _));
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", $"{positivePrefix}|FullyQualifiedName!~Excluded", out _));
+    }
+
+    [Xunit.Fact]
+    public void BuildPreReviewEvidenceContext_OversizedSingleClauseNeedsInputWithoutPartialEmission()
+    {
+        var root = CreateTempDirectory();
+        const string relativePath =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OversizedSelectionTests.cs";
+        try
+        {
+            var absolutePath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
+            File.WriteAllText(absolutePath, $"public sealed class {new string('A', 1100)} {{ }}");
+
+            var context = ConductorDriver.BuildPreReviewEvidenceContext(
+                "oversized-clause-sha", [relativePath], root);
+
+            Assert.True(context.MappingNeedsInput);
+            Assert.False(context.NoApplicableTests);
+            Assert.Null(context.FocusedRequest);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
 }
