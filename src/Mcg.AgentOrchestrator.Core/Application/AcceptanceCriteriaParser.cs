@@ -50,7 +50,7 @@ public static class AcceptanceCriteriaParser
         for (var i = start; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (IsH2Heading(line))
+            if (IsAcceptanceSectionBoundary(line))
                 break;
 
             var trimmed = line.Trim();
@@ -100,10 +100,7 @@ public static class AcceptanceCriteriaParser
     {
         for (var i = 0; i < lines.Length; i++)
         {
-            if (!IsH2Heading(lines[i]))
-                continue;
-            var heading = lines[i].TrimStart().TrimStart('#').Trim();
-            if (heading.StartsWith("Acceptance", StringComparison.OrdinalIgnoreCase))
+            if (IsAcceptanceSectionStart(lines[i]))
                 return i + 1;
         }
 
@@ -114,7 +111,7 @@ public static class AcceptanceCriteriaParser
     {
         for (var i = contentStart; i < lines.Length; i++)
         {
-            if (IsH2Heading(lines[i]) || ObjectiveTrailerHeadings.Contains(lines[i].Trim()))
+            if (IsAcceptanceSectionBoundary(lines[i]) || ObjectiveTrailerHeadings.Contains(lines[i].Trim()))
                 return i;
         }
 
@@ -127,6 +124,24 @@ public static class AcceptanceCriteriaParser
         return t.StartsWith("##", StringComparison.Ordinal) &&
                !t.StartsWith("###", StringComparison.Ordinal);
     }
+
+    private static bool IsAcceptanceSectionStart(string line)
+    {
+        if (IsStandaloneAcceptanceCriteriaLabel(line))
+            return true;
+
+        if (!IsH2Heading(line))
+            return false;
+
+        var heading = line.TrimStart().TrimStart('#').Trim();
+        return heading.StartsWith("Acceptance", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAcceptanceSectionBoundary(string line) =>
+        IsH2Heading(line) || IsStandaloneAcceptanceCriteriaLabel(line);
+
+    private static bool IsStandaloneAcceptanceCriteriaLabel(string line) =>
+        string.Equals(line.Trim(), "Acceptance criteria:", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryStripListPrefix(string trimmedLine, out string criterionText)
     {

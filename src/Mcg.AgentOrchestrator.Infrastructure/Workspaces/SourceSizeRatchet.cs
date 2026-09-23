@@ -81,7 +81,9 @@ internal static class SourceSizeRatchet
             // Raised again for goal cf64014b, integrated by operator squash on 2026-09-22: goal-evidence
             // lease recovery is admitted at the existing acceptance ownership seam, and classification and
             // journal parsing remain extracted. Ceiling re-measured at the integrated head.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6442),
+            // Raised deliberately by six for goal e46c3d92: the only addition is the candidate-currency
+            // guard that defers to VerifyingFindingCurrency.IsCurrent, whose logic lives in the model.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6448),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds

@@ -229,7 +229,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Assert.Equal(GoalLifecycleState.WorkspaceReady, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
-            evt.Message.Contains("Conductor auto-repaired", StringComparison.Ordinal));
+            evt.Message.Contains("Conductor reconciled stale goal/task lifecycle state", StringComparison.Ordinal));
     }
 
     // ── Dispatched state ──────────────────────────────────────────────────

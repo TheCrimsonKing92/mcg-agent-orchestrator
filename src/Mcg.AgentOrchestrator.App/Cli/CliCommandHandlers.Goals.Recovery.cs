@@ -50,9 +50,9 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         actions++;
     }
 
-    if (context.Kernel.NormalizeGoalLifecycleState(goal.Id, $"recover: normalized terminal goal with non-terminal task(s); {note}"))
+    if (context.Kernel.NormalizeGoalLifecycleState(goal.Id, $"recover: reconciled stale lifecycle state; {note}"))
     {
-        Console.WriteLine("recover: normalized terminal goal with non-terminal task(s) to Active.");
+        Console.WriteLine("recover: reconciled stale goal/task lifecycle state.");
         actions++;
     }
 
