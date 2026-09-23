@@ -107,10 +107,14 @@ public sealed class GateOwnedCriterionDeferralTests
                      SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester, TaskComplexity.Simple)
                  })
         {
-            Xunit.Assert.Contains("ACCEPTANCE-GATE-OWNED", requirements, StringComparison.Ordinal);
-            Xunit.Assert.Contains("OPERATOR-OWNED", requirements, StringComparison.Ordinal);
-            Xunit.Assert.Contains("not-verifiable", requirements, StringComparison.Ordinal);
-            Xunit.Assert.Contains("otherwise attest met", requirements, StringComparison.Ordinal);
+            Xunit.Assert.Contains(
+                "OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED criterion in brief: not-verifiable; else attest met/not-met.",
+                requirements,
+                StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(
+                "If brief lists OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED, not-verifiable",
+                requirements,
+                StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("does not fail the round", requirements, StringComparison.Ordinal);
         }
 
