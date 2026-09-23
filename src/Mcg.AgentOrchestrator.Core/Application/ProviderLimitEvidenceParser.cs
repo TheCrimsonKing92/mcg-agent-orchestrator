@@ -31,9 +31,11 @@ public static partial class ProviderLimitEvidenceParser
             }
         }
 
-        // Structured wrappers may carry the status and message in separate fields/lines.
+        // Structured wrappers may carry the status and message on separate lines, but the
+        // two signals must belong to the same JSON object. Never join unrelated prose lines
+        // into one synthetic budget-exhaustion diagnostic.
         var wrapper = string.Join('\n', retained);
-        if (ContainsBudgetExhaustionEvidence(wrapper))
+        if (TryGetStructuredBudgetExhaustionEvidence(wrapper))
         {
             evidenceLine = wrapper;
             return true;
@@ -134,6 +136,55 @@ public static partial class ProviderLimitEvidenceParser
             normalized.Contains("balance is exhausted", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("balance exhausted", StringComparison.OrdinalIgnoreCase);
         return hasPaymentRequired && hasExhaustedBalance;
+    }
+
+    private static bool TryGetStructuredBudgetExhaustionEvidence(string text)
+    {
+        var withoutAnsi = AnsiControlSequence().Replace(text, string.Empty);
+        var jsonStart = withoutAnsi.IndexOfAny(['{', '[']);
+        if (jsonStart < 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(withoutAnsi[jsonStart..]);
+            return ContainsBudgetExhaustionObject(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool ContainsBudgetExhaustionObject(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            return element.EnumerateArray().Any(ContainsBudgetExhaustionObject);
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array &&
+                ContainsBudgetExhaustionObject(property.Value))
+            {
+                return true;
+            }
+        }
+
+        var directFields = string.Join(
+            ' ',
+            element.EnumerateObject()
+                .Where(property => property.Value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+                .Select(property => $"{property.Name} {property.Value.GetRawText()}"));
+        return ContainsBudgetExhaustionEvidence(directFields);
     }
 
     private static string CollapseWhitespace(string value) =>

@@ -765,6 +765,7 @@ public static class GoalTimingReport
         kind is DispatchOutcomeKind.ProviderConnectivity
             or DispatchOutcomeKind.ProviderInterruption
             or DispatchOutcomeKind.ProviderAuthentication
+            or DispatchOutcomeKind.ProviderBudgetExhausted
             or DispatchOutcomeKind.ProviderModelRejection
             or DispatchOutcomeKind.PreflightFailure
             or DispatchOutcomeKind.LaunchFailure

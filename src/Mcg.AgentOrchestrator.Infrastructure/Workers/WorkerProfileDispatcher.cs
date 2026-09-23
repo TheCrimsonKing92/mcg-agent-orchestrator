@@ -1180,7 +1180,8 @@ public static class WorkerProfileDispatcher
                 allowGitReference: sandboxConfinesWrites,
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
-                commandExists: commandExists);
+                commandExists: commandExists,
+                providerHoldScope: kernel.Goals);
             if (!preflight.Allowed)
             {
                 TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);

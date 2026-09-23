@@ -133,7 +133,8 @@ public static class SubscriptionPlanBuilder
         DateTimeOffset? now = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        IReadOnlyCollection<Goal>? providerHoldScope = null)
+        IReadOnlyCollection<Goal>? providerHoldScope = null,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
     {
         var validations = OrchestratorHealthInspector
             .InspectWorkerProfiles(profiles, commandExists)
@@ -155,7 +156,8 @@ public static class SubscriptionPlanBuilder
                 allowCheapLaneInPlan,
                 sandboxOptions,
                 commandExists,
-                providerHoldScope))
+                providerHoldScope,
+                claudeAuthProbe))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -197,7 +199,8 @@ public static class SubscriptionPlanBuilder
         bool allowCheapLane = false,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        IReadOnlyCollection<Goal>? providerHoldScope = null)
+        IReadOnlyCollection<Goal>? providerHoldScope = null,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -318,10 +321,14 @@ public static class SubscriptionPlanBuilder
                 dispatchProviderName,
                 effectiveNow,
                 out var providerCooldown);
+            var providerCredentialBinding = ResolveProviderCredentialBinding(
+                profile,
+                sandboxOptions,
+                claudeAuthProbe);
             var providerBindingHeld = DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
                 providerHoldScope ?? [goal],
                 dispatchProviderName,
-                credentialBinding: null,
+                providerCredentialBinding,
                 out var providerHold);
             var retryDelaySeconds = retryDeferred
                 ? Math.Max(0, (int)Math.Ceiling((retryAfter - effectiveNow).TotalSeconds))
@@ -399,6 +406,8 @@ public static class SubscriptionPlanBuilder
                 patchCapability,
                 retryDeferred,
                 providerCoolingDown,
+                providerBindingHeld,
+                providerBindingHeld ? providerHold : null,
                 requiresLimitReview,
                 recoverableLimitFailures,
                 costGuardPromptCharacterCount,
@@ -493,6 +502,8 @@ public static class SubscriptionPlanBuilder
         WorkerProfilePatchCapability patchCapability,
         bool retryDeferred,
         bool providerCoolingDown,
+        bool providerBindingHeld,
+        ProviderBudgetExhaustionHold? providerHold,
         bool requiresLimitReview,
         int recoverableLimitFailures,
         int? costGuardPromptCharacterCount,
@@ -605,6 +616,16 @@ public static class SubscriptionPlanBuilder
             alternatives.Add("Wait for retry-after or route to a different provider profile.");
         }
 
+        if (providerBindingHeld && providerHold is not null)
+        {
+            reasons.Add(
+                $"provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
+                $"receipt={providerHold.EvidenceReceipt}");
+            alternatives.Add(
+                $"After replenishing binding {providerHold.BindingKey}, retry source goal " +
+                $"{providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} to clear the hold explicitly.");
+        }
+
         if (requiresLimitReview)
         {
             alternatives.Add("Acknowledge limit review with notes or route to a different provider.");
@@ -633,6 +654,23 @@ public static class SubscriptionPlanBuilder
             OutputTextPreview.CreateTimeline(recommendation).Text,
             reasons,
             alternatives.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static string? ResolveProviderCredentialBinding(
+        WorkerProfile? profile,
+        WorkerSandboxOptions? sandboxOptions,
+        Func<ClaudeCliAuthState>? claudeAuthProbe)
+    {
+        if (profile is null ||
+            WorkerProviderCatalog.Default().ResolveProfile(profile.Name).Identity.Kind != ProviderKind.AnthropicClaudeCli ||
+            !(sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled)
+        {
+            return null;
+        }
+
+        return (claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight())()
+            .ToTransportedSelection()
+            ?.DirectoryPath;
     }
 
     private static IReadOnlyDictionary<string, ModelOutcomeRecord>? BuildScorecardLookup(

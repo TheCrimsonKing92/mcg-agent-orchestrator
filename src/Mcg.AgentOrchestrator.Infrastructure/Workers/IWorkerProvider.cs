@@ -58,9 +58,10 @@ public sealed class StaticWorkerProvider : IWorkerProvider
             return ProviderFailureKind.Unknown;
         }
 
+        var providerStandardError = StripWorkerResultBlocks(outcome.StandardError);
         var text = StripWorkerResultBlocks(string.Join(Environment.NewLine, outcome.StandardOutput, outcome.StandardError));
         if (RecognizeBudgetExhaustion &&
-            ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(outcome.StandardError, out _))
+            ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(providerStandardError, out _))
         {
             return ProviderFailureKind.BudgetExhausted;
         }

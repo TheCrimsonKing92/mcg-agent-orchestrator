@@ -7,6 +7,13 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
 {
     private const string ObservedDiagnostic =
         "API error (status 402 Payment Required): Grok Build usage balance exhausted";
+    private const string GenericBudgetDiagnostic =
+        "API error (status 402 Payment Required): account usage balance exhausted";
+    private const string CredentialBinding = "C:\\profiles\\funded-a";
+    private static readonly WorkerSandboxOptions EnabledSandbox = new(
+        true,
+        WorkerSandboxOptions.DefaultAccount,
+        WorkerSandboxOptions.DefaultCredentialTarget);
 
     [Xunit.Fact]
     public void WorkerProviderCatalogRecognizesGrokBalanceExhaustion()
@@ -27,6 +34,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
     // ANSI framing is constructed around the verbatim observed message because log retention removed the original bytes.
     [Xunit.InlineData("\u001b[31mAPI error (status 402 Payment Required): Grok Build usage balance exhausted\u001b[0m")]
     [Xunit.InlineData("{\"error\":{\"message\":\"Grok Build usage balance exhausted\",\"http_status\":402}}")]
+    [Xunit.InlineData("{\n  \"error\": {\n    \"message\": \"Grok Build usage balance exhausted\",\n    \"http_status\": 402\n  }\n}")]
     public void WorkerProviderRecognizesConstructedAnsiAndStructuredWrapper(string standardError)
     {
         var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
@@ -64,6 +72,32 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
     }
 
     [Xunit.Fact]
+    public void WorkerProviderIgnoresBudgetFragmentsAcrossUnrelatedStderrLines()
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(
+            1,
+            string.Empty,
+            "prior response status was 402 Payment Required\nunrelated note: usage balance exhausted"));
+
+        Assert.Equal(ProviderFailureKind.Unknown, failureKind);
+    }
+
+    [Xunit.Fact]
+    public void WorkerProviderIgnoresBudgetDiagnosticInsideStderrWorkerResultBlock()
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(
+            1,
+            string.Empty,
+            $"WORKER_RESULT:\nblockers: quoted log: {ObservedDiagnostic}\nEND_WORKER_RESULT"));
+
+        Assert.Equal(ProviderFailureKind.Unknown, failureKind);
+    }
+
+    [Xunit.Fact]
     public void CompletionPreservesBudgetExhaustionAheadOfMissingFileChange()
     {
         var (_, task, dispatchedAt) = DispatchedTask();
@@ -82,6 +116,22 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         Assert.DoesNotContain("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Assert.Contains("source=stderr", outcome.EvidenceSummary, StringComparison.Ordinal);
         Assert.Contains("binding=xai::<provider-default>", outcome.EvidenceSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
+    public void BudgetExhaustionOutranksConnectivityChatter()
+    {
+        var (_, task, dispatchedAt) = DispatchedTask();
+        var verification = FailedVerification(
+            dispatchedAt,
+            $"connection refused while reporting provider response\n{ObservedDiagnostic}",
+            ProviderFailureKind.BudgetExhausted);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Assert.Equal(DispatchOutcomeKind.ProviderBudgetExhausted, outcome.Kind);
+        Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Assert.Contains("rule=provider-budget-exhausted", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -236,7 +286,15 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             providerHoldScope: restored.Goals);
         Assert.True(Assert.Single(unrelatedPlan.Items).CanPrepare);
 
-        var operatorRecovered = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var operatorRecovered = WithGoalStatus(
+            AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()),
+            sourceGoal.Id,
+            GoalStatus.Failed);
+        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            operatorRecovered.Goals,
+            "xAI",
+            credentialBinding: null,
+            out _));
         operatorRecovered.RetryTask(
             sourceGoal.Id,
             sourceTask.Id,
@@ -302,6 +360,109 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         }
     }
 
+    [Xunit.Fact]
+    public void CredentialScopedHoldBlocksSubscriptionPlan()
+    {
+        var (kernel, targetGoal, agent) = CredentialScopedHoldScenario();
+
+        var plan = SubscriptionPlanBuilder.Build(
+            targetGoal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            sandboxOptions: EnabledSandbox,
+            commandExists: _ => true,
+            providerHoldScope: kernel.Goals,
+            claudeAuthProbe: CredentialAuthProbe);
+
+        var item = Assert.Single(plan.Items);
+        Assert.False(item.CanPrepare, item.Detail);
+        Assert.Contains("anthropic::c:\\profiles\\funded-a", item.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            item.Route!.Reasons,
+            reason => reason.Contains("anthropic::c:\\profiles\\funded-a", StringComparison.OrdinalIgnoreCase) &&
+                reason.Contains("receipt=", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void CrossGoalCredentialScopedHoldBlocksReadyBatch()
+    {
+        var repository = CreateSeededDispatchRepository();
+        try
+        {
+            var promptRoot = Path.Combine(repository, ".test-prompts");
+            var (kernel, targetGoal, agent) = CredentialScopedHoldScenario();
+            var worktree = GoalWorktrees.Ensure(repository, targetGoal.Id);
+
+            var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+                kernel,
+                targetGoal,
+                [agent],
+                WorkerProfileCatalog.Default(),
+                promptRoot,
+                worktree,
+                DateTimeOffset.Parse("2026-09-06T20:00:00Z"),
+                commandExists: _ => true,
+                sandboxOptions: EnabledSandbox,
+                claudeAuthProbe: CredentialAuthProbe);
+
+            Assert.Empty(batch.Dispatches);
+            var blocked = Assert.Single(batch.Blocked);
+            Assert.Contains(
+                blocked.Details ?? [],
+                detail => detail.Contains("anthropic::c:\\profiles\\funded-a", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            try { Directory.Delete(repository, recursive: true); } catch { }
+        }
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal TargetGoal, AgentDefinition Agent) CredentialScopedHoldScenario()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var sourceGoal = kernel.CreateGoal(
+            "Observe exhausted Anthropic binding",
+            [new TaskSpec(TaskId.New(), "Run provider work.", AgentRole.Developer)]);
+        var targetGoal = kernel.CreateGoal(
+            "Avoid the exhausted Anthropic binding",
+            [new TaskSpec(TaskId.New(), "Run later provider work.", AgentRole.Developer)]);
+        var agent = ClaudeDeveloperAgent();
+        kernel.ActivateGoal(sourceGoal.Id, [agent]);
+        kernel.ActivateGoal(targetGoal.Id, [agent]);
+        var sourceTask = sourceGoal.Tasks.Single();
+        var dispatchedAt = DateTimeOffset.Parse("2026-09-06T19:24:00Z");
+        kernel.RecordTaskDispatch(
+            sourceGoal.Id,
+            sourceTask.Id,
+            new TaskDispatchRecord(
+                "claude-cli",
+                "claude",
+                "C:\\repo",
+                dispatchedAt,
+                ProviderName: "Anthropic",
+                WorkerProviderKind: ProviderKind.AnthropicClaudeCli,
+                ClaudeCredentialSourceDirectory: CredentialBinding,
+                ClaudeCredentialSourceIsExplicit: true,
+                GoalId: sourceGoal.Id));
+        kernel.RecordTaskVerification(
+            sourceGoal.Id,
+            sourceTask.Id,
+            FailedVerification(dispatchedAt, GenericBudgetDiagnostic, ProviderFailureKind.BudgetExhausted));
+        kernel.ReportTaskProgress(
+            sourceGoal.Id,
+            sourceTask.Id,
+            WorkTaskStatus.Failed,
+            "Provider budget exhausted; operator recovery required.");
+        return (kernel, targetGoal, agent);
+    }
+
+    private static ClaudeCliAuthState CredentialAuthProbe() => new(
+        HasAnthropicApiKey: false,
+        HasCliCredentialArtifact: true,
+        CredentialArtifactPath: Path.Combine(CredentialBinding, ".credentials.json"),
+        SelectedSourceDirectory: CredentialBinding,
+        IsExplicitSource: true);
+
     private static (AgentOrchestratorKernel Kernel, TaskSpec Task, DateTimeOffset DispatchedAt) DispatchedTask()
     {
         var kernel = new AgentOrchestratorKernel();
@@ -349,4 +510,17 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             "high"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("grok-cli", "grok-4.6", "high"));
+
+    private static AgentDefinition ClaudeDeveloperAgent() => new(
+        new AgentId("claude-developer"),
+        "Claude Developer",
+        AgentRole.Developer,
+        new ModelProfile(
+            "Anthropic",
+            "claude-opus-5",
+            ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
+            SubscriptionMode.ApiKey,
+            "high"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-opus-5", "high"));
 }
