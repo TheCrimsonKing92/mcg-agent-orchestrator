@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Text;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -141,21 +142,36 @@ public static partial class ProviderLimitEvidenceParser
     private static bool TryGetStructuredBudgetExhaustionEvidence(string text)
     {
         var withoutAnsi = AnsiControlSequence().Replace(text, string.Empty);
-        var jsonStart = withoutAnsi.IndexOfAny(['{', '[']);
-        if (jsonStart < 0)
+        for (var jsonStart = 0; jsonStart < withoutAnsi.Length; jsonStart++)
         {
-            return false;
+            if (withoutAnsi[jsonStart] is not ('{' or '['))
+            {
+                continue;
+            }
+
+            try
+            {
+                var json = Encoding.UTF8.GetBytes(withoutAnsi[jsonStart..]);
+                var reader = new Utf8JsonReader(json, new JsonReaderOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                });
+                using var document = JsonDocument.ParseValue(ref reader);
+                if (ContainsBudgetExhaustionObject(document.RootElement))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // Provider stderr may contain brace-like prose before the structured wrapper.
+                // Continue scanning for the next complete JSON value instead of assuming the
+                // first brace owns the remainder of the stream.
+            }
         }
 
-        try
-        {
-            using var document = JsonDocument.Parse(withoutAnsi[jsonStart..]);
-            return ContainsBudgetExhaustionObject(document.RootElement);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        return false;
     }
 
     private static bool ContainsBudgetExhaustionObject(JsonElement element)

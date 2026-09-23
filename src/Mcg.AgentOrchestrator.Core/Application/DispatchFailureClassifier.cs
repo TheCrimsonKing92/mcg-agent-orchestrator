@@ -2373,7 +2373,7 @@ public static class DispatchFailureClassifier
             var (goal, task, verification, observedProviderName, observedBinding) = observation;
             if (verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted ||
                 !observedBinding.Equals(requestedBinding) ||
-                task.LatestRetryAt is { } retryAt && retryAt > verification.CompletedAt ||
+                HasExplicitBudgetRecoveryForBinding(task, observedBinding, verification.CompletedAt) ||
                 latestAvailabilityAt > verification.CompletedAt)
             {
                 continue;
@@ -2398,6 +2398,25 @@ public static class DispatchFailureClassifier
 
         hold = latest!;
         return latest is not null;
+    }
+
+    private static bool HasExplicitBudgetRecoveryForBinding(
+        TaskSpec task,
+        ProviderBindingKey observedBinding,
+        DateTimeOffset exhaustedAt)
+    {
+        if (task.LatestProviderBudgetRecoveryAt is not { } recoveredAt || recoveredAt <= exhaustedAt)
+        {
+            return false;
+        }
+
+        var recoveredDispatch = task.DispatchHistory
+            .LastOrDefault(dispatch => dispatch.DispatchedAt <= recoveredAt);
+        return recoveredDispatch is not null &&
+            BuildProviderBindingKey(
+                recoveredDispatch.ProviderName ?? recoveredDispatch.WorkerName,
+                recoveredDispatch.ClaudeCredentialSourceDirectory)
+            .Equals(observedBinding);
     }
 
     private static TaskDispatchRecord? FindDispatchForVerification(

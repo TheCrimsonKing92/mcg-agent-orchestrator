@@ -86,7 +86,8 @@ internal static class DashboardActionRecommendationPlanner
             goal,
             agents,
             workerProfiles,
-            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents));
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents),
+            providerHoldScope: kernel.Goals);
         sourceSummaries.Add($"capacity: {subscription.CapacitySchedule.Disposition} ready={subscription.CapacitySchedule.ReadyNowCount} deferred={subscription.CapacitySchedule.DeferredCount}");
         if (subscription.CapacitySchedule.Disposition != ProviderCapacityDisposition.Ready ||
             subscription.CapacitySchedule.HasCostRisk)

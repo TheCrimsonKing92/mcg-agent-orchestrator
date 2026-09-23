@@ -72,6 +72,7 @@ public sealed record DispatchModelOverride(string? ProfileName, string? ModelNam
 
 public static class WorkerProfileDispatcher
 {
+    internal const string ProviderBudgetExhaustionErrorCode = "provider-budget-exhausted";
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string OpenAiSparkSubscriptionProfileName = "codex-spark";
     public const string OpenAiSparkSubscriptionModelName = "gpt-5.3-codex-spark";
@@ -726,6 +727,11 @@ public static class WorkerProfileDispatcher
 
     private static string? ResolvePreflightErrorCode(IReadOnlyList<string> findings)
     {
+        if (findings.Any(finding => finding.Contains(ProviderBudgetExhaustionErrorCode, StringComparison.Ordinal)))
+        {
+            return ProviderBudgetExhaustionErrorCode;
+        }
+
         if (findings.Any(finding => finding.Contains(MissingResearchArtifactErrorCode, StringComparison.Ordinal)))
         {
             return MissingResearchArtifactErrorCode;
@@ -1342,6 +1348,8 @@ public static class WorkerProfileDispatcher
             return MissingPlannerArtifactErrorCode;
         if (blockedFindings.Any(finding => finding.Contains(ArtifactTooLargeErrorCode, StringComparison.Ordinal)))
             return ArtifactTooLargeErrorCode;
+        if (blockedFindings.Any(finding => finding.Contains(ProviderBudgetExhaustionErrorCode, StringComparison.Ordinal)))
+            return ProviderBudgetExhaustionErrorCode;
         if (blockedFindings.Any(finding => finding.Contains("uncommitted change", StringComparison.OrdinalIgnoreCase)))
             return "dirty-worktree";
         if (blockedFindings.Any(finding => finding.Contains("cleanliness unavailable", StringComparison.OrdinalIgnoreCase)))

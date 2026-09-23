@@ -44,6 +44,20 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         Assert.Equal(ProviderFailureKind.BudgetExhausted, failureKind);
     }
 
+    [Xunit.Fact]
+    public void WorkerProviderRecognizesStructuredWrapperWithSurroundingStderr()
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+        var standardError =
+            "provider bootstrap {not-json}\n" +
+            "{\n  \"error\": {\n    \"http_status\": 402,\n    \"message\": \"Grok Build usage balance exhausted\"\n  }\n}\n" +
+            "provider shutdown complete";
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, string.Empty, standardError));
+
+        Assert.Equal(ProviderFailureKind.BudgetExhausted, failureKind);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("API error (status 402 Payment Required): request rejected", ProviderFailureKind.Unknown)]
     [Xunit.InlineData("ERROR: HTTP 401 Unauthorized", ProviderFailureKind.Unknown)]
@@ -299,9 +313,20 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             sourceGoal.Id,
             sourceTask.Id,
             "Operator confirmed the named billing binding was replenished.",
-            RetryCause.ContractClarification);
+            RetryCause.ProviderBudgetRecovery);
         Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
             operatorRecovered.Goals,
+            "xAI",
+            credentialBinding: null,
+            out _));
+        var recoveryRoundTrip = AgentOrchestratorKernel.FromSnapshot(operatorRecovered.ExportSnapshot());
+        recoveryRoundTrip.RetryTaskAutomatically(
+            sourceGoal.Id,
+            sourceTask.Id,
+            "Later automatic retry must not erase the explicit budget recovery marker.",
+            RetryCause.ProviderInterruption);
+        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            recoveryRoundTrip.Goals,
             "xAI",
             credentialBinding: null,
             out _));
@@ -326,6 +351,162 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             "xAI",
             credentialBinding: null,
             out _));
+    }
+
+    [Xunit.Fact]
+    public void AutomaticProviderRetryDoesNotClearExhaustedBindingHold()
+    {
+        var (kernel, task, dispatchedAt) = DispatchedTask();
+        kernel.RecordTaskVerification(
+            task.LastDispatch!.GoalId!,
+            task.Id,
+            FailedVerification(dispatchedAt, ObservedDiagnostic, ProviderFailureKind.BudgetExhausted));
+        kernel.ReportTaskProgress(
+            task.LastDispatch.GoalId!,
+            task.Id,
+            WorkTaskStatus.Failed,
+            "Provider budget exhausted; operator recovery required.");
+
+        kernel.RetryTaskAutomatically(
+            task.LastDispatch.GoalId!,
+            task.Id,
+            "Automatic provider interruption retry.",
+            RetryCause.ProviderInterruption);
+
+        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            kernel.Goals,
+            "xAI",
+            credentialBinding: null,
+            out _));
+    }
+
+    [Xunit.Fact]
+    public void ExplicitRecoveryClearsOnlyTheLatestNamedCredentialBinding()
+    {
+        var clock = new BudgetTestClock(DateTimeOffset.Parse("2026-09-06T19:20:00Z"));
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Recover one exhausted credential",
+            [new TaskSpec(TaskId.New(), "Run provider work.", AgentRole.Developer)]);
+        var agent = ClaudeDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        var firstDispatchAt = DateTimeOffset.Parse("2026-09-06T19:24:00Z");
+        var secondDispatchAt = firstDispatchAt.AddMinutes(10);
+        RecordClaudeBudgetExhaustion(kernel, goal, task, firstDispatchAt, @"C:\profiles\funded-a");
+        kernel.ReportTaskProgress(
+            goal.Id,
+            task.Id,
+            WorkTaskStatus.Failed,
+            "First credential exhausted.");
+        clock.UtcNow = firstDispatchAt.AddMinutes(2);
+        kernel.RetryTaskAutomatically(
+            goal.Id,
+            task.Id,
+            "Try the separately funded credential.",
+            RetryCause.ProviderInterruption);
+        RecordClaudeBudgetExhaustion(kernel, goal, task, secondDispatchAt, @"C:\profiles\funded-b");
+        kernel.ReportTaskProgress(
+            goal.Id,
+            task.Id,
+            WorkTaskStatus.Failed,
+            "Provider budget exhausted; operator recovery required.");
+
+        clock.UtcNow = secondDispatchAt.AddMinutes(2);
+        kernel.RetryTask(
+            goal.Id,
+            task.Id,
+            "Operator replenished funded-b.",
+            RetryCause.ProviderBudgetRecovery);
+
+        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            kernel.Goals,
+            "Anthropic",
+            @"C:\profiles\funded-a",
+            out _));
+        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            kernel.Goals,
+            "Anthropic",
+            @"C:\profiles\funded-b",
+            out _));
+    }
+
+    [Xunit.Fact]
+    public void OperatorInboxSeesCrossGoalCredentialScopedHold()
+    {
+        var root = InfrastructureTestSupport.CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var sourceGoal = kernel.CreateGoal(
+                "Observe exhausted xAI binding",
+                [new TaskSpec(TaskId.New(), "Run provider work.", AgentRole.Developer)]);
+            var targetGoal = kernel.CreateGoal(
+                "Avoid the exhausted xAI binding",
+                [new TaskSpec(TaskId.New(), "Run later provider work.", AgentRole.Developer)]);
+            var agent = XaiDeveloperAgent();
+            kernel.ActivateGoal(sourceGoal.Id, [agent]);
+            kernel.ActivateGoal(targetGoal.Id, [agent]);
+            var sourceTask = sourceGoal.Tasks.Single();
+            var dispatchedAt = DateTimeOffset.Parse("2026-09-06T19:24:00Z");
+            kernel.RecordTaskDispatch(sourceGoal.Id, sourceTask.Id, GrokDispatch(sourceGoal.Id, dispatchedAt));
+            kernel.RecordTaskVerification(
+                sourceGoal.Id,
+                sourceTask.Id,
+                FailedVerification(dispatchedAt, ObservedDiagnostic, ProviderFailureKind.BudgetExhausted));
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+
+            var inbox = OperatorInbox.Build(
+                kernel,
+                [agent],
+                WorkerProfileCatalog.Default(),
+                workspace,
+                targetGoal.Id.Value[..8]);
+
+            var blocked = Assert.Single(inbox.Items.Where(item =>
+                item.Kind == OperatorInboxKind.SubscriptionRouteWarning));
+            Assert.Equal(OperatorInboxSeverity.Blocker, blocked.Severity);
+            Assert.Contains("xai::<provider-default>", blocked.Evidence, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("receipt=", blocked.Evidence, StringComparison.OrdinalIgnoreCase);
+            var readiness = Assert.Single(inbox.Items.Where(item =>
+                item.Kind == OperatorInboxKind.ReadinessPreflight &&
+                item.Severity == OperatorInboxSeverity.Blocker &&
+                item.Message.Contains("xai::<provider-default>", StringComparison.OrdinalIgnoreCase)));
+            Assert.Contains("xai::<provider-default>", readiness.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void SubscriptionPlanResolvesClaudeCredentialOncePerBuild()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Plan two Claude tasks from one credential snapshot",
+            [
+                new TaskSpec(TaskId.New(), "Implement first change.", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Implement second change.", AgentRole.Developer)
+            ]);
+        var agent = ClaudeDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var probeCount = 0;
+
+        _ = SubscriptionPlanBuilder.Build(
+            goal,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            sandboxOptions: EnabledSandbox,
+            commandExists: _ => true,
+            claudeAuthProbe: () =>
+            {
+                probeCount++;
+                return CredentialAuthProbe();
+            });
+
+        Assert.Equal(1, probeCount);
     }
 
     [Xunit.Fact]
@@ -407,6 +588,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
 
             Assert.Empty(batch.Dispatches);
             var blocked = Assert.Single(batch.Blocked);
+            Assert.Equal("provider-budget-exhausted", blocked.Reason);
             Assert.Contains(
                 blocked.Details ?? [],
                 detail => detail.Contains("anthropic::c:\\profiles\\funded-a", StringComparison.OrdinalIgnoreCase));
@@ -462,6 +644,32 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         CredentialArtifactPath: Path.Combine(CredentialBinding, ".credentials.json"),
         SelectedSourceDirectory: CredentialBinding,
         IsExplicitSource: true);
+
+    private static void RecordClaudeBudgetExhaustion(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        DateTimeOffset dispatchedAt,
+        string credentialBinding)
+    {
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "claude-cli",
+                "claude",
+                "C:\\repo",
+                dispatchedAt,
+                ProviderName: "Anthropic",
+                WorkerProviderKind: ProviderKind.AnthropicClaudeCli,
+                ClaudeCredentialSourceDirectory: credentialBinding,
+                ClaudeCredentialSourceIsExplicit: true,
+                GoalId: goal.Id));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            FailedVerification(dispatchedAt, GenericBudgetDiagnostic, ProviderFailureKind.BudgetExhausted));
+    }
 
     private static (AgentOrchestratorKernel Kernel, TaskSpec Task, DateTimeOffset DispatchedAt) DispatchedTask()
     {
@@ -523,4 +731,9 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             "high"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-opus-5", "high"));
+
+    private sealed class BudgetTestClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+    }
 }

@@ -140,11 +140,11 @@ internal static class OperatorInbox
         {
             AddHumanInputItems(items, kernel, goal, acknowledgements);
             AddMonitorItems(items, kernel, goal, acknowledgements);
-            AddReadinessItems(items, goal, agents, workerProfiles, workspace, acknowledgements);
+            AddReadinessItems(items, goal, agents, workerProfiles, workspace, kernel.Goals, acknowledgements);
             AddAcceptanceItems(items, kernel, goal, workspace, acknowledgements);
             AddSupervisorItems(items, kernel, goal, agents, workspace, acknowledgements);
-            AddSubscriptionRouteItems(items, goal, agents, workerProfiles, acknowledgements);
-            AddBudgetItems(items, goal, agents, workerProfiles, acknowledgements);
+            AddSubscriptionRouteItems(items, goal, agents, workerProfiles, kernel.Goals, acknowledgements);
+            AddBudgetItems(items, goal, agents, workerProfiles, kernel.Goals, acknowledgements);
             AddLandingEscalationItems(items, goal, workspace, acknowledgements);
             AddOwnershipHoldItems(items, goal, workspace, acknowledgements);
             AddHoldFailureItems(items, goal, workspace, acknowledgements);
@@ -333,6 +333,7 @@ internal static class OperatorInbox
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog workerProfiles,
         OrchestratorWorkspace workspace,
+        IReadOnlyCollection<Goal> providerHoldScope,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
         if (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded)
@@ -340,7 +341,12 @@ internal static class OperatorInbox
             return;
         }
 
-        var readiness = GoalReadinessPreflight.Build(goal, agents, workspace.ExecutionDirectory, workerProfiles);
+        var readiness = GoalReadinessPreflight.Build(
+            goal,
+            agents,
+            workspace.ExecutionDirectory,
+            workerProfiles,
+            providerHoldScope: providerHoldScope);
         foreach (var finding in readiness.Findings.Where(finding => finding.Severity != GoalReadinessSeverity.Info))
         {
             var severity = finding.Severity == GoalReadinessSeverity.Blocker
@@ -406,9 +412,10 @@ internal static class OperatorInbox
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog workerProfiles,
+        IReadOnlyCollection<Goal> providerHoldScope,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
-        var plan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles);
+        var plan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles, providerHoldScope: providerHoldScope);
         foreach (var item in plan.Items.Where(item =>
             item.TaskStatus == WorkTaskStatus.Assigned &&
             item.Route is not null &&
@@ -439,6 +446,7 @@ internal static class OperatorInbox
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog workerProfiles,
+        IReadOnlyCollection<Goal> providerHoldScope,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
         if (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded)
@@ -446,7 +454,7 @@ internal static class OperatorInbox
             return;
         }
 
-        var plan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles);
+        var plan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles, providerHoldScope: providerHoldScope);
         if (!string.IsNullOrWhiteSpace(plan.ReadyStartCostRisk))
         {
             Add(items, BuildItem(

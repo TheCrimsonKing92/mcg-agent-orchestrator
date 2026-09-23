@@ -44,6 +44,8 @@ public sealed class TaskSpec
 
     public DateTimeOffset? LatestRetryAt { get; private set; }
 
+    public DateTimeOffset? LatestProviderBudgetRecoveryAt { get; private set; }
+
     public RetryRoundKind? PendingRetryRoundKind { get; private set; }
 
     public ReviewFindingRepairCheckpoint? PendingReviewFindingRepairCheckpoint { get; private set; }
@@ -255,7 +257,8 @@ public sealed class TaskSpec
             PreReviewEvidenceAttemptCount,
             PendingInterruptedWorkCheckpoint,
             ConductorRoutingRevision,
-            PendingPreDispatchIntegrationReceipt);
+            PendingPreDispatchIntegrationReceipt,
+            LatestProviderBudgetRecoveryAt);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -478,6 +481,7 @@ public sealed class TaskSpec
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
         task.PendingPreDispatchIntegrationReceipt = snapshot.PendingPreDispatchIntegrationReceipt;
+        task.LatestProviderBudgetRecoveryAt = snapshot.LatestProviderBudgetRecoveryAt;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
         task._preReviewEvidenceHistory.AddRange(
             snapshot.PreReviewEvidenceHistory ??
@@ -699,6 +703,10 @@ public sealed class TaskSpec
             ? ReviewFindingRepairCheckpoint.Create(priorVerification)
             : null;
         PendingRetryCause = retryCause;
+        if (retryCause == RetryCause.ProviderBudgetRecovery)
+        {
+            LatestProviderBudgetRecoveryAt = retriedAt;
+        }
         PendingPreDispatchIntegrationReceipt = null;
         RetryAdmissionHoldRoute = null;
     }

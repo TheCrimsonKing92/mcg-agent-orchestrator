@@ -74,7 +74,7 @@ internal static class WorkerSubscriptionPreflightFindings
         }
 
         findings.Add(
-            $"blocked: provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
+            $"blocked: code={WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode}; provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
             $"source goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}");
     }
 }

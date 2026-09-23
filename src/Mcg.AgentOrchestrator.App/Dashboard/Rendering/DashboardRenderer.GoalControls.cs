@@ -456,7 +456,8 @@ public static partial class DashboardRenderer
             goal,
             options.AgentDefinitions,
             options.WorkerProfiles,
-            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, options.AgentDefinitions));
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, options.AgentDefinitions),
+            providerHoldScope: kernel.Goals);
         var readyRisk = SubscriptionPromptCostGuard.EvaluateReadySubscriptionStart(
             goal,
             options.AgentDefinitions,

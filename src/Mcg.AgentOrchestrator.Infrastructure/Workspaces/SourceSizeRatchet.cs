@@ -179,7 +179,9 @@ internal static class SourceSizeRatchet
             // Raised two lines for goal 31fa5aec: the dispatcher adds the interrupted-work checkpoint
             // context source at its single call site; projection and metrics live in
             // InterruptedWorkCheckpointContextProjector. 3039 is the measured size with that call site.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3039),
+            // Lowered for goal 3cf50b77 after provider-budget preflight finding construction moved to
+            // WorkerSubscriptionPreflightFindings; 3000 includes the typed exhaustion error-code mapping.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 3000),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

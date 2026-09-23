@@ -124,6 +124,8 @@ public sealed record SubscriptionPlanItem(
 
 public static class SubscriptionPlanBuilder
 {
+    private static readonly WorkerProviderCatalog DefaultWorkerProviders = WorkerProviderCatalog.Default();
+
     public static SubscriptionPlan Build(
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
@@ -141,6 +143,10 @@ public static class SubscriptionPlanBuilder
             .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 
         var scorecardLookup = BuildScorecardLookup(scorecard);
+        var resolvedSandboxOptions = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
+        var sourceClaudeAuthProbe = claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight();
+        var sharedClaudeAuthState = new Lazy<ClaudeCliAuthState>(sourceClaudeAuthProbe);
+        Func<ClaudeCliAuthState> sharedClaudeAuthProbe = () => sharedClaudeAuthState.Value;
 
         var allowCheapLaneInPlan = scorecard is not null;
         var items = goal.Tasks
@@ -154,10 +160,10 @@ public static class SubscriptionPlanBuilder
                 scorecardLookup,
                 now,
                 allowCheapLaneInPlan,
-                sandboxOptions,
+                resolvedSandboxOptions,
                 commandExists,
                 providerHoldScope,
-                claudeAuthProbe))
+                sharedClaudeAuthProbe))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -662,7 +668,7 @@ public static class SubscriptionPlanBuilder
         Func<ClaudeCliAuthState>? claudeAuthProbe)
     {
         if (profile is null ||
-            WorkerProviderCatalog.Default().ResolveProfile(profile.Name).Identity.Kind != ProviderKind.AnthropicClaudeCli ||
+            DefaultWorkerProviders.ResolveProfile(profile.Name).Identity.Kind != ProviderKind.AnthropicClaudeCli ||
             !(sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled)
         {
             return null;
@@ -718,7 +724,7 @@ public static class SubscriptionPlanBuilder
 
     private static IWorkerProvider ResolveWorkerProviderForPlan(string profileName, string providerName)
     {
-        var catalog = WorkerProviderCatalog.Default();
+        var catalog = DefaultWorkerProviders;
         var provider = catalog.ResolveProfile(profileName);
         if (provider.Identity.Kind != ProviderKind.Unknown)
         {
@@ -737,7 +743,7 @@ public static class SubscriptionPlanBuilder
 
     private static string ResolveDispatchProviderName(string selectedProviderName, string profileName)
     {
-        var provider = WorkerProviderCatalog.Default().ResolveProfile(profileName);
+        var provider = DefaultWorkerProviders.ResolveProfile(profileName);
         return provider.Identity.Kind == ProviderKind.Unknown
             ? selectedProviderName
             : provider.ProviderName;
