@@ -36,6 +36,31 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
     }
 
     [Fact]
+    public void PassedCohortReceiptRecoversMergedVerifiedGoalAndWritesAuditDisposition()
+    {
+        var fixture = CreateFixture(withOperatorObligation: false);
+        try
+        {
+            MergeCandidateIntoMain(fixture);
+            SavePassedCohortReceipt(fixture, "recover-cohort-receipt", fixture.CandidateSha);
+
+            var result = RunSweep(fixture);
+
+            Assert.Equal(GoalStatus.Completed, fixture.Kernel.GetGoal(fixture.Goal.Id).Status);
+            var obligation = Assert.Single(fixture.Goal.CriterionEvidenceObligations);
+            Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
+            Assert.Equal(fixture.CandidateSha, obligation.CandidateSha);
+            var goalResult = Assert.Single(result.Goals);
+            Assert.Contains(goalResult.Repairs, repair =>
+                repair.Evidence.Contains("sourceId=recover-cohort-receipt", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Cleanup(fixture);
+        }
+    }
+
+    [Fact]
     public void PassedAcceptanceAttemptRecoversWhenNoTrainReceiptExists()
     {
         var fixture = CreateFixture(withOperatorObligation: false);
@@ -226,7 +251,8 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
             kernel,
             goal,
             candidateSha,
-            new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")));
+            new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")),
+            new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")));
     }
 
     private static void MergeCandidateIntoMain(RecoveryFixture fixture) =>
@@ -247,6 +273,47 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
             receiptId,
             identity,
             MergeTrainGateOutcome.Passed,
+            DateTimeOffset.UtcNow,
+            10,
+            [],
+            0,
+            [WritePassingTrx(fixture.Root, $"{receiptId}.trx")],
+            ValidForLanding: true));
+    }
+
+    private static void SavePassedCohortReceipt(RecoveryFixture fixture, string receiptId, string candidateSha)
+    {
+        var otherGoalId = GoalId.New();
+        var members = new[]
+        {
+            new AcceptanceCohortMemberBinding(
+                fixture.Goal.Id,
+                candidateSha,
+                candidateSha,
+                ["src/Recovered.cs"],
+                ["resource:recovered"],
+                ChangeRiskTier.Behavior,
+                ConductorTransitionDecision.Auto,
+                GateReadyMergeStatus.Clean.ToString(),
+                GateReadyMergeReason.NoConflictsDetected.ToString()),
+            new AcceptanceCohortMemberBinding(
+                otherGoalId,
+                candidateSha,
+                candidateSha,
+                ["tests/Other.cs"],
+                ["resource:other"],
+                ChangeRiskTier.Behavior,
+                ConductorTransitionDecision.Auto,
+                GateReadyMergeStatus.Clean.ToString(),
+                GateReadyMergeReason.NoConflictsDetected.ToString())
+        };
+        var mainSha = RunGitOutput(fixture.Root, "rev-parse", "main").Trim();
+        var treeSha = RunGitOutput(fixture.Root, "rev-parse", "main^{tree}").Trim();
+        var identity = AcceptanceCohortIdentity.Create(members, mainSha, treeSha, "manifest-v1");
+        fixture.CohortStore.SaveGateReceipt(new AcceptanceCohortReceipt(
+            receiptId,
+            identity,
+            AcceptanceCohortGateOutcome.Passed,
             DateTimeOffset.UtcNow,
             10,
             [],
@@ -334,5 +401,6 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
         AgentOrchestratorKernel Kernel,
         Goal Goal,
         string CandidateSha,
-        MergeTrainAcceptanceStore Store);
+        MergeTrainAcceptanceStore Store,
+        CohortAcceptanceStore CohortStore);
 }

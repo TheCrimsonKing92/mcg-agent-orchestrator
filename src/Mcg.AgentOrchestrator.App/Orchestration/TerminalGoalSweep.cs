@@ -410,7 +410,8 @@ internal static partial class TerminalGoalSweep
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
         GoalWorktreeCleanupHooks? cleanupHooks = null,
         string? orchestratorDirectory = null,
-        MergeTrainAcceptanceStore? mergeTrainAcceptanceStore = null)
+        MergeTrainAcceptanceStore? mergeTrainAcceptanceStore = null,
+        CohortAcceptanceStore? cohortAcceptanceStore = null)
     {
         gitRunner ??= GitRunner;
         var gitRunnerIdentity = gitRunner;
@@ -430,6 +431,8 @@ internal static partial class TerminalGoalSweep
         orchestratorDirectory ??= workspace.OrchestratorDirectory;
         mergeTrainAcceptanceStore ??= new MergeTrainAcceptanceStore(
             Path.Combine(orchestratorDirectory, "merge-train-acceptance.db"));
+        cohortAcceptanceStore ??= new CohortAcceptanceStore(
+            Path.Combine(orchestratorDirectory, "cohort-acceptance.db"));
         var dispatchRunner = new BackgroundDispatchRunner();
         var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
         var ownedRoots = ReapOwnedBuildRoots(workspace.SqliteStatePath);
@@ -527,6 +530,7 @@ internal static partial class TerminalGoalSweep
                 orchestratorDirectory,
                 branchFactIndex.MainSha,
                 mergeTrainAcceptanceStore,
+                cohortAcceptanceStore,
                 gitRunner);
             if (recoveredCriterionEvidence is { CanComplete: false })
             {

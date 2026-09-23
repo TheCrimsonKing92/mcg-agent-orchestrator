@@ -25,6 +25,7 @@ internal static class AcceptanceCriterionEvidenceRecovery
         string orchestratorDirectory,
         string? mainSha,
         MergeTrainAcceptanceStore mergeTrainStore,
+        CohortAcceptanceStore cohortStore,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
         if (goal.Status != GoalStatus.Verified ||
@@ -46,6 +47,22 @@ internal static class AcceptanceCriterionEvidenceRecovery
                 kernel,
                 goal,
                 "merge-train-receipt",
+                receipt.ReceiptId,
+                member.CandidateRevision);
+        }
+
+        foreach (var receipt in cohortStore.ReadPassedReceiptsForGoal(goal.Id))
+        {
+            var member = receipt.Identity.Members.Single(item => item.GoalId == goal.Id);
+            if (!IsAncestor(executionDirectory, member.CandidateRevision, mainSha, gitRunner))
+            {
+                continue;
+            }
+
+            return Record(
+                kernel,
+                goal,
+                "cohort-receipt",
                 receipt.ReceiptId,
                 member.CandidateRevision);
         }
