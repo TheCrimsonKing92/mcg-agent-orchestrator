@@ -48,6 +48,21 @@ public sealed class ConductorMergeTrainTests
         Assert.Null(ConductorMergeTrainSelector.Select([first, second]));
     }
 
+    [Fact]
+    public void Selector_skips_goal_with_non_acceptance_owned_obligation()
+    {
+        var first = Ready("11111111111111111111111111111111", "src/First.cs", "resource:first");
+        var blocked = Ready("22222222222222222222222222222222", "src/Blocked.cs", "resource:blocked");
+        var third = Ready("33333333333333333333333333333333", "src/Third.cs", "resource:third");
+        var fourth = Ready("44444444444444444444444444444444", "src/Fourth.cs", "resource:fourth");
+
+        var selection = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(
+            [first, blocked, third, fourth],
+            ineligibleGoalIds: new HashSet<string>(StringComparer.Ordinal) { blocked.GoalId.Value }));
+
+        Assert.Equal([first.GoalId, third.GoalId, fourth.GoalId], selection.Members.Select(member => member.GoalId));
+    }
+
     private static ConductorSpeculativeAcceptanceCandidate Ready(string id, string path, string resource)
     {
         var goalId = new GoalId(id);

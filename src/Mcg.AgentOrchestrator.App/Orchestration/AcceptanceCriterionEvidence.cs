@@ -25,7 +25,7 @@ internal static class AcceptanceCriterionEvidence
 
     public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel)
     {
-        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
             .Where(IsBoundOrNonAcceptanceObligation)
@@ -36,7 +36,80 @@ internal static class AcceptanceCriterionEvidence
         return $"Acceptance completed but required criterion evidence remains outstanding: {detail}.";
     }
 
-    private static string? RecordFullAcceptanceEvidence(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel)
+    public static string? RebindRecordAndDescribeOutstanding(
+        IReadOnlyList<Goal> goals,
+        Func<GoalId, string?> resolveCandidateSha,
+        AgentOrchestratorKernel? kernel,
+        string evidenceSource)
+    {
+        ArgumentNullException.ThrowIfNull(goals);
+        ArgumentNullException.ThrowIfNull(resolveCandidateSha);
+        var diagnostics = new List<string>();
+        foreach (var goal in goals)
+        {
+            var diagnostic = RebindRecordAndDescribeOutstanding(
+                goal,
+                resolveCandidateSha(goal.Id),
+                kernel,
+                evidenceSource);
+            if (diagnostic is not null)
+            {
+                diagnostics.Add($"goal {goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}: {diagnostic}");
+            }
+        }
+
+        return diagnostics.Count == 0 ? null : string.Join(" ", diagnostics);
+    }
+
+    public static string? RebindRecordAndDescribeOutstanding(
+        Goal goal,
+        string? candidateSha,
+        AgentOrchestratorKernel? kernel,
+        string evidenceSource)
+    {
+        if (kernel is null || string.IsNullOrWhiteSpace(candidateSha))
+        {
+            return "Acceptance passed but criterion evidence could not be recorded: the authoritative kernel or candidate SHA is unavailable. No obligation was resolved.";
+        }
+
+        var normalizedCandidate = candidateSha.Trim();
+        var acceptanceObligations = goal.OutstandingCriterionEvidenceObligations.Where(item =>
+                item.Owner == CriterionEvidenceOwner.Acceptance &&
+                item.State == CriterionEvidenceState.Pending &&
+                string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
+            .ToArray();
+        foreach (var obligation in acceptanceObligations)
+        {
+            if (!string.Equals(obligation.ExpectedCandidateSha, normalizedCandidate, StringComparison.OrdinalIgnoreCase))
+            {
+                kernel.MapCriterionEvidenceOwner(
+                    goal.Id,
+                    obligation.CriterionIndex,
+                    obligation.CriterionVersion,
+                    CriterionEvidenceOwner.Acceptance,
+                    "conductor deterministic full acceptance",
+                    obligation.RequiredScope,
+                    obligation.FindingStableId,
+                    normalizedCandidate);
+            }
+        }
+
+        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource);
+        if (diagnostic is not null) return diagnostic;
+        var outstanding = goal.GetOutstandingCriterionEvidenceObligations(normalizedCandidate)
+            .Where(IsBoundOrNonAcceptanceObligation)
+            .ToArray();
+        if (outstanding.Length == 0) return null;
+        var detail = string.Join(", ", outstanding.Select(item =>
+            $"{item.Id}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
+        return $"Acceptance completed but required criterion evidence remains outstanding: {detail}.";
+    }
+
+    private static string? RecordFullAcceptanceEvidence(
+        Goal goal,
+        string? candidateSha,
+        AgentOrchestratorKernel? kernel,
+        string? evidenceSource)
     {
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
         if (outstanding.Count == 0) return null;
@@ -66,7 +139,9 @@ internal static class AcceptanceCriterionEvidence
                 $"full-acceptance:{candidateSha}",
                 CriterionEvidenceScopes.FullAcceptanceGate,
                 passed: true,
-                detail: "Normal deterministic full acceptance passed for the mapped candidate.");
+                detail: string.IsNullOrWhiteSpace(evidenceSource)
+                    ? "Normal deterministic full acceptance passed for the mapped candidate."
+                    : $"Deterministic full acceptance passed for the mapped candidate; source={evidenceSource}.");
         }
 
         return null;

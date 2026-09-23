@@ -3071,7 +3071,7 @@ internal sealed partial class ConductorBatchLoop
                 _acceptanceEngineCircuit?.Read())) &&
             ConductorMergeTrainSelector.Select(
                 productionCandidates,
-                driver.ReadSuppressedCohortPairs()) is { } trainSelection)
+                driver.ReadSuppressedCohortPairs(), cohortEligible.Where(goal => goal.OutstandingCriterionEvidenceObligations.Any(obligation => obligation.Owner != CriterionEvidenceOwner.Acceptance)).Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal)) is { } trainSelection)
         {
             var trainRun = driver.RunMergeTrain(
                 trainSelection,

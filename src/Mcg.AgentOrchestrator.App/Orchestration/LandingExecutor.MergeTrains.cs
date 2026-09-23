@@ -71,6 +71,18 @@ internal static partial class LandingExecutor
             }
         }
 
+        var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+            goals,
+            goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
+            kernel,
+            $"merge-train-receipt:{receipt.ReceiptId}");
+        if (evidenceDiagnostic is not null)
+        {
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Merge train landing held before mutation because {evidenceDiagnostic}");
+        }
+
         var changedFiles = receipt.Identity.Members
             .SelectMany(member => member.LandingPaths)
             .Distinct(StringComparer.OrdinalIgnoreCase)

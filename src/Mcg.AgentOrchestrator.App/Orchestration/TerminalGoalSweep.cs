@@ -409,7 +409,8 @@ internal static partial class TerminalGoalSweep
         ICollaborationItemStore? attentionStore = null,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
         GoalWorktreeCleanupHooks? cleanupHooks = null,
-        string? orchestratorDirectory = null)
+        string? orchestratorDirectory = null,
+        MergeTrainAcceptanceStore? mergeTrainAcceptanceStore = null)
     {
         gitRunner ??= GitRunner;
         var gitRunnerIdentity = gitRunner;
@@ -427,6 +428,8 @@ internal static partial class TerminalGoalSweep
         cleanupHooks ??= new GoalWorktreeCleanupHooks();
         var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
         orchestratorDirectory ??= workspace.OrchestratorDirectory;
+        mergeTrainAcceptanceStore ??= new MergeTrainAcceptanceStore(
+            Path.Combine(orchestratorDirectory, "merge-train-acceptance.db"));
         var dispatchRunner = new BackgroundDispatchRunner();
         var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
         var ownedRoots = ReapOwnedBuildRoots(workspace.SqliteStatePath);
@@ -510,6 +513,77 @@ internal static partial class TerminalGoalSweep
                     "inspect merge-evidence ancestry and rerun conduct",
                     originalGoal.Id,
                     prefix));
+            }
+
+            var goalPendingRecovery = kernel.GetGoal(originalGoal.Id);
+            var hasPendingAcceptanceEvidence = goalPendingRecovery.OutstandingCriterionEvidenceObligations.Any(item =>
+                item.Owner == CriterionEvidenceOwner.Acceptance &&
+                item.State == CriterionEvidenceState.Pending &&
+                string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal));
+            var recoveredCriterionEvidence = AcceptanceCriterionEvidenceRecovery.TryRecord(
+                kernel,
+                goalPendingRecovery,
+                executionDirectory,
+                orchestratorDirectory,
+                branchFactIndex.MainSha,
+                mergeTrainAcceptanceStore,
+                gitRunner);
+            if (recoveredCriterionEvidence is { CanComplete: false })
+            {
+                repairs.Add(new TerminalGoalSweepRepair(
+                    "criterion-evidence-recovered",
+                    recoveredCriterionEvidence.AuditDetail,
+                    "held by remaining criterion evidence"));
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "criterion-evidence-recovery-held",
+                    recoveredCriterionEvidence.HoldDiagnostic!,
+                    $"next {prefix} --full",
+                    originalGoal.Id,
+                    prefix));
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
+            if (recoveredCriterionEvidence is { CanComplete: true })
+            {
+                var recoveredIntegrateSha = integrationEvidenceByGoal.TryGetValue(originalGoal.Id, out var knownIntegration)
+                    ? knownIntegration.IntegrateSha
+                    : TryRecoverLandingMerge(executionDirectory, goalPendingRecovery, gitRunner, out var recoveredLanding)
+                        ? recoveredLanding.MergeCommitSha
+                        : recoveredCriterionEvidence.CandidateSha;
+                var recoveredIntegrationEvidence = new GoalIntegrationEvidence(
+                    recoveredIntegrateSha,
+                    branchFactIndex.MainSha!,
+                    $"Recovered criterion evidence for goal/{prefix}");
+                var terminalization = TerminalizeFromMergeEvidence(
+                    kernel,
+                    executionDirectory,
+                    goalPendingRecovery,
+                    recoveredIntegrationEvidence,
+                    attentionStore,
+                    repairs,
+                    orchestratorDirectory,
+                    recoveredCriterionEvidence.AuditDetail);
+                resolvedAttentionItemCount += terminalization.ResolvedAttentionItemCount;
+                terminalizedGoalCount++;
+                terminalizedGoalIds.Add(originalGoal.Id);
+                results.Add(new TerminalGoalSweepGoalResult(
+                    originalGoal.Id,
+                    prefix,
+                    repairs,
+                    blockers,
+                    terminalization.Receipt));
+                continue;
+            }
+            if (hasPendingAcceptanceEvidence && integrationEvidenceByGoal.ContainsKey(originalGoal.Id))
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "criterion-evidence-recovery-unproven",
+                    "merge evidence exists, but no deterministic passed full gate for this goal has a certified candidate reachable from main",
+                    $"next {prefix} --full",
+                    originalGoal.Id,
+                    prefix));
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
             }
 
             if (integrationEvidenceByGoal.TryGetValue(originalGoal.Id, out var integrationEvidence))
@@ -943,11 +1017,13 @@ internal static partial class TerminalGoalSweep
         GoalIntegrationEvidence evidence,
         ICollaborationItemStore attentionStore,
         List<TerminalGoalSweepRepair> repairs,
-        string orchestratorDirectory)
+        string orchestratorDirectory,
+        string? acceptanceRecoveryAudit = null)
     {
         var priorStatus = goal.Status;
         var detail =
-            $"Goal terminalized from merge evidence at {evidence.IntegrateSha}; mainSha={evidence.MainSha}; priorStatus={priorStatus}.";
+            $"Goal terminalized from merge evidence at {evidence.IntegrateSha}; mainSha={evidence.MainSha}; priorStatus={priorStatus}." +
+            (acceptanceRecoveryAudit is null ? string.Empty : $" AcceptanceRecovery={acceptanceRecoveryAudit}.");
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var recoveringFromReceipt = GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal, evidence.IntegrateSha);
         var reconciliation = new TerminalGoalSweepReconciliationReceipt(
@@ -961,7 +1037,7 @@ internal static partial class TerminalGoalSweep
                 goal.Id),
             recoveringFromReceipt);
         kernel.CompleteGoalFromMergeEvidence(goal.Id, evidence.IntegrateSha, detail, recoveringFromReceipt);
-        if (!recoveringFromReceipt)
+        if (!recoveringFromReceipt || acceptanceRecoveryAudit is not null)
         {
             GoalOperationJournal.RecordTerminalDisposition(
                 executionDirectory,
@@ -991,7 +1067,8 @@ internal static partial class TerminalGoalSweep
         repairs.Add(new TerminalGoalSweepRepair(
             "merge-evidence-terminalized",
             $"integrateSha={evidence.IntegrateSha}; mainSha={evidence.MainSha}; priorStatus={priorStatus}; " +
-            $"recoveredFromJournalReceipt={recoveringFromReceipt.ToString().ToLowerInvariant()}; resolvedAttentionItems={resolvedAttention}",
+            $"recoveredFromJournalReceipt={recoveringFromReceipt.ToString().ToLowerInvariant()}; resolvedAttentionItems={resolvedAttention}" +
+            (acceptanceRecoveryAudit is null ? string.Empty : $"; acceptanceRecovery={acceptanceRecoveryAudit}"),
             "terminalized"));
         return new MergeEvidenceTerminalizationResult(
             resolvedAttention,
