@@ -524,7 +524,8 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Contains("blocked by concurrent acceptance or replacement", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("Goal evidence mutation is held", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("lease-recovery=state-unavailable", held.Reason, StringComparison.Ordinal);
         Assert.DoesNotContain(phaseTimings, timing => timing.Contains("phase=dispatch-remediation", StringComparison.Ordinal));
         Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id)));
         Assert.All(goal.Tasks, task => Assert.Null(task.LastDispatch));

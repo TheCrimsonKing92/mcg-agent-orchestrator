@@ -176,6 +176,148 @@ public sealed class RepoProcessCliCommandTests
         Assert.Contains("Mcg.AgentOrchestrator*", captured.ProcessNames);
     }
 
+    [Xunit.Fact]
+    public void IncludeChildren_RecycledParentEdge_ExcludesChildAndPrintsRejectionDiagnostic()
+    {
+        var output = new StringWriter();
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--id", "31292", "--include-children"],
+            output,
+            _ =>
+            [
+                Process(31_292, 1, "conhost", parentStartedAt),
+                Process(1_056, 31_292, "OneDrive.Sync.Service", DateTimeOffset.Parse("2026-09-02T12:00:00Z")),
+                Process(2_000, 1_056, "alleged-grandchild", parentStartedAt.AddMinutes(1))
+            ]);
+
+        var text = output.ToString();
+        Assert.Contains("PROCESS id=31292 ", text);
+        Assert.DoesNotContain("PROCESS id=1056 ", text);
+        Assert.DoesNotContain("PROCESS id=2000 ", text);
+        Assert.Contains(
+            "PROCESS_EDGE_REJECTED parent=31292 parent-anchor=31292 " +
+            "parent-anchor-created=2026-09-03T12:00:00.0000000+00:00 " +
+            "child=1056 child-name=OneDrive.Sync.Service child-created=2026-09-02T12:00:00.0000000+00:00",
+            text);
+        Assert.Contains("PROCESS_EDGE_SUMMARY rejected=1 unverified=0 truncated=0", text);
+    }
+
+    [Xunit.Fact]
+    public void IncludeChildren_ValidEdge_PrintsChildUnderParent()
+    {
+        var output = new StringWriter();
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--id", "100", "--include-children"],
+            output,
+            _ =>
+            [
+                Process(100, 1, "parent", parentStartedAt),
+                Process(101, 100, "child", parentStartedAt.AddSeconds(1))
+            ]);
+
+        var text = output.ToString();
+        Assert.Contains("PROCESS id=100 ", text);
+        Assert.Contains("PROCESS id=101 parent=100", text);
+        Assert.DoesNotContain("PROCESS_EDGE_", text);
+    }
+
+    [Xunit.Fact]
+    public void ParentIdQuery_MissingParentIdentity_PrintsUnverifiedEdgeInsteadOfSilentInclude()
+    {
+        var output = new StringWriter();
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--parent-id", "100"],
+            output,
+            _ =>
+            [
+                Process(101, 100, "child", DateTimeOffset.Parse("2026-09-03T12:00:01Z"))
+            ]);
+
+        var text = output.ToString();
+        Assert.Contains("PROCESS id=101 parent=100", text);
+        Assert.Contains(
+            "PROCESS_EDGE_UNVERIFIED parent=100 parent-anchor=unknown parent-anchor-created=unknown child=101 " +
+            "child-name=child child-created=2026-09-03T12:00:01.0000000+00:00",
+            text);
+        Assert.Contains("PROCESS_EDGE_SUMMARY rejected=0 unverified=1 truncated=0", text);
+    }
+
+    [Xunit.Fact]
+    public void IncludeChildren_ManyUnverifiedEdges_EmitsBoundedDiagnostic()
+    {
+        var output = new StringWriter();
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+        var snapshots = Enumerable.Range(200, 10)
+            .Select(processId => new RepoProcessCliCommand.ProcessSnapshot(
+                processId,
+                100,
+                $"child-{processId}",
+                null,
+                null,
+                null,
+                ProcessInspectionStatus.AccessDenied))
+            .Prepend(Process(100, 1, "parent", parentStartedAt))
+            .ToArray();
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--id", "100", "--include-children"],
+            output,
+            _ => snapshots);
+
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(8, lines.Count(line => line.StartsWith("PROCESS_EDGE_UNVERIFIED", StringComparison.Ordinal)));
+        Assert.Contains("PROCESS_EDGE_SUMMARY rejected=0 unverified=10 truncated=2", lines);
+    }
+
+    [Xunit.Fact]
+    public void IncludeChildren_UnreadableIntermediate_DoesNotLaunderOlderGrandchild()
+    {
+        var output = new StringWriter();
+        var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--id", "100", "--include-children"],
+            output,
+            _ =>
+            [
+                Process(100, 1, "parent", parentStartedAt),
+                new RepoProcessCliCommand.ProcessSnapshot(
+                    101,
+                    100,
+                    "unreadable-child",
+                    null,
+                    null,
+                    null,
+                    ProcessInspectionStatus.AccessDenied),
+                Process(102, 101, "older-grandchild", parentStartedAt.AddDays(-1))
+            ]);
+
+        var text = output.ToString();
+        Assert.Contains("PROCESS id=101 parent=100", text);
+        Assert.DoesNotContain("PROCESS id=102 ", text);
+        Assert.Contains("PROCESS_EDGE_UNVERIFIED parent=100", text);
+        Assert.Contains("PROCESS_EDGE_REJECTED parent=101 parent-anchor=100", text);
+    }
+
+    private static RepoProcessCliCommand.ProcessSnapshot Process(
+        int processId,
+        int parentProcessId,
+        string name,
+        DateTimeOffset startedAt) =>
+        new(
+            processId,
+            parentProcessId,
+            name,
+            Path.Combine("fixture", name + ".exe"),
+            startedAt,
+            name,
+            ProcessInspectionStatus.Available);
+
     private static RepoProcessCliCommand.ProcessSnapshot Snapshot(DateTimeOffset startedAt) =>
         new(
             42,

@@ -47,9 +47,7 @@ public sealed class CliPersistentStateRunnerAcceptanceFailureRecoveryTests : Cli
         RunGitOutput(root, "commit", "-m", "Move main");
         var repository = new InMemoryTransactionalStateRepository(kernel);
         var verifier = new ProbeAcceptanceVerifier(() => { });
-        var stableSlotSelections = 0;
-
-        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
             ["acceptance", "--keep-workspace", "--no-record"],
             repository,
             workspace,
@@ -57,15 +55,10 @@ public sealed class CliPersistentStateRunnerAcceptanceFailureRecoveryTests : Cli
             providers,
             ref profiles,
             ref currentGoal,
-            acceptanceVerifier: verifier,
-            stableSlotSelector: (_, _) =>
-            {
-                Interlocked.Increment(ref stableSlotSelections);
-                return CreateFakeStableSlotLease(root);
-            }));
+            acceptanceVerifier: verifier));
 
         Xunit.Assert.Contains("superseded failure is historical", output);
-        Xunit.Assert.Equal(1, stableSlotSelections);
+        Xunit.Assert.Equal(1, AcceptanceStableSlotTestSupport.LastSelectionCount);
         Xunit.Assert.Equal(1, verifier.RunCount);
         var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
         Xunit.Assert.Equal(GoalStatus.Completed, storedGoal.Status);
@@ -74,22 +67,5 @@ public sealed class CliPersistentStateRunnerAcceptanceFailureRecoveryTests : Cli
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("recorded branch=", StringComparison.Ordinal) &&
             evt.Message.Contains("current branch=", StringComparison.Ordinal));
-    }
-
-    private static DotnetBuildEnvironmentLease CreateFakeStableSlotLease(string root)
-    {
-        var leaseRoot = Path.Combine(root, ".fake-build-slot");
-        Directory.CreateDirectory(leaseRoot);
-        var lockPath = Path.Combine(leaseRoot, $"{Guid.NewGuid():N}.lock");
-        var stream = new FileStream(lockPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
-        var environment = new DotnetBuildEnvironment(
-            "fake-acceptance-recovery-slot",
-            leaseRoot,
-            Path.Combine(leaseRoot, "artifacts"),
-            lockPath,
-            [],
-            "build-0",
-            BuildPermitIndex: 0);
-        return new DotnetBuildEnvironmentLease(environment, stream);
     }
 }

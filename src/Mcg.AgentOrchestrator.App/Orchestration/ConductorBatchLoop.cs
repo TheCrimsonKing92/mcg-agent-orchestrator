@@ -603,7 +603,7 @@ internal sealed partial class ConductorBatchLoop
                 "sweep",
                 nextTick,
                 () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
-            foreach (var sweepEvent in sweepResult?.Events ?? [])
+            foreach (var sweepEvent in (sweepResult?.Events ?? []).Concat(sweepResult?.OwnedRoots?.OperatorEvents ?? []))
             {
                 EmitProgress(sweepEvent);
             }
@@ -1906,7 +1906,7 @@ internal sealed partial class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
-        var required = kind is "loop-start-deferred" or "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
+        var required = kind is "loop-start-deferred" or "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or "sweep-owned-root-deferred" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or "exit-unapplied" or
             "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
@@ -1975,10 +1975,12 @@ internal sealed partial class ConductorBatchLoop
             "ACCEPTANCE_COHORT_ENTRY" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_EXIT" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_INFLIGHT" => "acceptance-cohort",
-            "SWEEP_BLOCKER" => "sweep-blocker",
+            "ACCEPTANCE_COHORT_FAIRNESS" => "acceptance-cohort",
+            "ACCEPTANCE_COHORT_FAIRNESS_TRANSITION" => "acceptance-cohort",
+            "SWEEP_BLOCKER" => "sweep-blocker", "SWEEP_OWNED_ROOT_DEFERRED" => "sweep-owned-root-deferred",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
-            "SWEEP_REMEDY_RESULT" => "sweep-remedy-result",
+            "SWEEP_REMEDY_RESULT" => "sweep-remedy-result", "SWEEP_OWNED_ROOT_OBSERVED" => "sweep-owned-root-observed",
             "SET_ASIDE_SELF_CLEARED" => "set-aside-self-cleared",
             "BLOCKED_RECHECK_HEARTBEAT" => "blocked-recheck-heartbeat",
             "TICK_WRITE_BUSY" => "lock-blocker",
@@ -3091,7 +3093,7 @@ internal sealed partial class ConductorBatchLoop
                 .Where(candidate => !results.ContainsKey(candidate.GoalId.Value))
                 .ToArray();
         }
-        GoalId? forcedCohortCandidate = null;
+        ConductorAcceptanceCohortFairnessPriority? forcedCohortPriority = null;
         var cohortAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
         if (cohortAdmission.IsAdmitted &&
             driver.AcceptanceCohortsEnabled &&
@@ -3100,11 +3102,8 @@ internal sealed partial class ConductorBatchLoop
                 goal.Status,
                 _acceptanceEngineCircuit?.Read())))
         {
-            forcedCohortCandidate = driver.SelectForcedCohortCandidate(cohortEligible);
-            var cohortDecision = ConductorAcceptanceCohortSelector.Select(
-                productionCandidates,
-                forcedCohortCandidate,
-                driver.ReadSuppressedCohortPairs());
+            forcedCohortPriority = driver.SelectForcedCohortCandidate(cohortEligible);
+            var cohortDecision = SelectAndReportAcceptanceCohort(productionCandidates, liveAttempts, forcedCohortPriority, driver);
             if (cohortDecision.Selection is { } cohortSelection)
             {
                 var memberIds = string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]));
@@ -3121,7 +3120,8 @@ internal sealed partial class ConductorBatchLoop
                         cohortSelection,
                         cohortEligible,
                         policy,
-                        onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection),
+                        onGateAdmitted: () => EmitAcceptanceCohortFairnessTransition(
+                            driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection)),
                         runGateInBackground: true);
                     cohortRun = cohortOutcome.Run;
                     gateFault = cohortOutcome.Fault;
@@ -3395,7 +3395,7 @@ internal sealed partial class ConductorBatchLoop
                 candidate,
                 policy,
                 driver.RunParallelLandingAcceptance);
-            if (forcedCohortCandidate == goal.Id &&
+            if (forcedCohortPriority?.GoalId == goal.Id &&
                 decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
                     ConductorParallelAcceptanceAttemptDecisionKind.Running or
                     ConductorParallelAcceptanceAttemptDecisionKind.Completed)

@@ -129,7 +129,8 @@ public sealed record TaskSnapshot(
     IReadOnlyList<PreReviewEvidenceReceipt>? PreReviewEvidenceHistory = null,
     int PreReviewEvidenceAttemptCount = 0,
     InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint = null,
-    int ConductorRoutingRevision = 0);
+    int ConductorRoutingRevision = 0,
+    PreDispatchIntegrationReceipt? PendingPreDispatchIntegrationReceipt = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -222,7 +223,9 @@ public sealed record TaskDispatchSnapshot(
     string? ClaudeCredentialSourceDirectory = null,
     bool ClaudeCredentialSourceIsExplicit = false,
     string? AssignedAgentId = null,
-    int ConductorRoutingRevision = 0);
+    int ConductorRoutingRevision = 0,
+    PreDispatchIntegrationReceipt? PreDispatchIntegrationReceipt = null,
+    GoalId? GoalId = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,
@@ -244,7 +247,8 @@ public sealed record TaskProcessSnapshot(
     DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
-    IReadOnlyList<int>? NonBlockingProcessIds = null);
+    IReadOnlyList<int>? NonBlockingProcessIds = null,
+    DateTimeOffset? ProcessIdentityStartedAt = null);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,

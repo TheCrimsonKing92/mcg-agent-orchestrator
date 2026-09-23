@@ -2041,8 +2041,14 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProcessJobs_graceful_detach_survives_job_close_and_startup_sweep")]
-    public void WorkerProcessJobsGracefulDetachSurvivesJobCloseAndStartupSweep()
+    [Xunit.Theory(DisplayName = "Conductor detach controls missing-exit requeue by worker-result evidence")]
+    [Xunit.InlineData("unavailable", 1, WorkTaskStatus.Assigned)]
+    [Xunit.InlineData("absent", 1, WorkTaskStatus.Assigned)]
+    [Xunit.InlineData("present", 0, WorkTaskStatus.Failed)]
+    public void ConductorDetach_WorkerResultEvidence_ControlsRequeue(
+        string workerResultState,
+        int expectedRequeued,
+        WorkTaskStatus expectedStatus)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -2088,7 +2094,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.False(WorkerProcessJobs.HasRegisteredJob(worker.Id));
             Assert.True(IsRunning(worker.Id));
             var detached = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
-            Assert.Equal(SpawnRegistryLifecycle.GracefullyDetached, detached.Lifecycle);
+            Assert.Equal(SpawnRegistryLifecycle.ConductorDetached, detached.Lifecycle);
+            Assert.True(WorkerProcessJobs.WasDetachedByConductor(ownerId, worker.Id, processRecordedAt));
             Assert.Equal(0, WorkerProcessJobs.SweepStartupOrphans());
             Assert.True(IsRunning(worker.Id));
             Assert.Contains(
@@ -2100,7 +2107,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.True(worker.WaitForExit(5000));
             Assert.Equal(0, WorkerProcessJobs.SweepStartupOrphans());
             Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
-            Assert.True(WorkerProcessJobs.WasGracefullyDetached(ownerId, worker.Id, processRecordedAt));
+            Assert.True(WorkerProcessJobs.WasDetachedByConductor(ownerId, worker.Id, processRecordedAt));
 
             var failedAt = DateTimeOffset.UtcNow;
             var syntheticFailure = processRecord with
@@ -2110,21 +2117,316 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 ExitArtifactOrigin = DispatchExitArtifactOrigin.Synthetic,
                 ExitArtifactReason = "successor synthesized completion before detached task marker checkpointed"
             };
-            kernel.RecordTaskProcessRefreshed(
-                goal.Id,
-                task.Id,
-                syntheticFailure,
-                new TaskVerificationRecord(
+            var verification = workerResultState == "unavailable"
+                ? null
+                : new TaskVerificationRecord(
                     syntheticFailure.Command,
                     syntheticFailure.WorkingDirectory,
                     1,
                     string.Empty,
                     "dispatch host disappeared before writing its exit artifact",
-                    failedAt));
+                    failedAt,
+                    WorkerResultPresent: workerResultState == "present");
+            kernel.RecordTaskProcessRefreshed(
+                goal.Id,
+                task.Id,
+                syntheticFailure,
+                verification);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "synthetic missing-exit outcome");
 
             var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
-            Assert.Equal(1, runner.RequeueInterruptedDispatches(kernel));
-            Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+            Assert.Equal(expectedRequeued, runner.RequeueInterruptedDispatches(kernel));
+            Assert.Equal(expectedStatus, kernel.GetTask(goal.Id, task.Id).Status);
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(worker.Id); } catch { }
+                worker.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_runtime_handoff_survives_job_close_and_startup_sweep")]
+    public void WorkerProcessJobsRuntimeHandoffSurvivesJobCloseAndStartupSweep()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            worker = StartLongRunningShell();
+            Assert.True(WorkerProcessJobs.TryRegister(worker, "runtime-handoff:test"));
+
+            Assert.True(WorkerProcessJobs.TryHandOffToRuntimeOwnership(worker.Id, out var failure), failure);
+
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(worker.Id));
+            Assert.True(IsRunning(worker.Id));
+            var detached = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Equal(SpawnRegistryLifecycle.RuntimeOwned, detached.Lifecycle);
+            Assert.Contains("runtime-owned", detached.LastDiagnostic, StringComparison.Ordinal);
+            Assert.Equal(0, WorkerProcessJobs.SweepStartupOrphans());
+            Assert.True(IsRunning(worker.Id));
+
+            Assert.True(WorkerProcessJobs.TryKillOrFallbackAndWait(worker.Id, TimeSpan.FromSeconds(5)));
+            Assert.False(IsRunning(worker.Id));
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(worker.Id); } catch { }
+                worker.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "Runtime handoff synthetic missing exit does not authorize requeue")]
+    [Xunit.InlineData("unavailable")]
+    [Xunit.InlineData("absent")]
+    [Xunit.InlineData("present")]
+    public void RuntimeHandoff_SyntheticMissingExit_DoesNotAuthorizeRequeue(string workerResultState)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            worker = StartLongRunningShell();
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                AgentCatalog.Default().Agents,
+                "runtime handoff is not retry authority");
+            var task = goal.Tasks.Single();
+            var ownerId = $"{goal.Id.Value}:{task.Id.Value}";
+            Assert.True(WorkerProcessJobs.TryRegister(worker, ownerId));
+            var processRecordedAt = DateTimeOffset.UtcNow;
+            var processRecord = new TaskProcessRecord(
+                worker.Id,
+                "worker.exe",
+                Path.GetDirectoryName(dbPath)!,
+                Path.ChangeExtension(dbPath, ".out.log"),
+                Path.ChangeExtension(dbPath, ".err.log"),
+                Path.ChangeExtension(dbPath, ".exit.txt"),
+                processRecordedAt,
+                null,
+                null,
+                OwnedProcessIds: [worker.Id]);
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord("test-worker", "worker.exe", Path.GetDirectoryName(dbPath)!, processRecordedAt));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id, processRecord);
+
+            Assert.True(WorkerProcessJobs.TryHandOffToRuntimeOwnership(worker.Id, out var failure), failure);
+            Assert.True(WorkerProcessJobs.TryKillOrFallbackAndWait(worker.Id, TimeSpan.FromSeconds(5)));
+            var failedAt = DateTimeOffset.UtcNow;
+            var syntheticFailure = processRecord with
+            {
+                CompletedAt = failedAt,
+                ExitCode = 1,
+                ExitArtifactOrigin = DispatchExitArtifactOrigin.Synthetic,
+                ExitArtifactReason = "runtime owner synthesized completion without an exit artifact"
+            };
+            var verification = workerResultState == "unavailable"
+                ? null
+                : new TaskVerificationRecord(
+                    syntheticFailure.Command,
+                    syntheticFailure.WorkingDirectory,
+                    1,
+                    string.Empty,
+                    "dispatch host disappeared before writing its exit artifact",
+                    failedAt,
+                    WorkerResultPresent: workerResultState == "present");
+            kernel.RecordTaskProcessRefreshed(
+                goal.Id,
+                task.Id,
+                syntheticFailure,
+                verification);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "synthetic missing-exit outcome");
+
+            Assert.Equal(
+                workerResultState == "unavailable" ? null : workerResultState == "present",
+                kernel.GetTask(goal.Id, task.Id).LastVerification?.WorkerResultPresent);
+
+            var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+            Assert.Equal(0, runner.RequeueInterruptedDispatches(kernel));
+            Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, task.Id).Status);
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(worker.Id); } catch { }
+                worker.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Conductor detach authority follows latest identity-bound registry attempt")]
+    public void DetachAuthority_LatestRegistryAttempt_IsIdentityBound()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        const string ownerId = "goal-id:task-id";
+        const int reusedProcessId = 4242;
+        var registry = new SpawnRegistry(dbPath);
+        try
+        {
+            var interruptedIdentity = new SpawnProcessIdentity(
+                reusedProcessId,
+                DateTimeOffset.Parse("2026-09-06T12:00:00Z"),
+                "C:\\workers\\first.exe");
+            registry.Register(ownerId, interruptedIdentity, ownerIdentity: null);
+            Assert.True(registry.TryMarkConductorDetached(interruptedIdentity, "conductor interrupted first attempt"));
+            var interruptedRecordedAt = DateTimeOffset.UtcNow;
+
+            Assert.True(registry.WasDetachedByConductor(ownerId, reusedProcessId, interruptedRecordedAt));
+            registry.MarkReleased(reusedProcessId, "first attempt released");
+            Assert.True(registry.WasDetachedByConductor(ownerId, reusedProcessId, interruptedRecordedAt));
+
+            var runtimeIdentity = interruptedIdentity with
+            {
+                StartedAt = interruptedIdentity.StartedAt.AddMinutes(1),
+                ImagePath = "C:\\workers\\second.exe"
+            };
+            registry.Register(ownerId, runtimeIdentity, ownerIdentity: null);
+            Assert.True(registry.TryMarkRuntimeOwned(runtimeIdentity, "runtime owns reused pid"));
+            var runtimeRecordedAt = DateTimeOffset.UtcNow;
+
+            Assert.False(registry.WasDetachedByConductor(ownerId, reusedProcessId, runtimeRecordedAt));
+            registry.MarkReleased(reusedProcessId, "runtime attempt released");
+
+            var legacyIdentity = runtimeIdentity with
+            {
+                StartedAt = runtimeIdentity.StartedAt.AddMinutes(1),
+                ImagePath = "C:\\workers\\legacy.exe"
+            };
+            registry.Register(ownerId, legacyIdentity, ownerIdentity: null);
+            using (var connection = StateDbConnectionFactory.Open(dbPath, StateDbConnectionProfile.ReadWrite))
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    UPDATE spawn_registry
+                    SET lifecycle = $legacy
+                    WHERE process_id = $process_id
+                      AND process_started_at = $process_started_at
+                      AND image_path = $image_path
+                    """;
+                command.Parameters.AddWithValue("$legacy", SpawnRegistryLifecycle.GracefullyDetached.ToString());
+                command.Parameters.AddWithValue("$process_id", legacyIdentity.ProcessId);
+                command.Parameters.AddWithValue("$process_started_at", legacyIdentity.StartedAt.ToString("O"));
+                command.Parameters.AddWithValue("$image_path", legacyIdentity.ImagePath);
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            var legacyRecordedAt = DateTimeOffset.UtcNow;
+            Assert.Equal(
+                SpawnRegistryLifecycle.GracefullyDetached,
+                Assert.Single(registry.ListActive()).Lifecycle);
+            Assert.False(registry.WasDetachedByConductor(ownerId, reusedProcessId, legacyRecordedAt));
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_runtime_handoff_joins_ambient_state_write")]
+    public void WorkerProcessJobsRuntimeHandoffJoinsAmbientStateWrite()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            worker = StartLongRunningShell();
+            using (var connection = StateDbConnectionFactory.Open(dbPath, StateDbConnectionProfile.ReadWrite))
+            {
+                using (var begin = connection.CreateCommand())
+                {
+                    begin.CommandText = "BEGIN IMMEDIATE";
+                    begin.ExecuteNonQuery();
+                }
+
+                using (StateDbWriteSession.Enter(dbPath, connection))
+                {
+                    Assert.True(WorkerProcessJobs.TryRegister(worker, "runtime-handoff:ambient-write"));
+                    Assert.True(WorkerProcessJobs.TryHandOffToRuntimeOwnership(worker.Id, out var failure), failure);
+                }
+
+                using var commit = connection.CreateCommand();
+                commit.CommandText = "COMMIT";
+                commit.ExecuteNonQuery();
+            }
+
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(worker.Id));
+            var detached = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Equal(SpawnRegistryLifecycle.RuntimeOwned, detached.Lifecycle);
+            Assert.Contains("runtime-owned", detached.LastDiagnostic, StringComparison.Ordinal);
+            Assert.True(IsRunning(worker.Id));
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(worker.Id); } catch { }
+                worker.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_runtime_handoff_registry_failure_is_loud_and_reaps_job")]
+    public void WorkerProcessJobsRuntimeHandoffRegistryFailureIsLoudAndReapsJob()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            worker = StartLongRunningShell();
+            Assert.True(WorkerProcessJobs.TryRegister(worker, "runtime-handoff:registry-failure"));
+            File.WriteAllText(dbPath, "not a sqlite database");
+
+            Assert.False(WorkerProcessJobs.TryHandOffToRuntimeOwnership(worker.Id, out var failure));
+
+            Assert.Contains("worker-process-handoff-failed", failure, StringComparison.Ordinal);
+            Assert.Contains("durable-lifecycle-transition", failure, StringComparison.Ordinal);
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(worker.Id));
+            Assert.True(WaitUntilNotRunning(worker.Id, TimeSpan.FromSeconds(5)));
         }
         finally
         {
@@ -2184,6 +2486,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             WorkerProcessJobs.ConfigureRegistry(dbPath);
             worker = StartLongRunningShell();
             Assert.True(WorkerProcessJobs.TryRegister(worker, "graceful-stop:fallback-cancel"));
+            Assert.True(WorkerProcessJobs.TryGetRegisteredIdentity(worker.Id, out var registeredIdentity));
 
             var kernel = new AgentOrchestratorKernel();
             var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
@@ -2209,7 +2512,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
                     now,
                     null,
                     null,
-                    OwnedProcessIds: [worker.Id]));
+                    OwnedProcessIds: [worker.Id],
+                    ProcessIdentityStartedAt: registeredIdentity.StartedAt));
             File.WriteAllText(dbPath, "not a sqlite database");
 
             var runner = new BackgroundDispatchRunner();
@@ -2219,6 +2523,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.Equal(WorkTaskStatus.Cancelled, cancelledTask.Status);
             Assert.True(cancelledTask.LastProcess!.WasCancelled);
             Assert.True(cancelledTask.LastProcess.WasCancelledByConductor);
+            Assert.Contains(goal.Timeline, entry => entry.TaskId == task.Id &&
+                entry.Message.Contains("stage=durable-lifecycle-transition; error=SqliteException", StringComparison.Ordinal));
             Assert.True(WaitUntilNotRunning(worker.Id, TimeSpan.FromSeconds(5)));
 
             Assert.Equal(1, runner.RequeueInterruptedDispatches(kernel));

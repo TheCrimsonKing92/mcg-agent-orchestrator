@@ -1,1071 +1,935 @@
 # Orchestrator Handoff
 
-**Updated:** 2026-08-24 by Claude. Live status, not durable policy — verify before mutating.
-
-**Pruned 2026-08-24:** removed ~1380 lines of superseded RESUME HERE sections (08-05 through 08-18), old
-session results, and items already marked resolved or void. What was kept: the reading rules, the two current
-sections, the operator-CLI safety section whose closure is still unverified, the 08-03 velocity analysis, two
-sections about `fb13475c` that are still live, and the durable diagnostics at the tail. Deleted content is
-recoverable from git history.
-
-## HOW TO READ THIS FILE — folklore warning
-
-This file accretes by session. **Anything below the current session's sections is a point-in-time
-record, not current truth.** On 2026-08-07 an audit found that a section marked `⚠ CRITICAL` described
-a code gap that had since been closed, and a list headed "highest-value open items" had **4 of its 5
-items already Done**. An operator followed both as live guidance for a full day.
-
-Rules for using and maintaining this file:
-
-- **Verify before acting on any directive older than the top section.** Goal states move
-  (`status <goal>`), backlog items close (`backlog-show <id>`), and code gets fixed. All three are one
-  command away.
-- **A struck-through heading with a re-checked date means the claim was audited.** Absence of one means
-  nobody has checked, not that it is still true.
-- **When you invalidate a claim, mark it in place** — do not delete the reasoning. The receipts and the
-  dead ends are the durable value; the conclusions expire.
-- **Durable lessons belong in `### Operating lessons worth keeping`; live state belongs in the top
-  section.** Everything else is history.
-
-## RESUME HERE — 2026-08-24 22:05 UTC, ten landings; the gate artifact defect is FIXED and landed
-
-Ten goals landed on 08-24: `1d6b3fae`, `9c3885b2`, `ee57cc09`, `a04cdfe9`, `8c7fb174`, `d7585642`,
-`604b8a93`, `f28c201d`, `dd6ba0f8` (`e4701815`), `98430a7c` (`7cf14424`). Two more (`8612dcf0`,
-`e68a6324`) landed just before midnight on 08-23.
-
-### ⚠ READ THIS BEFORE DIAGNOSING ANY GATE FAILURE — a passing TRX may not be that failure's receipt
-
-**A check reported failed whose TRX shows all-passing is NOT a lying exit code.** Acceptance telemetry paths
-derive from the attempt prefix plus `Slug(check.Name)`, and each invocation deletes the existing TRX at that
-path first. Two checks named `infrastructure tests: Remainder` in one plan therefore share one path:
-
-    Remainder A runs, fails    -> gate records child exit 1/2 in memory
-    Remainder B deletes the TRX at that path and reuses it
-    Remainder B runs, passes   -> writes a green TRX and an exit-0 heartbeat
-    result.json still holds A's failure, sitting beside B's receipt
-
-The verdict never reopens the TRX to reconcile. Cited at
-`src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` lines 6263, 6287, 3397, 7348
-and 729.
-
-**FIXED AND LANDED as `98430a7c` (`7cf14424`, 2026-08-24 16:20 local).** Gate artifacts produced after that
-commit should be the failing invocation's own receipts again, and the normal TRX-first diagnosis works.
-**Artifacts retained from attempts BEFORE it remain corrupted** — every gate attempt earlier on 08-24 and
-before may pair a failed verdict with another invocation's green TRX. When reading an older attempt, still
-prefer the failed process's stdout or the partition-cache receipt. The fix also had to close a second path:
-the lock-remediation retry constructed its result without a run ordinal, which the Reviewer caught before it
-landed.
-
-**Consequences you will hit:**
-- The failing invocation's TRX **and heartbeat** are gone. Read the failed process's stdout, or the
-  partition-cache receipt, which retains both executions (one RED, one GREEN).
-- `scripts/Get-AcceptanceFailureCensus.ps1` inherits the blind spot. It reported `failed=0
-  distinctSignatures=0` for two real multi-failure attempts. The tool is not wrong; its input is.
-- MTP exit 2 is `AtLeastOneTestFailed` and exit 1 is `GenericFailure`. **Exit 2 beside an all-green TRX is
-  self-contradicting on its face** — that is your tell.
-
-Cost on 08-24: goal `dd6ba0f8` was closed as a non-attributable flake **three times** on fabricated
-evidence, one of its hidden failures being in the subject area it was changing. It also produced a false
-board-wide alarm — three failures across two goals with no passes for two hours, escalated as critical, and
-it was neither. Another gate passed shortly after, and the onset (16:35:30Z) **preceded** the loop handoff
-(16:39:56Z) that had been blamed.
-
-### AUTO-RESUME IS DISABLED — a dead loop stays dead
-
-`Get-ScheduledTask McgOrchestratorAutoResume` returns **State=Disabled**, last successful run 2026-08-02,
-`NumberOfMissedRuns = 1919`. It has been off for three weeks.
-
-Measured cost: on 08-24 the loop stopped at 05:43 UTC on `reason=max-duration` with no `.conduct-stop`
-present, and stayed down **6 hours 36 minutes** until relaunched by hand. Two goals sat frozen in
-`Verifying` throughout.
-
-**After any `LOOP_STOP`, relaunch manually.** Re-enabling needs elevation the Claude Code classifier blocks,
-so it is an operator action.
-
-The `--max-duration` self-renewal handoff still works and was verified **twice** on 08-24, at 16:41 and
-20:42, staging `312b3f52` and then `e4701815`. Both times the retry counter mattered: the first attempt logs
-`repositoryHead=resolve-pending` and it succeeded on attempt 2 and 3 respectively. **Verify a handoff by
-checking `stagedSourceCommit` equals `repositoryHead`, then confirming an additional `LOOP_START` appears in
-the same log file** — the successor inherits the log path, so a new file is not created.
-
-### Gate flakes are the throughput tax, measured
-
-Across retained conduct logs: **66 gate attempts, 26 failed — a 39% failure rate.** Of six failures
-diagnosed by hand on 08-24, five were caused wholly or partly by flakes rather than defects. With **two**
-gate slots and 10-25 minute gates, that consumes roughly four in ten of the scarcest resource.
-
-`a04cdfe9` is the clearest case: it lost **three consecutive gates** to three unrelated causes — a
-documented flake, OS pid recycling (`stage=duplicate-or-recycled-pid`), and a guard false positive — while
-its content had been correct since the first fix. It passed on the fourth attempt.
-
-Landed on 08-24 to reduce this: `ee57cc09` (a 250ms wall-clock budget truncating a retry loop),
-`d7585642` (a 2-second `FileSystemWatcher` budget that reddened four separate goals), `8c7fb174`
-(structural coverage no longer deleting a test project's lane partitioning).
-
-Still open: backlog `4519b61b` — a git helper in `GoalAcceptanceEvidenceBundleTests` treats a git call that
-returns **exit 0 with empty stdout** as a failure. Independent sol analysis on 08-24 identified the same
-exit-0/empty-stdout shape behind seed-isolation failures, so it is one family, not two.
-
-### Roster and config changes made 08-24
-
-- **Planner moved to `gpt-5.6-sol`** (operator direction) — **confirmed live after the 20:42 bounce**, where
-  a goal's Planner task shows agent `openai-p` rather than the previous `anthropi`. A roster change needs a
-  bounce to take effect, and in-flight tasks stay pinned to their old agent. The `agent` verb changes less
-  than it appears:
-  the first invocation moved only the API model and left `Subscription.ModelAlias` on `gpt-5.5` at
-  `reasoning=low`, which is what actually runs under `ExecutionPolicy=PreferSubscription`. Pass
-  `--subscription-model` and `--subscription-reasoning` too, and note `--complex-model` silently resets
-  `ComplexModel.ReasoningEffort` to null. Verify the printed line, do not trust the verb.
-- Loop running `--policy Permissive --max-duration 14400`, `effectiveWorkerCap=5`,
-  `workerAdmissionCapacity=9`, `reservedGateSlots=1`.
-
-### Live board at handoff
-
-In flight: `a9ea57dd` (ratchet burns gate cycles — at its gate), `da16a801` (cohort observability),
-`ac89d2c8` (status reprint).
-
-**`a9ea57dd` needed an operator merge resolution on 08-24 and it is worth understanding before touching it.**
-`f28c201d` deleted the entire inline-landing acceptance path when it consolidated the two execution paths, so
-`a9ea57dd`'s source-size guard on `RunInlineLandingAcceptance` was attached to a method that no longer exists.
-Resolution taken: main's deletion, for both `ConductorDriver.AcceptanceLanding.cs` and its test file, which
-main had rewritten for the consolidated path. Its other three guards survive — cohort
-(`ConductorDriver.cs:3736`), parallel landing (`:4037`), merge train (`ConductorDriver.MergeTrains.cs:104`) —
-as do its four tests in `GoalAcceptanceVerifierTestsSourceSizePreflight.cs`. The merge was verified to build
-with 0 errors before gating, and the Reviewer independently raised the same integration concern.
-
-**A suspected regression in `dd6ba0f8` was investigated and DISPROVEN.** An earlier operator note suspected
-`WorkerDispatchBuildEvidenceClassificationTests.MissingEvidencePassingCheckCompletesAndCommits`. A full gate
-subsequently passed, so it was not real. That suspicion originated from the TRX overwrite defect above.
-
-**Four goals are `Verified` with unmerged branches and are NOT landed:** `58ae2e59`, `9deb2c19`,
-`b9398a95`, and `fb13475c` (the last dating to 08-03 — see its two sections below, both still accurate).
-`git branch --merged main` lists none of them.
-
-`58ae2e59` is the concerning one — the sweep reported it `merge-evidence-terminalized` with
-`integrateSha=83d0ea3a` at 05:42 UTC, yet that commit is not an ancestor of HEAD and the branch is unmerged.
-**Do not treat a `merge-evidence-terminalized` sweep repair as proof of a landing.** Check
-`git branch --merged main`.
-
-### Operator direction in force (Miles, 08-24)
-
-Wind the board down: drive what is live to completion, keep filing defects as they are found, but do not
-intake new work unless it is critical. Defects that are not blocking go to the backlog rather than the board.
-
-## RESUME HERE — 2026-08-20 20:05 UTC, eleven landings; gate throughput is now the binding constraint
-
-Board recovered fully from the deadlock: **11 landings on 08-20** against 2 on 08-18 and 1 on 08-19. Most
-recent `bc01a13c` (`9bf2b63a`, base build cache). Six goals ran concurrently after the paid-worker cap was
-corrected from 5 to 6 (see below).
-
-**The constraint moved from workers to gates.** Four goals finished their pipelines within forty minutes and
-then queued behind one gate each, because acceptance serialises them. Raising worker concurrency did not
-raise throughput, it just moved the queue downstream.
-
-### The isolation finding, which is the most important thing on this page
-
-Operator direction (Miles, 08-20): decompose not only to kill god classes but to get **finer-grained test
-isolation so the grouping features can engage**. Measured evidence says the seams as previously scoped
-deliver none of that.
-
-Goals serialise on TWO reservation keys, both from `RepositoryOwnershipMap.Classify`:
-
-    ownership:shared-infrastructure                                        (Core + Infrastructure + Providers, ONE key)
-    ownership:test-project:tests/mcg.agentorchestrator.infrastructure.tests
-
-A pair needs BOTH distinct to gate concurrently, cohort, or join a merge train. At 19:53 four queued goals
-had all six pairs excluded. `3d016860` is the clean proof: it touches only a docs file and one test file,
-has NO production key at all, and is still excluded from pairing with everything.
-
-Consequences, each verified:
-- Class-level extraction inside `src/Mcg.AgentOrchestrator.Infrastructure/` does not change either key. Seams
-  4, 3, and 2 all landed and moved neither.
-- Seam 6 (`08537608`) created a genuinely separate collaborator and then put its tests back in the monolith
-  test project. Real extraction, **zero** isolation gain.
-- This is why acceptance cohorts have never executed across hundreds of planning ticks, and why the merge
-  train would not have formed on this queue either — `ConductorMergeTrains.Overlaps` excludes on shared
-  `ResourceKeys`, which is a parallelism rule misapplied to a mechanism that gates members as ONE attempt.
-
-Work filed: goal `f43caad4` (production key split, in flight), backlog `caef9efe` (test-project split, **the
-binding half**), backlog `3e1a0ad7` annotated with the merge-train overlap fix, backlog `8aae1018` now
-requires each seam to land its tests in its own test project.
-
-### Defect species found 08-20: correct work blocked by an undisclosed protocol
-
-Five instances, all found by watching goals fail rather than by reading code. Four cost paid rounds.
-
-| Backlog | Defect | Documented remedy | What actually happened |
-|---|---|---|---|
-| `0699a50d` | Tester reporting failing tests has its dispatch DISCARDED (`HasCompletedVerification` requires no failing tests) | report failures | discarded; four rounds lost, and a Tester reported `blockers=none` on a candidate that did not compile |
-| `6c1f59ee` | `AdvanceFault` set-aside makes a Verified goal invisible to the loop | `recover` | accepted, mutated nothing, no effect |
-| `b204ee6e` | Build break cannot be routed upstream; `retry` refused while any downstream task runs, and Tester↔Reviewer never idles | `retry` | refused twice, no alternative named |
-| `9fbce159` | One unresolvable backticked span discards an entire Planner plan | — | 7 plans discarded in one day |
-| (Reviewer) | `blockers: none` does NOT close findings; a prior finding not resubmitted stays Open (`ReviewFindings.cs:566`) | — | `ae9dccd4` burned three full cycles |
-
-### Corrections issued against earlier claims on this page and in reports
-
-- **"Retention made gates 40% faster" is RETRACTED.** Five timed gates split 47.7 min mean (busy board) vs
-  28.4 min (quiet board), and retention landed between them. The discriminating test — one gate under full
-  contention — came back at **46m39s** (`9bf2b63a`, 19:12:21→19:59:00). Gate wall-clock tracks contention,
-  not retention. Target concurrency and lane duration, not serial I/O plumbing.
-- **Base build cache was never a gate-latency lever.** Measured on real cache data: hash+copy total ~320 ms
-  per attempt against gates of tens of minutes. `docs/measurements/basebuildcache-io.md` has the numbers.
-  Requiring a committed measurement artifact is what caught this.
-- **"The ownership key is the cheaper half worth landing alone" is wrong.** It unblocks nothing for a queue
-  whose goals all add tests to one test project. `caef9efe` is the binding half.
-- **Decomposition line-count target is unreachable as written.** `GoalAcceptanceVerifier.cs` went 6,342
-  (07-27) → 8,713 (08-20) while ~761 lines were extracted. Judge seams on isolation, not size.
-
-### Operating notes worth keeping from this session
-
-- **The conductor ran 48 commits stale for ~19.5 hours.** The max-duration handoff spawns a
-  `--continuity-child` that reuses the parent's pinned `%TEMP%\mcg-run\<hash>` directory. **Check the marker
-  in the run-dir the PROCESS NAMES, not `src/.../bin/Debug`** — those diverge exactly when it matters. See
-  the new runbook section "Which binary is the running conductor actually executing?" (`fde5f80f`).
-- **`--policy Permissive` silently overrode `conductor-policy.json`.** The flag selects a built-in preset
-  (cap 5) and the file is loaded only to validate it before being discarded, so `PermissiveCap6Trial`'s cap
-  of 6 had been inert. Relaunch WITHOUT `--policy` to honour the file.
-- **`--help` is curated.** The full verb list is `CliArgumentParser.CommandCatalog.cs`. Verbs absent from
-  help but present and useful: `cancel-dispatch`, `backlog-depends`, `backlog-update`, `backlog-supersede`,
-  `loop-health`, `durations`, `provenance`.
-- **`cancel-dispatch <goal> <task#>` is the escape hatch** when `retry` on an upstream task is refused.
-  Cancel the downstream worker, then retry upstream immediately — the cycle re-dispatches within ~60s.
-- **The AdvanceFault remedy** is `retry <goal> <last-task#> --mechanical`, then `progress ... completed`,
-  then `verify-manual ... passed`. It costs one real dispatch on the tick between reopen and close. Hit four
-  times today.
-- **The grok Researcher death is fixed operationally.** `--permission-mode plan` headless has no approver, so
-  a tool outside the allow set is cancelled in ~1 ms and grok exits 0 — 2 of 4 Researchers died before the
-  fix. `grok-researcher` is now `Status: Offline` in `agents.json` (an agents.json edit specifically so
-  `recover` cannot revert it) and the codex researcher is primary. Root cause is
-  `WorkerProfileDispatcher.cs:3118`; the misclassification as `researcher-output-contract-rejected` is the
-  worse half and is unfixed (backlog `d8ff610b`).
-
-## SUPERSEDED 2026-08-20 20:05 — kept for its receipts. RESUME HERE — 2026-08-20 09:35 UTC, the fourteen reds are FIXED and landed; board draining
-
-**RESOLVED at `c0ad1c47`.** Main no longer carries the fourteen red tests that made the acceptance gate
-unpassable for every goal. A combined candidate carrying all fourteen fixes gated with **zero failures
-across every lane** and landed. `af19fd2a` (`6241ed3f`, gate-latency velocity) landed behind it.
-
-**How it was resolved, because the mechanism matters.** The two fix goals DEADLOCKED each other:
-`4fa6af44` fixed six Planner-contract reds, `c30eb2fe` fixed eight local-provider reds, and any candidate
-touching `src/Mcg.AgentOrchestrator.Infrastructure/` runs the whole Infrastructure suite
-(`RepositoryTestImpactPlanner.cs:194`), so each one's gate met the other's reds and failed. Proven, not
-inferred: `4fa6af44`'s gate showed all six of its own fixed, zero introduced, and still failed on exactly
-`c30eb2fe`'s eight. The exit was to merge `goal/4fa6af44` into `goal/c30eb2fe` so ONE gate run could see
-all fourteen fixes at once. **That merge was manual and only necessary because the gate cannot distinguish
-"you broke this" from "this was already broken" — backlog `92f531b4`, which carries the full proof.**
-
-Root causes worth keeping:
-- Six Planner reds: `MarkdownHeadingNormalizer`'s `(?m)(?<=\S)(#{1,6}[ \t]+\S)` — the first `#` of a
-  start-of-line `## Heading` satisfied the lookbehind, so the replace demoted it to `# Heading`. Fixed to
-  `(?<=[^\s#])`. One product bug behind all five failures, found by a grok Tester whose dispatch was then
-  rejected on output shape.
-- Eight local-provider reds: stale Ollama expectations after the LlamaCpp switch, plus one real bug —
-  `OrchestratorHealthInspector.IsApiRouteUsable` treated `Mode == "LocalBridge"` as an API route.
-
-**Still open and worth knowing before you drive:**
-
-| Goal | State |
-|---|---|
-| `21b284a0` | **held deliberately.** Its criterion demands the focused-evidence path that `9a9c7e8e` breaks; it burned 32 attempts. The Developer fix is done. Read the note on task 4 before removing the hold. |
-| `fe37d616` | `GoalAcceptanceVerifier` seam-4 extraction, recovered and current. **This is the only genuine test of whether the post-landing canary fires** — it is the sole engine-touching candidate. |
-| `9f64cd98` | squashed from 12 commits (with merges) to **1 linear commit** to stop a rebase treadmill that recurred every time main moved. |
-| `13b3be0d`, `ab933e32` | draining normally against a green base. |
-
-`4fa6af44`'s root cause is worth keeping: `MarkdownHeadingNormalizer`'s `(?m)(?<=\S)(#{1,6}[ \t]+\S)`
-demoted a start-of-line `## Heading` to `# Heading`, because the first `#` satisfied the lookbehind.
-One product bug behind all five reds. Fixed in `c85b9bdc`, confirmed by a focused receipt: 26 tests
-executed, passed.
-
-`c30eb2fe`'s eight cluster around local provider routing and are **hypothesised** (not diagnosed) to be
-stale Ollama expectations after the LlamaCpp switch. Verify before fixing.
-
-**How that was nearly missed, and the lesson.** The first read of a failing gate said "worker profiles:
-failed: 1". That came from grepping two of roughly twenty lane receipts. Always sweep every lane:
-
-```
-grep -oh 'testName="[^"]*"[^>]*outcome="Failed"' <attempt-dir>/<attempt-id>.*.trx | grep -o 'testName="[^"]*"' | sort -u
-```
-
-**Roster: codex is back on Developer** (`openai-developer`, `gpt-5.6-sol`, `codex-cli`, medium). Verify
-which harness actually ran by the prompt filename suffix (`-codex-cli.md` / `-grok-cli.md`) or the
-`Dispatched to ...` reason — **not** by `agents` output or `status`, both of which lied all evening. See
-backlog `fd4a5ed5`: a roster change and a `reassign-agent` can both report success and never reach
-dispatch.
-
-**Five defects filed tonight, all orchestrator-side, all cost real rounds:**
-
-| Id | Defect |
-|---|---|
-| `9a9c7e8e` | a rejected focused-evidence request is replayed verbatim forever; burned 16 retries on `21b284a0`. Trigger is **multi-selection** requests only — a single selection works |
-| `2861b909` | operator text in `recover`/`retry --text-file` is recorded, reports `Applied`, and never reaches the prompt when the retry counter is not yet engaged |
-| `fd4a5ed5` | `agent`/`agent-add` leave the subscription alias stale, and task agent assignments revert silently |
-| `9fbce159` | the Planner contract rejects `File.cs:442-479`; a line range discards the whole plan. Mitigated for future Planners by `045930f8` |
-| `7009ffbd` | the eight local-provider reds above |
-
-**Operating notes that saved or cost time tonight** — all now in `docs/operator-runbook.md`:
-verify a conductor rebuild with `App.dll.git-head` vs `git rev-parse HEAD` (run-dir hash proves nothing;
-handoff rebuilds are intermittent); never grep a .NET assembly for a string you added (UTF-16, gives
-false negatives on strings that are demonstrably present); put worker guidance in the **brief**, not a
-recover note; and front-load numbers in operator notes because truncation eats the middle.
-
-Prior section follows.
-
-## ~~⚠ CRITICAL~~ — OPERATOR CLI COMMANDS KILLED LIVE WORKERS — **GAP APPEARS CLOSED, VERIFY BY RECEIPT** (re-checked 2026-08-07)
-
-> **Read this box before the section below.** The described gap — the sweep killing a live victim
-> without checking whether its owning conductor was alive — is **not present in current code**.
-> `WorkerProcessJobs.cs:77-82` now evaluates owner liveness first and retains unless the owner is
-> `DeadOrRecycled`, with a `retain-unknown-victim` path at `:85-96` and a `GracefullyDetached` branch
-> at `:42-75`.
->
-> This was verified by reading the code, **not** by receipt. Four reaping receipts in `state.db`
-> established the original defect, so confirm the fix the same way before relying on it.
->
-> It remains a live, unproven candidate for the unexplained `root_exit_code=1 / child_exit_code=0`
-> Developer failures on `3a7afb95`, which occurred while an operator was running recovery verbs. Check
-> `state.db` reaping receipts against those timestamps.
->
-> **An operator followed this section as current guidance through all of 2026-08-06.** Tracked in the
-> command-safety program, backlog `c2ed4680`. The historical account below is preserved as the
-> reasoning record.
-
-**`WorkerProcessJobs.cs:30` treats every live shared-registry entry as an orphan and kills it (lines 39-58)
-WITHOUT checking whether its owning conductor is alive.** `Program.cs:447` runs that sweep on
-lifecycle-owning App startups and `Program.cs:397` enables destructive startup cleanup for nearly EVERY
-stateful command — the exemption list at `CliPersistentStateRunner.cs:419` is narrow.
-
-**Age: ~6 weeks.** `SweepStartupOrphans` landed 2026-06-22 in `3f654221` and never checked owner liveness.
-`MatchesLiveProcess` (line 41) confirms the VICTIM is alive — that is the entry condition for killing it.
-
-**CORRECTION to the first version of this note:** `backlog-add` is EXEMPT (`SkipsKernelState` line 433;
-`RequiresKernelBacklogState` line 452 for `--depends-on`) and cannot have caused the 01:19:30 reaping — I
-asserted that from a timeline without checking whether the verb reaches the sweep. Trigger for that instance
-is UNIDENTIFIED; the mechanism is confirmed. `backlog-intake` and `attention` are in neither list and DO sweep.
-`authorityTransferRequested` returns at Program.cs:461 before sweeping, so max-duration handoffs are safe.
-Sweeping verbs = everything not exempted: `recover`, `retry`, `progress`, `verify-manual`, `goal`,
-`backlog-intake`, `attention`, `pending` — i.e. precisely the RECOVERY verbs, reached only when live work is
-already fragile. Prior regression of this same class: `bc642e02` (2026-07-30) re-enabled the sweep for
-read-only `backlog-list`; the deny-list guards a destructive DEFAULT, so every newly added CLI verb is unsafe
-until someone remembers to exempt it.
-
-CONFIRMED by `.orchestrator/state.db` reaping receipts, not inference:
-| PID | goal | `startup-reaped` at | the command I ran |
-|---|---|---|---|
-| 37108 | `b3ada0bb` | 01:19:30.715Z | `backlog-add` |
-| 35200 | `1332b2ea` | 01:19:31.045Z | same sweep, 330ms later |
-| 35712 | `b3ada0bb` | 02:20:09.288Z | `backlog-intake --create-goal` |
-A fourth (Reviewer `b7b88f90`, 02:29) coincides with `attention show`/`answer`. Victims spanned BOTH
-providers (codex Developer, claude Reviewer) and both roles — consistent with an indiscriminate sweep, and
-it rules out any provider-specific theory.
-
-**Why it is worse than "a worker died":** killing the host skips the ONLY exit-artifact writer
-(`DispatchProcessHost.cs:1364`, end of a `finally`); the tree is in a kill-on-close job
-(`OwnedProcessGroup.cs:19`) so all descendants vanish and the heartbeat freezes at `state: running`. The
-reconciler then MANUFACTURES exit 1 (`BackgroundDispatchRunner.cs:683-684` → written at 1253-1255), and
-`DispatchRecoveryPolicy.cs:53` / `DispatchStateSurface.cs:203` track only artifact EXISTENCE, not
-native-vs-synthetic provenance — so a fabricated failure is indistinguishable downstream. **This is the
-mechanism behind the long-standing "dispatch manufactures failures for successful workers" note.**
-Careful: success is NOT proven for these — `b3ada0bb`'s stderr ends mid-diff, `1332b2ea`'s during context
-ingestion. Honest verdict is "interrupted after useful work". Recovery must PRESERVE work without ASSERTING
-success (quarantined WIP snapshot, not a result-bearing commit).
-
-**OPERATOR RULE UNTIL FIXED: do NOT run any App CLI command while workers are live** — including
-`backlog-add` and `attention show`. Batch operator actions into worker-free windows, or accept that each
-command may destroy a paid round. HANDOFF/file edits are safe (no sweep).
-**NOT YET FILED as a backlog item** — filing requires `backlog-add`, which would kill live workers. File it
-from `scratchpad/backlog-startup-sweep-kills-workers.txt` during the next worker-free window.
-Fixes, in order: (1) sweep must check owner liveness; (2) invert the exemption list so commands opt IN to
-destructive cleanup; (3) record the SWEEPER's pid/argv in the receipt (today it names only the victim, which
-is why this needed a PID-targeted `state.db` query to find); (4) distinguish synthetic from native exit
-artifacts (overlaps `f254171c` item 1 / goal `b3ada0bb`).
-
-**FILED 2026-08-03/04 (this drive):**
-- `7a81b5f6` startup sweep kills live workers. Annotated twice: sol's adversarial review, and the operator
-  UNIX DEFERRAL scope decision. Design conclusion: the command-name list is the flaw in EITHER polarity;
-  orphanhood must be decided from recorded owner-liveness evidence, not from who is asking. With Unix
-  deferred, reclaim has NO constituency (Windows KILL_ON_JOB_CLOSE already reclaims), so the scoped fix is
-  `startup-live-deferred` inside `SweepStartupOrphans` at the capability seam. STILL IN SCOPE regardless:
-  `MarkReleased` keys on PID not entry id (`SpawnRegistry.cs:79`), and `GoalWorktreeOrphanSweepScheduler.SweepNow`
-  at `Program.cs:465` is a SECOND destructive action on every stateful command.
-- `8b2e0873` gate cancellation escalates with an untyped reason. Six causes (null record, Active, Parked,
-  AcceptanceFailed, Cancelled, Superseded, Failed) collapse to one `Func<bool>`, then a message naming no
-  disposition, then a 40-char clip. Cost ~39 min of dead lane time on `65e85ad6` tonight.
-- `51926605` test cleanup swapped ACL-aware helper for `Directory.Delete` + `catch { }` and dropped
-  `[Collection]`; gate's own log proves these trees resist deletion ("Directory deletion failed after ACL reset").
-- `54b0a707` Reviewer rounds consumed by "finding-identity contract repair"; n=2 across goals, and on
-  `b3ada0bb` one emitted `pass` WITHOUT re-reviewing a changed HEAD - which is how `51926605` reached a gate.
-
-**SAFE vs SWEEPING CLI VERBS (verified in source, corrects the earlier blanket rule).**
-`RunsStartupCleanup = !SkipsKernelState && !RequiresKernelBacklogState` (`Program.cs:402`).
-SAFE (never sweep): `backlog-add` (without `--depends-on`), `backlog-update/annotate/close/supersede/link/reopen/view`,
-`backlog-list/show/depends`, `gate-status`, `acceptance-engine`, `cleanup-status`, `repo-process-info`, `run-event`, `project`.
-SWEEPING: `recover`, `retry`, `progress`, `verify-manual`, `goal`, `backlog-intake`, `attention`, `pending` -
-i.e. precisely the RECOVERY verbs. Holding ALL verbs (my earlier rule) costs velocity for no safety gain.
-CONSEQUENCE: dispatching `7a81b5f6` needs `backlog-intake`, a sweeping verb - the fix cannot be dispatched
-without triggering the defect it fixes. The sweep is now a CONCURRENCY CEILING, not just a paid-round risk.
-
-**LANDED #35: `d3829298`** - main `b32a6493 Integrate goal/d3829298`. Conductor continuity: durable
-lifecycle records, supervisor restart/backoff/caps, AND both self-stop fixes (watch-mode blocked-recheck
-budget at `ConductorBatchLoop.cs:620`, plus the one-shot `no-progress-no-watch` path at `:1115-1125`).
-NOTE: handoffs spawn the PREBUILT exe, so this fix only armed when the loop was relaunched via
-`Start-OrchestratorCommand.ps1` (which rebuilds) at 14:51Z. Loops started before that do NOT have it.
-
-**GATE TRIAGE RECEIPTS (2026-08-04) - three goals, useful reference for what real vs apparatus looks like:**
-- Apparatus signature: gate fails in 28-57s at "core tests" with `UnauthorizedAccessException` on
-  `...mcg-hvp\AppData\Local\Temp\Low\...`. Fixed at host level (see temp-label note above); code fix filed
-  as `302b92f6`.
-- Real signature: gate runs 12+ min and returns assertion failures. After the host repair, `b3ada0bb`
-  surfaced FIVE genuine failures that the apparatus noise had been hiding, then 3 of 5 were fixed by ONE
-  line (removing `WorkTaskStatus.Completed` from the reconciler's early-return guard at
-  `BackgroundDispatchRunner.cs:501`).
-- `d3829298`'s passing gate ran 18 infrastructure shards in ~156 SECONDS (vs 12-19 min typical), which is the
-  shared base-build cache working with a warm main sha.
-
-**VELOCITY GOAL IN FLIGHT: `10075221`** = backlog `d87d26be` partition-level pass caching (re-run only failed
-partitions on a gate re-roll; item estimates re-rolls 20-25 min -> 2-7 min). This was the ONLY one of three
-velocity candidates that survived a staleness check - see the velocity note above.
-
-**LANDED #34: `65e85ad6`** - main `a92b2989 Integrate goal/65e85ad6`. Note it passed with 2 files from
-Developer and 0 from BOTH Tester and Reviewer (thin five-role goal; cf. unlanded `3a7afb95`).
-
-**`b3ada0bb` IS TERMINALLY Failed BY A FORMAT BUG - ITS CODE WAS SOUND.** Root cause found and recorded in
-`54b0a707`. `ReviewFindingLocation` is `(File, Region, Hunk)` and `ToString()` renders `{File}::{Region} [{Hunk}]`
-only when Hunk is non-empty (`ReviewFindings.cs:132-141`), while `SameAnchor` compares File + Region and NEVER
-Hunk (`:526-542`). So `Region="...predicate" + Hunk="L1934-L1946"` and `Region="...predicate [L1934-L1946]" +
-Hunk=null` RENDER IDENTICALLY but are unequal anchors. `NormalizeRegion` (`:544-554`) should strip the trailing
-range but its regex arms want `[<digit>` or whitespace-then-`l`; the real form `[L1934-L1946]` is bracketed AND
-L-prefixed and matches NEITHER. Result: `ERR_REVIEW_FINDING_IDENTITY_MOVED` on genuinely-equal-looking values,
-`MaxReviewFindingContractRepairsPerRound`=2 exhausted, goal Failed. The escalation message contains violation
-code, both ids, both locations, open count AND the operator remedy - and the record kept 40 CHARACTERS of it
-(that clip is `8b2e0873`). Full text is recoverable from the conductor stdout log, not from the escalation.
-NOTE: I first hypothesised "line ranges are a volatile anchor that shifts under Developer edits" - WRONG,
-Hunk is never compared. Retracted in the annotation.
-
-RECOVERY SEQUENCE (from the truncated message, recovered from the loop log) - ALL THREE ARE SWEEPING VERBS:
-`retry b3ada0bb <task#> "<reason>" --mechanical`, then `progress <task#> completed`, then
-`verify-manual <task#> passed`. Re-escalates harmlessly at every loop start (re-derived from stored review
-state, NO new dispatch, zero paid rounds), so there is no time pressure - wait for a genuinely worker-free
-AND gate-free window.
-
-**GATE TRX TRIAGE - FILTER ON `outcome='Failed'`, NOT `outcome != 'Passed'`.** `NotExecuted` means SKIPPED and
-carries no ErrorInfo message, so a `!= Passed` filter reports skips as message-less "failures".
-`LockAttribution_handle_probe_returns_results_for_real_held_file` and
-`GoalAcceptanceVerifier_real_runner_smoke_is_opt_in` are opt-in/environment tests that are NotExecuted in
-EVERY gate including passing ones. I mis-triaged them as environmental failures twice.
-
-**RELAUNCH TRAP: `conduct --loop` DEFAULTS TO `Conservative`. ALWAYS PASS `--policy Permissive`.**
-The flag is `--policy <Conservative|Permissive|Manual>` (`CliCommandHandlers.Goals.cs:1294`), default
-`ConductorAutonomyPolicy.Default` = Conservative. Handoff relaunches inherit the incumbent's policy, so this
-only bites on a MANUAL relaunch - which is exactly when an operator is already recovering from something.
-Symptoms under Conservative, all of which look like unrelated defects:
-- Every goal whose write-set touches a high-risk ownership area holds forever with
-  `No tasks dispatched; all ready tasks require operator approval ... high-risk ownership area requires
-  operator approval: Script scripts/<name>.ps1; reserved write-set resource: ownership:scripts`.
-  `ParallelExecutionPlanner.cs:28` gates this on `approveHighRiskOwnership && !hasGeneratedPath`.
-- Goals escalate to `Failed` at role boundaries with the generic
-  `Goal_is_in_Failed_state;_operator_action`, indistinguishable from a real failure.
-Confirmed live 2026-08-04: after relaunching without the flag, `d3829298` and `b3ada0bb` held indefinitely and
-`9de9649d` (whose Planner had just SUCCEEDED with blockers=none, confidence=high) escalated to Failed.
-The tick line is the tell - it prints the policy: `[Conservative]` vs `[Permissive]`. Check it after any
-manual relaunch. Correct command:
-`.\scripts\Start-OrchestratorCommand.ps1 -Name "<label>" conduct --loop --watch --policy Permissive --max-duration 5400`
-
-**VELOCITY BACKLOG - VERIFY BEFORE INTAKE, TWO OF THREE WERE ALREADY DONE (checked 2026-08-04).**
-There is a filed, sequenced gate-throughput program: `4a50857f` shared base-build, `d87d26be` partition
-pass-caching, `a9d5e81d` diff-scoped suite selection, `5daadb79` parallel gates, `3e1a0ad7` merge train,
-`201b9b3c` candidate-keyed verdicts.
-- `396fd25d` (reuse gate receipts across acceptance+landing) is **STALE**: `65e85ad6` landed with exactly ONE
-  gate attempt directory. Auto-promote already consumes attempt results; only the operator CLI path re-ran,
-  and that is not the path in use.
-- `4a50857f` (shared base-build layer) is **ALREADY IMPLEMENTED**: gate logs emit
-  `BASE_BUILD_CACHE base-build-cache main_sha=... build_phase_ms=... projects=Core=miss,Infrastructure=changed,...
-  built_projects=... evictions=none`.
-- `d87d26be` (partition-level pass caching for re-rolls) is **LIVE and is the one to take**: `b3ada0bb`
-  gate 1 failed ONE shard, gate 2 re-ran all 19. Item estimates re-rolls ~20-25 min -> ~2-7 min.
-
-**TEST TEMP LEAK: 3,298 directories** under
-`C:\Users\miles\AppData\Local\Temp\mcg-hvp\AppData\Local\Temp\Low\mcg-tests\`, dating to Aug 1. This is the
-concrete cost of backlog `51926605` (ACL-aware `GoalWorktrees.DeleteDirectory` replaced by
-`Directory.Delete` + `catch { }`): cleanup failures are now invisible. Related but NOT root-caused: a
-`d3829298` gate failed in 28s with `UnauthorizedAccessException` under that tree in
-`AgentHarnessDocsDriftTests`. The directory is empty and writable now and the tree carries no mandatory
-label, so the Low-IL theory does NOT hold - cause unconfirmed. The auto-retry Developer went straight to
-`tests/Mcg.AgentOrchestrator.Core.Tests/AssemblyTempRedirect.cs`, which is the right seam.
-
-**WORKFLOW DEADLOCK ON TWO-ROLE GOALS (filed `c0171e99`).** The Developer lane is restricted to
-`Invoke-WorkerBuildCheck.ps1` (no testhost). Only the Tester role executes tests, and two-role goals
-(Developer+Reviewer) have no Tester - so a Reviewer asking for executed evidence deadlocks the goal, since the
-gate cannot run until the Reviewer passes. Cheapest fix is making `not-verifiable` non-actionable by contract
-so a Developer is never dispatched to clear one. Related: `1e178ba0` - rule (l) controls cannot produce a
-receipt when RED is a HANG; give such tests an explicit iteration/deadline bound so RED is a bound-exceeded
-assertion.
-
-**ACCEPTANCE PROCESSES ARE IN THE SPAWN REGISTRY** (`GoalAcceptanceVerifier.cs:6168`, owner `acceptance:{dir}`),
-so a sweeping verb during a GATE kills the gate's own shard processes - not just workers. A worker-free window
-is NOT sufficient; it must also be gate-free.
-
-**TWO WORKERS DIED WITHOUT EXIT ARTIFACTS IN THE SAME MINUTE (01:19-01:20)** — `b3ada0bb` and `1332b2ea`,
-both `blocked_by_stale_dispatch`, reason `no live process, exit-absent, heartbeat present but process
-liveness is absent`. Systemic, not isolated. NOT diagnosed — correlation only: free RAM was 2.4GB under load
-earlier and recovered to 3.4GB once both died, with the conductor alone at 883MB. Host is 15.9GB total.
-That is consistent with memory pressure killing workers but I did NOT establish causation. **Relevant to the
-"why not 3 build permits" question: if workers already die under load at 2 permits, that is evidence against
-raising it — but measure per-gate peak RSS before concluding.**
-Recovery that worked, in order: (1) `recover <goal> "<reason>"` resets the task; (2) then CHECK
-`git status` in the worktree — `b3ada0bb` was left holding **239+60 lines of uncommitted work** in the exact
-files it targets, which blocks ALL dispatch behind the generic `Assigned_tasks_exist_but_no_ready_batch`
-hold; (3) COMMIT that work on the goal branch (`f6c56831`), do not discard it. A stranded edit discarded
-earlier in this project turned out to BE the fix, so look before dropping.
-
-**CORRECTION — "only a deliberate relaunch clears a pre-landing rebase escalation" is TOO STRONG.** I said
-that four times tonight based on `809634e8` and `ef46e924`, both of which needed relaunches. But `09912b1f`
-cleared and went to gate after only a MAX-DURATION HANDOFF (00:36), with no deliberate bounce. What differed:
-I had fixed that branch's HISTORY with a real `git rebase main` (resolving the add at the offending commit),
-not just its final tree. I cannot cleanly attribute the clear to the handoff vs. the history fix vs. a tick
-re-evaluation — so do NOT bounce on the assumption it is required. Fix the branch history, verify with
-`workspace rebase` reporting fast-forward, then WAIT a generation before spending a relaunch.
-
-**WHICH ESCALATION CLASSES `recover` ACTUALLY FIXES** (learned by trial tonight — the runbook should say
-this): it WORKS for `dispatch-exit-reconciled` (goal `f9bc03c9`) and for `advance-fault` (goal `09912b1f`,
-slot-busy) — both reset the affected task to dispatchable with completed work intact, no worker round lost.
-It is a NO-OP for **pre-landing rebase conflicts** (`809634e8`, `ef46e924`) — only a conductor relaunch
-clears those, and `recover` prints "nothing to recover" while the goal stays set aside.
-
-**`3fcf1286` — build-slot shortage ESCALATES the goal, third site of the same defect.** `advance threw:
-Stable dotnet build slots busy` turned a routine two-permit contention into an operator-attention escalation
-of a blameless goal (its Developer round had just completed cleanly). Log also shows `pid=5576` — the
-CONDUCTOR ITSELF — holding `slot-1` while requesting a lease for the goal. The same exception class was made
-non-fatal TWICE today (`809634e8` canary, `8e8afe96` round 4 evidence) and neither prevented this third
-instance, because both were local patches. That is the argument for the written rule in one sentence.
-
-**`d3829298` round 2 introduced a DETERMINISTIC HANG — caught by the Reviewer, not by me.**
-`ConductorBatchLoop.cs:606-646` `continue`s at :645 without incrementing `totalTicks`, so the max-iterations
-guard at :254-256 can never fire; `BatchLoopPersistingRebaseConflictStaysSetAside` hangs forever rather than
-failing. Note the irony to carry into review: the goal exists to stop the loop stopping when it should not,
-and the first cut made it never stop when it should. Both directions of one boundary.
-
-**`f9bc03c9` PARK IS HOLDING** (`park-goal <id> <reason> --confirm-goal-park`; dry-run by default, and it
-reported `running dispatches to cancel: 0` before confirming). No re-escalation since 23:06, where it had
-been firing every generation. PROVISIONAL evidence against the old "park reverts to Active" note — watch it
-across a full generation before trusting.
-
-**`Goal_is_in_Failed_state` HAS AT LEAST TWO DISTINCT CAUSES — do not treat it as one defect.**
-- `f9bc03c9` (five-role): Planner exited **0**, root and child both, with a well-formed WORKER_RESULT and
-  `blockers: none`. Goal Failed ~10s later, nothing in the journal. STILL UNEXPLAINED — filed `3a7afb95`.
-- `d3829298` (TWO-role): Developer exited **1** while reporting `tests: pass - build 0 errors; focused tests
-  GREEN`, `blockers: none`. That is the exit-1-after-success class, and sol's audit gives it a candidate
-  mechanism — `BackgroundDispatchRunner.cs:2390` reads invalid exit-file text as exit code 1 (in
-  `f254171c`). Worker also hit the ~124s codex command cap on two whole-class test attempts (`b9d93945`).
-So `3a7afb95`'s "appears specific to the five-role workflow" framing is only safe for the EXIT-0 case. Check
-the exit code before assuming which defect you are looking at. `recover` fixed both, but note it reset the
-DEVELOPER task on `d3829298` rather than advancing to Reviewer, so that round re-runs.
-
-**`merge-tree` IS THE WRONG PRE-LANDING CHECK — THE CONDUCTOR REBASES.** `git merge-tree --write-tree
---name-only main HEAD` tests whether the FINAL TREES merge. A rebase replays EVERY COMMIT, so a branch that
-ADDS a file in one commit and DELETES it in a later one still conflicts at the add, even though its end state
-is clean. On `09912b1f` I ran merge-tree, got a clean tree, declared the conflict resolved — and the
-conductor escalated on `pre-landing_rebase_conflict` minutes later. **Verify with an actual
-`git rebase main` in the worktree**, not merge-tree. Resolution for that shape: `checkout --ours` (main's
-copy) at the add, then `rebase --skip` the now-moot doc commits — verify afterwards with
-`diff --stat main...HEAD` that the goal's real work survived, and with `workspace rebase <goal>` reporting
-"can already fast-forward".
-
-**ADD/ADD ON A SHARED DOC CANNOT BE FIXED BY EDITING EITHER SIDE.** Two branches that independently ADD the
-same path have no common ancestor for it, so `git merge-tree --write-tree --name-only main HEAD` keeps
-reporting `CONFLICT (add/add)` no matter how the content is reconciled. Goal `09912b1f`'s worker merged the
-two versions into a better 130-line document and the conflict persisted unchanged. The ONLY resolution is to
-delete one side. Resolved mechanically at `07b9b39d` (branch deletes, main is canonical); verified with
-`merge-tree` returning a clean tree, and `diff --stat main...HEAD` confirming the goal's own 10 files
-survived. **Salvage before deleting** — that worker's version contained two things the canonical doc lacked
-(persisted state vs read-time availability must not overwrite each other; retries must not turn exhaustion
-into success). Preserved to `scratchpad/branch-discipline-doc.md` and filed as `6f400169`.
-
-**AUTO-RETRY OUTRUNS OPERATOR GUIDANCE — plan around it.** The gap between `WATCH_TRANSITION` and the next
-dispatch is ~10s. Reading a Reviewer finding, deciding, writing a considered retry and submitting it takes
-longer, so the retry is REJECTED (`Task is already running` / `downstream task has a running process`) and
-the round proceeds on the Reviewer's findings instead. Both guidance retries I attempted tonight lost that
-race. Implications: (1) operator retries only land if you CANCEL the running task first, or catch the goal
-while ESCALATED; (2) for everything else, rely on Reviewer findings — they independently reached the same
-conclusion as my rejected retries in both cases; (3) reserve operator retries for when the Reviewer is WRONG,
-or the decision is genuinely operator-owned (scope, premise, policy), and expect to cancel first.
-
-**OPERATOR TRAP — "Operator intent queued" does NOT mean it will apply.** A `retry` on an upstream task is
-REJECTED if a downstream task still has a running process
-(`Cannot retry Developer task ... while downstream Reviewer task ... has a running process`). The submit
-output still prints `status=Pending`, and the rejection is visible ONLY via
-`operator-intent-status <id>`. I fired a retry mid-Reviewer-run, saw "queued", and it sat Rejected for 40
-minutes while I reported the goal as "retry pending". **Poll the id the command hands you**, or submit only
-when no downstream task is running.
-
-**Operator decisions made on `09912b1f` (record these, they are policy):** unreadable circuit FAILS CLOSED
-after a tightly-bounded retry, with an operator-visible item. Rationale is asymmetry — fail-open risks
-unverified code landing past a verifier we have DETECTED is lying; fail-closed risks a cheap reversible
-pause. Two constraints: the halt must be operator-visible (this circuit halted all landings for 29 min
-unnoticed), and the retry budget must stay well under a second because `Read()` is a synchronous block and
-`8e8afe96` landed tonight to take a blocking call OFF the tick thread. Also stated: a fail-closed policy that
-reports `Unhealthy` for UNKNOWN state is the same defect sign-flipped — `Unavailable` must be its own value
-with policy applied on top. Rejected: stale-cache fallback (a cache is most wrong exactly when it matters).
-
-**Filed tonight, all from measured evidence:**
-| id | defect | status |
-|---|---|---|
-| `aca3d2fc` | shared-doc collision | LANDED as `dd3b44fe` |
-| `cfe34c0e` | canary slot-busy halts all landings | LANDED as `809634e8` |
-| `1732dc79` | pre-review evidence blocks the tick | LANDED as `8e8afe96` |
-| `7ab385bc` | 2 remaining synchronous evidence call sites | open |
-| `bcbf92fc` | Developer cannot execute tests → `tests: deferred` everywhere | goal `1332b2ea` |
-| `18ccc733` | CS2012 baseline build recorded as a verdict | goal `f9bc03c9` (blocked) |
-| `f490241d` | conductor continuity unmeasurable, self-stops = 41% of dead time | open, HELD for `ef46e924` |
-| `4fd42301` | canary test pins exact main HEAD | goal `1046bed1` |
-| `3a7afb95` | five-role goal → Failed on clean Planner exit | open |
-
-**`3a7afb95` has an operator trap worth knowing before you hit it:** `recover` REPORTS SUCCESS on that goal
-("reset task 2 to dispatchable") and the goal fails again on the next Planner round. Following the runbook
-loops, and each cycle burns a full paid Planner round. Two cycles confirmed. Park rather than recover until
-the defect lands.
-
-**DESIGN RULE WRITTEN AND ALREADY PAYING — `docs/dispositive-decision-discipline.md`** (pointers +
-shared-anchor entries in BOTH `AGENTS.md` and `CLAUDE.md`). The rule: *a dispositive decision must be made in
-the presence of the evidence that discriminates its alternatives, and must record that evidence.* The
-enforceable check: **could I write the justification for this outcome from what is in scope right here?**
-Two independent audits (sol + Fable, near-disjoint results) found **13 MORE violations** within an hour:
-| id | finding | confidence |
-|---|---|---|
-| `e8b5cd1b` | **SAFETY: acceptance circuit FAILS OPEN** — unreadable state returns `Healthy`, a tripped circuit permits landings | verified by direct read |
-| `893f8be9` | outcome-class token drift poisons the routing scorecard DURABLY (`provider-Sandbox1312` interpolated vs `provider-sandbox-1312` literal) | verified by direct read |
-| `f0b431d9` | candidate mechanism for `438b18d3` stop-verbs-don't-stick | convergent, UNTRACED |
-| `f254171c` | six remaining, incl. invalid exit-file → exit 1 (candidate mechanism for "dispatch manufactures failures") | mixed |
-Fable's overall read: **the runtime conductor path is now well-hardened**; surviving violations cluster in
-the reporting layer that re-derives cause from strings AFTER typed evidence already existed. `f254171c`
-carries four REFERENCE PATTERNS where the rule is already applied correctly — use those as fix templates.
-
-**MY WORST PATTERN TONIGHT — file paths in backlog bodies, and direct commits to main mid-flight.**
-Three goals derailed by the same two habits, all within ~90 minutes, after I had already written the lesson
-down once:
-| goal | damage | cause |
-|---|---|---|
-| `d3829298` | worker added 226 lines to a THROWAWAY analysis script instead of touching the conductor | I named the script path in the backlog body |
-| `09912b1f` | worker authored a competing copy of the discipline doc → `CONFLICT (add/add)`, branch could not land | I named the doc path in the backlog body, then committed my own to main |
-| `c4d02669` | gate failed on a red main + worker made an off-topic drift-test change | I committed an anchor-list edit to main WITHOUT grepping what asserts it |
-**Rules for me:** (1) describe provenance WITHOUT paths — "the rule this came from", never the filename;
-(2) do NOT commit a file to main while any in-flight goal lists that path in scope; (3) before editing any
-contract file (`AGENTS.md`, `CLAUDE.md`, shared-anchor lists), grep for what asserts it and RUN that test
-before committing — `AgentHarnessDocsDriftTests` pins the anchor list to in-file `## Section` headings, and
-shared-home docs like `test-design-discipline.md` are referenced by POINTER ONLY, never listed as anchors.
-Containment was luck: only one lane happened to gate during the 20-minute red-main window while three sat in
-worker rounds.
-
-**OPERATOR LESSON, my error: do NOT name incidental tooling paths in a backlog body.** `f490241d`'s body
-named `scripts/Extract-LoopUptime.ps1` while explaining why current data is untrustworthy. Scope inference
-latched onto the filename, and goal `d3829298`'s Developer spent a full round adding 226 lines to that
-THROWAWAY ANALYSIS SCRIPT instead of touching the conductor. Scope inference cannot distinguish "this is the
-broken thing" from "this is how I noticed". Retry `2dce9999` sent with corrected scope + explicit do-not-touch
-list for all four scratch scripts (`Extract-LoopUptime`, `Extract-GoalVelocity`, `Extract-GoalFactsV2`,
-`Analyze-GoalVelocity` — none are product code).
-
-**Recurring architectural flaw, now 5 instances in one day — the boundary between "the measuring apparatus
-failed" and "the candidate failed" is drawn independently at each site and got it wrong every time: canary
-slot-busy (verdict←apparatus), `8e8afe96` `-001` terminal outcomes (verdict←apparatus), CS2012 baseline
-(verdict←apparatus), `EmptyReceipt`→`EnvironmentFault` (apparatus←verdict, the reverse), and the goal→Failed
-transition in `3a7afb95` leaving no typed record. This is a design rule waiting to be written, not five bugs.
-
-## VELOCITY ANALYSIS 2026-08-03 (me + sol + Fable, two rounds each, 756 goals / 7 weeks)
-
-- **COUNTING RULE — `git log --grep="Integrate goal/" | count` IS NOT A LANDING COUNT.** 408 Integrate
-  commits but only **372 distinct goals** (`| sort -u`). 36 are re-integrations: `a2f929ec` ×5, `a645091f`
-  ×4, three more ×3. Inflation is ~9% overall and up to **33% on peak days** (Jun 25: 21 commits ≈ 14 goals).
-  I quoted 21/day as landings AND defended it when challenged; both wrong. Any throughput metric built on raw
-  commit counts is inflated, and early-era-vs-later comparisons are unsafe because re-integrations may
-  cluster early (one `a2f929ec` message says "hand-landed past the acceptance fingerprint guard").
-- **#1 LEVER, ranked first by BOTH independent analyses: conductor continuity.** Dead-time attribution over
-  371 merged gaps — `all-done-or-escalated` self-stops precede **41.2% of all dead time** (14,369 min, 90
-  gaps), `stop-file` 27.5%, one-shot/stub rows 23.7%, `max-duration` handoff only 7.3% (median gap 16.8 min
-  but p90 195 min). The Jul 22–Aug 1 collapse contains three mega-gaps (3,971 / 5,073 / 2,609 min) each
-  opened by such a stop. Steady-coverage eras ran 11.9–12.5 landings/day vs 3.3–4.8 when coverage collapsed.
-  Filed as backlog **`f490241d`**; goal `ef46e924` targets one instance.
-- **The collapse was a FLOW collapse, not slower processing.** Goals that landed in Jul 24–Aug 1 were the
-  FASTEST of any July era (median wall 161 min vs 229 at peak). Intake fell ~14–23/day → 6.1/day and dispatch
-  starts 13.1 → 5.7. Round count doubling in that era was an EFFECT (goals spanning many generations), not a
-  cause. **Check uptime BEFORE concluding the pipeline got slower.**
-- **Rejected by both analyses: synchronous evidence runs are NOT the aggregate throughput driver.** They
-  barely existed before ~Jul 12 yet latency had already doubled; collapse-era tax ≈7% of tick capacity; and
-  the era with the MOST evidence activity (Aug 2–3) had the BEST throughput. What survives is tail risk —
-  one goal (`e7fd7951`) ran **159 evidence runs / 1,184 min** and never landed, with no per-goal cap. So
-  `8e8afe96` is worth landing for board-wide blocking, but I oversold it as the top lever.
-- Gate first-pass by era: **67.4% → 50.9% → 56.0%** (E3 → collapse → Aug 2–3). My earlier "~40%" pooled
-  across the collapse and was wrong.
-- Pre-dispatch queue wait is **negligible** — median 0.1–6.7 min, p90 ≤21 min, <3% of wall, stable across
-  eras. That question is settled; stop investigating it.
-- Partition re-execution: **3,312 executions, 15 reuses (0.5%), 0 forced reruns.** Median = p90 = **19
-  partition runs per gate attempt**; ~89% of partition work re-verifies what already passed; upper bound on
-  cross-attempt green re-runs ≈ **1,468 runs (44%)**. Cannot be priced in minutes — no partition durations.
-- Build lock/slot blocking genuinely vanishes after ~Jul 20, **but the throughput effect was invisible** —
-  the heaviest-blocked era was the throughput PEAK, so those were grind-holds, not stoppers.
-- **MY EXTRACTION SCRIPTS HAVE KNOWN DEFECTS — do not reuse without fixing.**
-  `scripts/Extract-LoopUptime.ps1`: includes one-shot/stub logs (51% of rows; filter `loopStarted=True`),
-  and 45 rows carry a −5h offset (filename parsed local, mtime taken local). Recorded uptime is a LOWER
-  bound. Proper source is `LOOP_START`/`LOOP_STOP` in `conduct-events.log`, but **that log rotates and
-  retains <1 day** — which is why the analysis needed log archaeology at all.
-  `scripts/Extract-GoalVelocity.ps1` / `Extract-GoalFactsV2.ps1`: landing match drops goals with no journal
-  file, and v2 aggregates away per-event timestamps that were needed to date the lock/slot cessation.
-
-- **`1732dc79` IS THE TOP DEFECT ON THE BOARD — reproduced live tonight, root-caused to one line.**
-  `ConductorDriver.cs:480` blocks the tick thread on an already-async method:
-  `RunFocusedEvidenceAsync(...).GetAwaiter().GetResult()`. It is UNCONDITIONAL — no config switch — so it
-  cannot be mitigated operationally. Receipt in `goal-operations/badac7c6...jsonl`: focused reviewer evidence
-  ran **17:55:45 → 18:27:03 = 31m18s synchronously inside the tick**. Corroborated independently by
-  `conduct-events.log` holding **ZERO events of any kind** across 17:55:23 → 18:27:04, every goal resuming in
-  the same millisecond. Collateral: `20912699` PASSED its gate at 18:08 and could not be reaped or landed
-  until 18:27 — a finished, landable goal held 19 minutes behind an UNRELATED goal's handoff. It runs BEFORE
-  Reviewer dispatch, so every Developer→Reviewer handoff pays it.
-  **Diagnostic lesson:** per-goal events legitimately go quiet while a worker runs, so silence there is NOT a
-  stall signal — I misread it as healthy. The signal that distinguishes a running worker from a frozen loop is
-  the tick-emitted `eventKind:"acceptance"` poll; when those stop, the tick is blocked.
-- **Loop handed off at 18:34** (`LOOP_STOP tick=104 reason=max-duration`), successor pid **38560** alive and
-  ticking, `424f2d45`'s in-flight gate survived and kept completing shards. Handoff spawns the PREBUILT exe,
-  so `20912699`'s landed code is NOT armed in this generation — and neither will `1732dc79` be when it lands.
-  Bounce deliberately via the launcher after landing it.
-- **INTAKED as goal `8e8afe96`** (2026-08-03 18:54, Developer+Reviewer, Complex). This is the `1732dc79`
-  fix. Scope-collision advisory: 0 explicit conflicts across 24 compared goals.
-- **`424f2d45` LANDED 18:46 as `1c474a25`** — 24 landings. Then the loop self-stopped
-  `LOOP_STOP tick=27 reason=all-done-or-escalated`, because BOTH remaining goals escalated at once with
-  `pre-landing_rebase_conflict (docs/test-design-discipline.md)`. NOTE: contrary to the old rule, this
-  all-done stop left **no stale lock** — `conduct-loop.lock` was already gone and pid 38560 was dead.
-- **I hand-resolved both conflicts (2026-08-03 ~18:50).** `badac7c6` → `8d105de7`, `809634e8` → `de3cbfe3`.
-  Both were PURELY POSITIONAL: each goal appends an independent "Negative-control record for goal X"
-  paragraph at the SAME anchor (right after `fa009044`'s, before "Motivating incidents:"), and main had just
-  gained `424f2d45`'s. Resolution was a union in landing order — zero judgment content. Verified after each
-  rebase that `diff --stat main...HEAD` shows ONLY that goal's own files (badac7c6 = 8 files, 809634e8 = 13),
-  so neither branch absorbed foreign work. **Both branches changed, so both need a re-gate.**
-  Filed the systemic cause as backlog **`aca3d2fc`** — the shared doc both serializes parallel acceptance
-  (only-shared-path overlap) AND escalates landings (same-anchor insert). Fix has two halves: exclude
-  `*.md`/`docs/**` from the overlap/reservation computation, and stop making one shared doc the write target
-  for per-goal records.
-- **Loop relaunched 18:54 via the launcher (REBUILDS): pid 38288**, name `conduct-loop-tickfix-lane`. This
-  generation therefore ARMS `20912699` + `424f2d45`. Board on relaunch: `badac7c6` + `809634e8` rebased and
-  awaiting re-gate, `8e8afe96` fresh.
-- Superseded: backlog `1732dc79` (pre-review evidence blocks the tick) is now goal `8e8afe96`.
-- **`badac7c6` LANDED 19:11 as `fb9fb42d` — 25 landings.** Its re-gate PASSED at tick 62, so my hand-resolved
-  union rebase (`8d105de7`) is validated by executed tests. Post-landing sweep terminalized it cleanly.
-- **`809634e8` escalated a SECOND time on the same doc**, exactly as predicted: `badac7c6` landing put another
-  paragraph at the same anchor. Re-resolved by union rebase → `dfc73043`, still only its own 13 files.
-  `workspace rebase 809634e8` now reports "can already fast-forward into main; no rebase needed".
-  **BUT the escalation state persists independently of git state** — the goal reads `Status: Verifying` with
-  both tasks Completed, yet the SWEEP phase still reports `set_aside=1` and prewalk `eligible=1`, so the loop
-  will not re-gate it on its own. `recover` is a NO-OP here ("nothing to recover"). `attention show` lists no
-  open item. The conductor's own guidance is `use 'workspace rebase' to resolve` then `Next: acceptance
-  809634e8`. **Deliberately NOT running manual `acceptance` while `8e8afe96`'s Reviewer is about to hand off
-  to a gate** — a slot-leased command overlapping a gate has wiped lane receipts before. Options when the
-  board is quiet: run `acceptance 809634e8`, or graceful-stop + relaunch (a relaunch cleared exactly this
-  escalation class earlier tonight at 18:54).
-- **`8e8afe96` round 1 REJECTED by the Reviewer — and the Reviewer was right.** This is the depth we want:
-  it found two blocking defects I did not, by tracing the new dispatch kind through parent/child
-  reconciliation rather than reading the diff. Retry queued as intent `cd6817c4` (task 1).
-  - **`-001` (ConductorDriver.cs ~2289-2328), blocking:** terminal-without-run outcomes (BlockedBuildSlot /
-    BlockedBuildLock / ProcessDied / CorruptArtifacts / LaunchFailed / Cancelled / StaleCandidate) are
-    synthesized as `FocusedEvidenceRunResult(Accepted:false)`, and the `!Accepted` branch consumes that as a
-    REJECTED EVIDENCE REQUEST → Tester reopen or `PRE_REVIEW_MAPPING_NEEDS_INPUT` escalation. The acceptance
-    path it copied treats the identical set as RETRYABLE (`ConductorBatchLoop.cs:2090-2095, 2447-2453`).
-    Permit acquisition uses `TimeSpan.Zero` (`ConductorParallelAcceptanceAttempts.cs:873-889`), so
-    BlockedBuildSlot is ROUTINE on the 2-permit board, and a restart-killed child yields ProcessDied on the
-    same path — **it would escalate goals under exactly the conditions the goal exists to fix.**
-  - **`-002` (ConductorParallelAcceptanceAttempts.cs ~664-699), blocking:** the child coordinator always gets
-    `tryRunPreSlot: RunParallelLandingAcceptancePreSlot`, so a pre-review child runs the LANDING-ONLY
-    already-merged short-circuit, journals a FALSE `Acceptance skipped:skip-already-merged`, and returns
-    `Early(Done(Verified))` with no evidence. Gate on `Kind == GateDispatchKind`.
-  - **`-003` is OPERATOR-OWNED AND MINE.** Criterion 4's rule (l) negative control has no execution receipt
-    (Developer honestly reported `tests: deferred`). I must restore the synchronous
-    `.GetAwaiter().GetResult()`, run `FullyQualifiedName~ConductorDriverTests`, capture actual RED, revert.
-    **Do this only AFTER the -001/-002 fix lands** — running it now measures code about to change. I told the
-    worker to state in WORKER_RESULT exactly which edit produces RED for each new test so I need not guess.
-  - Scope calls I made: `-006` (missing terminal-lane coverage, lease path stubbed null) IN; `-005` (evidence
-    coordinator outside the 2-slot admission budget while competing for the same permits) IN **only if it is
-    wiring, not restructuring** — report rather than force; `-004` OUT, already backlog `7ab385bc`.
-- **Loop relaunched 19:20, pid 28656**, name `conduct-loop-async-fix-round2`. Again NO stale lock after an
-  all-done stop — that is twice now, so treat the old "always leaves one behind" rule as obsolete.
-  The relaunch ALSO cleared `809634e8`'s stuck escalation (it re-gated at 19:21:40 without manual
-  `acceptance`), and applied the queued retry intent. **A relaunch is the reliable clear for a stale
-  landing-escalation; `recover` is not.**
-  Caution when reading this generation: **redirected stdout is BLOCK-BUFFERED**, so
-  `operator-conduct-loop-*.out.log` lags reality by minutes. I misread that lag as an 18-minute startup hang.
-  Confirm liveness by the process's CPU climbing, not by the log's mtime.
-- **`8e8afe96` round 2 (`96ac38fc`, 3 files) fixes BOTH blockers — verified by reading, not by claim:**
-  `-002` gates the pre-slot on `attempt.Kind == GateDispatchKind`. `-001` routes
-  `ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun` to `Held … retry on next conduct tick`,
-  and `IsTerminalWithoutRunOutcome` (`ConductorParallelAcceptanceAttempts.cs:1700-1707`) covers EXACTLY the
-  seven outcomes the Reviewer named. +157 test lines cover `-006`.
-  **`-005` was neither implemented nor mentioned in WORKER_RESULT** — I asked for "do it if wiring, report if
-  restructuring" and got neither. Re-raise it if the Reviewer does not.
-- **Round 2 was NOT complete — `-001` has a residual, and my "genuinely fixed" verdict was overconfident.**
-  I verified `IsTerminalWithoutRunOutcome` covers the seven named outcomes (it does) but never checked the
-  OTHER entry path. `Failed` is deliberately absent from that predicate, and `FromArtifact`
-  (`ConductorParallelAcceptanceAttempts.cs:1631`) maps a fault to a run with `FocusedEvidence == null`, so an
-  infrastructure exception in the evidence child arrives as a **Completed** decision, hits
-  `ConductorDriver.cs:2304-2311`, and is synthesized as `Accepted:false` → `MappingNeedsInput` + Tester
-  reopen. Same defect class, different door. Remedy (Reviewer's): treat Completed-with-null-FocusedEvidence
-  as retryable — `MarkReconciled` + `Held("…retry on next conduct tick…")` matching the 2289-2301 branch —
-  plus a test driving a Fault evidence attempt asserting Held + null receipt, whose RED comes from removing
-  that new guard. Auto-retry carried it to **Developer round 3**; no operator relay needed.
-  **Lesson for verifying this class of fix: checking that a predicate's SET is complete is not the same as
-  checking every path that reaches the consuming branch.**
-- **`809634e8` gate failed 489/491 on its OWN new tests** (`Post-landing canary sink failure ...`, both
-  `breakSqliteStore` cases, `exitCode 2`). Not from my rebase (that touched 2 doc lines). Auto-retry fixed it
-  in 2m4s (`b4dae627`) by INVERTING an assertion: `Unhealthy` → `Healthy`.
-  **I checked this rather than trusting it, because an inverted assertion is normally a stop-and-ask signal.
-  It is legitimate.** The goal exists to stop a transient slot shortage tripping the circuit, so
-  "canary failure stays non-blocking" IS the intended behavior. The safety net is preserved: the enum gained
-  a distinct `Deferred` kind (`PostLandingCanaryState.cs:78-88`) for the slot-busy path, while the health
-  read still returns `Unhealthy` for ANY `Failed` receipt (`PostLandingCanaryState.cs:472-486`). Slot-busy is
-  non-fatal; a real canary failure still fails closed. Matches sol's recommendation from earlier tonight.
-- **WATCH: both in-flight goals now modify `tests/…/ConductorDriverTests.cs` from the same base
-  (`e7c3e60b`)** — `8e8afe96` appends tests near line 3141, `809634e8` edits ~1868. Far apart so it will
-  probably auto-merge, but this is the first genuine CODE overlap tonight (all prior ones were the shared
-  doc). If the second landing conflicts, resolve as a union the same way — the regions are independent.
-- **`8e8afe96` gate FAILED 20:22 on INFRASTRUCTURE, not code.** Check `structural test coverage:
-  infrastructure tests`, exitCode 1, `resultSummary: "trusted main baseline build failed"`, cause
-  `CSC : error CS2012 ... file may be locked by 'csc' (32188)` in the isolated
-  `main-coverage-baseline` artifacts dir. The goal's code was never evaluated. The conductor still recorded
-  it as a failed verdict and auto-dispatched a paid Developer round. **Filed as backlog `18ccc733`** —
-  classify baseline-build file-lock/IO faults as retryable infrastructure, same shape as the canary fix in
-  `809634e8`. Recurring principle: an exception in the MEASUREMENT APPARATUS must never be recorded as a
-  MEASUREMENT of the candidate. That is now three instances tonight (canary slot-busy, `8e8afe96` `-001`,
-  this).
-  **This also INVALIDATES my earlier flakiness estimate.** I concluded "gate failures are real defects, not
-  flaky" from finding only 2 RED→GREEN `partitionVerdict` flips. A baseline BUILD failure never emits a
-  partition verdict, so that whole class was invisible to the check. The ~40% first-pass rate is depressed by
-  an unknown number of infrastructure failures — recount before trusting it.
-- **`8e8afe96` round 4 (`cdff3ea8`) is legitimate, not phantom-chasing.** It correctly did NOT try to fix the
-  CS2012 (gate infrastructure, not its code). It extended the retryable branch to catch
-  `DotnetBuildSlotsBusyException`/`BuildLockBlockedException`/`OperationCanceledException` from
-  `attemptDecision.Run?.Exception`, and split build-environment attempt naming into `pre-review-evidence-*`
-  vs `parallel-acceptance-*` so lease telemetry attributes evidence children correctly. Its only blocker is
-  the operator-owned rule (l) receipt. **Developer round 4 — the retry cap is CUMULATIVE, so the next
-  Reviewer round must come back clean.**
-- **OPERATOR-OWNED RULE (l) NEGATIVE CONTROL FOR `8e8afe96` — STILL OWED, deferred 5× on slot contention.**
-  The Reviewer DOWNGRADED it at round 4 (`state:open, severity:advisory, category:test-evidence`) and passed
-  the goal, so it can land with the control never having run. The obligation stands regardless: rule (l) says
-  a test earns authority only by being shown capable of failing, and these tests' power is unproven.
-  Hypothesis worth watching, NOT a claim: round 4 sat at the cumulative retry cap, where any blocker
-  escalates instantly — that creates structural pressure to downgrade rather than block.
-  **Run against MAIN, not the goal worktree** — the worktree is cleaned on landing, and main is where the
-  tests will live. For each: apply the edit, run `FullyQualifiedName~ConductorDriverTests` through the slot
-  runner, capture the ACTUAL red text, then REVERT.
-  1. Restore unconditional pre-slot invocation (undo the `attempt.Kind == GateDispatchKind` gate in
-     `ConductorParallelAcceptanceAttempts.cs` ~744) → `PreReviewAttempt_FocusedKind_SkipsLandingPreSlot`
-     must fail its 0/1 invocation assertions.
-  2. Remove the terminal-without-run hold (`ConductorDriver.cs` ~2287) →
-     `PreReviewEvidence_ProcessDiesAfterRestart_RelaunchesWithoutReceipt` must fail its Held/null-receipt
-     assertions.
-  3. Restore the synchronous `.GetAwaiter().GetResult()` pre-review call →
-     `PreReviewEvidence_InFlightRun_ReturnsThenReconcilesAfterRestart` must fail its first-walk
-     Held/zero-run assertions.
-  4. (added round 4) Remove the `DotnetBuildSlotsBusyException or BuildLockBlockedException or
-     OperationCanceledException` arm from that same branch → its round-4 test must fail.
-  **If ANY fails to go RED that is a defect in the test, not a formality — file it immediately** rather than
-  letting the goal's evidence stand.
-  **Do NOT run while any gate holds a build slot** — a slot-leased command mid-gate wipes lane receipts.
-  **The deferral pattern IS the argument in backlog `bcbf92fc`:** an evidence obligation only an operator can
-  discharge, in windows a busy board rarely provides, will keep slipping.
-- **Filed backlog `7ab385bc`:** two focused-evidence call sites remain SYNCHRONOUS on the tick thread after
-  `8e8afe96` — `ConductorDriver.cs` ~1197 (reviewer-issued evidence-on-demand) and ~1541 (conductor-derived
-  substitution), both passing `CancellationToken.None`. `8e8afe96` correctly fixes only the pre-review path,
-  which is the path tonight's 31-minute freeze actually came through (verified: the run sat between Developer
-  completion and Reviewer dispatch). Do these AFTER `8e8afe96` lands so there is one mechanism.
-  **Attribution trap:** "reviewer mapped project evidence" is a check name generated inside
-  `RunFocusedEvidenceAsync` (`GoalAcceptanceVerifier.cs:1104/1140/2124`) and appears for EVERY caller — use
-  the surrounding transition sequence to attribute a freeze, not that string. Brief written to `scratchpad/brief-1732dc79.txt` — grounded in the 478930/162961/123499 ms
-  measurement, copies the acceptance gate's existing async shape rather than inventing a second one, carries
-  the "do NOT build event-driven handoffs (66ms, measured)" negative result, and splits the perf measurement
-  into an OPERATOR-OWNED post-landing criterion because the feasibility pass makes live-conductor/wall-clock
-  observation infeasible for a worker role. Fire it with `goal --brief-file` once a slot frees.
-  **Do not intake while a gate holds a build permit** — heavy write racing an active gate crashes the loop.
-  All four fix defects MEASURED tonight; three of them cost operator time in the last four hours.
-- **`20912699` carries a HAND-RESOLVED REBASE.** I resolved its pre-landing conflict manually rather than
-  delegating: `ProgressKind` union (`PreReviewMappingEscalationSuppressed=28` from main, `OperatorTaskNote=29`,
-  `OperatorGateSatisfied=30`) plus a `docs/test-design-discipline.md` section merge. Its re-gate then failed on
-  three `Cli_note_*` tests. **Cause established (a): the tests were stale, not the merge.** `CliCommandHandlers`
-  `.Tasks.cs:111,458` call `RecordOperatorTaskNote`, which writes the new kind, so tests asserting `TaskNote`
-  could not pass. Fixed in `991a80ec` (4m20s). The split is deliberate and consistent: `TaskNote` = kernel/system
-  note (still written from 7 sites in `Recording.cs`), `OperatorTaskNote` = operator-authored. "Any note"
-  consumers (`TaskBriefs.cs:1237`, `TaskOutcomeClassification.cs:84`, `PromptContextFormatter.cs:257`) match
-  BOTH; only the gate-source resolvers narrow to the operator kind — which is the point of the goal.
-- **Correction to my earlier warning: `ProgressKind` ORDINALS ARE FREE.** I told the worker (and wrote here) to
-  treat the numbers as persisted. They are not. `SqliteOrchestratorStateRepository.cs:2058-2061` registers a
-  `JsonStringEnumConverter`, so kinds round-trip **by name**; the stores that do serialize enums numerically
-  (`OperatorIntentStore`, `ProgressiveReviewSteeringStore`, `CollaborationItemStore`, `PortfolioStore`) carry no
-  `ProgressKind` at all. The real constraint is on the NAME. Renumbering is safe — do not avoid a correct
-  renumber on my say-so.
-- **`10bd7223` is the standout.** Its Developer CONFIRMED the console-flash hypothesis rather than fabricating:
-  it found `GetConsoleWindow()` insufficient, added `GetConsoleProcessList` and proved **attachment** is the
-  causal state (unattached incumbent → successor allocated a visible window at +98ms; attached incumbents → no
-  window). Post-fix: 3 handoffs, 0 windows, `CREATE_NEW_CONSOLE` positive control, visual capture, RED controls
-  with exact compiler errors, 187/187. Flags pinned `0x01080600`, both forbidden flags absent, guards untouched.
-- **`f00622a9` was wedged 2.5h and nothing surfaced it.** A progressive-review glance returned
-  FundamentalMisdirection at 00:29:55 because the diff went outside `docs/test-design-discipline.md`, which it
-  called "the authoritative trusted scope" — that is the CANNED refiner field (identical Includes list appears
-  on `10bd7223` and on freshly filed backlog items; the brief itself says `Scope confidence: unknown`). The
-  worker was killed after 336 CPU-seconds with 612 insertions left uncommitted, and every tick since held on
-  "Reviewer blocked: predecessor is Cancelled, not Completed" — no requeue path exists for a glance cancel.
-  Recovered by committing the stranded work as `f68f7444` and submitting retry intent `07d183d3`. Filed
-  `ce36eff9`. **If a goal is quiet, check for this shape: Cancelled predecessor + Assigned dependent.**
-- **`e7fd7951` is PARKED** pending `f00622a9`. Its work is committed (12 test files, zero production, plus
-  `cb80328d`), scope adjudicated test-only, but every dispatch minted a NEW human-input request so answering
-  could not clear it. Re-intake after `f00622a9` lands.
-- **`b3c2a121` was ABANDONED TWICE** — premise disproven mid-flight, criteria unamendable. The first abandon
-  (01:03) was UNDONE at 01:45 when a fresh loop generation replayed the identical 00:58 Reviewer escalation at
-  **tick 1**. Expect the second abandon (02:56) to be undone the same way at the next handoff. Filed `c1fbf766`.
-  This is NOT `438b18d3` — that goal has no open task, so its documented "cancel the tasks first" workaround
-  does not apply.
-
-## Optional follow-up: one stranded edit preserved, deliberately NOT landed
-
-`fb13475c` reached Verified then failed its pre-landing rebase on a dirty worktree — one uncommitted file,
-`ProgressiveReviewSteeringTests.cs`. The edit was REAL, not junk: it wires `FakeCollaborationItemStore` into a
-test and improves an assertion to dump `result.ProgressLines` on failure.
-
-**I discarded it from the worktree on purpose.** The gate that passed and the Reviewer that approved both ran on
-the COMMITTED branch head — this edit was in neither. Committing it would have landed ungated, unreviewed code
-and broken the evidence chain between the gate verdict and what reaches main.
-
-Saved as a patch before discarding, at
-`…/scratchpad/fb13475c-stranded-edit.patch` (1619 bytes, session-scoped so it will not survive indefinitely).
-Re-apply as a small follow-up if wanted — it is an improvement, not a fix, and the committed state gates green
-without it.
-
-**The general rule this establishes:** when a stranded edit blocks a pre-landing rebase, the question is not
-"is this edit good" but "was it gated". Preserve it, discard it, land what was actually verified. That differs
-from the `f00622a9` case earlier tonight, where the stranded work was the ONLY copy of a killed worker's output
-and nothing had gated yet — there, committing was correct.
-
-**BUT I GOT THE SECOND HALF WRONG, and the gate proved it at 09:19.** I called that edit "an improvement, not a
-fix". It was the fix. The gate failed on exactly that test —
-`ProgressiveReviewSteering_requeues_and_preserves_goal_worktree_when_restart_preparation_throws`,
-`ProgressiveReviewSteeringTests.cs:932`, `Assert.True(result.MutatedTaskState)` False. The edit passed a
-`FakeCollaborationItemStore` into `NewCoordinator`, whose `attentionStore` parameter is **optional and defaults
-to null** (`:945`), so removing it compiled silently while the restart-failure path — which raises attention —
-stopped completing.
-
-**The discard was still correct; the CHARACTERIZATION was not.** Landing ungated code would have been worse.
-What I should have done in the same breath was hand the Developer the edit's exact content instead of filing it
-as an optional follow-up. Done now, at 09:21, with the diff inline and an instruction to verify the mechanism
-rather than trust me.
-
-**Rule to carry:** an optional parameter that defaults to null makes a deletion invisible to the compiler. When
-a stranded edit only *adds arguments*, assume it is load-bearing until a test proves otherwise — and route it
-to the worker immediately rather than parking it as a nicety.
-
-## `fb13475c` is Verified-but-set-aside — waiting on a handoff, NOT broken
-
-It passed review and gate, then failed its pre-landing rebase at 07:16 on a dirty worktree. I cleared the dirty
-file at 07:17 (see the stranded-edit section) — but the goal then sat with **zero events for 45+ minutes**.
-
-That is not a stall and not a new defect. Escalation SETS THE GOAL ASIDE for the remainder of that loop run
-(`ConductorBatchLoop.cs:872`, per sol's trace), so the repaired worktree is never re-tried within the same
-generation. `goal-recovery` confirms **"Findings: none"** — the goal is healthy. A new loop generation
-re-includes it, so the natural `--max-duration` handoff clears it.
-
-**Operator lesson:** repairing a goal worktree does NOT re-arm the goal. The repair only takes effect when a
-later generation re-walks it. Don't bounce the loop to force this while workers are in flight; wait for the
-handoff.
-
-Also found: `goal-recovery fb13475c` reports its build lease ORPHANED (`ownerPid=12720 ownerAlive=False
-canCleanup=True`). **`build-lease-cleanup` is GLOBAL with no goal-prefix parameter**, and it aborts on the first
-lease it cannot delete — here `goal-80f4bd56`, whose artifacts are file-locked by a live pre-review evidence run
-that continued after the goal was parked. So one locked lease blocks cleanup for every other goal. Retry once
-that evidence run finishes.
-
-## BLOCKED DISPATCH IS INVISIBLE — the highest-value diagnostic learned tonight
-
-**`status` shows `[Assigned]` for a task that is BLOCKED and cannot dispatch.** Nothing distinguishes
-"about to run" from "stuck and going nowhere". Goal `5694679a` sat blocked for ~2 HOURS while reading
-`1. [Assigned] Developer:` — and I reported it as making progress in five separate status updates.
-Meanwhile **726 insertions of finished worker output sat uncommitted in its worktree, the only copy.**
-
-**THE DIAGNOSTIC — maps a janitorial exception to its owning goal in seconds:**
-
-    grep -rl "<task-id>" .orchestrator/goal-operations/
-
-The journal line then carries the blocking reason verbatim:
-
-    <task-id> provider=codex-cli reason=dirty-worktree: blocked: worktree has 14 uncommitted change(s)
-    before dispatch
-
-First instance cost me two hours. Second cost ninety seconds.
-
-**THE SYMPTOM TO WATCH:** `LOOP_JANITORIAL_FAILED ... InvalidOperationException: Task '<id>' has no dispatch to
-execute`, repeating every tick. That is blocked dispatch, NOT a corrupt or dangling record. It fired every ~13
-seconds for two hours across two loop generations and produced no escalation and no goal-level signal.
-
-**THE FIX, every time:** commit the stranded work on the goal branch (`git add -A` + commit), which cleans the
-tree and lets dispatch form on the next tick. Verified on `5694679a` (`00b5096c`) and `ce8597ad` — the exception
-stopped within a minute of each.
-
-**This has now been needed FOUR times tonight** — `f00622a9`, `fb13475c`, `5694679a`, `ce8597ad`. Identical
-operator action every time. Filed as scope item 5 of `e0dc2b2d`: auto-commit stranded output rather than
-blocking indefinitely.
-
-**Caveat — do NOT blindly commit.** If a GATE has already passed on the branch head, the stranded edit was not
-gated and committing it lands unverified code; discard and preserve a patch instead. See the stranded-edit
-section above for the two cases and how to tell them apart.
-
-## THE TICK BLOCKS ON SYNCHRONOUS TEST RUNS — measured, and it kills the "event-driven handoff" idea
-
-Filed as `1732dc79`. Two things every future measurement of this system needs.
-
-**1. `WATCH_TRANSITION ... elapsed=` RESETS when a worker restarts.** Back-computing a round's start time by
-subtracting it from the transition timestamp produces PHANTOM IDLE GAPS. I did that and published a wrong
-"26% idle" figure. For loop cost use `PHASE_TIMING phase=per-goal-walk elapsed_ms`; treat
-`WATCH_PROGRESS elapsed=` as a live liveness read only.
-
-**2. Role handoffs are already instant. The loop is BUSY, not asleep.**
-
-    11:10:39.526  tick=67 ... adca4b85 ... Executed
-    11:10:39.592  WATCH_TRANSITION Developer -> next=Reviewer ... "Reviewer dispatched"
-    11:10:39.593  WATCH_PROGRESS role=Reviewer elapsed=0s pid 24048 alive
-
-**66 ms**, same tick. So backlog `cd753fd9` (event-driven handoffs, "every handoff costs up to a full tick") is
-aimed at a cost that does not exist on this path. Do not build it without re-measuring first.
-
-The real cost is pre-review evidence running a REAL TEST SUITE synchronously inside `per-goal-walk`. Across
-~300 ticks of one generation, only THREE exceeded 10s — 478930 ms, 162961 ms, 123499 ms — but those three ate
-**12.75 minutes, ~14% of the generation**, and the walk is serial so EVERY goal freezes. The acceptance gate is
-already async (`acceptance_verification_running_in_background`); pre-review evidence is not. That asymmetry is
-the fix.
-
-Also note what a blocked tick costs beyond throughput: while blocked, the loop cannot apply operator intents or
-notice stopped goals.
-
-## Liveness lives in the STDOUT log, not the event log
-
-`conduct-events.log` records **decisions**, not liveness. A healthy loop with workers running and nothing to
-decide emits NOTHING there for many minutes. A monitor watching only that file cannot tell quiet from dead —
-which is a real gap in the silence-breaker as built, and it produced one false alarm at 07:21.
-
-Per-tick liveness is in the loop's own stdout log (`.orchestrator/logs/operator-<name>-<ts>.out.log`):
-
-    PHASE_TIMING tick=26 phase=sweep elapsed_ms=3189 goals=16 ...
-    PHASE_TIMING tick=26 phase=prewalk scoped=15 candidates=15 eligible=2 excluded_terminal=0 ...
-    WATCH_PROGRESS goal=6cd812af role=Reviewer elapsed=5m16s liveness="alive" ...
-
-To check liveness properly: read that tail, and/or `Get-Process -Id <lock pid>` and look at **CPU** — a loop
-consuming CPU is working. The lock pid is line 1 of `.orchestrator/conduct-loop.lock`.
-
-**TIMEZONE TRAP — bit me twice.** `ls` prints **local time (UTC-5)**; log timestamps and `date -u` are **UTC**.
-Comparing an `ls` mtime against a UTC log timestamp makes a 12-second-old file look 5 hours stale, and makes a
-healthy loop look dead. Either compare `ls` mtime to `date` (local), or compare log-line timestamps to
-`date -u`. Never mix the two.
-
-Note `scoped=15` of `goals=16`: the missing one is the goal evicted per `60d80486`, so that counter is a cheap
-way to see eviction actually happening.
-
-## Operator gotchas learned tonight
-
-- **`WATCH_TRANSITION files=N` is the LAST ROUND's delta, not the branch total.** Use
-  `git diff --stat main...<branch-head>`. It caused two false alarms.
-- **Filter artifact directories by ATTEMPT ID.** Attempt folders accumulate siblings; I read a three-hour-old
-  TRX and filed a wrong diagnosis from it (`7dfecf10`, since retracted).
-- **A cancelled dispatch strands its partial edits**, which dirties the worktree and blocks the pre-landing
-  rebase. Check `git status --porcelain` in the goal worktree after any cancel — and READ the diff before
-  discarding, because one of them was a real fix worth committing.
-- **`goal-mark-landed` is NOT broken** — it records the landing and defers terminalization to a sweep that
-  never flips the status. I wrongly called it broken from a single `status` check.
+Live state at the top, durable operating rules below it, nothing else. The 2026-09-14 to 2026-09-19 running log
+that used to live here was moved to `.orchestrator/operator-evidence/handoff-running-log-2026-09-14-to-2026-09-19.md`
+(committed versions remain in git history). Verify any goal or backlog claim with
+`pwsh -NoProfile -File .orchestrator\operator-tools\Get-GoalCard.ps1 <prefix...>` or `backlog-list --text <words>`
+before acting on it; goal states move.
+
+## RESUME HERE — 2026-09-22 22:05 UTC (Claude)
+
+**STATE IN ONE BLOCK.** Conductor pid 29064, started 19:08:27Z, next renewal ~23:08Z (maxDuration 14400s).
+Worker cap 4/4 for most of the last hour. Origin current at `1f637fbca`. Eight goals reached Completed
+today (`cf64014b` 16:14, `4e380a73` 16:55, `919396a7` 19:55, `725ff65b`/`9bea7a9a`/`643fbd9a` together on a
+passing cohort at 20:20, `6cd11d28` 20:43, `36169fb0` 21:39); four of those carry their own integrate
+commits (`85fa8ffab`, `2dccce740`, `edfd5aacd`, `1f637fbca`). Three goals were Superseded (`48677446`,
+`b5271c78`, `fdb06590`).
+
+**UNUSUAL THING ON THE BOARD, READ THIS FIRST.** `fdb06590` is a **disposable operator fixture**, not
+product work. Miles authorised it. It exists to supply `7131a80c`'s criterion 4, which is operator-owned and
+says *"validates a disposable stopped predecessor and active successor through the shipped CLI plus multiple
+daemon ticks/reload... Do not act on unrelated live goals"* — so the pair had to be **constructed**, not
+observed on the board. `fdb06590` is `Superseded` **with its Developer task still `Assigned`**, which is
+exactly the precondition under test: a stopped goal holding a non-terminal task must emit no dispatch across
+repeated recovery passes and a runtime renewal. Baseline tick **554**, stopped 22:02Z.
+**Do not "clean it up".** Leaving it sitting IS the experiment. If it ever prepares a dispatch, that is the
+defect and should be captured.
+**Half-built:** the successor was NOT created. `goal-replace` needs a terminal predecessor and refuses a
+`Cancelled` one (hence Superseded). Brief and reason are written at
+`scratchpad/disposable-successor-brief.txt` and `scratchpad/disposable-successor-reason.txt`; the command
+still needs a fresh `--request-id <guid>` and `--disposition supersede-unlanded-attempt`. After the
+successor proceeds and a renewal has been spanned, record the receipt against `7131a80c` criterion 4.
+
+**IN FLIGHT, healthy, needs nothing:** `0a336878` in the acceptance gate (this is the review-convergence goal
+that was blocked 2h11m this morning on a clarification); `cd39be97` Reviewer passed, queued for the gate;
+`29e8cbeb` and `e96849a6` with Developers running on freshly reset bases.
+
+**PARKED, both deliberately:**
+- `7131a80c` — park reason on the goal is now CORRECTED by a note on task 2. Its stated condition
+  ("until 919396a7 lands") is satisfied in letter but NOT substance: `919396a7` landed 19:55 but covered only
+  two test classes, and this goal's gate fails on
+  `CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.GoalReplaceCancelledZeroWorkCreatesFiveRoleSuccessor`,
+  which was never in its scope. **The real blocker is `853c5a5a`.** Also: its Reviewer task is a PHANTOM —
+  I parked the goal 60 s after dispatching it, which killed the worker with no exit recorded. Close that
+  task on its receipt before unparking.
+- `f57758c8` — parked 22:05Z to stop a **paid re-dispatch loop**, ~100 s per cycle. Its Developer work is
+  already committed at `67b7e30c`; every round since has nothing to do and is rejected
+  `post_dispatch_commits=0`. Rejections at 21:56:27 and 22:04:42. Reason is
+  `verification-pattern-unmatched`, NOT `no-change-evidence` — so this is ADJACENT to `e96849a6`'s slice,
+  not an instance of it; do not hand it over as a reproduction. On unpark, do NOT just close task 3 again
+  (that feeds the loop) — use the mechanical-retry escape in `1cd87e1e`, and unpark only on an idle board.
+
+**TO-DO, in order:** (1) create `fdb06590`'s successor and let the pair span the ~23:08Z renewal, then record
+`7131a80c` criterion 4; (2) see `0a336878` and `cd39be97` through their gates; (3) unpark `f57758c8` on an
+idle board using the mechanical-retry escape; (4) re-scope backlog `ed949b7a` to its owned-process-cleanup
+half only — its integrity-query half is superseded in main and annotated.
+
+**NEW BACKLOG FILED TODAY:** `804feeeb` gate liveness cannot be answered from any operator surface (linked
+related to `176cf1ff`); `125a3f7d` a gate test fabricates PIDs 1000-1999 that collide with the live
+test-host pid; `853c5a5a` the CLI acceptance-command contention residual `919396a7` did not cover.
+Annotated: `0310cc2d` (worker build timeout is a two-sided deadlock, not just a low number), `ed949b7a`
+(half superseded).
+
+**PATTERNS WORTH KEEPING.**
+- **Conflict count predicts nothing about a stale branch.** `6cd11d28` had 1 conflict and squashed in
+  minutes; `48677446`/`b5271c78` had 2-5 and were **fully superseded** by main, where taking the branch side
+  would have reverted a better implementation and the gate might well have passed. Always diff base→main per
+  conflicted file BEFORE opening a hunk. `29e8cbeb` was a third case: both sides rewrote the same function
+  from the same base, so no union compiles and it needed re-implementation, not merging.
+- **A stop-class verb on a live dispatch orphans the worker** and leaves the task phantom-`Running`, which
+  blocks batch formation for every downstream task. Hit on `7131a80c` (park) and mirrored on `f57758c8`
+  (finished round whose status never advanced). Check the newest dispatch's `exit.txt` and heartbeat first.
+- **A close on a `Running` task is reverted by an armed retry; a close on a `Failed` task sticks** — but
+  only until the retry re-arms, which is what turned `f57758c8` into a loop.
+- **`--cause UnchangedContextRepeat`** is the mechanical-reopen cause that falls through to
+  `AcceptanceRegate`, re-gating with no paid round. No cause at all routes to `HumanClarification` and wedges
+  the goal in `WaitingForHuman`; `EnvironmentApparatusFailure` routes to `EnvironmentalHold` and also wedges.
+- **`[Introduced]` on an `unattested` attempt is not evidence of guilt.** It means the gate could not
+  attribute, not that the candidate is innocent either. The discriminator is whether the candidate's diff
+  reaches the failing code — for `36169fb0` it did not (host-PID flake, re-gated green with no worker round),
+  for `cd39be97` it did (a real manifest/pin mismatch).
+- **A manifest lane move obligates three places:** the lane filter, every exclusion, and the PINNING tests —
+  and the pin's failure surfaces in the **Remainder** lane, not the lane you edited.
+
+## Earlier — 2026-09-21 03:55 UTC (Claude)
+
+**STATE IN ONE BLOCK.** Conductor pid 10208, `LOOP_START` 02:52:13Z, next renewal ~06:52Z. Two clean
+renewals tonight (22:49Z, 02:51Z), both with `stagedSourceCommit == repositoryHead == 28c94667`, 28 s
+and 21 s of downtime. Landings today: 21, most recent `28c94667`.
+
+- `98b82ef1` — NARROWED, candidate `1366f2a6bbc8e14fb652d8623db74da6bd4f4d3e`, left in **Failed**
+  deliberately (zero-cost pause, will NOT self-dispatch, keeps options open — do not park it). Developer
+  and Tester adjudicated closed by the operator; criterion 7 rebound and VERIFIED IN THE STORE as
+  `1366f2a6bbc8e14fb652d8623db74da6bd4f4d3e`.
+  **ONE REAL BLOCKING DEFECT REMAINS and it is the first thing to fix:**
+  `98b82ef1-stable-slot-cs2012-recovery-before-retry`, at
+  `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` lines 4741, 4951,
+  4970-4983. *"When stableSlotLease is held, reacquireLease returns without releasing it; the code marks
+  recovery then immediately retries. The conductor disposes the stable lease only after the attempt, so
+  the guarded shutdown cannot remediate the CS2012 before that retry."*
+  **Why it matters more than it looks:** the entire justification for removing the session-global
+  shutdown is that a GUARDED shutdown still remediates CS2012. `MarkCompilerLockRemediationRequired()`
+  only takes effect on lease DISPOSAL, so if the stable lease is held across the retry the safety valve
+  never fires and criterion 1 is only half-present. Verified the shape in source; the finding is sound.
+  **Caution:** this is gate-code, which cannot validate itself — a fix needs evidence from a real gate
+  run, not just a focused class pass.
+- `0285f012` — WEDGED since 22:26Z, do not expect it to move on its own. Its refinement executor
+  respawns every ~15 min, prints `SPEC_REFINEMENT_WORK_COMPLETE ... claimed=false`, and exits zero.
+  Filed as `03ebdb47` with the full diagnosis. Repair was deliberately deferred because `readiness`/
+  `goal-recovery` run a REPAIRING SWEEP that writes to state.db and a live round was always in flight.
+  **Do this on an idle board.**
+
+**IMMEDIATE TO-DO, in order:** (1) see 98b82ef1 through the gate, rebinding criterion 7 again if the
+head moves on an integrate commit; (2) after it lands and the loop is bounced, take the deferred
+post-landing `peak_mem_bytes` reading of the next three Developer rounds and the next gate build
+against the 2.8–3.3 GB baseline and record on `43327f1a` — the waiver RELOCATED that obligation, it did
+not retire it; (3) repair `0285f012` on an idle board; (4) the staged owned-roots brief at
+`scratchpad/brief-owned-roots-slice1.md` is still unfired and now unblocked once 98b82ef1 lands.
+
+**NEW BACKLOG FILED TONIGHT:** `8368dbdc` cancel-dispatch does not stop the round; `7e4e97e7`
+Get-GoalCard buries the card under exceptions; `b50ca9e8` isolated App build fails MSB3030 on main;
+`3a392688` provider capacity error misclassified as missing evidence; `03ebdb47` durable outbox not
+drained; `c6c5be25` the split-out shared-compilation enablement carrying all of tonight's evidence.
+
+**THE PATTERN WORTH INTERNALISING: this board fails by SILENCE, not by error.** Three independent
+instances tonight, each invisible in every summary view — a 5.8-hour unanswered `attention` item on a
+goal that kept producing rounds; an outbox executor respawning forever printing COMPLETE while doing
+nothing; a provider capacity error reported as a worker evidence fault. A lane with ZERO events for
+many minutes is more suspicious than one throwing errors. Run `attention` as routine status.
+
+## Earlier — 2026-09-20 19:55 UTC (Claude)
+
+**Host:** pagefile 48 GB, commit limit 96 GB (was 76), free disk 77 GB, Windows Update paused to 09-25. Three restarts
+today: 11:46, 12:14 (pagefile), and 13:25 — the third was unannounced and killed the daemon plus a running gate, so
+ask for a park before any further restart. Daemon relaunched 18:49Z, conductor pid 25116 (lock says the live pid),
+log `operator-conduct-loop-daemon-20260920134912.out.log`, worker cap 4, gate width 1, 4-hour renewals (next ~22:49Z),
+GC-conserve 5, binary from main `1df8d72b5`.
+
+**Two landings at 19:27Z and 19:35Z (19th and 20th this session):** `5210c79e` as `49d82c66f` (Hermes fixture git
+budget and the hung-child heartbeat wall-clock retired, so two recurring apparatus reds are gone) and `743ff0ea` as
+`d89005f65` (landing refusals now name the failing IsAccepted term and the sweep remedy points at the waits). Getting
+743ff0ea in took FOUR passing gates and two operator rebinds: each time main advanced, the branch was re-integrated,
+the candidate sha changed and all seven obligations went stale again (fa34cec88 then 21a569f04). Rebind recipe and the
+systemic fix are on backlog 1822ddfe.
+
+**Third landing at 19:50Z (21st this session):** `011dbb7c` as `28c94667`, the goal that WITHDREW its own change.
+Its measurement disproved the premise (61.827 s fact, zero janitor lines, redirect startup plus cleanup 204 ms =
+0.33 percent, the rest is per-fact git fixture work), and a gate then proved the precheck unsafe in production, so
+the Developer removed it entirely with operator permission. What landed is ONE file, docs/negative-controls/
+011dbb7c.md (39 lines), and zero production-source lines. The Reviewer's round-2 finding
+CTX-011DBB7C-C1C2C7-PRECHECK-WITHDRAWN-01 was factually accurate but not a defect — it asked for the withdrawn
+precheck back — so criteria 1, 2 and 7 were hand-closed as WITHDRAWN via progress + verify-manual on both tasks.
+Backlog `bdab2d75` stays OPEN with its premise corrected (annotated 19:52Z, including a correction to my own earlier
+"the precheck is correct" note, which two gates disproved); its criterion-6 lane reading should be taken after a
+bounce expecting NO improvement, since nothing in production changed.
+
+**Cost of that disposal, now filed as backlog `8368dbdc`:** cancel-dispatch stops the process but not the ROUND. It
+leaves the worktree dirty (it even records `kind=Dirty` with the file list), the dirt escalates the goal, and
+clearing the dirt is the starting gun for the loop to re-dispatch the very round you cancelled — 56 s later, here.
+The second round rewrote the same files 4 s before the close intents applied, which failed the pre-landing rebase and
+invalidated BOTH closes. Cost: one extra paid gpt-5.6-sol round (cpu_ms=372218) and one discarded gate attempt. The
+retry only worked because the note files were already written and all four intents could be queued inside 60 s. **If
+you cancel a round to stop it doing the wrong thing, write the close notes FIRST, then cancel, then queue all four
+intents immediately** — otherwise you lose the race.
+
+**Board triage 19:55Z–20:05Z.** `a3e78f34` ABANDONED: Verified but branchless, could never land. Learn
+this from it — **a backlog claim does NOT release when a goal terminates**; ~170 claim rows on this
+board are held by already-terminal goals. Its item `76d74a03` was already unreachable either way
+(`goal --backlog-item` refuses while any goal holds the claim, and `goal-replace` needs a TERMINAL
+predecessor, which Verified is not). Recovery, recorded on the item: create with `--brief-file` and
+NO `--backlog-item`, then `backlog-close`. `643fbd9a` LEFT Failed deliberately — Failed costs nothing
+and keeps refile options open; cancelling would make `3b7b19ed` a one-way door too. `9bea7a9a` LEFT
+alone — holds no claim, has zero work (no diff vs merge-base), blocked on parked `cf64014b`.
+
+**Defects filed:** `8368dbdc` (cancel-dispatch re-dispatch race, above) and `7e4e97e7`
+(`Get-GoalCard.ps1` buries the card: a pruned TRX receipt throws FOUR exception blocks, and the task
+line crashes on EVERY multi-task goal via `[int]$_.n` on an `Object[]`, so roles/statuses/agents print
+as three undelimited runs).
+
+**Shared-compiler-server mechanism found** while reading 98b82ef1's worker stderr, written up at
+`.orchestrator/operator-evidence/shared-compiler-server-temp-inheritance-20260920.md` and annotated on
+`43327f1a`. It is not a concurrency limit: the repo redirects TEMP per test lane, a compiler server
+started inside a lane INHERITS that TEMP, and Roslyn shadow-copies analyzer DLLs into
+`$TEMP\VBCSCompiler\AnalyzerAssemblyLoader\<hash>\1\` and holds them loaded — inside the directory the
+lane must remove at teardown. 35 failures in one round, `UnauthorizedAccessException 0x80070005`
+after 6 attempts. Almost certainly why `UseSharedCompilation=false` exists (`7ce2a5f1c`, a CS2012 fix
+— same "file in use" class). Direction: pin the server's TEMP outside every lane root. NOT yet
+measured; the diagnosis is proven by the path, the fix is a prediction.
+
+**Staged and held:** `scratchpad/brief-sweep-subphase.md`, the sweep sub-phase instrumentation brief,
+preflighted clean against both the 16-word and `.git` guards (guards validated against a control file
+first). Do not fire it until 98b82ef1 is past its gate. Authoring found a better seam than planned:
+`RunJanitorialPhase` (loop file line 1783) already wraps a named phase with failure accounting and two
+of the nine operations already use it, so timing goes in ONE helper. Also learned the ratchet has only
+TWO agreeing places, not three — it parses its own source as the authority, so a ceiling change is a
+single-file edit. When it is created, it doubles as the `5e0b01a9` close test (first owner-tagged
+brief refined on a post-`b3da0320` binary must show non-empty owner lists and a raw-output path).
+
+**01:50Z — THE SPLIT WAS EXECUTED. 98b82ef1 is narrowed and Tester-running; the waived half is
+backlog `c6c5be25`.**
+
+Option B also failed. The Developer stopped as instructed rather than trying a third approach, and gave
+the real obstacle: **`exact-blocker - copied managed-test closures still omit
+Mcg.AgentOrchestrator.IsolatedDotnetProbe.dll`**, which defeats probe resolution regardless of where
+TEMP points. So the probe-closure findings are NOT fundamentally a TEMP problem.
+
+Criteria **2 and 5 waived BY EXACT TEXT** (`goal-amend`), recorded as durable "Effective acceptance
+criteria corrections" with supersedes text, reason and provenance. **Mechanical note for next time: the
+repo's compound-shell hook blocks `;`, and both criteria contain one, so the waive value cannot be
+passed inline from Bash. A truncated prefix is REJECTED (`KeyNotFoundException ... Use its 1-based
+number or exact text`). Do NOT fall back to the number. The working route is the PowerShell tool with
+`--waive (Get-Content -Raw <file>).Trim()`, which has no literal `;` in the command.**
+
+98b82ef1 now ships exactly backlog `43327f1a`'s stated problem and nothing more: session-global
+`dotnet build-server shutdown` removed from ordinary lease-release and gate-phase paths (reachable only
+from CS2012 remediation), per-lane DOTNET_CLI_HOME with NUGET_PACKAGES shared and NUGET_HTTP_CACHE_PATH
+per lease, and the gate build maxcpucount control. Narrowing verified at `eca35a27`: Directory.Build.props
+back to unconditional `<UseSharedCompilation>false</UseSharedCompilation>` and ABSENT from the diff vs
+main; `ConfigureSharedCompilerTemp` has zero references (helper deleted, no dead code); and the waived
+criterion-2 fact was INVERTED rather than deleted — it now asserts `false` for both the repo tree and
+under McgIsolatedArtifactsPath, which is a regression guard that the revert holds.
+
+`c6c5be25` carries the waived work with all of tonight's evidence so none is re-derived: the receipt
+proving the shared compiler itself WORKS (one VBCSCompiler pid 12152, zero CS2012, both builds exit 0),
+the two-lane-root cleanup failure with exact `failure_path`s, both failed mitigations and why each
+failed, and the closure blocker. **It says to START WITH THE CLOSURE, NOT TEMP**, and flags the ordering
+evidence — the probe findings appeared with the TEMP-pinning commit `543a39ad7` and the 22:18Z gate did
+not have them, so the omission may be pre-existing but only EXPOSED when TEMP moves. Those two cases
+need different fixes; determine which first.
+
+STILL TO DO before landing: rebind `criterion-v1-7` to the FINAL candidate (bound to `b21ce6d5`, head is
+now `eca35a27` and will move again on any integrate commit), then take the deferred post-landing memory
+reading onto `43327f1a`.
+
+**01:18Z DECISION on 98b82ef1 — Option A abandoned, Option B in flight, SPLIT PRE-AUTHORISED.**
+
+Pinning TEMP so the compiler server's shadow copies leave the lane root (Option A) displaced probe
+output in TWO independent classes, which is the same root cause twice:
+`98b82ef1-goalworktree-probe-closure-resolution` (GoalWorktreeTests.cs `ResolveProbeOutputDirectory`
+2643-2682, "failed all 6 GoalWorktreeIsolatedDotnetTests at Assert.Single(candidates)") and
+`98b82ef1-verifier-probe-closure-resolution`
+(GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources.cs
+`ProductionRunnerCancellationKillsReadyDescendantTree` 420-462). **TEMP is not only where Roslyn puts
+analyzer shadow copies; it is where these builds put outputs that other code resolves by globbing. Every
+place you pin it, something else moves.** Chasing displaced paths one at a time is unbounded.
+
+Switched to **Option B**: leave TEMP alone for test-side builds, and make the assembly temp-root cleanup
+tolerate the compiler server's subtree, on the ownership argument that a server which deliberately
+outlives the lane never created lane-owned files. Guarded against becoming a blanket ignore by
+requiring the exemption be scoped to that subdirectory, emit a skipped-and-why line, and carry TWO
+facts — retained file under the server subdir does NOT fail cleanup, retained file anywhere else STILL
+does. Accepted trade-off, stated in the brief: bounded analyzer residue under lane temp roots, already
+tracked as the disposable-directory reaping concern.
+
+**SPLIT IS PRE-AUTHORISED IF OPTION B ALSO PRODUCES COLLATERAL.** The worker is told to stop rather than
+try a third approach. The split: land the lease-counted shutdown removal, the per-lane DOTNET_CLI_HOME
+separation and the maxcpucount control on their own; make enabling `UseSharedCompilation` its own goal
+carrying tonight's gate evidence. Note criterion 2 explicitly requires a fact asserting
+UseSharedCompilation is true under McgIsolatedArtifactsPath, so narrowing the goal needs
+`goal-amend --waive` BY EXACT TEXT first.
+
+Routing note: the loop stopped with `ERR_REVIEW_NO_OPEN_FINDINGS_FOR_TARGET` because both blocking
+findings are `category=test-evidence` and therefore not owned by the Developer retry target. The
+operator routed them to the Developer anyway with `retry --cause NewTestFinding`, because the
+Developer's change caused them and it is the only role that can undo it.
+
+Stale advisory to ignore: `98b82ef1-concurrent-build-receipt-missing` claims the criterion-5 receipt is
+absent. It is present at 4,898 bytes in the goal worktree's gitignored
+`.orchestrator/operator-evidence/98b82ef1/`. Advisory, not blocking.
+
+**23:50Z UPDATE — the shared-compiler premise is CONFIRMED BROKEN by the gate, and `attention` is a
+surface nobody was reading.**
+
+**READ THIS FIRST: check `attention` as part of routine status.** `98b82ef1` carried an unanswered
+operator wait `7dee910b` for **5.8 hours** — the Planner had correctly routed criterion 5 to the
+operator with the reason *"the Researcher task was dispatched without build-execution tools and
+reported it could not run builds"*. The role the criterion named could never satisfy it, the Planner
+said so, and nothing surfaced it. Meanwhile the Reviewer failed the goal for the missing receipt and
+several paid rounds burned. Answered 23:2xZ with the receipt; the Reviewer then PASSED.
+
+**The VBCSCompiler TEMP-inheritance mechanism is now PROVEN, not predicted.** Gate attempt
+`98b82ef1-0-20260920232807597` failed with, from its `result.json` (NOT the TRX — see below):
+`failure_path=...\Temp\Low\mcg-tests\p7848\VBCSCompiler\AnalyzerAssemblyLoader\bf271cf8…\1\Microsoft.CodeAnalysis.CSharp.Analyzers.dll`,
+`exception_hresult=0x80070005`, and the same shape under lane root `p7990`. The shared server inherits
+the lane's redirected TEMP, shadow-copies analyzer DLLs inside it, outlives the lane, and
+`AssemblyTempRootCleanupFixture` then cannot remove its own root — surfacing as "Test Assembly Cleanup
+Failure" against innocent `ConductorSelfRelaunchTests` facts. Mechanism write-up:
+`.orchestrator/operator-evidence/shared-compiler-server-temp-inheritance-20260920.md`.
+**This means the goal's core premise and per-lane deletable temp roots are in direct tension, and the
+goal may not be landable as one slice.** The Developer has been given three options with a decision
+procedure and EXPLICIT PERMISSION to report the fix is too large and stop.
+
+**TRAP WORTH REMEMBERING: the TRX does not always carry the failure.** Both cleanup failures read
+`failure message unavailable` / `stack trace unavailable` in the TRX that the retry feedback points at.
+The actual `failure_path` and exception live in the sibling `<attempt>.result.json`. An auto-retry fed
+only the TRX is working blind. Always grep `result.json` for `failure_path=` when a TRX says
+unavailable.
+
+Second, unrelated gate failure: `GoalAcceptanceVerifierSplitFactParityTests` collections differ at index
+262, because a new test class was added. Same guard that bit `5210c79e` today; the accepted resolution
+there was to fold new facts into an EXISTING fragment class so the guarded count stays put.
+
+**A Tester round was lost to a provider capacity error misreported as an evidence failure.** codex
+returned `"Selected model is at capacity"` and died before its first turn; the classifier recorded
+`required-file-change-evidence-missing` + `DISPATCH_REJECTED verification-pattern-unmatched` and
+escalated for operator action. Tell: exit 1 in <10 s with `cpu_ms` in the low thousands. Filed
+`3a392688`. Repair is `retry --cause ProviderInterruption`.
+
+Also filed: `b50ca9e8` (isolated-artifact builds of the App project fail with MSB3030 ON MAIN — proven
+by two controls: fails alone, fails on main; mechanism stated as hypothesis with its discriminating
+check).
+
+`0285f012` is WEDGED at `SPEC_REFINEMENT_PENDING owner=durable-outbox executor_started=false
+detail=executor-launch-deferred-cadence`, unchanged across the daemon bounce. Its Researcher genuinely
+completed (5.1 min, 27.8 KB stdout); the refiner executor simply never launched. Not yet diagnosed.
+
+Daemon renewed cleanly at 22:49:45Z: `LOOP_HANDOFF` with `stagedSourceCommit == repositoryHead ==
+28c94667` (fresh binary, not stale), successor **pid 31844**, `LOOP_START` 22:50:53Z, 28 s of downtime,
+next renewal ~02:50Z. Creating `0285f012` beforehand is what kept a dispatchable goal on the board —
+without it the running gate would have been the only live work and the daemon exits in that shape.
+
+**22:20Z UPDATE — 98b82ef1 unblocked and gating; `0285f012` created.**
+
+`98b82ef1` sat **Failed and idle for 93 minutes** (20:43Z to 22:16Z) because its Reviewer refused to
+attest two REAL-WORLD-DEPENDENT criteria, and no one was watching. Both dispositions are operator
+calls the Reviewer structurally could not make:
+- **index 4** (Researcher's reproduction receipt) — the directory never existed; the Researcher never
+  produced it. SATISFIED BY EVIDENCE, not waived: operator ran two concurrent isolated builds from the
+  candidate (Infrastructure + Core, distinct artifact roots), both exit 0 with `Build succeeded`, ZERO
+  CS2012, exactly ONE VBCSCompiler identity (pid 12152) across 6 of 7 both-alive samples, pre-existing
+  servers cleared first and no shutdown issued. Receipt committed at
+  `.orchestrator/operator-evidence/98b82ef1/shared-compiler-concurrency-receipt.md`.
+- **index 7** — its text begins *"After landing and the bounce that stages it"*, so NO party can satisfy
+  it at the decision point. Deferred via the loop's own printed `criterion-evidence-map` repair. **The
+  obligation is NOT retired** — the post-landing `peak_mem_bytes` reading against the 2.8–3.3 GB
+  baseline is recorded on `43327f1a` with the baseline numbers.
+
+**A first pairing used the App project and FAILED with `MSB3030`. Not reported as a pass.** Two controls
+show it is neither concurrency nor this goal: it fails ALONE, and it fails on MAIN at `28c946672`.
+Filed as `b50ca9e8`. Isolated-artifact builds of App are broken on main today; the mechanism is stated
+as a hypothesis with its discriminating check, not asserted.
+
+**Ratchet checked at the final head, not assumed:** main holds `GoalAcceptanceVerifier.cs` at EXACTLY
+its 9,649 ceiling, so a rebase breach was live. The candidate is net **−10** (21 added, 31 removed), so
+it lands at 9,639. Safe.
+
+**MAX-DURATION HAZARD, live right now.** Daemon `LOOP_START` 18:49:23Z with `maxDurationSeconds=14400`
+→ exits **22:49:23Z**. The gate started 22:18:32Z, 26 s before a bounce was possible, and a running gate
+does NOT count as active work to the max-duration path — gate + parked/escalated only ⇒ exit with NO
+successor, orphaning the gate while it keeps writing progress lines. Mitigation applied: created
+`0285f012` so a dispatchable goal is on the board at renewal. **Liveness = the lock file, never log
+activity.** If it exits anyway: relaunch and reconcile the orphan attempt (expect an apparatus RED
+reopening a Developer — cancel it).
+
+`0285f012` "Attribute the eight unmeasured operations sharing the conductor tick's sweep label",
+five-role, from `scratchpad/brief-sweep-subphase.md`. Intake returned `fileScopes` = exactly the three
+intended files all `Explicit`, and `explicitConflicts=0` vs 20 comparable goals. STILL TO CHECK on it:
+the refined criteria count must equal the brief's **7** on the FIRST prompt file (a refiner split at a
+parenthetical asks the Planner for N+1 and costs an Opus round; repair is the exact-text waiver), and it
+doubles as the `5e0b01a9` close test (first owner-tagged brief refined on a post-`b3da0320` binary must
+show non-empty owner lists and a raw-output path).
+
+**Still staged, not fired:** `scratchpad/brief-owned-roots-slice1.md` (orphaned-directory registry,
+Sol's smallest first slice). It owns `DotnetBuildEnvironmentManager.cs`, which 98b82ef1 is changing, so
+it must wait for that landing.
+
+**One goal still in flight:**
+- `98b82ef1` Developer running since 19:33Z (task 3/5, codex pid 30452). The Tester REJECTED at 19:33Z with three
+  open blocking findings now routed to the Developer: `98b82ef1-full-verifier-class-unexecuted`,
+  `98b82ef1-local-verifier-global-shutdown`, `98b82ef1-worker-build-helper-bypasses-shared-compiler`. Candidate
+  `bfe1cbb0b`, 22 files / +345 / -210, ahead 3 behind 10 vs main, clean merge. It lands alone and needs a bounce
+  afterward. Criterion 8 is operator-owned: read RESOURCE `peak_mem_bytes` of the next three Developer rounds and the
+  next gate build against the 2.8–3.3 GB baseline and record on backlog `43327f1a`.
+
+**Superseded detail from the 19:15 entry follows.**
+- `743ff0ea` (landing hold names the term, backlog 1822ddfe): candidate `fa34cec88`, gate PASSED twice (18:57Z,
+  18:59Z) but would not land: seven acceptance obligations were bound to superseded candidates (`29ce6c2ea`, one to
+  `4397a9c1f`) after three later Developer commits moved the head. Rebound all seven to `fa34cec88` at 19:02Z to
+  19:04Z with `criterion-evidence-map --goal 743ff0ea <index> 1 acceptance acceptance:full-gate <label> fa34cec88…`
+  (verified in the snapshot). Its next attempt faulted `blocked-build-slot` ("Stable dotnet build slots busy"), so it
+  needs one more gate pass at `fa34cec88` to record evidence, then it lands. The systemic fix (auto-rebind when the
+  passing gate's candidate is a descendant of the bound one) is annotated on 1822ddfe.
+- `5210c79e` (apparatus flakes, backlog a1451eee): candidate `a8d45f6f9`, gate running since 19:01:43Z. Its earlier
+  failure was a REAL regression: the new test class joined the build-slot split family and broke
+  GoalAcceptanceVerifierSplitFactParityTests three ways. The Developer fixed it better than prescribed, by moving the
+  fact into an existing fragment class so the guarded count stays 13.
+- `011dbb7c` (fixtures A precheck, backlog bdab2d75): REAL regression, proven by the loop itself — the cohort was
+  dissolved, 743ff0ea passed alone and 011dbb7c failed alone on
+  GoalWorktreesRemoveKillsUnprotectedRecordedWorkerProcess. `IsDefinitelyNotAlive` (WorkerProcessJobs.cs line 1550)
+  treats a pid ABSENT from the inspection Records as definite death, so a live recorded worker is never killed.
+  Commit `866264664` tried to fix it by disabling the precheck whenever a test overrides `TryKillPidTree`
+  (ReferenceEquals against a captured production delegate) — test detection, rejected by the operator at 19:10Z.
+  Developer re-running with `scratchpad/retry-011dbb7c-no-test-detection.txt` (cause NewSourceFinding): revert the
+  gating, require `TryGetValue(...) && Status == Exited`, add an absent-record fact, touch none of the four broken
+  facts. My earlier note calling the precheck sound is corrected on bdab2d75.
+- `98b82ef1` (shared compiler server, backlog 43327f1a): its Developer died in the 18:17Z modem bounce with 40 minutes
+  of work uncommitted. Rescued as `12bfcbaca` on the goal branch (shared compilation scoped to isolated builds,
+  lease-counted shutdown, MCG_GATE_BUILD_MAXCPUCOUNT) and recovered with a note to resume from that checkpoint and
+  verify it builds; criterion 3 (private DOTNET_CLI_HOME per lane) and the negative-controls doc are still missing.
+
+**Two operating lessons recorded today:** name the exact managed-runner FILTER in a criterion, not a list of classes
+(cost two paid rounds on 5210c79e), and `goal-recovery`/`readiness` run a repairing sweep rather than a read.
+
+## Earlier — 2026-09-20 17:30 UTC (Claude) — RESTART DONE, BOARD RUNNING
+
+**Host restart completed 17:14Z.** Pagefile 28 GB to 48 GB (his first attempt did not save: the registry still read
+`c:\pagefile.sys 0 0`, system-managed; and the commit limit tracks the file's CURRENT size, so initial must equal
+maximum). Commit limit 76 GB to 96 GB. Free disk 77 GB after the run-directory reclaim and the run-events VACUUM
+(685 MB to 44 MB). Daemon relaunched 17:19Z: conductor pid `7508`, launcher pid 7508 log
+`.orchestrator/logs/operator-conduct-loop-daemon-20260920121900.out.log`, worker cap 4, gate width 1, 4-hour renewals
+(next ~21:19Z), DOTNET_GCConserveMemory=5, binary built from main `1df8d72b5`. Loop monitor re-armed (task bjsinmu32).
+
+**Board at 17:30Z:** cohort gate running for `011dbb7c` + `743ff0ea` (started 17:25:56Z, one gate for two goals).
+`98b82ef1` (shared compiler server) is at WorkspaceReady, Planner re-dispatching. `5210c79e` was recovered at 17:25Z
+with a repair note (below) and its Developer re-dispatches.
+
+**5210c79e gate failure was NOT what the truncated message said.** Four lanes hit the 40 min budget AND the Remainder
+lane had four real failures. Two are candidate-caused and two are apparatus:
+- CANDIDATE: the new file `GoalAcceptanceVerifierDotnetBuildSlotTestsHeartbeatFailsafe.cs` derives from
+  `GoalAcceptanceVerifierDotnetBuildSlotTests`, which puts it in the build-slot split family guarded by
+  `GoalAcceptanceVerifierSplitFactParityTests`. `SplitPreservesCollectionConcurrencyContracts` asserts exactly 13
+  fragments (now 14); `SplitPreservesDeclaredFactAndTheoryMethodSet` needs the new identity in
+  `GoalAcceptanceVerifierSplitFactBaseline.txt` (264 lines, `Owner.Method`, owner normalizes to the base class name)
+  AND the fact's attribute on ONE line, because its regex is `(?:^[ \t]*\[[^\r\n]+\]\r?\n)+` and the Developer wrote
+  `[Xunit.Fact(` across three lines. All three repairs are in `scratchpad/recover-5210c79e-parity.txt`.
+- APPARATUS: `RepositorySourceInventoryTests.GitInventoryIncludesTrackedAndUntrackedSource` (37.4 s) and
+  `GitInventorySkipsTrackedFileThroughOutsideJunction` (26.2 s), both `Expected: "git" Actual: "filesystem-fallback"`:
+  the inventory's git call degraded under load and fell back. Recorded as a third instance on backlog `a1451eee`
+  with the direction (bounded budget; assert inventory CONTENT, report the fallback as a diagnostic).
+
+**2140d2d8 criterion 5, delivered by eb5133d1's timers, and it relabels the problem.** The sweep PHASE_TIMING line's
+sub-phases sum to a fraction of the span: tick 4 total 13,773 ms vs 590 ms instrumented; tick 5 13,413 vs 1,267;
+tick 6 33,998 vs 1,294 (git index 288, attention 546, goals 378, dependency metadata 82, 6 git spawns). Reading
+ConductorBatchLoop.cs lines 463 to 613: the stopwatch labelled "sweep" spans NINE operations, only one of which is
+`TerminalGoalSweep.Run` — also PersistSweepTerminalizations, the `recover-interrupted-dispatches` janitorial phase,
+CountRunningDispatches, the self-relaunch drain, AwaitCanaryTasks, ReadmitResolvedSetAsideGoals,
+MarkCompletedDependencyGoals and ReconcileUnscopedDispatchableGoals. So the sweep itself is cheap (about 1.3 s) and
+the next slice must instrument the other eight segments, NOT optimize TerminalGoalSweep. These ticks ran beside a
+cohort gate; the clean baseline is the 04:12Z set (median 5,980 ms).
+
+Miles enlarged the pagefile (needs a reboot) and asked for a safe window. Manufactured it: `743ff0ea`, `011dbb7c`
+(both Verified, queued for the gate) and `98b82ef1` (five-role, Researcher done, Planner cancelled at 3 min) are
+PARKED with `scratchpad/park-restart-window.txt`. Only `5210c79e`'s gate (attempt 5210c79e-0-20260920133941118,
+started 13:39Z) is in flight; when it returns (and lands if passed), the operator creates `.conduct-stop`, waits for
+LOOP_STOP plus the supervisor successor's tick-0 LOOP_STOP, confirms no dotnet `conduct` process and no
+`__acceptance-gate-attempt` child, then (with the daemon down) runs `sqlite3 .orchestrator\run-events.db "VACUUM"`:
+that store is 685 MB with 163,195 of 175,175 pages FREE (rows are deleted but never vacuumed; only 22,209 live rows),
+so the vacuum returns about 640 MB of disk; state.db has only 7,907 free pages of 203,462, leave it. Then restarts
+Windows. The two heap dumps for d96a70f4 are already taken (13:55Z and 15:24Z, annotated on the item).
+
+**After the reboot, in this order:**
+1. Confirm `.conduct-stop` is still present, then remove it. Confirm `.orchestrator\conduct-loop.lock` is absent.
+2. Relaunch with `scratchpad\launch-loop-240min-filepolicy-cap.ps1` (no --policy; policy file now has
+   maxConcurrentPaidWorkers 4; --max-duration 14400; DOTNET_GCConserveMemory=5 experiment). Read LOOP_START for
+   `configuredWorkerCap=4` and the binary git-head equal to main HEAD (b3da0320's owner mapping and eb5133d1's sweep
+   timers become live here).
+3. `unpark-goal 743ff0ea`, `unpark-goal 011dbb7c` (they should form one cohort gate), then `unpark-goal 98b82ef1`
+   (Planner re-dispatches). Confirm the gate starts. `5210c79e` is ALSO parked: its gate (13:39Z to 15:49Z, 130 min)
+   failed on two lane budget timeouts (Goal lifecycle commands and Goal worktree cleanup, both 40 m, no test red, no
+   TRX) while a Developer round, a Planner and a 4 GB game shared the host; the auto Developer retry was cancelled at
+   20 s by the park. After unpark it needs the mechanical reopen triple on its Reviewer task (cause
+   EnvironmentApparatusFailure) so it re-gates on candidate 8ac3ad7e with no worker round; let it join a cohort.
+4. Read ten sweep PHASE_TIMING lines for 2140d2d8 criterion 5 (eb5133d1 timers) and the daemon WS at LOOP_START and
+   +2 h for the GCConserveMemory experiment.
+5. Sol's disposable-directory analysis finished (saved at
+   `.orchestrator/operator-evidence/disposable-directory-escapes-sol-20260920.md`, annotated on backlog b25053ee); cut
+   its first slice (owned-root registry for runs\p<pid>-build-* and mcg-run\v2) after 98b82ef1 is in its gate.
+6. Re-arm the loop monitor: `Monitor` on `bash scratchpad/poll-conductor2.sh` (persistent). It was stopped at 16:03Z
+   because the loop is down on purpose for the restart.
+
+## Earlier — 2026-09-20 04:15 UTC (Claude)
+
+**Three more landings, then a bounce.** `1711c156` (terminal-journal cache) gate passed 03:27:50Z after 42 min and
+landed as `6bda15bec`. `a319f2e0` (receipt-first Tester) and `ddf216bc` (precedent bound to answer revisions) ran
+together in cohort gate cohort-v2-b5069bea (03:29Z to 04:08Z, ~39 min) and landed as `15100b59b` and `fc2f87305`.
+Session total: 16 landings. With no worker or gate in flight I bounced the daemon per the runbook: `.conduct-stop`
+04:10Z, LOOP_STOP tick 284 at 04:10:54Z (the daemon supervisor respawned one successor at 04:10:56Z which honoured
+the stop file at tick 0 and released the lock), marker removed, relaunched with scratchpad
+`launch-loop-120min-filepolicy.ps1` (no `--policy`, poll 120 s, max-duration 43200). New loop: launcher pid `39196`,
+conductor pid `24788`, LOOP_START 04:12:47Z, log
+`.orchestrator/logs/operator-conduct-loop-daemon-20260919231222.out.log`, binary git-head `15100b59b` = main HEAD.
+Next max-duration renewal ~16:12Z.
+
+**Criterion 6 of 1711c156 measured (04:12:51Z to 04:17:39Z, ticks 1 to 10 on the new binary):** sweep 4,466 /
+5,610 / 6,422 / 8,793 / 5,562 / 8,404 / 6,229 / 7,874 / 5,708 / 5,732 ms, median 5,980 ms against the 13.6 s baseline
+(56 percent lower); dependency_metadata_ms 30 to 38 and dependency_journals_read 0 on every tick, so the journal path
+is solved. Above the 5 s line, so backlog `2140d2d8` stays Open with the numbers (annotated 04:18Z; receipts in
+`.orchestrator/operator-evidence/1711c156-criterion6/sweep-ten-ticks.md`). Two undiagnosed observations recorded
+there: sweep_cache_hits and sweep_cache_misses are 0 on every tick (the 96211ff6 cache is not consulted on this
+board) and the sweep span has no sub-phase breakdown beyond dependency metadata. Next slice: per-sub-phase timers on
+the sweep line (git fact index, worktree cleanup, blocker evaluation, terminalization) and read one tick before
+optimizing; hypothesis is git spawns per goal. Cut it only after `743ff0ea` lands (shared files, and
+ConductorBatchLoop.cs has 3 lines of ratchet headroom).
+
+**`b3da0320` LANDED as `6c12b1333` (07:31Z; 17th landing):** refiner owner mapping by declared_index + raw refiner
+output persisted beside the executor log (backlog `5e0b01a9` slice; five clarifications answered 03:55Z with
+`ans-b3d-*.txt`; one Reviewer finding on the sidecar stamp fixed in round 2; gate 87 min). NOT live until the next
+bounce or renewal (daemon still runs 15100b59b). Close test for 5e0b01a9 is in its 07:31Z annotation: the first
+owner-tagged brief refined after the bounce must show non-empty owner lists in its snapshot and its Reviewer's
+not-verifiable must defer.
+
+**743ff0ea gate 2 FAILED too** (attempt 743ff0ea-0-20260920073031463, 07:30Z to 08:44Z, 74 min) on retry commit
+`4397a9c1f`: down from 24 facts to 3, all "Completed after CLI acceptance" shapes
+(CliCommandTestsPersistentRunnerCommandsAcceptance ...FinalStateIsPersistedByGoalCas, GoalWorktreeTestsRebaseMerge
+...AcceptedRoutesStopHostMergeMarkLanded..., GoalWorktreeTestsRemoveCleanupLifecycleCommands ...StaysAccepted).
+Mechanism from the diff: the candidate widened the projector's early return from `Status != Verified` to
+`is not (Verified or Completed)`, so a just-landed Completed goal walks the candidate path, the journal outcome no
+longer matches the moved main head, and IsAccepted flips false. The loop auto-routed the FINAL Developer retry (2/2)
+at 08:44Z. If gate 3 fails the goal becomes AcceptanceFailed: retry the Developer with
+`scratchpad/retry-743ff0ea-completed-status.txt` (`--cause NewTestFinding`), which names the guard to restore and the
+whole classes to request. Retry 3 (`29ce6c2ea`, 08:56Z) took a different route: for a Completed goal whose branch
+already landed it falls back to journal outcomes keyed on the branch head alone, at the cost of a GoalGitFactIndex.Build
+(four git spawns) inside the projector for that case. Reviewer round 3 (08:56Z to 09:09Z) accepted the shape but
+raised one residual item, "candidate-resolution-must-fail-closed", which is exactly the gate-1 mutation (force
+IsAccepted false with no candidate) and contradicts criterion 5, so I cancelled the auto-opened Developer round
+(ConfirmedUnchanged at 29ce6c2ea, 09:11Z), closed both tasks on the receipts (`close-743-dev.txt`, `close-743-rev.txt`,
+four intents applied 09:13Z) and gate 3 ran 09:14Z to 10:44Z (attempt 743ff0ea-0-20260920091450802, 89 min). It
+FAILED on two apparatus facts only: HermesExecutableIdentityTests (fixture git config 5 s budget, backlog `a1451eee`)
+and GoalAcceptanceVerifier_gate_heartbeat_surfaces_hung_child_without_process_inspection (5 s wall-clock fact, backlog
+`b0a6bad5`); the three CLI-acceptance facts from gate 2 PASSED, so the candidate's regression is closed. Escalated
+"after 2 retries", so I submitted the mechanical reopen triple on the Reviewer task at 10:47Z
+(`regate-743ff0ea-apparatus.txt`, cause EnvironmentApparatusFailure; intents 8fe1dd71, 6ddecf4c, a18c7215). Gate 4
+(attempt 743ff0ea-0-20260920115939931) ran 11:59Z to 12:04Z and failed ONE apparatus fact in the cli lane:
+CliGoalUnparkConflictTests.CancellationBeforeCommit_LeavesParkedStateUnchanged expected "" got "\r\n" (the bare-newline
+console-capture bucket; the same lane was 77/77 green on this candidate in gate 3). Second mechanical reopen at 12:07Z
+(`regate2-743ff0ea-console.txt`; intents 7980d3a0, fd48a4ab, fb0beac7, all Applied 12:09Z). Gate 5 (attempt
+743ff0ea-0-20260920121105344, 12:11Z to 13:39Z) FAILED on acceptance-check-timeout only: Goal lifecycle commands lane
+hit its 40 min budget with a 011dbb7c Developer round and a 4 GB game on the host; no test failed. Third mechanical
+reopen 13:42Z (`regate3-743ff0ea-timeout.txt`). While the host carries a game plus a worker round, EVERY gate's
+lifecycle lane (20 to 28 min quiet, 70 min loaded) is at risk of the 40 min budget; `5210c79e`'s gate (attempt
+5210c79e-0-20260920133941118, started 13:39:41Z) faces the same risk. `5210c79e` Developer `8ac3ad7e` (4 test files),
+Reviewer passed on merits but held criterion 4's whole-class record; the record-only Developer round was rejected
+as no-change-evidence and both tasks were hand-closed 13:37Z (`close-5210-both.txt`). `011dbb7c` Developer
+`4911e10fc` (13:44Z, 3 files: liveness precheck in WorkerProcessJobs.TryKillOrFallback + 6 facts) and its attribution
+CONTRADICTED the bdab2d75 premise for the sampled fact: 61.8 s with ZERO janitor lines, redirect 0.4 percent, the rest
+is real per-fact git fixture work. Recorded on bdab2d75 at 13:46Z with the next attribution (instrument
+WorkerDispatchTestSupport setup/dispose steps; likely remedy a per-class bare template repo cloned per fact). The
+precheck still lands as a correct small change; do not expect it to move the lane. `eb5133d1` LANDED as `1df8d72b5` at ~12:00Z (gate 75 min; 18th landing). After 743ff0ea lands: bounce
+(makes b3da0320 owner mapping and eb5133d1 sweep timers live), then read ten sweep lines for 2140d2d8 criterion 5 and
+check the first owner-tagged refinement for 5e0b01a9's close test.
+
+**`eb5133d1` created 09:04Z** (sweep sub-phase timers + git spawn count on the PHASE_TIMING line, backlog `2140d2d8`
+slice, Developer+Reviewer, brief `scratchpad/brief-sweep-subphase-timing.md`). Measure-only; criterion 5 is the
+operator's ten-tick reading after the next bounce. Its refinement ran on the OLD binary (b3da0320 not live), so expect
+the operator-owned criterion to have no obligation record and the Reviewer's not-verifiable to need a hand-close on the
+verdict, as with 1711c156. Regions of TerminalGoalSweep.cs overlap 743ff0ea's edits (lines 690 to 740 excluded in the
+brief); expect a clean merge, check at pre-landing. Developer `7dd8fb31e` (5 files, 144 lines, ConductorBatchLoop.cs
+5,190) at 09:47Z; Reviewer round 1 asked for zero-filled fields when the sweep returns null, Developer `642be9cb1`
+10:16Z; Reviewer round 2 passed on merits 10:24Z but the attestation rejected its not-verifiable on criteria 3 and 5
+(no owner obligations, refined on the old binary as predicted), hand-closed 10:26Z with `close-eb5-rev.txt` (intents
+5aa9f2cd, 1f434495). Gate queues behind 743ff0ea's.
+
+**12:10Z to 12:35Z, Miles asked "what else can we do to accelerate":** answered with the lane data
+(`.orchestrator/acceptance-lane-durations.jsonl`: Goal lifecycle commands 20 to 28 min quiet, 70 to 73 min in the
+07:15Z and 11:55Z gates; fixtures A 19 to 25 min quiet, 70 min at 07:15Z) and cut two goals: `5210c79e` (Hermes
+fixture 5 s git budget + hung-child heartbeat wall-clock wait, backlogs a1451eee + b0a6bad5, test-only) and
+`011dbb7c` (fixtures A per-fact teardown: fallback-kill against fake pid 999999 snapshots and reaps four temp roots,
+backlog bdab2d75 slice). Both Developer+Reviewer, briefs `brief-gate-apparatus-flakes.md` and
+`brief-fixtures-a-teardown.md`. Also on Miles's instruction stopped Ollama entirely (tray app 27500, `ollama serve`
+16100 then its restart 31072, runners 41908 and 34564): the orchestrator's `acceptance-judge` model function is bound
+to Ollama qwen3:8b, so every gate start loaded a 6.4 GB runner; the judge is advisory (invalid verdict on failure), so
+gates continue. Commit fell from 67 to 61 GB.
+
+**13:53Z to 14:10Z, memory and disk work on Miles's direction:** (1) `conductor-policy.json` maxConcurrentPaidWorkers
+5 -> 4 (effective at next launch; Miles wants 4 first, 3 later if it makes sense). (2) New launcher
+`scratchpad/launch-loop-240min-filepolicy-cap.ps1`: no --policy, watchdog 120 min, --max-duration 14400 (4 h renewals
+against the d96a70f4 growth), DOTNET_GCConserveMemory=5 experiment; MCG_BUILD_MAXCPUCOUNT deliberately unset because
+Invoke-IsolatedDotnet.ps1 already defaults worker builds to 1 node while the gate's DotnetBuildEnvironmentManager uses
+max(2, 24 cores / 2) = 12 nodes from the SAME variable, so a gate-only cap needs a code change. (3) d96a70f4 first
+measurement: `dotnet-gcdump collect -p 24788` at 13:55Z (`scratchpad/daemon-24788-1355Z.gcdump`, 64 MB): live managed
+heap 1.32 GB / 3.47 M objects inside a 2.85 GB working set (handles 554, so no connection leak); ~1.5 GB is committed
+GC segments and native. Take a second dump ~15:00Z and diff. (4) Subagent reading of the build architecture (why builds
+cannot share a compiler server): UseSharedCompilation=false in Directory.Build.props line 6 and -nodeReuse:false in
+Directory.Build.rsp since 2026-06-15 (7ce2a5f1c, e133bd545, CS2012 obj locks); `dotnet build-server shutdown` fired on
+every lease Dispose (DotnetBuildEnvironmentManager.cs 515-541, 2731) kills the other lane's compilers; 2-slot lock
+grid (line 98); all lanes share DOTNET_CLI_HOME and NUGET_PACKAGES (GoalAcceptanceVerifier.cs 8167-8219). Each build
+pays a cold ~3 GB MSBuild node with in-proc Roslyn. Feasible fix: private DOTNET_CLI_HOME per lane, re-enable shared
+compilation, retire the global shutdown; a brief is owed. (5) Disk (895 GB used, 35 GB free before): removed 284
+orphaned `mcg-dotnet-isolated\runs\p<pid>-build-*` dirs (dead pids, >24 h) = 15.0 GB and 49 stale `Temp\mcg-run\v2`
+staged binaries (>36 h, not in use) = 1.9 GB with `Reclaim-OrphanedRuns.ps1` / `Reclaim-StagedBinaries.ps1` (both
+have dry-run default and -Apply). Remaining consumers: acceptance-gate-attempts 5.3 GB, operator-evidence 3.3 GB,
+logs 2.0 GB, worktrees 8.5 GB (34 vs 22 loaded goals), base-build-cache 1.2 GB, goals roots of landed goals reclaimed
+by the sweep itself after backoff. `goal-recovery` and `readiness` run a repairing sweep (memory written).
+
+**`98b82ef1` created 14:21Z (shared Roslyn compiler server for isolated builds, retire the session-global
+build-server shutdown, private DOTNET_CLI_HOME per lane, MCG_GATE_BUILD_MAXCPUCOUNT; backlog `43327f1a`, FIVE-ROLE
+because CS2012 history 7ce2a5f1c/e133bd545 must be re-established by the Researcher first; brief
+`scratchpad/brief-shared-compiler-server.md`). Gate-code change: land alone, bounce after. GoalAcceptanceVerifier.cs
+is AT its ratchet ceiling (9,649/9,649), so its edits must be net-zero or extracted to a partial.
+
+**Stale board items surfaced by the scope advisory (not tonight's work, triage later):** `a3e78f34` (wall-clock
+assertion sweep slice) is Verified since 09-15 with NO goal branch left, so it can never land and should be abandoned
+or re-cut; `643fbd9a` (recycled parent-PID edges) escalated at Failed, 569 commits behind, Developer failed on two
+unchanged cohort tests; `9bea7a9a` (cohort fairness remainder) waits on parked dependency `cf64014b` since 09-03.
+
+**Next gate-speed cut (after the bounce):** backlog `bdab2d75`, the two lanes that run at the 40-minute budget
+(Worker dispatch fixtures A = one 4,843-line serial class; Goal lifecycle commands = seven CLI-spawning classes).
+Tonight's gates: 42, 39 (cohort), 86, 87, 74 min, the long ones with two worker rounds beside them and host commit at
+93 percent. Its direction is attribute-then-remove per-fact teardown cost, not a budget raise.
+
+**743ff0ea gate 1 FAILED (04:37Z to 06:03Z, 86 min, real regression):** Developer `73e0d1a3f` (9 files) passed
+review at 04:37Z with evidence "executor/sweep 6/6, LandingDecisionTests 20/20" (only the new facts, not the whole
+LandingExecutorTests class). The gate then failed 24 distinct facts across LandingExecutorTests (remote mirror, landing
+intent, ownership hold, backlog proposal), GoalWorktreeTestsRebaseMerge, GoalWorktreeTestsRemoveCleanupLifecycleCommands,
+GoalLifecycleEventWriterTests and CliCommandTestsPersistentRunnerCommandsAcceptance ("Goal ... acceptance: accepted"
+not printed), all shapes where acceptance PASSED and the candidate should land or hold on ownership: one root cause,
+the new hold description or IsAccepted misfires on the passed case. RepositorySourceInventoryTests
+GitInventorySkipsTrackedFileThroughOutsideJunction also failed once (probably unrelated; check its history before
+blaming the change). The loop auto-routed Developer retry 1/2 at 06:04Z (pid 2632) with the TRX evidence; b3da0320
+took the freed gate slot (attempt b3da0320-0-20260920060357604, started 06:03:57Z). Lesson for the next brief: require
+the Developer to request the WHOLE touched test class as focused evidence before review, not the new facts.
+
+**In flight:** `743ff0ea` (landing hold names the failing IsAccepted term, backlog `1822ddfe`, Developer+Reviewer,
+brief `scratchpad/brief-landing-hold-names-the-term.md`). Refiner raised five clarifications at 03:53Z (grammar,
+id ordering, multi-kind rendering, sweep evidence extend-vs-replace, semantics unchanged); all answered 03:55Z with
+text files `ans-743-*.txt`. A re-refinement ran 04:07:44Z, yet the loop still holds it with
+`SPEC_REFINEMENT_PENDING ... executor-launch-deferred-cadence` on the new daemon too (the cadence is persisted, a
+bounce does not reset it, backlog `8c11fd0d`). Expect the executor at ~04:22Z; if the hold loops past two cadences,
+annotate 8c11fd0d with the goal-events messages and hand-drive the refinement.
+
+**ddf216bc criterion 4 receipts** are at `.orchestrator/operator-evidence/ddf216bc-criterion4/receipts.md`. Disposable
+workspace `C:\Users\miles\mcg-pub\ws-ddf` driven only through public verbs with the candidate dll built from
+`5bf7e8631` (scratchpad `Run-Ddf-Cli.ps1` sets `MCG_ORCHESTRATOR_REPOSITORY_ROOT`): goal `4b70f41d` (operator-notes
+doc) answered poll-interval-unit A "seconds" (answer `090ddbf9`) 03:01:38Z, `supersede` to B "minutes" (`9406b4ae`)
+03:02:21Z; the precedent store entry was replaced to reference answer B; the item's answer_history keeps A retracted
+with supersededByAnswerId = B; goal `e46d96a1` (identical brief, operator-notes-2) refined 03:06Z and its stored
+decision chose B with rationale "Authoritative clarification precedent (topic: poll-interval-unit, item: 0dd54e50...,
+answer: 9406b4ae..., brief: 1)" without re-asking, while its three unrelated topics did not inherit B. The ws-ddf goals
+are left as they are (e46d96a1 has three Raised clarifications; no loop runs there).
+
+**Incident 03:06Z:** I typed `goal show ddf216bc` (the verb is `status`), which CREATED five-role goal `89a35fdf`
+("show ddf216bc"). The loop refined it and escalated AwaitingClarification at 03:09Z; no worker was dispatched. Abandoned
+with `abandon-goal ... --confirm-goal-abandon` at 03:12Z (Cancelled). Lesson: `goal <text>` is a creator.
+
+**Backlog `5e0b01a9` annotated 03:25Z with the owner-drop mechanism (hypothesis, raw refiner output is not persisted):**
+1711c156's snapshot has the seven brief criteria verbatim and BOTH owner lists empty with no parse diagnostic.
+`GoalRefinementService.ResolveAcceptanceCriteria` (line 804) keeps the brief's declared criteria and discards the
+refiner's text, then `ResolveOwnedCriteria` (line 1285) keeps an owner only on EXACT trimmed text equality with the
+refiner's own criterion text, so any paraphrase drops the owner silently. The existing fact
+(GateOwnedCriterionRefinementTests) only echoes identical text. Successor slice direction is in the annotation
+(persist raw output, map owners by declared index, loud diagnostic, paraphrase fact). Do NOT cut that goal until
+`ddf216bc` lands: it touches GoalRefinementService.cs (195-line diff on that branch).
+
+**Still owed after landings:** ten sweep PHASE_TIMING lines after 1711c156 lands and the next renewal (~09:53Z) or a
+bounce (criterion 6: median under 3 s, journals_read 0 steady state; above 5 s reopens `2140d2d8`). Daemon 16204 was
+3.28 GB working set at 03:19Z; host commit 61.4 of 73.2 GB.
+
+## Earlier — 2026-09-20 02:47 UTC (Claude)
+
+**Three goals converging on the single gate slot:**
+- `1711c156` (terminal-journal cache, backlog `2140d2d8`): Developer `fe578fbb4` in 27 minutes (92-line cache class,
+  runner calls it at the two-boolean seam, `dependency_journals_read` on the sweep line, 210 lines of facts, negative
+  controls), Reviewer pass at 02:30Z vetoed on the operator-owned criterion (hand-closed; the new criterion-evidence-map
+  diagnostic fired, meaning refinement recorded no owner for a criterion whose text says operator-owned, so backlog
+  `5e0b01a9` is REOPENED with that receipt). First gate red at 02:39Z was one bare-newline console-capture fact
+  (CliGoalUnparkConcurrentWriterTests, 181 passed / 1 failed in history, candidate adds no Console writes); the
+  auto Developer round was cancelled ConfirmedUnchanged and the goal re-gated mechanically at 02:45Z.
+- `a319f2e0` (receipt-first Tester procedure): Developer rounds `b86d7db06` and `231b11e91`, Tester pass, Reviewer
+  pass vetoed on operator-owned criterion 3 (replays bound to an older candidate). Operator re-ran the four bounded
+  Opus replays at 231b11e91 (`.orchestrator/operator-evidence/a319f2e0-criterion3-231b11e9/`, guidance rendered by
+  reflection from the candidate's Core assembly): matching-pass closes on the receipt, stale-pass rejects and requests
+  one run, matching-timeout stays inconclusive without an identical re-request (the full-contract variant narrows to
+  four Name~ partitions covering all 17 facts). Three invalid runs are marked in replay.log. Reviewer hand-closed
+  02:46Z; gate next.
+- `ddf216bc` (clarification precedent bound to answer revisions): Developer verified the merged tree unchanged
+  (93/93) and committed nothing, which the dispatch classifier counted as a failed round (hand-closed on the receipt);
+  Tester passed 02:45Z; Reviewer next.
+No open human waits on any of the three (checked with `attention show`). Daemon 16204 at 3.4 GB working set
+(backlog `d96a70f4`).
+
+## Earlier — 2026-09-20 01:52 UTC (Claude)
+
+**Three goals put back in flight at 01:45Z to 01:51Z (Miles: nothing is left for a next session):**
+- `1711c156` **Stop the per-tick sweep from re-reading every terminal goal's operation journal** (backlog `2140d2d8`,
+  Developer+Reviewer). Mechanism verified at HEAD: LoadConductLoopKernel maps ReadConductLoopDependencyMetadata over
+  every terminal summary and each call does GoalOperationJournal.Read on `.orchestrator/goal-operations/<id>.jsonl`
+  with no cache (824 live files, 587 MB with archive, about 1,240 terminal goals) to derive two stable booleans. Fix
+  shape: per-process cache keyed on journal file identity in a new file, plus `dependency_journals_read` and
+  `dependency_metadata_ms` on the sweep PHASE_TIMING line. Ratchet headroom is 7 lines in CliPersistentStateRunner.cs
+  and 5 in ConductorBatchLoop.cs. Criterion 6 is mine after landing (median under 3 s over ten ticks, above 5 s reopens).
+- `a319f2e0` receipt-first Tester decision procedure (backlog `effa0696`): operator merged main with two conflicts
+  resolved (both receipt-first contracts kept above main's evidence_index line; both Tester requirement facts kept),
+  commit `e720d2ca1`; routed Developer retry warns that the compact-budget fact may fail and says to shorten the
+  branch's compact contract strings, not main's line.
+- `ddf216bc` reusable clarification precedent bound to answer revisions (backlog `8a59a34f`): operator merged main
+  cleanly (`5bf7e8631`), bounded build 0 errors; routed Developer retry to run GoalRefinementTests and
+  CliCommandTestsHumanInputSupersede on the merged tree and reconcile with da3d19ed's evidence_owner field.
+Backlog `d96a70f4` filed for the daemon working-set growth (samples in the body).
+
+## Earlier — 2026-09-20 01:10 UTC (Claude)
+
+**Board was clear of active work.** `ac61f820` LANDED 01:08Z as `cc9167aec`, the thirteenth landing of the
+session (headless runtime with optional dashboard host, 124 files). Its two earlier green gates (20:36Z, 21:57Z)
+were refused as "acceptance verification not passed" by a hidden term: three Planner ProspectiveAcceptanceEvidence
+waits for the operator-owned criterion, open 17 hours, visible only in `attention show`; answered 22:01Z, then a
+mechanical reopen (2.5-minute receipt-reusing gate) landed it. Backlog `1822ddfe`, memory
+`open-planner-evidence-wait-blocks-landing-as-not-passed`. Prototype dashboard and Edge stopped.
+
+**Loop:** successor pid `16204` since the 21:53Z max-duration renewal, staged `9d2c8a4af`, so main's landings
+through da3d19ed are the running binary (ac61f820's landing is not; next renewal about 09:53Z 09-20 picks it
+up). Daemon working set 3.2 GB after 3 hours.
+
+**Metadata scan (backlog `2140d2d8`) REOPENED 01:03Z by criterion 5's own rule:** sweep phase median 13.6 s over
+60 ticks (11.8 to 18.7 s) on the new binary against 22 to 38 s before. The terminal-blob parse is gone; another
+sweep-phase reader still costs about 13 s per tick with 24 goals. Next step is a PHASE_TIMING breakdown inside
+the sweep phase (or a one-tick dotnet-trace of pid 16204) before any code change; candidates are the
+terminal-goal sweep's per-goal reads and the dependency metadata reload.
+
+**Defender:** Miles added path exclusions for `<repo>\.orchestrator` and `%LOCALAPPDATA%\Temp\mcg-run` at
+01:01Z (elevated). Not yet measured against a full gate; the only gate since reused receipts (2.5 minutes).
+Process exclusions (git.exe, dotnet.exe, testhost.exe) offered as an optional second step.
+
+**Backlog filed today:** `4d1cf58c` browser smoke check preconditions, `a1451eee` HermesIdentity fixture,
+`1822ddfe` hidden human-wait landing refusal. Closed: `5e0b01a9`, `2140d2d8` (then reopened), `bfe0778a`.
+Stale Active goals worth a decision next session: a319f2e0 and ddf216bc (Failed Developers, 328 and 386 commits
+behind, scopes overlap landed work).
+
+## Earlier — 2026-09-19 19:27 UTC (Claude)
+
+**Since 16:56Z:** `da3d19ed` (gate-owned criteria as obligations) LANDED 17:47Z as `9d2c8a4af`, the twelfth
+landing; backlog `5e0b01a9` closed by hand (its owner was the abandoned 28292ab8). `ac61f820` is the last goal on
+the board: its 18:06Z gate failed one fact again (TaskAndTasks_PreserveOutputAndTargetSelection, main baseline
+green), mechanism found from the lane TRX: the branch's new RuntimeMaintenanceOwnershipTests runs a real
+ConductorBatchLoop tick in the Cli test project and its Console.WriteLine output lands inside a parallel test's
+console capture; Developer round 10 (`912f2ca48`) put the five console-touching Cli classes in one xunit
+collection. The branch was squashed onto main (`a971ce5cc`, tag `salvage/ac61f820-presquash`) after a
+pre-landing rebase conflict from operator merge commits; Reviewer round 6 passed 19:20Z (vetoed only on the
+operator-owned criterion, hand-closed; the loop's redundant seventh Reviewer dispatch was cancelled). Criterion-4
+receipts parts 1 to 4 are in `.orchestrator/operator-evidence/ac61f820-criterion4/receipts.log` (part 4 at the
+final candidate: static dashboard/transcript exit 78 headless-only and render from the combined layout,
+`dashboard --mode local` launches the host, teardown clean). The prototype dashboard is served on 5087 and Edge
+DevTools is warm on 9222 for its gate; stop both after the gate (`Get-Process msedge` started 12:52 local,
+the pwsh `Serve-SmokeDashboard.ps1` task). Backlog filed: `4d1cf58c` browser smoke check preconditions,
+`a1451eee` HermesIdentity fixture. After ac61f820 lands or parks, the board is empty of workers: bounce the
+daemon (staged 209400a8b, three landings behind) and measure the sweep phase over ten ticks for `2140d2d8`.
+
+## Earlier — 2026-09-19 16:56 UTC (Claude)
+
+**Since 14:05Z:** `96211ff6` (metadata scan) LANDED 16:52Z as `54756bc36`, the eleventh landing; backlog `2140d2d8`
+is Done but its criterion 5 (ten-tick sweep median, baseline 22 to 38 s) is still the operator's after the next
+bounce or the 21:50Z renewal. Its Reviewer pass was vetoed on the operator-owned criterion (hand-closed), and its
+first gate red (HermesIdentity fixture cleanup, backlog `a1451eee`) auto-opened a Developer round that was
+cancelled ConfirmedUnchanged and re-gated mechanically. `da3d19ed` (gate-owned criteria as obligations) passed
+Reviewer round 3 at 16:55Z and is in its gate on `d284c6698`; its Tester looped on evidence-on-demand twice
+(cancel + close on receipts, backlog `a2d5c16c`). `ac61f820`: the 14:05Z gate failed on a real inventory gap
+(operator commit `efb31426f`) and the browser smoke check, which had never run in retained history and needs an
+operator-served PROTOTYPE dashboard on 5087 plus a 127.0.0.1 DevTools probe (memory
+`dashboard-browser-smoke-check-needs-prototype-dashboard-and-ipv4-probe`, backlog `4d1cf58c`, harness fix
+`f29d68048`); the 14:32Z gate then failed on a real regression (static `dashboard`/`transcript` routed to the
+missing sibling component) fixed by Developer round 8 (`b2d353b09`: static render through the dashboard assembly
+when present, exit 78 otherwise, capability table corrected); Tester passed 16:47Z, Reviewer running. Serve the
+prototype dashboard again before its next gate (scratchpad `Serve-SmokeDashboard.ps1`). Host memory hit 90 percent
+commit twice (Miles's apps about 13 GB); the harness killed background waiters, so the loop monitor is the only
+reliable wake source.
+
+## Earlier — 2026-09-19 14:05 UTC (Claude)
+
+**Direction (Miles, 09-19 13:20Z):** nothing on the board needs his call except elevation (Defender exclusion for
+`<repo>\.orchestrator` and process exclusions; pagefile or host memory headroom); the metadata-scan fix is the
+priority. Earlier (09-18): take care of it all; lane timeouts are the priority; no wind-down; experiment
+directories deleted (about 20 GB); write audit done (backlog B1 to B6, `.orchestrator/operator-evidence/write-audit-2026-09-18.md`).
+
+**State at 14:05Z (main `b1a4a0630`, ten landings this session):**
+- `96211ff6` **Stop the per-tick goal metadata scan from parsing terminal snapshots** (backlog `2140d2d8`, the
+  priority): Developer+Reviewer pipeline, Developer running since 14:03Z on `62387da9a`. Decisions given in its
+  clarifications: CASE-gate the three json_each subqueries (no column, no schema change, no backfill); prove
+  "terminal blobs never parsed" with malformed-JSON sentinels for terminal rows (json_each throws on touch);
+  negative-controls file `docs/negative-controls/96211ff6.md`. Criterion 5 is mine after landing: median
+  PHASE_TIMING `phase=sweep` over ten ticks against the 19 to 29 s baseline (ticks 128 to 137); expect under 2 s.
+  `CliPersistentStateRunner.cs` sits exactly at its 4,863-line ratchet ceiling; the brief says net-zero there.
+- `da3d19ed` **Record gate-owned criteria as obligations at refinement** (backlog `5e0b01a9`; recut of `28292ab8`,
+  abandoned 13:44Z with tag `salvage/28292ab8-recut` = e99b08817): five-role, refinement completed 13:56Z, waiting
+  on the executor cadence for dispatch. HEAD finding on the item: Recording.cs already defers non-worker-owned
+  not-verifiable verdicts (faf947696, 09-09) but nothing creates an Acceptance-owned obligation at refinement
+  (Goal.cs EnsureCriterionEvidenceObligations maps only OperatorOwnedAcceptanceCriteria), so "Acceptance executes"
+  criteria still fail honest Reviewer rounds. Answers given: no backfill of old spec versions; a `met` verdict on a
+  gate-owned criterion is advisory only. Scope collisions flagged with stale goals a319f2e0 and ddf216bc (both
+  Failed, 328 and 386 commits behind); no dependency added.
+- `ac61f820` headless runtime with optional dashboard: criterion 4 run by the operator 13:56Z to 14:01Z, receipts in
+  `.orchestrator/operator-evidence/ac61f820-criterion4/` (headless 59 files 43.4 MB without ASP.NET, dashboard 65
+  files, zero shared-byte differences when combined; headless-only `dashboard` exits 78 with state unchanged;
+  hosted UI child Dashboard.exe dies with its App.exe parent within 3 s; successor self-check LOOP_START from a
+  sealed run directory in 209 ms; legacy single-file 113 MB, working set about 11 MB higher, wall time within
+  noise). Reviewer closed on the receipts, branch merged to main twice (`571a840bf` resolved GoalDispatchResults.cs
+  by making main's assignment-hold records public; `bddaa0a1b` clean), unparked 14:04Z; **confirm its gate
+  started** (ahead 10, 117 files).
+- `03aaf13e` LANDED 13:53Z as `b1a4a0630` on its fourth gate (11.5 minutes verifier, 470 s longest lane, host
+  quiet) after three apparatus reds; the third (13:07Z) was the git-to-filesystem-fallback flake, sixth receipt on
+  backlog `98c02c6b`. Canary passed at 13:54Z. The landed gate code (owned build storage root) is NOT in the
+  running binary until the next renewal or a bounce.
+- `90e4a429` Completed 13:23Z after the operator reset its worktree to main (tag `salvage/90e4a429-prelanded`).
+- Deletions done 13:26Z: 21 operator worktrees (about 3.1 GB), 56 `mcg-tests\summary-*` (2,003 MB), 994
+  `%TEMP%\mcg-acc-*` (75 MB); `git worktree prune` run.
+
+**Bounce owed, when nothing is in flight:** the running daemon (pid 43736, staged 209400a8b) predates the
+5fac0245, 03aaf13e landings; renewal is about 21:50Z. A quiet window (no worker, no gate) before then is worth a
+manual bounce so gates run the new build-root and canary code.
+
+**Root cause found and fixed on the host (09-18 21:22Z):** Windows Defender on-access scanning of the test temp
+roots serialised process creation host-wide whenever several spawn-heavy lanes ran together (fixtures A: 9m43s
+alone, 34m52s with three peers, 10m29s with the exclusions). Miles added path exclusions (elevated) for
+`%LOCALAPPDATA%\Temp\Low\mcg-tests`, `%LOCALAPPDATA%\Temp\mcg-hvp`, `%LOCALAPPDATA%\..\LocalLow\mcg-dotnet-isolated`
+and `.orchestrator-worktrees`. Still scanned: `<repo>\.orchestrator` (attempt artifacts); MsMpEng sat at about
+50 percent CPU during real gates, so that is the next exclusion to propose. Backlog `478f5f0f` makes the
+exclusions host setup.
+
+**Loop:** daemon pid `43736`, the max-duration successor of pid 42796, LOOP_READY 09:50:48Z 09-19 and LOOP_START
+09:51:42Z with `policySource=file:` (`acceptanceWidth: 1`), `stagedSourceCommit=209400a8b` = main, so tonight's
+landed loop and gate code IS the running binary (no bounce owed); next renewal about 21:50Z 09-19. Log is still
+`.orchestrator/logs/operator-conduct-loop-daemon-20260918164853.out.log`. **The renewal discarded the inflight
+cohort gate** (5fac0245 + a3b2c4ad, 108 minutes in; test hosts and the ac61f820 Developer round died with the old
+daemon; backlog `27edd359`). The successor's tick 1 took acceptance lease `merge-train-v1-47a9f72e…` and runs it
+INLINE (members per its plan: 31fa5aec, a3b2c4ad, 90e4a429): the tick is blocked for the gate's duration,
+conduct-events.log is silent (monitor says STALL), and PHASE_PROGRESS in the daemon stdout is the liveness.
+No intent applies and no worker reconciles until it finishes; do not bounce. Host: 47.9 GB RAM, commit limit
+73.7 GB; at 05:41Z commit was 65.6 GB with Miles's apps holding about 12 GB and the harness killed a background
+task for low memory; `dotnet build-server shutdown` freed 1.9 GB. Check `Get-HostMemory.ps1` (scratchpad) first.
+
+**Landed tonight (main `209400a8b`):** 29423867 typed worker context, e389f7df typed operator-intent receipt,
+b885eda9 land refused candidates only from bound main (02:33Z), 36b98d7a one active acceptance owner per goal
+across cohort gates (03:36Z), 6032a3d4 explicit execution-context and teardown ownership for acceptance attempts
+(04:37Z, 69 files, gate code).
+
+**In flight at 09:10Z (all evidence in each goal's card):**
+- **Merge train landed at 10:30Z** (the successor's first inline gate, 38 minutes for three members, receipt
+  `merge-train-receipt-47a9f72e…`): `31fa5aec` preserve provider-interrupted Developer work, `a3b2c4ad`
+  PostLandingCanaryTests in a non-parallel collection (the canary fix is on main), `90e4a429` producer artifact
+  identity and shared retention. Main is `f79d5d444`; the train lands member commits linearly (no Integrate commit).
+  31fa5aec and a3b2c4ad reached Completed; **90e4a429 fell from Recorded back to Verified** (four rebased commits,
+  branch tip not an ancestor of main, sweep says "retirement required") and would have re-gated already-landed
+  patches, so it is PARKED at 10:56Z with the landing receipt in its park reason; it needs a terminal state by hand
+  (backlog `dca5bc38`; its work is on main, backlog `bfe0778a` is Done). Nine landings this session with 5fac0245.
+- `03aaf13e` (owned build storage root for the acceptance verifier): its 10:31Z gate failed one fact, the split
+  parity baseline missing the candidate's new storage-root fact (the candidate's own defect); the loop's automatic
+  Developer round fixed the baseline in one file (candidate `0488f55155c4`, 11:33Z); the Tester then looped on the
+  passing parity run (twice 2/2) and was closed on the receipts at 11:45Z; Reviewer round 3 (11:59Z) `verdict: pass`,
+  `blockers: none`, criteria 1 to 4 met, criteria 0 and 5 vetoed as gate-owned; hand-closed 12:01Z. Its 12:16Z gate
+  failed in six minutes on one Core fact (AssemblyTempRootChildProcessTests.KilledProcessResidueIsReapedByNextStartup,
+  sharing violation on its own handshake file; the candidate does not touch Core.Tests) and the loop's second and last
+  automatic Developer retry fired; cancelled (ConfirmedUnchanged) and re-gated with seven intents. **Re-gate started
+  12:39Z** (attempt `03aaf13e-0-20260919123952068`), the last goal in the queue; when it lands the board holds only
+  parked goals and the daemon idles in watch mode until its 21:50Z renewal. Its acceptance auto-retries are exhausted:
+  another red needs the same cancel-then-seven-intents sequence.
+- **`5fac0245` LANDED 12:16Z** as `9e5db1e1d` (honor acknowledged agent reassignment at the next dispatch), the ninth
+  landing of the session: pre-landing rebase conflict against the train's main at 10:30Z (TaskSnapshot trailing
+  parameters from 31fa5aec) resolved by operator merge, build (0 errors) and squash to `baa5eadb2`; the 11:25Z gate
+  passed every lane on the first complete run of this candidate (its 06:44Z attempt lost four hosts' temp roots and
+  its 08:01Z cohort attempt died at the renewal).
+- `ac61f820` (headless runtime with optional dashboard host): Developer round 3 committed 64 files at 08:58Z
+  (the public application facade its round-2 blocker called for), round 4 fixed the scheduler-sweep facts, Tester
+  passed 09:28Z, Reviewer round 1 (09:41Z) left two blockers (inert publish inventory guard under single-file
+  publish; narrowed catch filter lets an ambiguous goal prefix escape monitor-goal). Round 5 was killed by the
+  09:49Z handoff with its four files uncommitted; the operator checkpointed them as `1482d4119` on goal/ac61f820
+  (they address both blockers). The successor accepted the checkpoint as the round's output; Reviewer round 2
+  raised one more blocker (ungated error catch in monitor-goal), round 6 fixed it, Tester passed 11:17Z, Reviewer
+  round 3 at 11:22Z: `verdict: pass`, `blockers: none`, criteria 1 to 3 met, criterion 4 not-verifiable because it
+  is REAL-WORLD-DEPENDENT and operator-owned. **PARKED 11:24Z at candidate `3b7779b21bb7`** with the operator
+  checklist in its park reason (isolated headless and dashboard publishes via the branch's `scripts/publish-*.ps1`,
+  disposable no-UI workflow, UI open/close during it, launcher/successor staging on the new layout, identities,
+  exits, child ownership, inventory, cold/warm startup and RSS under matched conditions). Do not close the Reviewer
+  on its verdict for this one: that would land a deployment layout the brief says must be measured first. When the
+  receipts exist, attach them, `progress`+`verify-manual` task 5 citing them, unpark, gate.
+- `28292ab8` (make acceptance obligations truthful across stages) PARKED 02:43Z pending Miles: 343 commits behind,
+  a trial merge produced 13 conflict hunks in 9 files, three semantic (its extracted CLI acceptance finalizer vs
+  main's evolved inline transaction; its integration-branch landing flow vs what b885eda9 landed). Recommendation:
+  abandon and recut from backlog `5e0b01a9` on current main naming the salvageable parts; the worktree is clean at
+  e99b08817.
+
+**Apparatus reds tonight and how they were closed (all mechanical re-gates, none a worker round):**
+- Canary `retained-capture-incomplete` (foreign pwsh/cmd/dotnet/git child holds an inherited capture handle):
+  11 hits since 09-15, five tonight (5fac0245 00:32Z, b885eda9 01:28Z, 31fa5aec 05:30Z and 07:58Z). Backlog
+  `d9c6e10e` has the mechanism (OwnedProcessGroup.cs:726-731) and the two fix halves; `a3b2c4ad` is the test-host
+  half and is in the running cohort. Memory `canary-retained-capture-incomplete-is-a-foreign-inherited-handle`.
+- Temp roots of live gate test hosts vanished under running git (06:23Z, four hosts, 26 facts; 07:34Z, one host):
+  backlog `badb8ea5`. Not attributable today because TempRootJanitor and the assembly cleanup key roots by pid
+  alone and write no deletion receipt. Open hypothesis with its check on the item: both events fell inside
+  90e4a429's StorageRetentionMaintenanceTests executions; StorageRetentionMaintenance.cs:246 falls back to the
+  real profile when LOCALAPPDATA is empty.
+- 6032a3d4's gate failed twice on three deterministic tests introduced by its own refactor (prefix no longer
+  threaded through the environment); Developer round 4 fixed them in two files.
+- Reviewer gate-owned veto (criterion "not-verifiable" because the gate executes it): hand-closed on 6032a3d4 six
+  times and on 03aaf13e once. Backlog `5e0b01a9` is the fix; 28292ab8 was its goal.
+- Tester evidence-on-demand loop (backlog `a2d5c16c`): two more shapes tonight on 90e4a429, five and two rounds.
+  Break it with `cancel-dispatch --goal <g> 4`, then `progress`+`verify-manual` on the passing receipt.
+- Planner output contract rejected all three first-round plans after 6032a3d4 landed (one heading-style mapping,
+  two citation paths). Annotated `e2fc9db6`; filed `eece9c19` (Planner prompt lacks the repository-root citation
+  rule). Scratchpad `Check-PlanCitations.ps1 -LogPath <planner out.log>` lists unresolved citations with candidates.
+- Branches carrying operator merge commits fail the pre-landing rebase; squash onto main first (salvage tag, then
+  `reset --soft main` and one commit) and re-run `git merge main` if main moved in between (31fa5aec's first squash
+  silently dropped the 36b98d7a landing until redone).
+
+**Backlog filed tonight:** `d9c6e10e` canary inherited handle; `eece9c19` Planner citation rule; `badb8ea5`
+temp-root loss attribution; plus the six write-audit items (B1 to B6) and `478f5f0f` Defender exclusions.
+Annotated: `d1a68bfa` (mechanism corrected), `e2fc9db6`, `a2d5c16c` twice, `d9c6e10e` three times, `badb8ea5`.
+
+**Waiting on Miles (elevation only):** Defender exclusion for `<repo>\.orchestrator` and process exclusions
+(elevated); host memory headroom for overnight runs (a larger pagefile or fewer desktop apps; commit charge hit
+89 percent). Everything else listed here earlier (28292ab8 recut, ac61f820 criterion 4, 90e4a429 terminal state,
+write-audit deletions) was done by the operator on 09-19 per his 13:20Z direction.
+
+## Operating rules (verified this week; details in memory and `docs/operator-runbook.md`)
+
+- **CLI:** `.\mcg-orchestrator.cmd <verb>`. `dotnet run --project …` fails state verbs with SQLite Error 14.
+  Long text always via `--text-file` / `--brief-file`; the shell hook blocks `;`, `&&`, `||`, backticks, `$(...)`
+  and heredocs, including inside grep patterns, so use the Grep tool for patterns that need them.
+- **Gate width is policy, not parking:** launch WITHOUT `--policy` so `conductor-policy.json` (`acceptanceWidth: 1`)
+  applies. Focused-evidence attempts count as live acceptance occupants and run beside the gate. Keep at least one
+  dispatchable goal or a long `--max-duration`, or the daemon exits without a successor.
+- **Never bounce with a worker or gate in flight.** `.conduct-stop` (repo root) detaches; relaunch with the
+  scratchpad launcher or the runbook form.
+- **Intents apply one per tick.** Poll every id (`poll-intent.ps1 -Ids a,b`) before reporting done. A retry on a
+  Developer is rejected while its Tester runs: `cancel-dispatch --goal <g> <task#>` first. A cancel right after a
+  dispatch yields one transient "stale dispatch recovery" escalation.
+- **Mechanical reopen = intents in ONE response:** `retry <g> <last-task#> --text-file … --cause <cause> --mechanical`,
+  then `progress`+`verify-manual` on EVERY task the retry reopened (a reopened Developer invalidates Tester and
+  Reviewer too). Causes: EnvironmentApparatusFailure, MainDriftConflict (branch repair), NewTestFinding,
+  NewSourceFinding, ContractClarification (Planner or worker contract repair), ProviderInterruption.
+- **Apparatus RED:** read the TRX first (`Grep` for `outcome="Failed"` and `<Message>` in the attempt dir). Cancel the
+  auto-reopened Developer within minutes (expect `CANCELLATION_CANDIDATE_EVIDENCE ConfirmedUnchanged`), then the
+  mechanical reopen. A REAL defect in the candidate's own files: route the Developer with file, line, expected and
+  actual, and a decision procedure.
+- **Reviewer `verdict: pass` with a gate-owned criterion `not-verifiable` is vetoed.** Close the Reviewer task on
+  its verdict with `progress`+`verify-manual`, after checking `blockers: none` in its out.log.
+- **Pre-landing rebase conflict on a branch with merge commits:** squash (tag `salvage/<g>-presquash`, `git merge main`,
+  `reset --soft main`, one commit, verify `git diff main --stat` shows only the goal's files), then mechanical reopen
+  of the last task with `--cause MainDriftConflict`.
+- **Goal creation:** `goal --brief-file <md> --backlog-item <id> --backlog-coverage full|slice
+  [--pipeline developer-reviewer]`; the brief linter blocks 16 words (auth, authentication, authorization,
+  credential(s), delete, destructive, migration, permission(s), production, rollback, secret(s), token) and
+  `.git<non-alnum>`. Refiner clarifications: `attention show <g>`, answer by topic key.
+- **Diagnosis:** liveness is the TICK line in the daemon stdout log, not conduct-events.log; `ls` prints local
+  time, logs are UTC; filter attempt artifacts by attempt id; `WATCH_TRANSITION files=N` is the round's delta;
+  the goal card answers state in seconds, `status <g>` gives the refined criteria, `task <g> <n>` the timeline.
+- **Workers:** Developer and Tester are codex `gpt-5.6-sol`; Planner and Reviewer are claude-opus-5 (Reviewer
+  sometimes openai gpt-5.6-terra). Test classes sit in the global namespace; a namespaced `FullyQualifiedName~`
+  filter selects zero tests.

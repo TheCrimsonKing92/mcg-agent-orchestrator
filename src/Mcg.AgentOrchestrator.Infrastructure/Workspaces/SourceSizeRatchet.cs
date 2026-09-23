@@ -78,7 +78,10 @@ internal static class SourceSizeRatchet
             // driver retains attributed observation, stale-authority revalidation, and effect application.
             // Review correction moved rung-8 candidate, route, target, cap, and retry-cause selection
             // behind the policy; the split effect owner is pinned at its measured 369-line size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6436),
+            // Raised again for goal cf64014b, integrated by operator squash on 2026-09-22: goal-evidence
+            // lease recovery is admitted at the existing acceptance ownership seam, and classification and
+            // journal parsing remain extracted. Ceiling re-measured at the integrated head.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6442),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
@@ -132,7 +135,11 @@ internal static class SourceSizeRatchet
             // DispatchProcessCompletionState construction; moving that construction would split
             // the completion contract the runner owns rather than extract independent behavior.
             // 2684 is the measured post-change size of that contract-preserving handoff.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2684),
+            // Goal cd39be97 raised this row for the bounded runtime-ownership handoff. The runner must
+            // fail and checkpoint before releasing the worker start gate when any owned process cannot
+            // detach. 2707 is the measured size after integrating that handoff with the rows above; the
+            // branch measured 2678 against a main that has since grown this file to 2684.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2707),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -215,7 +222,9 @@ internal static class SourceSizeRatchet
             // Raised by one line for goal 5d57fe95: the observed-correlation control must assert both that
             // origin stays Unattributed and that the apparatus hold still classifies, because the defect being
             // guarded is exactly the pair coming apart; splitting them would lose the contract they compare.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1280),
+            // Reconciled again for goal cf64014b on 2026-09-22, which adds one lease-recovery assertion at
+            // this acceptance seam; ceiling re-measured at the integrated head.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1281),
             // Raised for goal 13630c9f: lifecycle coverage keeps unchanged-candidate holds, bounded
             // operator release, and main/candidate HEAD regating in one state-transition decision table.
             // Raised for goal d5fcf981: acceptance attribution controls prove worker retry versus held

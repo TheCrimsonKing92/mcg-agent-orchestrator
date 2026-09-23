@@ -118,7 +118,8 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 ReviewFindingConvergence.NoOpenFindingsForTargetViolationCode,
                 allOpen.Length,
                 0,
-                $"Reviewer verdict=needs-work has {allOpen.Length} open blocking finding(s), but none are owned by retry target {targetRole}; route to the feasible finding owner instead.");
+                $"Reviewer verdict=needs-work has {allOpen.Length} open blocking finding(s), but none are owned by retry target {targetRole}; " +
+                $"route to the feasible finding owner instead. {FormatFindingInventory(findings)}");
         }
 
         if (allOpen.Length == 0)
@@ -139,12 +140,13 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                           .Take(12)
                           .Select(item =>
                               $"{item.Finding.StableId}:{item.Finding.State}/{item.Finding.Severity}")) +
-                  (findings.Count > 12 ? ", ..." : string.Empty) + "]";
+                  (findings.Count > 12 ? $", +{findings.Count - 12} more omitted" : string.Empty) + "]";
             throw new ReviewFindingConvergenceException(
                 ReviewFindingConvergence.NeedsWorkWithoutOpenFindingsViolationCode,
                 0,
                 0,
-                $"Reviewer verdict=needs-work produced no open blocking finding to retry on; {observed}.");
+                $"Reviewer verdict=needs-work produced no open blocking finding to retry on; {observed}; " +
+                $"{FormatFindingInventory(findings)}.");
         }
 
         var lines = new List<string>
@@ -401,10 +403,18 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
     internal static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
         Goal goal,
         TaskSpec triggeringTask)
-        => ReadStructuredReviewFindingState(
-            goal,
-            triggeringTask.RequiredRole,
-            triggeringTask.LastVerification!.CompletedAt);
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(triggeringTask);
+
+        var triggeringState = triggeringTask.LastVerification?.MergedReviewFindings;
+        return triggeringState is null
+            ? ReadStructuredReviewFindingState(
+                goal,
+                triggeringTask.RequiredRole,
+                triggeringTask.LastVerification!.CompletedAt)
+            : SuppressCorrectedFindings(goal, triggeringState);
+    }
 
     private static IReadOnlyList<StructuredFindingSource> ReadStructuredReviewFindingStates(
         Goal goal,
@@ -412,7 +422,9 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
     {
         var completedAt = triggeringTask.LastVerification!.CompletedAt;
         return new[] { AgentRole.Reviewer, AgentRole.Tester }
-            .SelectMany(role => ReadStructuredReviewFindingState(goal, role, completedAt)
+            .SelectMany(role => (role == triggeringTask.RequiredRole
+                    ? ReadStructuredReviewFindingState(goal, triggeringTask)
+                    : ReadStructuredReviewFindingState(goal, role, completedAt))
                 .Select(finding => new StructuredFindingSource(role, finding)))
             .ToArray();
     }
@@ -433,11 +445,36 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             .Select(verification => verification.MergedReviewFindings!)
             .FirstOrDefault() ?? [];
 
+        return SuppressCorrectedFindings(goal, state);
+    }
+
+    private static IReadOnlyList<ReviewFinding> SuppressCorrectedFindings(
+        Goal goal,
+        IReadOnlyList<ReviewFinding> state)
+    {
         return state
             .Where(finding => !WorkerResultBlockers.IsSuppressedByCriteriaCorrection(
                 finding.Description,
                 goal.EffectiveAcceptanceCriteriaCorrections))
             .ToArray();
+    }
+
+    private static string FormatFindingInventory(IReadOnlyList<StructuredFindingSource> findings)
+    {
+        const int inventoryLimit = 12;
+        var ordered = findings
+            .OrderBy(item => item.Finding.StableId, StringComparer.Ordinal)
+            .ThenBy(item => item.Role)
+            .ToArray();
+        var rendered = string.Join(
+            ", ",
+            ordered
+                .Take(inventoryLimit)
+                .Select(item => $"{item.Finding.StableId}:{item.Finding.State}/{item.Finding.Severity}"));
+        var omitted = ordered.Length > inventoryLimit
+            ? $", +{ordered.Length - inventoryLimit} more omitted"
+            : string.Empty;
+        return $"findings_read=[{rendered}{omitted}]";
     }
 
     private static IReadOnlyList<string> DeduplicateConvergenceFindings(IEnumerable<string> findings)

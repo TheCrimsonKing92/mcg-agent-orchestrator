@@ -40,7 +40,10 @@ internal enum DeveloperBranchIntegrationStatus
 internal sealed record DeveloperBranchIntegrationResult(
     DeveloperBranchIntegrationStatus Status,
     string Message,
-    IReadOnlyList<string> ConflictPaths)
+    IReadOnlyList<string> ConflictPaths,
+    string? OriginalCandidateSha = null,
+    string? IntegratedMainSha = null,
+    string? ResultingCandidateSha = null)
 {
     internal bool CanDispatch =>
         Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
@@ -72,7 +75,7 @@ internal sealed partial class ConductorDriver
 
     private const int MaxCriterionRetryEvidenceLines = 30;
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan EvidenceMutationLeaseDuration = TimeSpan.FromMinutes(30);
     private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
 
     // Finding evidence retries deliver a Conductor-owned receipt or typed refusal to the role that
@@ -97,6 +100,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
     private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
+    private readonly Action<Goal, DeveloperBranchIntegrationResult> _recordPreDispatchIntegrationReceipt;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Func<Goal, TaskId, bool> _reconcileExitedDispatch;
@@ -170,6 +174,8 @@ internal sealed partial class ConductorDriver
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly Func<Goal, string, IDisposable?> _tryAcquireEvidenceMutationLease;
+    private readonly Func<Goal, GoalEvidenceOperationStart>? _tryBeginDeveloperIntegrationEvidenceOperation;
+    private readonly Func<Goal, GoalEvidenceLeaseFact?>? _tryRecoverTerminalDeveloperIntegrationLease;
     private readonly Func<Goal, ReconcileAcceptanceLeaseState?> _getEvidenceMutationLease;
     private readonly Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> _resolveAcceptanceHeads;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -320,12 +326,22 @@ internal sealed partial class ConductorDriver
         void RefreshJournal(GoalId goalId) =>
             journalFacts[goalId] = ProjectJournalFacts(GoalOperationJournal.Read(dir, goalId));
         var evidenceMutationLeaseStore = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
+        var goalEvidenceOperationCoordinator = new GoalEvidenceOperationCoordinator(
+            evidenceMutationLeaseStore,
+            dir,
+            EvidenceMutationLeaseDuration,
+            pidProbe: new ConductLockPidProbe());
+        _tryBeginDeveloperIntegrationEvidenceOperation = goal =>
+            goalEvidenceOperationCoordinator.TryBegin(goal, "conductor:developer-branch-integration");
+        _tryRecoverTerminalDeveloperIntegrationLease = goal =>
+            goalEvidenceOperationCoordinator.TryRecoverTerminal(goal);
         _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
             goal.Id.Value,
             EvidenceMutationLeaseDuration);
         _utcNow = () => DateTimeOffset.UtcNow;
         IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
         {
+            _tryRecoverTerminalDeveloperIntegrationLease(goal);
             var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
             return evidenceMutationLeaseStore.TryAcquireAcceptanceLease(
                 goal.Id.Value,
@@ -853,31 +869,10 @@ internal sealed partial class ConductorDriver
 
         _integrateMainBeforeDeveloperDispatch = goal =>
         {
-            GoalOperationJournal.Begin(
-                dir,
-                goal,
-                "conductor:developer-branch-integration",
-                "Checking goal branch against current main before Developer dispatch.");
             var result = IntegrateMainBeforeDeveloperDispatch(dir, goal);
-            if (result.CanDispatch)
-            {
-                GoalOperationJournal.Completed(
-                    dir,
-                    goal,
-                    "conductor:developer-branch-integration",
-                    result.Message);
-            }
-            else
-            {
-                GoalOperationJournal.Failed(
-                    dir,
-                    goal,
-                    "conductor:developer-branch-integration",
-                    result.Message);
-            }
-            RefreshJournal(goal.Id);
             return result;
         };
+        _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
         _recheckPreLandingRebaseConflict = goal =>
         {
@@ -1191,7 +1186,10 @@ internal sealed partial class ConductorDriver
         return new DeveloperBranchIntegrationResult(
             DeveloperBranchIntegrationStatus.Integrated,
             $"Conductor integrated main {mainRevision[..12]} into {branch} before Developer dispatch at {integratedHead.Output.Trim()[..12]}.",
-            []);
+            [],
+            OriginalCandidateSha: branchRevision,
+            IntegratedMainSha: mainRevision,
+            ResultingCandidateSha: integratedHead.Output.Trim());
     }
 
     private static DeveloperBranchIntegrationResult DeveloperIntegrationFailure(string message) =>
@@ -1296,9 +1294,12 @@ internal sealed partial class ConductorDriver
         Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveAcceptanceHeads = null,
         Func<DateTimeOffset>? utcNow = null, string? executionDirectory = null, Action<string, string>? acceptanceEventSink = null,
         Action<TimeSpan>? noTickAcceptancePollDelay = null, TimeSpan? noTickAcceptancePollTimeout = null,
+        Func<Goal, GoalEvidenceOperationStart>? tryBeginDeveloperIntegrationEvidenceOperation = null,
+        Func<Goal, GoalEvidenceLeaseFact?>? tryRecoverTerminalDeveloperIntegrationLease = null,
         Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
         ApparatusRedGate? apparatusRedGate = null,
-        Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null)
+        Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null,
+        Action<Goal, DeveloperBranchIntegrationResult>? recordPreDispatchIntegrationReceipt = null)
     {
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
@@ -1309,6 +1310,7 @@ internal sealed partial class ConductorDriver
                 DeveloperBranchIntegrationStatus.Current,
                 "Goal branch is current with main.",
                 []));
+        _recordPreDispatchIntegrationReceipt = recordPreDispatchIntegrationReceipt ?? ((_, _) => { });
         _dispatchAndStart = (goal, _) => dispatchAndStart(goal);
         _startRecordedDispatches = startRecordedDispatches is null
             ? _dispatchAndStart
@@ -1412,6 +1414,8 @@ internal sealed partial class ConductorDriver
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
         _tryAcquireEvidenceMutationLease =
             tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
+        _tryBeginDeveloperIntegrationEvidenceOperation = tryBeginDeveloperIntegrationEvidenceOperation;
+        _tryRecoverTerminalDeveloperIntegrationLease = tryRecoverTerminalDeveloperIntegrationLease;
         _getEvidenceMutationLease = getEvidenceMutationLease ?? (_ => null);
         _resolveAcceptanceHeads = resolveAcceptanceHeads ?? (_ => (null, null));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -2063,10 +2067,12 @@ internal sealed partial class ConductorDriver
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
+        var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
+        var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(findingEvidenceEngineSettings);
         foreach (var finding in requestingFindings)
         {
             if (!TryNormalizeFindingEvidenceRequest(
-                    finding.EvidenceRequest!, _getFindingEvidenceEngineSettings(goal),
+                    finding.EvidenceRequest!, findingEvidenceEngineSettings,
                     (project, requestedClass) =>
                         _resolveFindingEvidenceSiblingClasses(goal, project, requestedClass),
                     out var typedRequest, out var request,
@@ -2079,6 +2085,8 @@ internal sealed partial class ConductorDriver
             }
 
             var identity = BuildFindingEvidenceIdentity(typedRequest);
+            IReadOnlyList<FindingEvidenceReceipt> reusedSourceReceipts = [];
+            string? coverageDecisionReason = null;
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
             var priorOutcome = mergedFinding?.EvidenceOutcome;
@@ -2093,28 +2101,50 @@ internal sealed partial class ConductorDriver
                         mergedFinding,
                         typedRequest,
                         telemetryCandidateSha,
-                        findingRoundFingerprint))
+                        findingRoundFingerprint,
+                        executionBasisIdentity))
             {
                 continue;
             }
 
-            if (TryGetReusableGreenFindingEvidenceReceipt(
+            if (TryResolveFindingEvidenceCoverage(
                     requestingTask,
                     typedRequest,
                     telemetryCandidateSha,
-                    out var reusableOutcome,
-                    out var reusableReceipt))
+                    executionBasisIdentity,
+                    out var coverageReceipts,
+                    out var uncoveredSelections,
+                    out var coverageReason))
             {
                 reusedGreenReceipt = true;
-                ReattachReusableGreenFindingEvidence(
-                    goal, requestingTask, mergedFinding ?? finding, reusableOutcome!, reusableReceipt!);
-                continue;
+                if (uncoveredSelections.Count == 0)
+                {
+                    ReattachCoverageReusableGreenFindingEvidence(
+                        goal,
+                        requestingTask,
+                        mergedFinding ?? finding,
+                        coverageReceipts,
+                        identity,
+                        coverageReason);
+                    continue;
+                }
+
+                typedRequest = new FindingEvidenceRequest(uncoveredSelections);
+                request = string.Join("; ", uncoveredSelections.Select(FormatFindingEvidenceSelection));
+                reusedSourceReceipts = coverageReceipts;
+                coverageDecisionReason = coverageReason;
             }
 
             var groupIndex = groups.FindIndex(group => string.Equals(group.Identity, identity, StringComparison.Ordinal));
             if (groupIndex < 0)
             {
-                groups.Add(new FindingEvidenceRequestGroup(identity, request, typedRequest, [finding]));
+                groups.Add(new FindingEvidenceRequestGroup(
+                    identity,
+                    request,
+                    typedRequest,
+                    [finding],
+                    reusedSourceReceipts,
+                    coverageDecisionReason));
             }
             else
             {
@@ -2230,23 +2260,7 @@ internal sealed partial class ConductorDriver
         var receiptId = CreateFindingEvidenceReceiptId(
             candidateSha!, findingRoundFingerprint, runnable.Identity);
         var armReceipts = (evidence.Arms ?? [])
-            .Select(arm => new FindingEvidenceArmReceipt(
-                arm.Arm,
-                arm.Sha,
-                arm.Disposition,
-                arm.Accepted,
-                arm.Passed,
-                arm.Summary,
-                arm.Checks
-                    .SelectMany(check => check.TestResultPaths ?? [])
-                    .Concat(arm.Checks.Select(check => check.ArtifactsPath ?? string.Empty))
-                    .Where(path => !string.IsNullOrWhiteSpace(path))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
-                arm.Checks
-                    .SelectMany(check => check.FailingTestIdentities ?? [])
-                    .Distinct(StringComparer.Ordinal)
-                    .ToArray()))
+            .Select(CreateFindingEvidenceArmReceipt)
             .ToArray();
         var actionableCandidateRed = TryAttributeActionableCandidateRed(
             candidateSha!, evidence, armReceipts, runnable);
@@ -2269,7 +2283,8 @@ internal sealed partial class ConductorDriver
             evidence.Summary,
             armReceipts,
             requestDispositions,
-            findingRoundFingerprint);
+            findingRoundFingerprint,
+            executionBasisIdentity);
         if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
         {
             foreach (var finding in runnable.Findings)
@@ -2321,19 +2336,37 @@ internal sealed partial class ConductorDriver
 
         foreach (var finding in runnable.Findings)
         {
+            var member = runnable.Members.Single(candidate => candidate.Findings.Contains(finding));
+            var sourceReceiptIds = (member.ReusedSourceReceipts ?? [])
+                .Select(sourceReceipt => sourceReceipt.ReceiptId)
+                .Append(receiptId)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var outcome = new FindingEvidenceOutcome(
+                Honoured: true,
+                ReceiptId: receiptId,
+                ResultReason: evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown,
+                RequestedSelectionIdentity: member.Identity,
+                DecisionReason: member.CoverageDecisionReason is null
+                    ? "executed-focused-evidence"
+                    : $"executed-uncovered-after-reuse:{member.CoverageDecisionReason}",
+                SourceReceiptIds: sourceReceiptIds);
+            foreach (var sourceReceipt in member.ReusedSourceReceipts ?? [])
+            {
+                _recordFindingEvidenceOutcome(
+                    goal.Id, requestingTask.Id, finding.StableId, outcome, sourceReceipt);
+            }
             _recordFindingEvidenceOutcome(
                 goal.Id, requestingTask.Id, finding.StableId,
-                new FindingEvidenceOutcome(
-                    Honoured: true,
-                    ReceiptId: receiptId,
-                    ResultReason: evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown),
+                outcome,
                 receipt);
             var resultReason = FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(
                 evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown);
             _recordFindingEvidenceRequest(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence disposition=honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
-                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}");
+                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}; " +
+                $"decision={outcome.DecisionReason}; source_receipt_ids={string.Join(',', sourceReceiptIds)}");
             _recordFindingEvidenceRun(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; finding_id={finding.StableId}; " +
@@ -2599,31 +2632,6 @@ internal sealed partial class ConductorDriver
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
         FindingEvidenceExecutionClassifier.BuildRequestIdentity(request);
-
-    private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
-    {
-        var verificationTicks = requestingTask.LastVerification?.CompletedAt.ToUniversalTime().Ticks ?? 0;
-        var findings = round.Findings
-            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
-            .Select(finding => string.Join(
-                "\u001f",
-                finding.StableId,
-                finding.State,
-                finding.Severity,
-                finding.Category,
-                finding.Location.File,
-                finding.Location.Region,
-                finding.Description,
-                string.Join(
-                    "\u001e",
-                    (finding.EvidenceRequest?.Selections ?? [])
-                        .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
-                        .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
-                        .Select(selection => $"{selection.TestProject}:{selection.TestClass}"))));
-        var payload = $"{requestingTask.Id.Value}\u001d{verificationTicks}\u001d{string.Join("\u001d", findings)}";
-        return "finding-round-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))
-            .ToLowerInvariant()[..24];
-    }
 
     private static IReadOnlyList<FindingEvidenceRequestDisposition> BuildInitialRequestDispositions(
         IReadOnlyList<FindingEvidenceBatch> batches,
@@ -3043,7 +3051,9 @@ internal sealed partial class ConductorDriver
         string Identity,
         string Request,
         FindingEvidenceRequest TypedRequest,
-        List<ReviewFinding> Findings);
+        List<ReviewFinding> Findings,
+        IReadOnlyList<FindingEvidenceReceipt>? ReusedSourceReceipts = null,
+        string? CoverageDecisionReason = null);
 
     private sealed record FindingEvidenceBatch(
         string Identity,
@@ -3259,26 +3269,8 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    internal GoalId? SelectForcedCohortCandidate(IReadOnlyList<Goal> orderedGoals)
-    {
-        if (_cohortAcceptanceStore is null) return null;
-        return orderedGoals.FirstOrDefault(goal =>
-            _cohortAcceptanceStore.ReadOvertakeCount(goal.Id) >=
-            ConductorBatchLoop.ParallelAcceptanceBoundedOvertakeLimit)?.Id;
-    }
-
     internal IReadOnlySet<string> ReadSuppressedCohortPairs() =>
         _cohortAcceptanceStore?.ReadSuppressedPairs() ?? new HashSet<string>(StringComparer.Ordinal);
-
-    internal void RecordCohortAdmissionFairness(
-        IReadOnlyList<Goal> orderedGoals,
-        ConductorAcceptanceCohortSelection selection)
-    {
-        if (_cohortAcceptanceStore is null || orderedGoals.Count == 0) return;
-        var admitted = selection.Members.Select(member => member.GoalId).ToHashSet();
-        var oldest = orderedGoals[0].Id;
-        _cohortAcceptanceStore.ApplyAdmissionFairness(admitted, oldest);
-    }
 
     internal void ResetCohortFairness(GoalId goalId) =>
         _cohortAcceptanceStore?.ResetOvertake(goalId);
@@ -4313,24 +4305,75 @@ internal sealed partial class ConductorDriver
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
-            using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
-                goal,
-                "conductor:developer-branch-integration");
-            if (integrationEvidenceMutationLease is null)
+            if (_tryBeginDeveloperIntegrationEvidenceOperation is not null)
             {
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        fromState,
-                        $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
-            }
+                var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation(goal);
+                if (operationStart.Scope is null)
+                {
+                    var status = operationStart.LeaseFact is { } leaseFact
+                        ? GoalEvidenceLeaseRecoveryStatuses.Format(leaseFact.RecoveryStatus)
+                        : "state-unavailable";
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            fromState,
+                            $"Goal evidence mutation is held for {goal.Id.Value}; lease-recovery={status}."));
+                }
 
-            var integration = _integrateMainBeforeDeveloperDispatch(goal);
-            if (!integration.CanDispatch)
+                using (operationStart.Scope)
+                {
+                    DeveloperBranchIntegrationResult integration;
+                    try
+                    {
+                        integration = _integrateMainBeforeDeveloperDispatch(goal);
+                        _recordPreDispatchIntegrationReceipt(goal, integration);
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        operationStart.Scope.Abort(ex.Message);
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        operationStart.Scope.Fail(ex.Message);
+                        throw;
+                    }
+
+                    if (integration.CanDispatch)
+                    {
+                        operationStart.Scope.Complete(integration.Message);
+                    }
+                    else
+                    {
+                        operationStart.Scope.Fail(integration.Message);
+                        return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                    }
+                }
+            }
+            else
             {
-                return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
+                    goal,
+                    "conductor:developer-branch-integration");
+                if (integrationEvidenceMutationLease is null)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            fromState,
+                            $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
+                }
+
+                var integration = _integrateMainBeforeDeveloperDispatch(goal);
+                _recordPreDispatchIntegrationReceipt(goal, integration);
+                if (!integration.CanDispatch)
+                {
+                    return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                }
             }
         }
 
@@ -5640,6 +5683,7 @@ internal sealed partial class ConductorDriver
 
     private ReconcileAcceptanceLeaseState? TryGetActiveEvidenceMutationLease(Goal goal)
     {
+        _tryRecoverTerminalDeveloperIntegrationLease?.Invoke(goal);
         var lease = _getEvidenceMutationLease(goal);
         return lease is not null && lease.ExpiresAtUtc > _utcNow()
             ? lease

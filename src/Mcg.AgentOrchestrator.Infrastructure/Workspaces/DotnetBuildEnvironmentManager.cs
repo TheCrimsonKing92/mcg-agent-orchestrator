@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection.PortableExecutable;
@@ -18,6 +19,8 @@ public sealed record DotnetBuildEnvironment(
     bool StaleLockCleared = false,
     int? BuildPermitIndex = null)
 {
+    internal IOwnedRunRootRegistrar? OwnedRootRegistrar { get; init; }
+
     internal DotnetBuildEnvironment DeriveArtifactsPath(string artifactsPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(artifactsPath);
@@ -127,6 +130,11 @@ public static class DotnetBuildEnvironmentManager
     private static readonly object CurrentLandingFixtureRootsGate = new();
     private static readonly object LeaseJournalDrainGate = new();
     private static readonly HashSet<string> CurrentLandingFixtureRoots = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Func<DotnetBuildStorageRoot, IOwnedRunRootRegistrar?> DefaultOwnedRunRootRegistrarFactory =
+        CreateDefaultOwnedRunRootRegistrar;
+    private static readonly ConcurrentDictionary<string, IOwnedRunRootRegistrar> OwnedRunRootRegistrarsForTests =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private static readonly ConcurrentQueue<string> OwnedRunRootWriteFailures = new();
     private static int s_nextStableSlotScanStart = -1;
     private static int s_heldExecutionLeaseCount;
     private static int s_compilerLockRecoveryRequested;
@@ -140,6 +148,9 @@ public static class DotnetBuildEnvironmentManager
     internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
     internal static TimeProvider DefaultLeaseTimeProviderForTests => DefaultLeaseTimeProvider;
     internal static Action<TimeSpan> DefaultLeaseSleepForTests => DefaultLeaseSleep;
+    internal static Func<DotnetBuildStorageRoot, IOwnedRunRootRegistrar?> OwnedRunRootRegistrarFactory { get; set; } =
+        DefaultOwnedRunRootRegistrarFactory;
+    internal static TimeProvider OwnedRunRootTimeProvider { get; set; } = TimeProvider.System;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -167,6 +178,7 @@ public static class DotnetBuildEnvironmentManager
         var root = Path.Combine(storageRoot.RootPath, "runs", owner);
         var artifactsPath = Path.Combine(root, "artifacts");
         var executionLockPath = BuildSlotExecutionLockPath(BuildSlotIndex(owner), storageRoot);
+        var registrar = RegisterOwnedRunRoot(storageRoot, root, OwnedRunRootPurpose.RunAttempt);
         Directory.CreateDirectory(artifactsPath);
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
 
@@ -176,7 +188,10 @@ public static class DotnetBuildEnvironmentManager
             artifactsPath,
             executionLockPath,
             BuildArguments(artifactsPath),
-            owner);
+            owner)
+        {
+            OwnedRootRegistrar = registrar
+        };
     }
 
     internal static DotnetBuildEnvironment ResolveGoalEnvironment(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
@@ -239,11 +254,23 @@ public static class DotnetBuildEnvironmentManager
 
         try
         {
+            RecordOwnedRunRootRelease(environment, OwnedRunRootReleaseOutcome.Succeeded);
             Directory.Delete(root, recursive: true);
+            TryRecordOwnedRunRoot(
+                environment.OwnedRootRegistrar,
+                root,
+                "mark-removed",
+                registrar => registrar.MarkRemoved(root, OwnedRunRootTimeProvider.GetUtcNow()));
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            var now = OwnedRunRootTimeProvider.GetUtcNow();
+            TryRecordOwnedRunRoot(
+                environment.OwnedRootRegistrar,
+                root,
+                "mark-cleanup-failure",
+                registrar => registrar.MarkCleanupFailure(root, ex.Message, now.AddMinutes(5), now));
             return false;
         }
     }
@@ -367,7 +394,10 @@ public static class DotnetBuildEnvironmentManager
                 if (TryOpenLeaseExecutionLock(environment, out var stream, out var blockedAttribution))
                 {
                     return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
-                        environment, stream, waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value));
+                        environment,
+                        stream,
+                        waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value,
+                        cancellationToken));
                 }
                 if (blockedAttribution is not null)
                 {
@@ -404,7 +434,10 @@ public static class DotnetBuildEnvironmentManager
             if (TryOpenLeaseExecutionLock(target, out var targetStream, out var targetBlockedAttribution))
             {
                 return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
-                    target, targetStream, waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value));
+                    target,
+                    targetStream,
+                    waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value,
+                    cancellationToken));
             }
             if (targetBlockedAttribution is not null)
             {
@@ -637,14 +670,14 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    internal static void TransferExecutionLeaseToLegacyStream(FileStream stream)
+    internal static void TransferExecutionLeaseToLegacyStream(FileStream stream, Action releaseObserver)
     {
         if (stream is not LeaseFileStream leaseStream)
         {
             throw new InvalidOperationException("Only a managed execution lease stream can assume lease accounting custody.");
         }
 
-        leaseStream.RegisterDisposeObserver(() => ReleaseExecutionLease(attemptPendingRecovery: true));
+        leaseStream.RegisterDisposeObserver(releaseObserver);
     }
 
     public static FileStream AcquireLeaseExecutionLock(
@@ -843,7 +876,10 @@ public static class DotnetBuildEnvironmentManager
                     throw;
                 }
 
-                return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(environment, stream));
+                return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
+                    environment,
+                    stream,
+                    cancellationToken: cancellationToken));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -1147,8 +1183,10 @@ public static class DotnetBuildEnvironmentManager
         var root = Path.Combine(storageRoot.RootPath, "runs", owner);
         var artifactsPath = Path.Combine(root, "artifacts");
         var executionLockPath = BuildSlotExecutionLockPath(slotIndex % BuildConcurrencySlotCount, storageRoot);
+        IOwnedRunRootRegistrar? registrar = null;
         if (createArtifactsDirectory)
         {
+            registrar = RegisterOwnedRunRoot(storageRoot, root, OwnedRunRootPurpose.StableSlot);
             Directory.CreateDirectory(artifactsPath);
         }
         Directory.CreateDirectory(Path.GetDirectoryName(executionLockPath)!);
@@ -1160,7 +1198,147 @@ public static class DotnetBuildEnvironmentManager
             executionLockPath,
             BuildArguments(artifactsPath),
             $"build-{slotIndex % BuildConcurrencySlotCount}",
-            BuildPermitIndex: slotIndex % BuildConcurrencySlotCount);
+            BuildPermitIndex: slotIndex % BuildConcurrencySlotCount)
+        {
+            OwnedRootRegistrar = registrar
+        };
+    }
+
+    private static IOwnedRunRootRegistrar? RegisterOwnedRunRoot(
+        DotnetBuildStorageRoot storageRoot,
+        string root,
+        OwnedRunRootPurpose purpose)
+    {
+        var canonicalRoot = Path.GetFullPath(root);
+        try
+        {
+            var registrar = ResolveOwnedRunRootRegistrar(storageRoot);
+            if (registrar is null)
+            {
+                OwnedRunRootWriteFailures.Enqueue(
+                    $"owned-root registration unavailable; created as unregistered path={canonicalRoot}");
+                return null;
+            }
+
+            using var process = Process.GetCurrentProcess();
+            if (!SpawnProcessIdentityReader.TryReadForRegistration(process, out var owner))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot register owned build run root '{canonicalRoot}' because the owner process identity is unavailable.");
+            }
+
+            registrar.Register(
+                canonicalRoot,
+                purpose,
+                owner,
+                goalId: null,
+                dispatchId: null,
+                OwnedRunRootTimeProvider.GetUtcNow());
+            return registrar;
+        }
+        catch (Exception ex)
+        {
+            OwnedRunRootWriteFailures.Enqueue(
+                $"owned-root registration failed; created as unregistered path={canonicalRoot} error={ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    internal static IOwnedRunRootRegistrar? SetOwnedRunRootRegistrarForTests(
+        DotnetBuildStorageRoot storageRoot,
+        IOwnedRunRootRegistrar? registrar)
+    {
+        ArgumentNullException.ThrowIfNull(storageRoot);
+        var key = Path.TrimEndingDirectorySeparator(Path.GetFullPath(storageRoot.RootPath));
+        OwnedRunRootRegistrarsForTests.TryGetValue(key, out var prior);
+        if (registrar is null)
+            OwnedRunRootRegistrarsForTests.TryRemove(key, out _);
+        else
+            OwnedRunRootRegistrarsForTests[key] = registrar;
+        return prior;
+    }
+
+    private static IOwnedRunRootRegistrar? ResolveOwnedRunRootRegistrar(DotnetBuildStorageRoot storageRoot)
+    {
+        var factory = OwnedRunRootRegistrarFactory;
+        try
+        {
+            if (!ReferenceEquals(factory, DefaultOwnedRunRootRegistrarFactory))
+                return factory(storageRoot);
+
+            var key = Path.TrimEndingDirectorySeparator(Path.GetFullPath(storageRoot.RootPath));
+            return OwnedRunRootRegistrarsForTests.TryGetValue(key, out var registrar)
+                ? registrar
+                : factory(storageRoot);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static void RecordOwnedRunRootRelease(
+        DotnetBuildEnvironment environment,
+        OwnedRunRootReleaseOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        if (environment.OwnedRootRegistrar is not { } registrar)
+            return;
+
+        try
+        {
+            registrar.Release(
+                environment.RootPath,
+                outcome,
+                OwnedRunRootTimeProvider.GetUtcNow());
+        }
+        catch (Exception ex)
+        {
+            OwnedRunRootWriteFailures.Enqueue(
+                $"owned-root release persistence failed path={environment.RootPath} outcome={outcome} error={ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    internal static IReadOnlyList<string> DrainOwnedRunRootWriteFailures(int maxCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
+        var failures = new List<string>(maxCount);
+        while (failures.Count < maxCount && OwnedRunRootWriteFailures.TryDequeue(out var failure))
+            failures.Add(failure);
+        return failures;
+    }
+
+    private static IOwnedRunRootRegistrar? CreateDefaultOwnedRunRootRegistrar(DotnetBuildStorageRoot _)
+    {
+        var repositoryRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+        if (string.IsNullOrWhiteSpace(repositoryRoot))
+            repositoryRoot = Directory.GetCurrentDirectory();
+
+        var stateDbPath = Path.Combine(Path.GetFullPath(repositoryRoot), ".orchestrator", "state.db");
+        if (!File.Exists(stateDbPath) || !StateDbMigrations.IsUpToDate(stateDbPath))
+            return null;
+
+        return new OwnedRunRootRegistry(stateDbPath);
+    }
+
+    private static void TryRecordOwnedRunRoot(
+        IOwnedRunRootRegistrar? registrar,
+        string canonicalPath,
+        string operation,
+        Action<IOwnedRunRootRegistrar> write)
+    {
+        if (registrar is null)
+            return;
+
+        try
+        {
+            write(registrar);
+        }
+        catch (Exception ex)
+        {
+            OwnedRunRootWriteFailures.Enqueue(
+                $"owned-root cleanup persistence failed path={canonicalPath} operation={operation} error={ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static void ValidateStableSlotIndex(int slotIndex)
@@ -2800,14 +2978,21 @@ public static class DotnetBuildEnvironmentManager
 public sealed class DotnetBuildEnvironmentLease : IDisposable
 {
     private readonly FileStream _stream;
+    private readonly CancellationToken _cancellationToken;
     private readonly object _releaseObserverGate = new();
     private Action? _executionLockReleaseObserver;
     private int _state;
+    private int _releaseOutcome = -1;
 
-    internal DotnetBuildEnvironmentLease(DotnetBuildEnvironment environment, FileStream stream, TimeSpan? slotWaitDuration = null)
+    internal DotnetBuildEnvironmentLease(
+        DotnetBuildEnvironment environment,
+        FileStream stream,
+        TimeSpan? slotWaitDuration = null,
+        CancellationToken cancellationToken = default)
     {
         Environment = environment;
         _stream = stream;
+        _cancellationToken = cancellationToken;
         SlotWaitDuration = slotWaitDuration;
         DotnetBuildEnvironmentManager.RegisterExecutionLease();
     }
@@ -2816,6 +3001,13 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
     public TimeSpan? SlotWaitDuration { get; }
 
     internal bool IsExecutionLockHeld => Volatile.Read(ref _state) == 0;
+
+    public void SetReleaseOutcome(OwnedRunRootReleaseOutcome outcome)
+    {
+        Interlocked.Exchange(ref _releaseOutcome, (int)outcome);
+        if (Volatile.Read(ref _state) != 0)
+            DotnetBuildEnvironmentManager.RecordOwnedRunRootRelease(Environment, outcome);
+    }
 
     internal FileStream DetachStreamForLegacyCaller()
     {
@@ -2826,7 +3018,19 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
 
         try
         {
-            DotnetBuildEnvironmentManager.TransferExecutionLeaseToLegacyStream(_stream);
+            DotnetBuildEnvironmentManager.TransferExecutionLeaseToLegacyStream(_stream, () =>
+            {
+                try
+                {
+                    DotnetBuildEnvironmentManager.RecordOwnedRunRootRelease(
+                        Environment,
+                        ResolveReleaseOutcome());
+                }
+                finally
+                {
+                    DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: true);
+                }
+            });
         }
         catch
         {
@@ -2883,7 +3087,16 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: true);
+            try
+            {
+                DotnetBuildEnvironmentManager.RecordOwnedRunRootRelease(
+                    Environment,
+                    ResolveReleaseOutcome());
+            }
+            finally
+            {
+                DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: true);
+            }
         }
 
         Action? observer;
@@ -2902,4 +3115,11 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
             // Permit-release telemetry is advisory and cannot alter gate disposition.
         }
     }
+
+    private OwnedRunRootReleaseOutcome ResolveReleaseOutcome() =>
+        Volatile.Read(ref _releaseOutcome) is var outcome and >= 0
+            ? (OwnedRunRootReleaseOutcome)outcome
+            : _cancellationToken.IsCancellationRequested
+                ? OwnedRunRootReleaseOutcome.Cancelled
+                : OwnedRunRootReleaseOutcome.Failed;
 }

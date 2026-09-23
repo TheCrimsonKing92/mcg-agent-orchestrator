@@ -7,6 +7,85 @@ using System.Net.Sockets;
 
 public sealed class AgentCatalogTests
 {
+    [Xunit.Theory(DisplayName = "AgentCatalog_subscription_reasoning_defaults_are_pinned_by_model")]
+    [Xunit.InlineData(AgentCatalog.OpenAiSubscriptionModelAlias, "low")]
+    [Xunit.InlineData(AgentCatalog.OpenAiSolSubscriptionModelAlias, "low")]
+    [Xunit.InlineData(AgentCatalog.OpenAiTerraSubscriptionModelAlias, "medium")]
+    [Xunit.InlineData(AgentCatalog.OpenAiLunaSubscriptionModelAlias, "medium")]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "medium")]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "medium")]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "medium")]
+    public void AgentCatalogSubscriptionReasoningDefaultsArePinnedByModel(string modelAlias, string expected)
+    {
+        Assert.Equal(expected, AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", modelAlias));
+    }
+
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_load_defaults_GPT_6_subscription_reasoning_to_medium")]
+    public void AgentCatalogStoreLoadDefaultsGpt6SubscriptionReasoningToMedium()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "agents.json");
+        var catalog = new AgentCatalog(
+        [
+            new AgentDefinition(
+                new AgentId("openai-developer"),
+                "OpenAI developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+                ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+                Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias))
+        ]);
+
+        AgentCatalogStore.Save(path, catalog);
+
+        var restored = AgentCatalogStore.Load(path);
+        var subscription = restored.GetRequired(AgentRole.Developer).Subscription!;
+        Assert.Equal(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, subscription.ModelAlias);
+        Assert.Equal("medium", subscription.ReasoningEffort);
+    }
+
+    [Xunit.Fact(DisplayName = "DashboardAgentOptionCatalog_OpenAI_offers_GPT_6_with_supported_reasoning")]
+    public void DashboardAgentOptionCatalogOpenAiOffersGpt6WithSupportedReasoning()
+    {
+        var subscriptionModels = DashboardAgentOptionCatalog.SubscriptionModelOptions("OpenAI");
+        string[] expectedModelAliases =
+        [
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            AgentCatalog.OpenAiTerraSubscriptionModelAlias,
+            AgentCatalog.OpenAiLunaSubscriptionModelAlias,
+            AgentCatalog.OpenAiSubscriptionModelAlias,
+            AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias,
+            AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias,
+            AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias
+        ];
+        Assert.All(expectedModelAliases, alias => Assert.Contains(subscriptionModels, option => option.Value == alias));
+
+        var solReasoning = DashboardAgentOptionCatalog.SubscriptionReasoningOptions(
+            "OpenAI",
+            AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias);
+        var lunaReasoning = DashboardAgentOptionCatalog.SubscriptionReasoningOptions(
+            "OpenAI",
+            AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias);
+        var astraReasoning = DashboardAgentOptionCatalog.SubscriptionReasoningOptions(
+            "OpenAI",
+            AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias);
+        Assert.Contains(solReasoning, option => option.Value == "ultra");
+        Assert.DoesNotContain(lunaReasoning, option => option.Value == "ultra");
+        Assert.Contains(lunaReasoning, option => option.Value == "max");
+        Assert.Contains(astraReasoning, option => option.Value == "ultra");
+
+        var defaults = DashboardAgentOptionCatalog.ForProvider("OpenAI").DefaultSubscriptionReasoningByModel;
+        foreach (var alias in expectedModelAliases[^3..])
+        {
+            Assert.Equal("medium", defaults[alias]);
+            Assert.Equal(AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", alias), defaults[alias]);
+        }
+
+        Assert.Equal(
+            AgentCatalog.OpenAiSubscriptionModelAlias,
+            DashboardAgentOptionCatalog.DefaultSubscriptionModelAlias("OpenAI"));
+    }
+
     [Xunit.Fact(DisplayName = "AgentCatalog_default_contains_sdlc_roles")]
     public void AgentCatalogDefaultContainsSdlcRoles()
 {

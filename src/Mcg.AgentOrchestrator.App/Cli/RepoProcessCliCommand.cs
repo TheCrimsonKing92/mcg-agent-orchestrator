@@ -8,14 +8,24 @@ internal static class RepoProcessCliCommand
 {
     private const int MaxCommandLength = 420;
     private const int MaxUnavailableExemplars = 4;
+    private const int MaxEdgeVerdicts = 8;
 
     public static void PrintInfo(IReadOnlyList<string> parts, TextWriter output) =>
-        PrintInfo(parts, output, BuildSnapshots);
+        PrintInfoCore(parts, output, BuildSnapshotResult);
 
     internal static void PrintInfo(
         IReadOnlyList<string> parts,
         TextWriter output,
-        Func<ProcessSnapshotQuery, IReadOnlyList<ProcessSnapshot>> buildSnapshots)
+        Func<ProcessSnapshotQuery, IReadOnlyList<ProcessSnapshot>> buildSnapshots) =>
+        PrintInfoCore(
+            parts,
+            output,
+            query => new ProcessSnapshotBuildResult(buildSnapshots(query), [], 0));
+
+    private static void PrintInfoCore(
+        IReadOnlyList<string> parts,
+        TextWriter output,
+        Func<ProcessSnapshotQuery, ProcessSnapshotBuildResult> buildSnapshots)
     {
         var options = RepoProcessOptions.Parse(parts);
         if (!options.HasQuery)
@@ -23,10 +33,10 @@ internal static class RepoProcessCliCommand
             throw new ArgumentException("Usage: repo-process-info [--id <pid>] [--parent-id <pid>] [--name <name>] [--command-contains <text>] [--newest <n>] [--conduct-loop] [--dispatch-host] [--include-children] [--locks]");
         }
 
-        IReadOnlyList<ProcessSnapshot> snapshots;
+        ProcessSnapshotBuildResult buildResult;
         try
         {
-            snapshots = buildSnapshots(ProcessSnapshotQuery.From(options));
+            buildResult = buildSnapshots(ProcessSnapshotQuery.From(options));
         }
         catch (Exception ex)
         {
@@ -34,6 +44,11 @@ internal static class RepoProcessCliCommand
             return;
         }
 
+        var snapshots = buildResult.Snapshots;
+        var edgeDiagnostics = new ProcessTreeEdgeDiagnostics(
+            MaxEdgeVerdicts,
+            buildResult.EdgeVerdicts,
+            buildResult.TruncatedEdgeVerdictCount);
         var byId = snapshots.ToDictionary(snapshot => snapshot.ProcessId);
         var childrenByParent = snapshots
             .Where(snapshot => snapshot.ParentProcessId > 0)
@@ -54,7 +69,13 @@ internal static class RepoProcessCliCommand
                 }
                 else
                 {
-                    AddSelected(snapshot, options.IncludeChildren, childrenByParent, seen, selected);
+                    AddSelected(
+                        snapshot,
+                        options.IncludeChildren,
+                        childrenByParent,
+                        seen,
+                        selected,
+                        edgeDiagnostics);
                 }
             }
             else if (seen.Add(processId))
@@ -67,9 +88,20 @@ internal static class RepoProcessCliCommand
         {
             if (childrenByParent.TryGetValue(parentId, out var children))
             {
+                var parentAnchor = byId.TryGetValue(parentId, out var parent)
+                    ? IdentityAnchor(parent)
+                    : null;
                 foreach (var child in children)
                 {
-                    AddSelected(child, options.IncludeChildren, childrenByParent, seen, selected);
+                    AddSelected(
+                        child,
+                        options.IncludeChildren,
+                        childrenByParent,
+                        seen,
+                        selected,
+                        edgeDiagnostics,
+                        parentId,
+                        parentAnchor);
                 }
             }
         }
@@ -128,9 +160,17 @@ internal static class RepoProcessCliCommand
                 .Take(options.Newest);
             foreach (var snapshot in query)
             {
-                AddSelected(snapshot, options.IncludeChildren, childrenByParent, seen, selected);
+                AddSelected(
+                    snapshot,
+                    options.IncludeChildren,
+                    childrenByParent,
+                    seen,
+                    selected,
+                    edgeDiagnostics);
             }
         }
+
+        edgeDiagnostics.WriteTo(output);
 
         if (selected.Count == 0 && options.ShouldPrintEmptyMessage)
         {
@@ -225,7 +265,7 @@ internal static class RepoProcessCliCommand
             .ToList();
     }
 
-    private static IReadOnlyList<ProcessSnapshot> BuildSnapshots(ProcessSnapshotQuery query)
+    private static ProcessSnapshotBuildResult BuildSnapshotResult(ProcessSnapshotQuery query)
     {
         var snapshot = ProcessCommandLines.Snapshot(new ProcessInspectionQuery(
             query.ProcessIds.ToHashSet(),
@@ -234,7 +274,7 @@ internal static class RepoProcessCliCommand
             query.IncludeChildren,
             query.IncludeAll,
             query.AncestorProcessIds.ToHashSet()));
-        return snapshot.Records.Values
+        var snapshots = snapshot.Records.Values
             .Select(process => new ProcessSnapshot(
                 process.ProcessId,
                 process.ParentProcessId,
@@ -244,6 +284,10 @@ internal static class RepoProcessCliCommand
                 process.CommandLine,
                 process.Status))
             .ToList();
+        return new ProcessSnapshotBuildResult(
+            snapshots,
+            snapshot.EdgeVerdicts,
+            snapshot.TruncatedEdgeVerdictCount);
     }
 
     private static void AddSelected(
@@ -251,8 +295,36 @@ internal static class RepoProcessCliCommand
         bool includeChildren,
         IReadOnlyDictionary<int, List<ProcessSnapshot>> childrenByParent,
         HashSet<int> seen,
-        List<ProcessSnapshot> selected)
+        List<ProcessSnapshot> selected,
+        ProcessTreeEdgeDiagnostics edgeDiagnostics,
+        int? parentProcessId = null,
+        ProcessTreeIdentityAnchor? parentAnchor = null)
     {
+        var descendantAnchor = IdentityAnchor(snapshot);
+        if (parentProcessId is { } parentId)
+        {
+            var verdict = ProcessTreeEdgeEligibility.Evaluate(
+                parentId,
+                parentAnchor,
+                snapshot.ProcessId,
+                snapshot.Name,
+                snapshot.StartedAt,
+                snapshot.InspectionStatus);
+            if (verdict.Decision != ProcessTreeEdgeDecision.Eligible)
+            {
+                edgeDiagnostics.Add(verdict);
+            }
+
+            if (verdict.Decision == ProcessTreeEdgeDecision.TemporalInversion)
+            {
+                return;
+            }
+
+            descendantAnchor = verdict.Decision == ProcessTreeEdgeDecision.Eligible
+                ? IdentityAnchor(snapshot)
+                : parentAnchor;
+        }
+
         if (!seen.Add(snapshot.ProcessId))
         {
             return;
@@ -266,9 +338,24 @@ internal static class RepoProcessCliCommand
 
         foreach (var child in children)
         {
-            AddSelected(child, includeChildren, childrenByParent, seen, selected);
+            AddSelected(
+                child,
+                includeChildren,
+                childrenByParent,
+                seen,
+                selected,
+                edgeDiagnostics,
+                snapshot.ProcessId,
+                descendantAnchor);
         }
     }
+
+    private static ProcessTreeIdentityAnchor? IdentityAnchor(ProcessSnapshot snapshot) =>
+        snapshot.InspectionStatus is ProcessInspectionStatus.Exited or ProcessInspectionStatus.DeadOrRecycled
+            ? null
+            : snapshot.StartedAt is { } startedAt
+                ? new ProcessTreeIdentityAnchor(snapshot.ProcessId, startedAt)
+                : null;
 
     private static bool MatchesNames(ProcessSnapshot snapshot, IReadOnlyList<string> names) =>
         names.Count == 0 ||
@@ -451,6 +538,77 @@ internal static class RepoProcessCliCommand
         DateTimeOffset? StartedAt,
         string? CommandLine,
         ProcessInspectionStatus InspectionStatus);
+
+    private sealed record ProcessSnapshotBuildResult(
+        IReadOnlyList<ProcessSnapshot> Snapshots,
+        IReadOnlyList<ProcessTreeEdgeVerdict> EdgeVerdicts,
+        int TruncatedEdgeVerdictCount);
+
+    private sealed class ProcessTreeEdgeDiagnostics
+    {
+        private readonly int _limit;
+        private readonly List<ProcessTreeEdgeVerdict> _verdicts = [];
+        private readonly HashSet<(ProcessTreeEdgeDecision Decision, int ParentId, int ChildId)> _seen = [];
+        private int _rejectedCount;
+        private int _unverifiedCount;
+        private int _truncatedCount;
+
+        internal ProcessTreeEdgeDiagnostics(
+            int limit,
+            IReadOnlyList<ProcessTreeEdgeVerdict> initialVerdicts,
+            int initialTruncatedCount)
+        {
+            _limit = limit;
+            foreach (var verdict in initialVerdicts)
+            {
+                Add(verdict);
+            }
+
+            _rejectedCount += initialTruncatedCount;
+            _truncatedCount += initialTruncatedCount;
+        }
+
+        internal void Add(ProcessTreeEdgeVerdict verdict)
+        {
+            if (verdict.Decision == ProcessTreeEdgeDecision.Eligible ||
+                !_seen.Add((verdict.Decision, verdict.ParentProcessId, verdict.ChildProcessId)))
+            {
+                return;
+            }
+
+            if (verdict.Decision == ProcessTreeEdgeDecision.TemporalInversion)
+            {
+                _rejectedCount++;
+            }
+            else
+            {
+                _unverifiedCount++;
+            }
+
+            if (_verdicts.Count < _limit)
+            {
+                _verdicts.Add(verdict);
+            }
+            else
+            {
+                _truncatedCount++;
+            }
+        }
+
+        internal void WriteTo(TextWriter output)
+        {
+            foreach (var verdict in _verdicts)
+            {
+                output.WriteLine(verdict.Format());
+            }
+
+            if (_rejectedCount > 0 || _unverifiedCount > 0)
+            {
+                output.WriteLine(
+                    $"PROCESS_EDGE_SUMMARY rejected={_rejectedCount} unverified={_unverifiedCount} truncated={_truncatedCount}");
+            }
+        }
+    }
 
     internal sealed record ProcessSnapshotQuery(
         IReadOnlyList<int> ProcessIds,

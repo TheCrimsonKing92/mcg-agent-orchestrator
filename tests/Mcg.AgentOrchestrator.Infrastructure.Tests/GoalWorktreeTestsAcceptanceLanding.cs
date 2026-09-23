@@ -928,13 +928,14 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             Goal? currentGoal = goal;
 
             var acceptanceWatch = Stopwatch.StartNew();
-            CliPersistentStateRunner.ExecuteCommand(
+            AcceptanceStableSlotTestSupport.ExecuteWithIsolatedStableSlot(
                 ["acceptance"], stateRepository, workspace, ref agents, providers,
                 ref profiles, ref currentGoal, acceptanceVerifier: fakeVerifier,
                 acceptanceCleanupContext: CreateIsolatedCleanupContext(workspace.ExecutionDirectory));
 
             Console.WriteLine($"acceptance-lock-probe read_ms={readElapsed?.TotalMilliseconds} " +
                 $"write_ms={writeElapsed?.TotalMilliseconds} acceptance_ms={acceptanceWatch.Elapsed.TotalMilliseconds}");
+            Assert.Equal(1, AcceptanceStableSlotTestSupport.LastSelectionCount);
             Assert.Equal(1, fakeVerifier.RunCount);
             Assert.Null(readFailure);
             Assert.Null(writeFailure);

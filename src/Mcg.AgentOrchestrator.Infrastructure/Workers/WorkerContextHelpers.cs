@@ -4,6 +4,15 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class WorkerContextHelpers
 {
+    private static readonly HashSet<string> TypedContextPackageModelAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        AgentCatalog.OpenAiSolSubscriptionModelAlias,
+        AgentCatalog.OpenAiTerraSubscriptionModelAlias,
+        AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias,
+        AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias,
+        AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias
+    };
+
     public static string TrimArtifactBlock(string value, int maxChars)
     {
         var trimmed = value.Trim();
@@ -27,6 +36,6 @@ internal static class WorkerContextHelpers
         AgentRole.Tester or
         AgentRole.Reviewer &&
         string.Equals(providerName, "OpenAI", StringComparison.OrdinalIgnoreCase) &&
-        (string.Equals(modelName, AgentCatalog.OpenAiSolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
-         string.Equals(modelName, AgentCatalog.OpenAiTerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase));
+        modelName is not null &&
+        TypedContextPackageModelAliases.Contains(modelName);
 }

@@ -106,7 +106,11 @@ internal static class ProcessCommandLines
 
     private static ProcessCommandLineSnapshot ToSnapshot(
         WindowsNativeProcessInspection.ProcessInspectionResult result) =>
-        new(result.Records, result.Failure);
+        new(
+            result.Records,
+            result.Failure,
+            edgeVerdicts: result.EdgeVerdicts,
+            truncatedEdgeVerdictCount: result.TruncatedEdgeVerdictCount);
 
     private static IReadOnlyDictionary<int, ProcessInspectionRecord> ReadLinuxRecords(IEnumerable<int> pids)
     {
@@ -194,6 +198,8 @@ public sealed class ProcessCommandLineSnapshot
     private readonly Func<IReadOnlyCollection<int>, WindowsNativeProcessInspection.ProcessInspectionResult>? _readRecords;
     private ProcessInspectionFailure? _failure;
     private bool _hasLazyRead;
+    private readonly IReadOnlyList<ProcessTreeEdgeVerdict> _edgeVerdicts = [];
+    private readonly int _truncatedEdgeVerdictCount;
 
     internal ProcessCommandLineSnapshot(IReadOnlyDictionary<int, string> commandLines, Action<int>? onRead = null)
         : this(commandLines.ToDictionary(
@@ -219,11 +225,15 @@ public sealed class ProcessCommandLineSnapshot
     internal ProcessCommandLineSnapshot(
         IReadOnlyDictionary<int, ProcessInspectionRecord> records,
         ProcessInspectionFailure? failure,
-        Action<int>? onRead = null)
+        Action<int>? onRead = null,
+        IReadOnlyList<ProcessTreeEdgeVerdict>? edgeVerdicts = null,
+        int truncatedEdgeVerdictCount = 0)
     {
         _records = records.ToDictionary(pair => pair.Key, pair => pair.Value);
         _failure = failure;
         _onRead = onRead;
+        _edgeVerdicts = edgeVerdicts ?? [];
+        _truncatedEdgeVerdictCount = truncatedEdgeVerdictCount;
     }
 
     internal ProcessCommandLineSnapshot(
@@ -244,6 +254,9 @@ public sealed class ProcessCommandLineSnapshot
         ? throw new InvalidOperationException(
             "A partial operation-backed process snapshot has not inspected any requested process ids.")
         : _failure;
+
+    internal IReadOnlyList<ProcessTreeEdgeVerdict> EdgeVerdicts => _edgeVerdicts;
+    internal int TruncatedEdgeVerdictCount => _truncatedEdgeVerdictCount;
 
     public bool TryGetRecord(int processId, out ProcessInspectionRecord record)
     {

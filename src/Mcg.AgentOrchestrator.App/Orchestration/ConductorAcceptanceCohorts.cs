@@ -41,9 +41,51 @@ internal sealed record ConductorAcceptanceCohortSelection(
             member.MergeEvidence.Reason.ToString())).ToArray();
 }
 
+internal enum ConductorAcceptanceHeldConflictKind
+{
+    LandingPath,
+    SerializedResource,
+    UnknownResourceIdentity
+}
+
+internal enum ConductorAcceptanceCohortFairnessOutcome
+{
+    YieldedToRunnableYounger,
+    NoRunnableYounger
+}
+
+internal sealed record ConductorAcceptanceHeldResource(
+    string HolderGoalId,
+    IReadOnlyList<string> LandingPaths,
+    IReadOnlyList<string> ResourceKeys);
+
+internal sealed record ConductorAcceptanceHeldConflict(
+    GoalId CandidateGoalId,
+    string HolderGoalId,
+    ConductorAcceptanceHeldConflictKind Kind,
+    string ConflictKey);
+
+internal sealed record ConductorAcceptanceCohortFairnessContext(
+    GoalId BlockedHeadGoalId,
+    int OvertakeCount,
+    IReadOnlyList<ConductorAcceptanceHeldResource> HeldResources);
+
+internal sealed record ConductorAcceptanceCohortFairnessPriority(
+    GoalId GoalId,
+    int OvertakeCount);
+
+internal sealed record ConductorAcceptanceCohortFairnessDecision(
+    ConductorAcceptanceCohortFairnessOutcome Outcome,
+    GoalId BlockedHeadGoalId,
+    GoalId? SelectedGoalId,
+    ConductorAcceptanceHeldConflict HeadConflict,
+    int OvertakeCount,
+    IReadOnlyList<ConductorAcceptanceHeldConflict> CandidateConflicts);
+
 internal sealed record ConductorAcceptanceCohortSelectionResult(
     ConductorAcceptanceCohortSelection? Selection,
-    IReadOnlyList<ConductorAcceptanceCohortPairExclusion> Exclusions);
+    IReadOnlyList<ConductorAcceptanceCohortPairExclusion> Exclusions,
+    ConductorAcceptanceCohortFairnessDecision? FairnessDecision = null);
 
 internal sealed record ConductorAcceptanceCohortRunResult(
     AcceptanceCohortReceipt? Receipt,
@@ -83,7 +125,8 @@ internal static class ConductorAcceptanceCohortSelector
     internal static ConductorAcceptanceCohortSelectionResult Select(
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> orderedCandidates,
         GoalId? forcedCandidate = null,
-        IReadOnlySet<string>? suppressedPairFingerprints = null)
+        IReadOnlySet<string>? suppressedPairFingerprints = null,
+        ConductorAcceptanceCohortFairnessContext? fairnessContext = null)
     {
         ArgumentNullException.ThrowIfNull(orderedCandidates);
         var ready = new List<GateReadyCandidateProjection>(orderedCandidates.Count);
@@ -109,6 +152,73 @@ internal static class ConductorAcceptanceCohortSelector
                     $"Cohort candidate {candidate.GoalId.Value} does not match its Ready projection {projected.Projection.GoalId.Value}.");
             }
             ready.Add(projected.Projection);
+        }
+
+        if (fairnessContext is not null)
+        {
+            if (forcedCandidate is null || forcedCandidate != fairnessContext.BlockedHeadGoalId)
+            {
+                throw new InvalidOperationException(
+                    "A cohort fairness context must describe the exact forced candidate.");
+            }
+
+            var blockedHeadIndex = ready.FindIndex(candidate => candidate.GoalId == forcedCandidate);
+            if (blockedHeadIndex >= 0 &&
+                FindHeldConflict(ready[blockedHeadIndex], fairnessContext.HeldResources) is { } headConflict)
+            {
+                var candidateConflicts = new List<ConductorAcceptanceHeldConflict>();
+                for (var candidateIndex = blockedHeadIndex + 1; candidateIndex < ready.Count; candidateIndex++)
+                {
+                    var candidate = ready[candidateIndex];
+                    if (FindHeldConflict(candidate, fairnessContext.HeldResources) is { } candidateConflict)
+                    {
+                        candidateConflicts.Add(candidateConflict);
+                        continue;
+                    }
+
+                    for (var peerIndex = candidateIndex + 1; peerIndex < ready.Count; peerIndex++)
+                    {
+                        var peer = ready[peerIndex];
+                        if (FindHeldConflict(peer, fairnessContext.HeldResources) is { } peerConflict)
+                        {
+                            candidateConflicts.Add(peerConflict);
+                            continue;
+                        }
+
+                        var pairExclusion = FindExclusion(candidate, peer, suppressedPairFingerprints);
+                        if (pairExclusion is not null)
+                        {
+                            exclusions.Add(pairExclusion);
+                            continue;
+                        }
+
+                        var frozenExclusions = Array.AsReadOnly(exclusions.ToArray());
+                        return new ConductorAcceptanceCohortSelectionResult(
+                            new ConductorAcceptanceCohortSelection(
+                                Array.AsReadOnly([candidate, peer]),
+                                frozenExclusions),
+                            frozenExclusions,
+                            new ConductorAcceptanceCohortFairnessDecision(
+                                ConductorAcceptanceCohortFairnessOutcome.YieldedToRunnableYounger,
+                                fairnessContext.BlockedHeadGoalId,
+                                candidate.GoalId,
+                                headConflict,
+                                fairnessContext.OvertakeCount,
+                                Array.AsReadOnly(candidateConflicts.ToArray())));
+                    }
+                }
+
+                return new ConductorAcceptanceCohortSelectionResult(
+                    Selection: null,
+                    Array.AsReadOnly(exclusions.ToArray()),
+                    new ConductorAcceptanceCohortFairnessDecision(
+                        ConductorAcceptanceCohortFairnessOutcome.NoRunnableYounger,
+                        fairnessContext.BlockedHeadGoalId,
+                        SelectedGoalId: null,
+                        headConflict,
+                        fairnessContext.OvertakeCount,
+                        Array.AsReadOnly(candidateConflicts.ToArray())));
+            }
         }
 
         var forcedCandidateIsReady = false;
@@ -160,6 +270,60 @@ internal static class ConductorAcceptanceCohortSelector
         return new ConductorAcceptanceCohortSelectionResult(
             Selection: null,
             Array.AsReadOnly(exclusions.ToArray()));
+    }
+
+    private static ConductorAcceptanceHeldConflict? FindHeldConflict(
+        GateReadyCandidateProjection candidate,
+        IReadOnlyList<ConductorAcceptanceHeldResource> heldResources)
+    {
+        foreach (var holder in heldResources
+                     .OrderBy(holder => holder.HolderGoalId, StringComparer.Ordinal))
+        {
+            if (string.IsNullOrWhiteSpace(holder.HolderGoalId) ||
+                holder.ResourceKeys is null ||
+                holder.LandingPaths is null ||
+                (holder.ResourceKeys.Count == 0 && holder.LandingPaths.Count == 0) ||
+                holder.ResourceKeys.Contains(
+                    RepositoryLandingScopeNormalization.UnknownAcceptanceScopeResourceKey,
+                    StringComparer.OrdinalIgnoreCase))
+            {
+                return new ConductorAcceptanceHeldConflict(
+                    candidate.GoalId,
+                    string.IsNullOrWhiteSpace(holder.HolderGoalId) ? "unknown" : holder.HolderGoalId,
+                    ConductorAcceptanceHeldConflictKind.UnknownResourceIdentity,
+                    RepositoryLandingScopeNormalization.UnknownAcceptanceScopeResourceKey);
+            }
+
+            var sharedResource = candidate.ResourceKeys
+                .Intersect(holder.ResourceKeys, StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (sharedResource is not null)
+            {
+                return new ConductorAcceptanceHeldConflict(
+                    candidate.GoalId,
+                    holder.HolderGoalId,
+                    ConductorAcceptanceHeldConflictKind.SerializedResource,
+                    sharedResource);
+            }
+
+            foreach (var candidatePath in candidate.LandingPaths.Order(StringComparer.OrdinalIgnoreCase))
+            {
+                foreach (var heldPath in holder.LandingPaths.Order(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (RepositoryPathOverlap.Overlaps(candidatePath, heldPath))
+                    {
+                        return new ConductorAcceptanceHeldConflict(
+                            candidate.GoalId,
+                            holder.HolderGoalId,
+                            ConductorAcceptanceHeldConflictKind.LandingPath,
+                            $"path:{candidatePath}:{heldPath}");
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     internal static string PairFingerprint(GateReadyCandidateProjection first, GateReadyCandidateProjection second) =>
@@ -275,6 +439,71 @@ internal static class ConductorAcceptanceCohortAttribution
 
 internal sealed partial class ConductorBatchLoop
 {
+    private ConductorAcceptanceCohortSelectionResult SelectAndReportAcceptanceCohort(
+        IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
+        IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts,
+        ConductorAcceptanceCohortFairnessPriority? fairnessPriority,
+        ConductorDriver driver)
+    {
+        var fairnessContext = fairnessPriority is null
+            ? null
+            : new ConductorAcceptanceCohortFairnessContext(
+                fairnessPriority.GoalId,
+                fairnessPriority.OvertakeCount,
+                BuildAcceptanceHeldResources(liveAttempts));
+        var decision = ConductorAcceptanceCohortSelector.Select(
+            candidates,
+            fairnessPriority?.GoalId,
+            driver.ReadSuppressedCohortPairs(),
+            fairnessContext);
+        EmitAcceptanceCohortFairnessDecision(decision.FairnessDecision);
+        return decision;
+    }
+
+    private void EmitAcceptanceCohortFairnessDecision(
+        ConductorAcceptanceCohortFairnessDecision? decision)
+    {
+        if (decision is null) return;
+        var candidateConflicts = decision.CandidateConflicts.Count == 0
+            ? "none"
+            : string.Join(',', decision.CandidateConflicts.Select(conflict =>
+                $"{conflict.CandidateGoalId.Value}:{conflict.HolderGoalId}:{conflict.Kind}:{SanitizeReason(conflict.ConflictKey)}"));
+        EmitProgress(
+            $"ACCEPTANCE_COHORT_FAIRNESS outcome={decision.Outcome} " +
+            $"blocked={decision.BlockedHeadGoalId.Value} selected={decision.SelectedGoalId?.Value ?? "none"} " +
+            $"holder={decision.HeadConflict.HolderGoalId} conflict_kind={decision.HeadConflict.Kind} " +
+            $"conflict={SanitizeReason(decision.HeadConflict.ConflictKey)} " +
+            $"overtakes={decision.OvertakeCount} candidate_conflicts={candidateConflicts}");
+    }
+
+    private void EmitAcceptanceCohortFairnessTransition(CohortAdmissionFairnessTransition? transition)
+    {
+        if (transition is null) return;
+        EmitProgress(
+            $"ACCEPTANCE_COHORT_FAIRNESS_TRANSITION oldest={transition.OldestEligibleGoalId.Value} " +
+            $"previous={transition.PreviousOvertakeCount} resulting={transition.ResultingOvertakeCount} " +
+            $"oldest_admitted={transition.OldestAdmitted} " +
+            $"admitted={string.Join(',', transition.AdmittedGoalIds.Select(goalId => goalId.Value))}");
+    }
+
+    private static IReadOnlyList<ConductorAcceptanceHeldResource> BuildAcceptanceHeldResources(
+        IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts) =>
+        liveAttempts
+            .Where(attempt => attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
+            .OrderBy(attempt => attempt.GoalId, StringComparer.Ordinal)
+            .ThenBy(attempt => attempt.AttemptId, StringComparer.Ordinal)
+            .Select(attempt =>
+            {
+                var scope = RepositoryLandingScopeNormalization.Normalize(
+                    attempt.ScopePaths ?? [],
+                    reserveUnknownScope: true);
+                return new ConductorAcceptanceHeldResource(
+                    attempt.GoalId,
+                    scope.ConflictPaths,
+                    scope.ResourceKeys);
+            })
+            .ToArray();
+
     // The infrastructure faults the background attempt path treats as transient (IsRetryableAcceptanceRun).
     // A cohort gate that fails this way is retried on a later tick, not turned into a candidate verdict.
     private static bool IsTransientCohortGateFault(Exception exception) =>
@@ -339,6 +568,39 @@ internal sealed partial class ConductorBatchLoop
 
 internal sealed partial class ConductorDriver
 {
+    internal ConductorAcceptanceCohortFairnessPriority? SelectForcedCohortCandidate(
+        IReadOnlyList<Goal> orderedGoals)
+    {
+        if (_cohortAcceptanceStore is null) return null;
+        foreach (var goal in orderedGoals)
+        {
+            var count = _cohortAcceptanceStore.ReadOvertakeCount(goal.Id);
+            if (count >= ConductorBatchLoop.ParallelAcceptanceBoundedOvertakeLimit)
+            {
+                return new ConductorAcceptanceCohortFairnessPriority(goal.Id, count);
+            }
+        }
+
+        return null;
+    }
+
+    internal CohortAdmissionFairnessTransition RecordCohortAdmissionFairness(
+        IReadOnlyList<Goal> orderedGoals,
+        ConductorAcceptanceCohortSelection selection)
+    {
+        if (_cohortAcceptanceStore is null)
+        {
+            throw new InvalidOperationException("Cohort admission fairness store is unavailable.");
+        }
+        if (orderedGoals.Count == 0)
+        {
+            throw new InvalidOperationException("Cohort admission fairness requires an ordered eligible goal.");
+        }
+        var admitted = selection.Members.Select(member => member.GoalId).ToHashSet();
+        var oldest = orderedGoals[0].Id;
+        return _cohortAcceptanceStore.ApplyAdmissionFairness(admitted, oldest);
+    }
+
     // A background cohort gate that faulted is parked here as a typed fault instead of being rethrown
     // into the conduct tick, and drained by the next RunAcceptanceCohort call for the same member pair.
     private readonly ConcurrentDictionary<string, ConductorAcceptanceCohortGateFault> _cohortGateFaults =

@@ -64,8 +64,10 @@ internal sealed record TerminalGoalSweepResult(
     public long AttentionDurationMs { get; init; }
     public long MergeEvidenceDurationMs { get; init; }
     public long GoalsDurationMs { get; init; }
+    public long OwnedRootDurationMs { get; init; }
     public int GitSpawnCount { get; init; }
     public int GoalsSweptCount { get; init; }
+    public TerminalGoalSweepOwnedRootResult? OwnedRoots { get; init; }
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
     public IReadOnlyList<GoalId> ExplicitlySweptGoalIds =>
@@ -369,7 +371,7 @@ internal sealed record TerminalGoalSweepCacheSweepFacts(
     IReadOnlyList<string> EphemeralDirectories,
     GoalWorktreeCleanupHooks CleanupHooks);
 
-internal static class TerminalGoalSweep
+internal static partial class TerminalGoalSweep
 {
     private static readonly AsyncLocal<GitSpawnCounter?> CurrentGitSpawnCounter = new();
 
@@ -423,8 +425,12 @@ internal static class TerminalGoalSweep
         }
         gitRunner = CountingGitRunner;
         cleanupHooks ??= new GoalWorktreeCleanupHooks();
-        orchestratorDirectory ??= OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory;
+        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
+        orchestratorDirectory ??= workspace.OrchestratorDirectory;
         var dispatchRunner = new BackgroundDispatchRunner();
+        var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
+        var ownedRoots = ReapOwnedBuildRoots(workspace.SqliteStatePath);
+        ownedRootTiming.Stop();
         var gitIndexTiming = System.Diagnostics.Stopwatch.StartNew();
         var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);
         gitIndexTiming.Stop();
@@ -872,8 +878,10 @@ internal static class TerminalGoalSweep
             AttentionDurationMs = attentionTiming.ElapsedMilliseconds,
             MergeEvidenceDurationMs = mergeEvidenceTiming.ElapsedMilliseconds,
             GoalsDurationMs = goalsTiming.ElapsedMilliseconds,
+            OwnedRootDurationMs = ownedRootTiming.ElapsedMilliseconds,
             GitSpawnCount = gitSpawnCounter.Value,
-            GoalsSweptCount = sweptGoalIds.Count
+            GoalsSweptCount = sweptGoalIds.Count,
+            OwnedRoots = ownedRoots
         };
     }
 
