@@ -159,6 +159,77 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
     }
 
     [Xunit.Fact(Timeout = 30_000)]
+    public async Task MaxDurationBoundary_WhenAcceptanceSnapshotIsUnreadable_DefersInsteadOfStopping()
+    {
+        var time = new ManualConductorTimeProviderForTests(
+            new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+        await using var fixture = new HoldingAcceptanceAttemptsAcrossTicksFixture(time);
+        var root = CreateTempDirectory("mcg-max-duration-unreadable-snapshot");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var running = CreateVerifiedSimpleGoal(kernel, "Update src/UnreadableAtMaxDuration.cs");
+            var sleepCount = 0;
+            var metadataRestored = false;
+            string? metadataPath = null;
+            string? validMetadata = null;
+
+            var outputText = CaptureConsole(() => new ConductorBatchLoop(
+                handoffOnMaxDuration: _ => ConductorLoopHandoffResult.StartedProcess(1234, "out.log", "err.log"),
+                utcNow: time.GetUtcNow).Run(
+                kernel,
+                MakeAcceptanceDriver(fixture, () => { }),
+                ConductorAutonomyPolicy.Conservative,
+                Path.Combine(root, ConductorBatchLoop.StopFileName),
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ =>
+                {
+                    sleepCount++;
+                    if (sleepCount == 1)
+                    {
+                        var handle = fixture.RequiredHandleForTests(running);
+                        metadataPath = handle.Attempt.MetadataPath;
+                        validMetadata = File.ReadAllText(metadataPath);
+                        File.WriteAllText(metadataPath, "not-json");
+                        time.AdvanceForTests(TimeSpan.FromSeconds(2));
+                    }
+                    else if (sleepCount == 2)
+                    {
+                        time.AdvanceForTests(TimeSpan.FromSeconds(1));
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("Unreadable-snapshot deferral exceeded its deterministic tick budget.");
+                    }
+
+                    return false;
+                },
+                maxDuration: TimeSpan.FromSeconds(1),
+                keepAliveWhenIdle: true,
+                maxDurationDeferralCeiling: TimeSpan.FromSeconds(30),
+                onMaxDurationDeferralStateChanged: isDeferred =>
+                {
+                    if (isDeferred && !metadataRestored)
+                    {
+                        File.WriteAllText(metadataPath!, validMetadata!);
+                        fixture.RequiredHandleForTests(running).CompleteForTests();
+                        metadataRestored = true;
+                    }
+                }));
+
+            Assert.True(metadataRestored);
+            Assert.Contains("LOOP_STOP_DEFERRED ", outputText, StringComparison.Ordinal);
+            Assert.Contains("inflightStateUnavailable=true", outputText, StringComparison.Ordinal);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, ReadAttempt(metadataPath!).Outcome);
+            Assert.Contains("LOOP_STOP ", outputText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
     public void MaxDurationBoundary_WithoutInFlightAttempt_StopsWithoutDeferral()
     {
         var (kernel, _) = SimpleGoal();

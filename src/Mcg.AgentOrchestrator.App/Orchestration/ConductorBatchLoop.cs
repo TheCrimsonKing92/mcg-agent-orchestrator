@@ -548,20 +548,20 @@ internal sealed partial class ConductorBatchLoop
                 var now = _utcNow();
                 maxDurationDeferralStartedAt ??= now;
                 var snapshot = BuildMaxDurationAcceptanceSnapshot(kernel, driver, maxDurationDeferredAttemptIds);
-                var verdict = snapshot.Failure is null
-                    ? ConductorMaxDurationStopDeferral.Decide(
-                        now,
-                        maxDurationDeferralStartedAt.Value,
-                        snapshot.Attempts,
-                        maxDurationDeferralCeiling ?? AcceptanceCheckTimeouts.DefaultTimeout)
-                    : new ConductorMaxDurationStopVerdict(ConductorMaxDurationStopVerdictKind.Stop, []);
+                var verdict = ConductorMaxDurationStopDeferral.Decide(
+                    now,
+                    maxDurationDeferralStartedAt.Value,
+                    snapshot.Attempts,
+                    maxDurationDeferralCeiling ?? AcceptanceCheckTimeouts.DefaultTimeout,
+                    snapshot.Failure);
                 if (verdict.Kind == ConductorMaxDurationStopVerdictKind.Defer)
                 {
                     isDeferringMaxDurationStop = true;
-                    maxDurationDeferredAttemptIds ??= verdict.Attempts.Select(attempt => attempt.AttemptId).ToHashSet(StringComparer.Ordinal);
+                    if (maxDurationDeferredAttemptIds is null && verdict.Attempts.Count > 0)
+                        maxDurationDeferredAttemptIds = verdict.Attempts.Select(attempt => attempt.AttemptId).ToHashSet(StringComparer.Ordinal);
                     onMaxDurationDeferralStateChanged?.Invoke(true);
                     if (!maxDurationDeferralAnnounced)
-                        EmitProgress(ConductorMaxDurationStopDeferral.FormatDeferredEvent(totalTicks, now, maxDurationDeferralStartedAt.Value, maxDurationDeferralCeiling ?? AcceptanceCheckTimeouts.DefaultTimeout, verdict.Attempts));
+                        EmitProgress(ConductorMaxDurationStopDeferral.FormatDeferredEvent(totalTicks, now, maxDurationDeferralStartedAt.Value, maxDurationDeferralCeiling ?? AcceptanceCheckTimeouts.DefaultTimeout, verdict.Attempts, snapshot.Failure));
                     maxDurationDeferralAnnounced = true;
                 }
                 else

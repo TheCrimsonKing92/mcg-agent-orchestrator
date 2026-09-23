@@ -73,6 +73,34 @@ public sealed class ConductorMaxDurationStopDeferralTests
         Assert.Equal(ConductorMaxDurationStopVerdictKind.Defer, verdict.Kind);
     }
 
+    [Xunit.Fact]
+    public void SnapshotFailureDefersUntilCeilingThenExpiresLoudly()
+    {
+        var failure = new InvalidDataException("attempt metadata is unreadable");
+
+        var deferred = ConductorMaxDurationStopDeferral.Decide(
+            DeferralStartedAt.AddMinutes(39),
+            DeferralStartedAt,
+            [],
+            TimeSpan.FromMinutes(40),
+            failure);
+        var expired = ConductorMaxDurationStopDeferral.Decide(
+            DeferralStartedAt.AddMinutes(40),
+            DeferralStartedAt,
+            [],
+            TimeSpan.FromMinutes(40),
+            failure);
+        var detail = ConductorMaxDurationStopDeferral.FormatStopDetail(
+            TimeSpan.FromHours(12),
+            expired,
+            failure);
+
+        Assert.Equal(ConductorMaxDurationStopVerdictKind.Defer, deferred.Kind);
+        Assert.Equal(ConductorMaxDurationStopVerdictKind.StopExpired, expired.Kind);
+        Assert.Contains("deferralExpired=true", detail, StringComparison.Ordinal);
+        Assert.Contains("inflightStateUnavailable=true", detail, StringComparison.Ordinal);
+    }
+
     private static ConductorMaxDurationInFlightAttempt Attempt(string id, DateTimeOffset startedAt) =>
         new(id, ["goal-a"], startedAt);
 }

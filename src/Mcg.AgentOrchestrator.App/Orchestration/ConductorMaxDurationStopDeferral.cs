@@ -24,19 +24,27 @@ internal static class ConductorMaxDurationStopDeferral
         DateTimeOffset utcNow,
         DateTimeOffset deferralStartedAt,
         IReadOnlyList<ConductorMaxDurationInFlightAttempt> attempts,
-        TimeSpan ceiling)
+        TimeSpan ceiling,
+        Exception? snapshotFailure = null)
     {
         ArgumentNullException.ThrowIfNull(attempts);
         var ordered = attempts.OrderBy(attempt => attempt.AttemptId, StringComparer.Ordinal).ToArray();
-        if (ordered.Length == 0)
-        {
-            return new ConductorMaxDurationStopVerdict(ConductorMaxDurationStopVerdictKind.Stop, ordered);
-        }
-
         var elapsed = utcNow - deferralStartedAt;
         if (elapsed < TimeSpan.Zero)
         {
             elapsed = TimeSpan.Zero;
+        }
+
+        if (snapshotFailure is not null)
+        {
+            return elapsed < ceiling
+                ? new ConductorMaxDurationStopVerdict(ConductorMaxDurationStopVerdictKind.Defer, ordered)
+                : new ConductorMaxDurationStopVerdict(ConductorMaxDurationStopVerdictKind.StopExpired, ordered);
+        }
+
+        if (ordered.Length == 0)
+        {
+            return new ConductorMaxDurationStopVerdict(ConductorMaxDurationStopVerdictKind.Stop, ordered);
         }
 
         return elapsed < ceiling
@@ -49,12 +57,14 @@ internal static class ConductorMaxDurationStopDeferral
         DateTimeOffset utcNow,
         DateTimeOffset deferralStartedAt,
         TimeSpan ceiling,
-        IReadOnlyList<ConductorMaxDurationInFlightAttempt> attempts) =>
+        IReadOnlyList<ConductorMaxDurationInFlightAttempt> attempts,
+        Exception? snapshotFailure = null) =>
         $"LOOP_STOP_DEFERRED tick={tick} reason=max-duration " +
         $"deferral_started_at={deferralStartedAt:O} ceiling_ms={Math.Max(0L, (long)ceiling.TotalMilliseconds)} " +
         $"attempts={string.Join(',', attempts.Select(attempt => attempt.AttemptId))} " +
         $"attempt_elapsed_ms={string.Join(',', attempts.Select(attempt => $"{attempt.AttemptId}:{Math.Max(0L, (long)(utcNow - attempt.StartedAt).TotalMilliseconds)}"))} " +
-        $"attempt_started_at={string.Join(',', attempts.Select(attempt => $"{attempt.AttemptId}:{attempt.StartedAt:O}"))}";
+        $"attempt_started_at={string.Join(',', attempts.Select(attempt => $"{attempt.AttemptId}:{attempt.StartedAt:O}"))}" +
+        (snapshotFailure is null ? string.Empty : $" inflightStateUnavailable=true error={snapshotFailure.GetType().Name}");
 
     internal static string FormatStopDetail(
         TimeSpan maxDuration,
@@ -62,14 +72,17 @@ internal static class ConductorMaxDurationStopDeferral
         Exception? snapshotFailure = null)
     {
         var detail = $"seconds={(int)maxDuration.TotalSeconds}";
+        if (verdict.Kind == ConductorMaxDurationStopVerdictKind.StopExpired)
+        {
+            detail += $" deferralExpired=true attempts={string.Join(',', verdict.Attempts.Select(attempt => attempt.AttemptId))}";
+        }
+
         if (snapshotFailure is not null)
         {
             return $"{detail} inflightStateUnavailable=true error={snapshotFailure.GetType().Name}";
         }
 
-        return verdict.Kind == ConductorMaxDurationStopVerdictKind.StopExpired
-            ? $"{detail} deferralExpired=true attempts={string.Join(',', verdict.Attempts.Select(attempt => attempt.AttemptId))}"
-            : detail;
+        return detail;
     }
 }
 
