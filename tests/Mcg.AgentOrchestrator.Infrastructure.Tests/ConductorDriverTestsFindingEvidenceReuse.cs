@@ -116,6 +116,75 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         Assert.Equal(developer.Id, retriedTaskId);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(FindingEvidenceArmDisposition.Inconclusive, FindingEvidenceOutcomeReason.BaselineInconclusive)]
+    [Xunit.InlineData(FindingEvidenceArmDisposition.ApparatusFailure, FindingEvidenceOutcomeReason.ApparatusFailure)]
+    public void CandidateRedWithUnusableBaselineEscalatesWithoutRetryingTester(
+        FindingEvidenceArmDisposition baselineDisposition,
+        FindingEvidenceOutcomeReason outcomeReason)
+    {
+        const string candidateSha = "abc1234";
+        const string failingTest = "GoalAcceptanceVerifierTests.CandidateOutsideChangedFiles";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        var finding = EvidenceFindingWithRequest(
+            "The candidate red has an unusable Baseline arm.",
+            id: "candidate-red-unusable-baseline",
+            category: FindingCategory.TestEvidence,
+            classes: ["GoalAcceptanceVerifierTests"]);
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        var focusedRuns = 0;
+        TaskId? retriedTaskId = null;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                var red = CandidateRedFindingEvidence(request, candidateSha, failingTest);
+                if (focusedRuns != 1)
+                {
+                    return red;
+                }
+
+                return red with
+                {
+                    Arms = red.Arms!.Select(arm => arm.Arm == FindingEvidenceArm.Baseline
+                        ? arm with
+                        {
+                            Disposition = baselineDisposition,
+                            Passed = false,
+                            Summary = "baseline apparatus failed"
+                        }
+                        : arm).ToArray(),
+                    OutcomeReason = outcomeReason
+                };
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            getLandingFileScopes: _ =>
+                ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidenceReuse.cs"],
+            writeEscalation: (_, _, message) => escalation = message,
+            executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        Assert.Null(retriedTaskId);
+        Assert.Contains("Baseline execution failure", escalation, StringComparison.Ordinal);
+        Assert.Contains("candidate-red-unusable-baseline", escalation, StringComparison.Ordinal);
+        Assert.Contains(candidateSha, escalation, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public void IdenticalRedRequestReusesReceiptWithoutAnotherExecution()
     {
@@ -137,7 +206,12 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return CandidateOnlyRedWithExecutedCount(request, candidateSha, failingTest);
+                return CandidateOnlyRedWithExecutedClasses(
+                    _artifactRoot,
+                    request,
+                    candidateSha,
+                    failingTest,
+                    ["ConductorDriverTestsFindingEvidenceReuse"]);
             },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
@@ -163,6 +237,55 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
     }
 
     [Xunit.Fact]
+    public void PartialMultiClassRedReceiptDoesNotSuppressMissingExecution()
+    {
+        const string candidateSha = "abc1234";
+        const string failingTest =
+            "ConductorDriverTestsFindingEvidenceReuse.PartialMultiClassRedReceiptDoesNotSuppressMissingExecution";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        var finding = EvidenceFindingWithRequest(
+            "The retained red receipt executed only one of two requested classes.",
+            id: "partial-red-coverage",
+            category: FindingCategory.TestEvidence,
+            classes: ["ConductorDriverTestsFindingEvidenceReuse", "GoalAcceptanceVerifierTests"]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return CandidateOnlyRedWithExecutedClasses(
+                    _artifactRoot,
+                    request,
+                    candidateSha,
+                    failingTest,
+                    ["ConductorDriverTestsFindingEvidenceReuse"]);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            getLandingFileScopes: _ =>
+                ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidenceReuse.cs"],
+            executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: false);
+        kernel.RetryTask(goal.Id, tester.Id, "Replay the same request with incomplete retained coverage.");
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
+    }
+
+    [Xunit.Fact]
     public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper()
     {
         const string candidateSha = "abc1234";
@@ -184,7 +307,12 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         {
             focusedRuns++;
             return focusedRuns == 1
-                ? CandidateOnlyRedWithExecutedCount(request, candidateSha, failingTest)
+                ? CandidateOnlyRedWithExecutedClasses(
+                    _artifactRoot,
+                    request,
+                    candidateSha,
+                    failingTest,
+                    ["ConductorDriverTestsFindingEvidenceReuse"])
                 : CandidateRedFindingEvidence(request, candidateSha, failingTest);
         }
 
@@ -1197,6 +1325,62 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             Checks = [check],
             Arms = [candidate],
             OutcomeReason = null
+        };
+    }
+
+    private static FocusedEvidenceRunResult CandidateOnlyRedWithExecutedClasses(
+        string artifactRoot,
+        string request,
+        string candidateSha,
+        string failingTestIdentity,
+        IReadOnlyList<string> executedClasses)
+    {
+        var source = CandidateOnlyRedWithExecutedCount(request, candidateSha, failingTestIdentity);
+        var trxPath = Path.Combine(artifactRoot, $"{Guid.NewGuid():N}.trx");
+        XNamespace trx = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+        var tests = executedClasses.Select((testClass, index) => new
+        {
+            Id = $"red-test-{index}",
+            ClassName = $"Mcg.AgentOrchestrator.Infrastructure.Tests.{testClass}"
+        }).ToArray();
+        new XDocument(
+            new XElement(
+                trx + "TestRun",
+                new XElement(
+                    trx + "TestDefinitions",
+                    tests.Select(test => new XElement(
+                        trx + "UnitTest",
+                        new XAttribute("id", test.Id),
+                        new XElement(
+                            trx + "TestMethod",
+                            new XAttribute("className", test.ClassName),
+                            new XAttribute("name", "Runs"))))),
+                new XElement(
+                    trx + "Results",
+                    tests.Select(test => new XElement(
+                        trx + "UnitTestResult",
+                        new XAttribute("testId", test.Id),
+                        new XAttribute("outcome", "Failed")))),
+                new XElement(
+                    trx + "ResultSummary",
+                    new XElement(
+                        trx + "Counters",
+                        new XAttribute("total", tests.Length),
+                        new XAttribute("executed", tests.Length),
+                        new XAttribute("passed", 0),
+                        new XAttribute("failed", tests.Length)))))
+            .Save(trxPath);
+        var sourceCandidate = source.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
+        var candidateCheck = sourceCandidate.Checks.Single() with
+        {
+            ArtifactsPath = artifactRoot,
+            TestResultPaths = [trxPath],
+            ExecutedTestCount = executedClasses.Count
+        };
+        return source with
+        {
+            Checks = [candidateCheck],
+            Arms = [sourceCandidate with { Checks = [candidateCheck] }]
         };
     }
 

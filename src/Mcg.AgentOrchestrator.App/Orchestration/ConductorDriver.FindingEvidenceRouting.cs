@@ -101,6 +101,15 @@ internal sealed partial class ConductorDriver
                 $"Candidate RED receipt {receiptId} at candidate {candidateSha} for finding(s) {findingIds} is inherited from a RED Baseline arm. No worker was dispatched.");
             return true;
         }
+        if (baseline?.Disposition is
+                FindingEvidenceArmDisposition.ApparatusFailure or FindingEvidenceArmDisposition.Inconclusive)
+        {
+            decision = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
+                $"Baseline execution failure for candidate RED finding(s) {findingIds} at candidate {candidateSha}; " +
+                $"candidate_receipt_id={receiptId}; baseline_receipt_id={receiptId}. No worker was dispatched.");
+            return true;
+        }
 
         return false;
     }

@@ -2313,7 +2313,8 @@ internal sealed partial class ConductorDriver
             requestDispositions,
             findingRoundFingerprint,
             executionBasisIdentity);
-        if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
+        if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure &&
+            !armReceipts.Any(arm => arm is { Arm: FindingEvidenceArm.Candidate, Disposition: FindingEvidenceArmDisposition.Red }))
         {
             foreach (var finding in runnable.Findings)
             {
@@ -2342,7 +2343,6 @@ internal sealed partial class ConductorDriver
                     $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; " +
                     FormatFocusedEvidenceResult(evidence));
             }
-
             if (evidenceAttempt is null ||
                 !_focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(
                     evidenceAttempt,
