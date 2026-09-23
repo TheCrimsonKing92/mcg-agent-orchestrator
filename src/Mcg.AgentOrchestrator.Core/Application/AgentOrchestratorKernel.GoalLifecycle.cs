@@ -1257,27 +1257,10 @@ public sealed partial class AgentOrchestratorKernel
             return goal;
         }
 
-        if (IsTerminalGoalStatus(goal.Status))
+        var refusal = DescribeMergeEvidenceCompletionRefusal(goal);
+        if (refusal is not null)
         {
-            throw new InvalidOperationException(
-                $"Goal '{goalId}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.");
-        }
-
-        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
-        if (outstandingObligations.Count > 0)
-        {
-            var detail = string.Join(", ", outstandingObligations.Select(item =>
-                $"{item.Id}:{item.Owner}:{item.State}"));
-            throw new InvalidOperationException(
-                $"Goal '{goalId}' cannot complete from merge evidence while criterion evidence obligations remain outstanding: {detail}.");
-        }
-
-        if (goal.Tasks.Any(task =>
-                task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled or WorkTaskStatus.Failed) ||
-                task.LastProcess is { IsRunning: true }))
-        {
-            throw new InvalidOperationException(
-                $"Goal '{goalId}' cannot complete from merge evidence while any task is non-terminal or has a live process.");
+            throw new InvalidOperationException(refusal);
         }
 
         foreach (var task in goal.Tasks.Where(task =>
@@ -1308,6 +1291,39 @@ public sealed partial class AgentOrchestratorKernel
             Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
         }
         return goal;
+    }
+
+    public string? DescribeMergeEvidenceCompletionRefusal(GoalId goalId) =>
+        DescribeMergeEvidenceCompletionRefusal(GetGoal(goalId));
+
+    private static string? DescribeMergeEvidenceCompletionRefusal(Goal goal)
+    {
+        if (goal.Status == GoalStatus.Completed)
+        {
+            return null;
+        }
+
+        if (IsTerminalGoalStatus(goal.Status))
+        {
+            return $"Goal '{goal.Id}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.";
+        }
+
+        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
+        if (outstandingObligations.Count > 0)
+        {
+            var detail = string.Join(", ", outstandingObligations.Select(item =>
+                $"{item.Id}:{item.Owner}:{item.State}"));
+            return $"Goal '{goal.Id}' cannot complete from merge evidence while criterion evidence obligations remain outstanding: {detail}.";
+        }
+
+        if (goal.Tasks.Any(task =>
+                task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled or WorkTaskStatus.Failed) ||
+                task.LastProcess is { IsRunning: true }))
+        {
+            return $"Goal '{goal.Id}' cannot complete from merge evidence while any task is non-terminal or has a live process.";
+        }
+
+        return null;
     }
 
     public void RecordGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha)
