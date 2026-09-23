@@ -5091,14 +5091,7 @@ internal sealed partial class ConductorDriver
                     MappingNeedsInput: true);
             }
 
-            var alias = project.Contains("Core.Tests", StringComparison.OrdinalIgnoreCase)
-                ? "Core.Tests"
-                : project.Contains("Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)
-                    ? "Infrastructure.Tests"
-                    : project.Contains("Dashboard.Tests", StringComparison.OrdinalIgnoreCase)
-                        ? "Dashboard.Tests"
-                        : null;
-            if (alias is null)
+            if (!PreReviewFocusedRequestSplitter.TryResolveBrokerAlias(project, out var alias))
             {
                 return new PreReviewEvidenceContext(
                     candidateSha,
@@ -5108,7 +5101,6 @@ internal sealed partial class ConductorDriver
                     NoApplicableTests: false,
                     MappingNeedsInput: true);
             }
-
             if (filterIndex >= 0 && filterIndex + 1 >= check.Command.Count)
             {
                 return new PreReviewEvidenceContext(
@@ -5120,7 +5112,15 @@ internal sealed partial class ConductorDriver
                     MappingNeedsInput: true);
             }
 
-            requests.Add($"{alias}: {check.Command[filterIndex + 1]}");
+            if (!PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+                    alias!, check.Command[filterIndex + 1], out var requestItems))
+            {
+                return new PreReviewEvidenceContext(
+                    candidateSha, selected, null,
+                    "Mapped test filter cannot be split into broker-safe positive clauses.",
+                    NoApplicableTests: false, MappingNeedsInput: true);
+            }
+            requests.AddRange(requestItems);
         }
 
         return new PreReviewEvidenceContext(
