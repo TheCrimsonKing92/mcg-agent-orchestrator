@@ -581,7 +581,7 @@ internal static partial class PlannerOutputContract
             if (!mappingLines.ContainsKey(criterion))
             {
                 diagnostic = unparsedLines.TryGetValue(criterion, out var offendingLine)
-                    ? $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped; a line for criterion {criterion} was found but was not parsed as a mapping: '{BoundOffendingLine(offendingLine)}'"
+                    ? $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped; a line for criterion {criterion} was found but was not parsed as a mapping: '{BoundOffendingLine(offendingLine)}'; keep your existing plan and re-emit this criterion as a single line such as \"{criterion}. disposition=planned; plan=<mapping>\" or \"{criterion}. disposition=undecidable; would-settle=<evidence>; required-source=<producer/store>; unavailable-because=<reason>\""
                     : $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped; no line was found for criterion {criterion}";
                 return false;
             }
@@ -682,7 +682,7 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?<open>\*{1,2}|_{1,2})?(?:criterion[ \t]+)?(?<criterion>\d+)\b(?<skip>(?:[ \t]*(?:\*{1,2}|_{1,2}|\([^()\n]*\)|\[[^\[\]\n]*\]))*)(?:[ \t]*[.)\]:\-–—][ \t]*(?:(?:maps?(?:[ \t]+to)?|covers)[ \t]+)?|[ \t]+(?:maps?(?:[ \t]+to)?|covers|→|=>|[–—])[ \t]*)(?<mapping>.*)$", RegexOptions.IgnoreCase)]
     private static partial Regex CriterionMappingLine();
 
-    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:\*{1,2}|_{1,2})?(?:criterion[ \t]+)?(?<criterion>\d+)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[ \t]*(?:#{1,6}[ \t]+)?(?:[-*][ \t]+)?(?:\*{1,2}|_{1,2})?(?:criterion[ \t]+)?(?<criterion>\d+)\b", RegexOptions.IgnoreCase)]
     private static partial Regex CriterionMappingPrefix();
 
     [GeneratedRegex(@"(?i)(?<name>disposition|plan|would-settle|required-source|unavailable-because)\s*=\s*(?<value>[^;]+)")]

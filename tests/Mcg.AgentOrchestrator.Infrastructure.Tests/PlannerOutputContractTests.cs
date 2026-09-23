@@ -807,6 +807,102 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_HeadingMapping_ReportsHeadingAndCanonicalRepair()
+    {
+        const string heading = "### Criterion 1";
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping",
+            $$"""
+            {{heading}}
+            `disposition=planned; plan=Implement the mapped behavior.`
+            """);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the mapped behavior."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("criterion 1 is unmapped", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("was found but was not parsed as a mapping", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains(heading, result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("1. disposition=planned; plan=<mapping>", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_HeadingMapping_PreservesCriterionNumberInRepair()
+    {
+        const string heading = "### Criterion 2";
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping",
+            $$"""
+            1. disposition=planned; plan=Implement the first mapped behavior.
+            {{heading}}
+            `disposition=planned; plan=Implement the second mapped behavior.`
+            """);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the first mapped behavior.", "Implement the second mapped behavior."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("criterion 2 is unmapped", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains(heading, result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("2. disposition=planned; plan=<mapping>", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("1. disposition=planned; plan=<mapping>", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_CanonicalDispositionMapping_Passes()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping",
+            "1. disposition=planned; plan=Implement the mapped behavior.");
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the mapped behavior."]);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_HeadingMapping_BoundsOffendingLine()
+    {
+        var heading = "### Criterion 1 " + new string('x', 250);
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping",
+            heading + "\n`disposition=planned; plan=Implement the mapped behavior.`");
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the mapped behavior."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("…", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(heading, result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_AbsentMapping_ReportsNoLineFound()
     {
         var workingDirectory = CreateTempDirectory();
@@ -825,6 +921,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.False(result.Succeeded);
         Xunit.Assert.Contains("criterion 1 is unmapped", result.Diagnostic, StringComparison.Ordinal);
         Xunit.Assert.Contains("no line was found for criterion 1", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("keep your existing plan and re-emit", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
