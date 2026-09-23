@@ -55,10 +55,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
         var infrastructureRollup = Assert.Single(result.Checks!, check => check.Name == "infrastructure tests");
         Assert.True(infrastructureRollup.Passed);
-        Assert.StartsWith(
-            $"covered by {laneCount} partitioned checks; changed file in dependency closure; ",
-            infrastructureRollup.ResultSummary,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            $"covered by {laneCount} partitioned checks; changed file in dependency closure; " +
+            "changed projects: Infrastructure; dependency closure: App, Dashboard.Tests, Infrastructure, " +
+            "Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.ProviderEnvironment.Tests, " +
+            "Infrastructure.Tests, TestSupport",
+            infrastructureRollup.ResultSummary);
         Assert.Equal(
             result.Checks
                 .Where(check => check.Name.StartsWith("infrastructure tests: ", StringComparison.Ordinal))
