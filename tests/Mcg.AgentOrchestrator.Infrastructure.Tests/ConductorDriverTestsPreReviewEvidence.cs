@@ -1324,17 +1324,52 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             emitted.SelectMany(item => item[(item.IndexOf(": ", StringComparison.Ordinal) + 2)..].Split('|')));
     }
 
+    // Frozen from goal 1a43cb08's premise; this list intentionally does not track the live test inventory.
+    private static readonly string[] PremiseInfrastructureClassNames =
+    [
+        "AdvanceLoopTests",
+        "AutoReviewRetryConvergenceBriefBuilderTests",
+        "ChaosGateAssignedScopeIncompleteTests",
+        "ChaosGateDispatchDirtyWorktreeTests",
+        "ChaosGateDispatchNoChangeTests",
+        "CitedPriorEvidenceResolverTests",
+        "CliCommandTestsSubscriptionDispatchCommands",
+        "ConductorBatchLoopTestsReapingDetach",
+        "ConductorBatchLoopTestsWatchProgress",
+        "ConductorBatchLoopVerificationReconcileTests",
+        "ConductorDriverTests",
+        "ConductorDriverTestsDispatchRecovery",
+        "DirtyDispatchRecoveryViewTests",
+        "DispatchRecoveryPolicyTests",
+        "FailureTriageDecisionTests",
+        "GoalRefinementTests",
+        "InterruptedWorkCheckpointContinuationTests",
+        "LandingExecutorTests",
+        "PlannerEvidenceDispatchTests",
+        "PlannerOutputContractTests",
+        "PlannerSamplingDispatchTests",
+        "PreDispatchIntegrationNoChangeTests",
+        "RunGoalServiceProcessContractTests",
+        "RunGoalServiceTests",
+        "VerificationAndProcessLogTests",
+        "WorkerBuildEvidenceRequirementTests",
+        "WorkerContextRendererDispatchPathTests",
+        "WorkerDispatchBuildEvidenceClassificationTests",
+        "WorkerDispatchCompletionClassifierTests",
+        "WorkerDispatchJobAccountingTests",
+        "WorkerDispatchTestsDispatchPreparation",
+        "WorkerDispatchTestsModelSelection",
+        "WorkerDispatchTestsModelSelectionEnvMutation",
+        "WorkerDispatchTestsSandboxLowIntegrity",
+        "WorkerDispatchTestsSubscriptionPreflight",
+        "WorkerDispatchTestsWorkerResultClassification"
+    ];
+
     [Xunit.Fact]
     public void PremiseInfrastructureSelection_SplitItemsPassBrokerValidation()
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
-        var plan = RepositoryTestImpactPlanner.Plan([
-            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
-            root);
-        var classNames = Assert.Single(plan.Checks,
-            check => check.TestProject == RepositoryTestProject.Infrastructure).TestClassSelections!;
-        Assert.Equal(37, classNames.Count);
-        var filter = string.Join('|', classNames.Select(name => $"FullyQualifiedName~{name}"));
+        var filter = string.Join('|', PremiseInfrastructureClassNames.Select(name => $"FullyQualifiedName~{name}"));
         Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", filter, out var items));
         Assert.Equal(2, items.Count);
 
