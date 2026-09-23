@@ -846,6 +846,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title", "--depends-on", "abc"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-similar", "query"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-update", "abc", "--title", "new"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-annotate", "abc", "receipt"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-close", "abc"]));
@@ -861,6 +862,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-show", "abc"]));
         Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-list"]));
+        Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-similar", "query"]));
         Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-show", "abc"]));
         Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-depends", "abc", "--on", "def"]));
         Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-add", "title", "--depends-on", "abc"]));
@@ -870,6 +872,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["serve-dashboard"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState([]));
+        Xunit.Assert.Equal(
+            CliCommandCapability.QueryOnly,
+            CliCommandCapabilities.Classify(["backlog-similar", "query"]));
     }
 
     [Xunit.Fact(DisplayName = "Cli_gate_status_lists_stable_slot_heartbeats")]
@@ -1690,6 +1695,191 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var unchanged = await new DogfoodLogStore(workspace.DogfoodLogStorePath)
             .GetByGoalIdAsync(goal.Id.Value);
         Xunit.Assert.Equal(originalMarkdown, unchanged!.RenderedMarkdown);
+    }
+
+    [Xunit.Fact]
+    public async Task CliBacklogSimilarReturnsRankedPointersAcrossStatusesAndCompletedGoals()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var open = await store.AddAsync("Open pointer", "crossstatusuniqueword");
+        var done = await store.AddAsync("Done pointer", "crossstatusuniqueword");
+        await store.CloseAsync(done.Id);
+        var superseded = await store.AddAsync("Superseded pointer", "crossstatusuniqueword");
+        await store.UpdateAsync(superseded.Id, new BacklogItemUpdate(Status: BacklogItemStatus.Superseded));
+        var noteOnly = await store.AddAsync("Note-only pointer");
+        await store.AppendNoteAsync(noteOnly.Id, "noteonlyuniqueword");
+        var kernel = new AgentOrchestratorKernel();
+        var completedGoalId = new GoalId("abcdef12abcdef12abcdef12abcdef12");
+        kernel.AddTerminalGoalMetadataOnlyStubs([
+            new TerminalGoalMetadata(
+                completedGoalId,
+                GoalStatus.Completed,
+                "crossstatusuniqueword completed goal",
+                CreatedAt: new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero),
+                TerminatedAt: new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero))
+        ]);
+
+        var statusOutput = ExecuteCliAndCapture(["backlog-similar", "crossstatusuniqueword"], kernel, workspace);
+        var noteOutput = ExecuteCliAndCapture(["backlog-similar", "noteonlyuniqueword"], kernel, workspace);
+
+        Xunit.Assert.Contains($"kind=backlog id={open.Id[..8]} status=Open title=Open pointer updated=", statusOutput);
+        Xunit.Assert.Contains($"kind=backlog id={done.Id[..8]} status=Done title=Done pointer updated=", statusOutput);
+        Xunit.Assert.Contains($"kind=backlog id={superseded.Id[..8]} status=Superseded title=Superseded pointer updated=", statusOutput);
+        Xunit.Assert.Contains($"kind=goal id={completedGoalId.Value[..8]} status=Completed title=crossstatusuniqueword completed goal updated=2026-09-02 rank=", statusOutput);
+        var firstPointer = noteOutput.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)[0];
+        Xunit.Assert.Contains($"kind=backlog id={noteOnly.Id[..8]}", firstPointer);
+        Xunit.Assert.DoesNotContain(" excerpt=", statusOutput);
+    }
+
+    [Xunit.Fact]
+    public async Task CliBacklogSimilarIdExcludesSelfAndHonorsOutputOptions()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var source = await store.AddAsync("Identity source", "identityuniqueword");
+        await store.AppendNoteAsync(source.Id, "noteidentityword");
+        var related = await store.AddAsync("Identity related", "identityuniqueword noteidentityword " + new string('x', 400));
+        var unrelated = await store.AddAsync("Open unrelated", "identityuniqueword");
+        await store.CloseAsync(related.Id);
+
+        var output = ExecuteCliAndCapture(
+            ["backlog-similar", "--id", source.Id[..8], "--status", "Done", "--limit", "1", "--excerpt"],
+            new AgentOrchestratorKernel(),
+            workspace);
+
+        Xunit.Assert.DoesNotContain(source.Id[..8], output);
+        Xunit.Assert.Contains($"kind=backlog id={related.Id[..8]} status=Done", output);
+        Xunit.Assert.DoesNotContain(unrelated.Id[..8], output);
+        var pointer = Xunit.Assert.Single(output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.StartsWith("- kind=", StringComparison.Ordinal)));
+        var excerpt = pointer[(pointer.IndexOf(" excerpt=", StringComparison.Ordinal) + " excerpt=".Length)..];
+        Xunit.Assert.InRange(excerpt.Length, 1, 200);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("\"")]
+    [Xunit.InlineData("(")]
+    [Xunit.InlineData(")")]
+    [Xunit.InlineData("*")]
+    [Xunit.InlineData(":")]
+    [Xunit.InlineData("AND")]
+    [Xunit.InlineData("OR")]
+    [Xunit.InlineData("NOT")]
+    [Xunit.InlineData("NEAR")]
+    public async Task CliBacklogSimilarTreatsFtsSyntaxAsPlainText(string query)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        await new BacklogStore(workspace.BacklogStorePath).AddAsync("Syntax source", "AND OR NOT NEAR");
+
+        var exception = Record.Exception(() => ExecuteCliAndCapture(
+            ["backlog-similar", query],
+            new AgentOrchestratorKernel(),
+            workspace));
+
+        Xunit.Assert.Null(exception);
+    }
+
+    [Xunit.Fact]
+    public async Task CliBacklogAddSimilarityIsAdvisorySuppressibleAndFailureSafe()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        for (var index = 0; index < 5; index++)
+            await store.AddAsync($"Prior advisory {index}", "advisoryuniqueword");
+
+        var advisory = ExecuteCliAndCapture(
+            ["backlog-add", "New advisory", "advisoryuniqueword"],
+            new AgentOrchestratorKernel(),
+            workspace);
+        var advisoryLines = advisory.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var similarIndex = Array.IndexOf(advisoryLines, "Similar:");
+        Xunit.Assert.StartsWith("Added:", advisoryLines[0], StringComparison.Ordinal);
+        Xunit.Assert.True(similarIndex > 0);
+        Xunit.Assert.InRange(advisoryLines.Count(line => line.StartsWith("- kind=", StringComparison.Ordinal)), 1, 3);
+
+        var suppressed = ExecuteCliAndCapture(
+            ["backlog-add", "Suppressed advisory", "advisoryuniqueword", "--no-similar"],
+            new AgentOrchestratorKernel(),
+            workspace);
+        Xunit.Assert.Single(suppressed.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        Xunit.Assert.DoesNotContain("Similar:", suppressed);
+
+        BacklogSimilaritySearch.ForcedFailureMessage = "forced test failure";
+        string failedSearch;
+        try
+        {
+            failedSearch = ExecuteCliAndCapture(
+                ["backlog-add", "Failure-safe advisory", "advisoryuniqueword"],
+                new AgentOrchestratorKernel(),
+                workspace);
+        }
+        finally
+        {
+            BacklogSimilaritySearch.ForcedFailureMessage = null;
+        }
+
+        var failedLines = failedSearch.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Xunit.Assert.Equal(2, failedLines.Length);
+        Xunit.Assert.StartsWith("Added:", failedLines[0], StringComparison.Ordinal);
+        Xunit.Assert.Equal("Warning: similarity search unavailable; item was added.", failedLines[1]);
+        Xunit.Assert.Contains(
+            await store.ListAsync(includeAll: true),
+            item => item.Title == "Failure-safe advisory");
+    }
+
+    [Xunit.Fact]
+    public async Task CliBacklogSimilarDoesNotChangePersistentTablesOrFiles()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        await store.AddAsync("Stable similarity source", "stableuniqueword");
+        var beforeTables = ReadBacklogTableNames(workspace.BacklogStorePath);
+        var beforeFiles = SnapshotFiles(root);
+
+        _ = ExecuteCliAndCapture(
+            ["backlog-similar", "stableuniqueword"],
+            new AgentOrchestratorKernel(),
+            workspace);
+
+        Xunit.Assert.Equal(beforeTables, ReadBacklogTableNames(workspace.BacklogStorePath));
+        Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
+    }
+
+    [Xunit.Fact]
+    public void CliBacklogSimilarMissingStoreDoesNotCreateBacklogDatabase()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var beforeFiles = SnapshotFiles(root);
+
+        var output = ExecuteCliAndCapture(
+            ["backlog-similar", "absentuniqueword"],
+            new AgentOrchestratorKernel(),
+            workspace);
+
+        Xunit.Assert.Contains("Backlog similar: 0 result(s)", output);
+        Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+        Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
+    }
+
+    private static string[] ReadBacklogTableNames(string databasePath)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            $"Data Source={databasePath};Mode=ReadOnly;Pooling=False;");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names.ToArray();
     }
 
 

@@ -10,6 +10,7 @@ public sealed class CliHelpTests
     [Xunit.Theory(DisplayName = "Cli_help_prints_usage_without_executing_command")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
+    [Xunit.InlineData(new[] { "backlog-similar", "--help" }, "backlog-similar", "--excerpt")]
     [Xunit.InlineData(new[] { "backlog-update", "--help" }, "backlog-update", "--description")]
     [Xunit.InlineData(new[] { "backlog-show", "--help" }, "backlog-show", "-h")]
     [Xunit.InlineData(new[] { "backlog-annotate", "--help" }, "backlog-annotate", "--text-file")]
