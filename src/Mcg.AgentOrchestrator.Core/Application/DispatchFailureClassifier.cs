@@ -1001,20 +1001,28 @@ public static class DispatchFailureClassifier
 
         if (TryGetOrchestratorAuthoredFailure(verification, out var authoredFailure))
         {
+            var verifiedNoChange = IsVerifiedNoChangeRoundWithRecognisedEvidence(
+                authoredFailure,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges);
+
             return BuildOutcome(
-                authoredFailure.Rule,
+                verifiedNoChange ? TaskOutcomeRules.VerifiedNoChangeRound : authoredFailure.Rule,
                 task,
                 verification,
                 workerResultPresent,
                 hasCommittedChanges,
                 new DispatchOutcome(
-                DispatchOutcomeKind.UnknownFailure,
+                verifiedNoChange ? DispatchOutcomeKind.VerifiedSuccess : DispatchOutcomeKind.UnknownFailure,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
-                RecoveryRecommendation.OperatorNeeded,
-                BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure.Description, verification)));
+                verifiedNoChange ? RecoveryRecommendation.None : RecoveryRecommendation.OperatorNeeded,
+                verifiedNoChange
+                    ? BuildVerifiedNoChangeRoundEvidenceSummary(task, verification)
+                    : BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure.Description, verification)));
         }
 
         if (verification.ExitCode != 0 && HasScriptingFailureEvidence(verification))
@@ -1536,7 +1544,7 @@ public static class DispatchFailureClassifier
                 $"main {integration.IntegratedMainSha}; candidate {integration.ResultingCandidateSha}{testsEvidence}";
         }
 
-        return $"verified-no-change-round: candidate {task.LastDispatch!.BaseCommit}{testsEvidence}";
+        return $"verified-no-change-round: candidate {task.LastDispatch?.BaseCommit ?? "unknown"}{testsEvidence}";
     }
 
     private static string BuildProviderAuthenticationEvidenceSummary(TaskVerificationRecord verification) =>
@@ -1794,6 +1802,24 @@ public static class DispatchFailureClassifier
                 TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
                 StringComparison.Ordinal);
     }
+
+    private static bool IsVerifiedNoChangeRoundWithRecognisedEvidence(
+        OrchestratorAuthoredFailure authoredFailure,
+        TaskVerificationRecord verification,
+        bool workerResultPresent,
+        bool hasCommittedChanges) =>
+        !hasCommittedChanges &&
+        workerResultPresent &&
+        HasPopulatedStandardOutput(verification) &&
+        string.Equals(authoredFailure.Rule.Token, TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token, StringComparison.Ordinal) &&
+        DispatchRejectionDiagnosticMarker.TryParse(verification.StandardError, out var verificationRecognized, out _, out _, out _) &&
+        verificationRecognized &&
+        WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
+        blockersStatus == WorkerResultBlockers.BlockersStatus.None &&
+        !WorkerResultBlockers.TryFindBlocker(verification, out _) &&
+        WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
+        testsStatus == WorkerResultBlockers.TestsStatus.Pass &&
+        !HasStructuredFailingTests(verification);
 
     // The verified-no-change allowance is gated on re-dispatch, not on the reason for it. Operator
     // recovery and upstream bounces record LatestRetryAt without touching criterion-retry state.
