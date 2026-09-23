@@ -563,9 +563,9 @@ internal static partial class CliPersistentStateRunner
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
             // write lock, no process sweep — keeps them fully concurrent with a running conductor
-            // instead of contending on the per-tick write transaction. Dependency-aware add/list/show
-            // commands intentionally hydrate state through RequiresKernelBacklogState.
-            "backlog-add" when !HasFlag(args, "--depends-on") => true,
+            // instead of contending on the per-tick write transaction. Dependency- and similarity-aware
+            // add/list/show/search commands intentionally hydrate state through RequiresKernelBacklogState.
+            "backlog-add" when !HasFlag(args, "--depends-on") && HasFlag(args, "--no-similar") => true,
             "backlog-update" or "backlog-annotate" or "backlog-close" or
             "backlog-supersede" or "backlog-unsupersede" or "backlog-link" or "backlog-reopen" or "backlog-view" or
             "cleanup-status" or
@@ -585,8 +585,8 @@ internal static partial class CliPersistentStateRunner
 
         return args[0].ToLowerInvariant() switch
         {
-            "backlog-list" or "backlog-show" or "backlog-depends" => true,
-            "backlog-add" => HasFlag(args, "--depends-on"),
+            "backlog-list" or "backlog-show" or "backlog-depends" or "backlog-similar" => true,
+            "backlog-add" => HasFlag(args, "--depends-on") || !HasFlag(args, "--no-similar"),
             _ => false
         };
     }
