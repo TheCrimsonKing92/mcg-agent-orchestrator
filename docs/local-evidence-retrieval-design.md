@@ -60,6 +60,12 @@ Skip retrieval and rely on direct artifacts when:
 
 Mitigation: return pointers, not snippets, unless the caller explicitly asks for a bounded excerpt; cap results by role; prefer current-goal sources; include source class and authorship.
 
+## Backlog Similarity Implementation
+
+`backlog-similar` implements the first deterministic lexical slice with an SQLite FTS5 index created in memory for each invocation. It reads the current backlog database without changing its schema and indexes every backlog item's title, body, and notes plus the objective of every Completed goal. There is no persistent index, cache, background process, or synchronization state that can become stale.
+
+Results are pointer-first: kind, id prefix, status, title, updated date, and rank. Excerpts remain opt-in with `--excerpt` and are bounded to 200 characters. After a successful `backlog-add`, the same search prints up to three advisory pointers; it never creates links or blocks the add, and `--no-similar` disables that advisory call.
+
 ## Test Plan Before Implementation
 
 - Unit tests for source eligibility and skip conditions.

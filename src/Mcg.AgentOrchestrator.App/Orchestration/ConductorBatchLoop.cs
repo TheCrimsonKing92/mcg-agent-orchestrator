@@ -3058,10 +3058,8 @@ internal sealed partial class ConductorBatchLoop
             .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value) &&
                            !activeCohortMemberGoalIds.Contains(goal.Id.Value))
             .ToArray();
-        var productionCandidates = speculativeCandidates
-            .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value) &&
-                                !activeCohortMemberGoalIds.Contains(candidate.GoalId.Value))
-            .ToArray();
+        var productionCandidates = ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
+            speculativeCandidates, cohortEligible, liveAttemptGoalIds, activeCohortMemberGoalIds);
         var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
         if (trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&

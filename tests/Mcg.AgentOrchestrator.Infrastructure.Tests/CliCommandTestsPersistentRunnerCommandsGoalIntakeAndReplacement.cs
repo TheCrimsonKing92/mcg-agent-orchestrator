@@ -884,7 +884,8 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             profiles,
             authoritativeSuccessor)
         {
-            AcceptanceVerifier = new ProbeAcceptanceVerifier(() => { })
+            AcceptanceVerifier = new ProbeAcceptanceVerifier(() => { }),
+            StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(root)
         };
         var acceptanceOutput = CaptureConsole(() => CliCommandHandlers.Execute(
             ["acceptance", authoritativeSuccessor.Id.Value, "--no-record"],

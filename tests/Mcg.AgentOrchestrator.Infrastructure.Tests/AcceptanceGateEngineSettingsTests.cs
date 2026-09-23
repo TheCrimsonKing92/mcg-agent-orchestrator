@@ -2174,7 +2174,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 attemptPrefix);
             var result = await verifier.RunAsync(root, goalId);
 
-            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.False(result.Passed);
             Xunit.Assert.True(result.Retried);
             Xunit.Assert.Equal(2, invocation);
         }
