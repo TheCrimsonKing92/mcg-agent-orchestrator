@@ -32,4 +32,30 @@ public sealed class ProgressEventPayloadSnapshotTests
             item => item.OperatorIntentApplied?.IntentId == intentId);
         Assert.Equal(intentId, restoredEvent.OperatorIntentApplied!.IntentId);
     }
+
+    [Xunit.Fact]
+    public void ToSnapshot_HumanInputSupersededPayload_RoundTrips()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Persist supersede resolution evidence.",
+            [new TaskSpec(TaskId.New(), "Implement.", AgentRole.Developer)]);
+        goal.Append(new ProgressEvent(
+            goal.Id,
+            null,
+            ProgressKind.HumanInputSuperseded,
+            "Display text with resolvedStableIds=other.",
+            clock.UtcNow,
+            HumanInputSuperseded: new HumanInputSupersededPayload(["finding-b", "finding-a"])));
+
+        var restored = Goal.FromSnapshot(goal.ToSnapshot());
+
+        var restoredEvent = Assert.Single(
+            restored.Timeline,
+            item => item.HumanInputSuperseded is not null);
+        Assert.Equal(
+            ["finding-b", "finding-a"],
+            Assert.IsType<HumanInputSupersededPayload>(restoredEvent.HumanInputSuperseded).ResolvedStableIds);
+    }
 }
