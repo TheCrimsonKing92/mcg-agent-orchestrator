@@ -33,7 +33,9 @@ internal sealed class HoldingAcceptanceAttemptsAcrossTicksFixture : IAsyncDispos
     private bool _disposed;
     private int _processSpawnCount;
 
-    internal HoldingAcceptanceAttemptsAcrossTicksFixture(ManualConductorTimeProviderForTests timeProvider)
+    internal HoldingAcceptanceAttemptsAcrossTicksFixture(
+        ManualConductorTimeProviderForTests timeProvider,
+        AcceptanceVerificationSummary? completionSummary = null)
     {
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _attemptRoot = Path.Combine(
@@ -55,7 +57,7 @@ internal sealed class HoldingAcceptanceAttemptsAcrossTicksFixture : IAsyncDispos
             },
             tryRunPreSlot: (candidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
                 candidate,
-                AcceptanceVerificationSummary.PassedWithNoUnmetCriteria),
+                completionSummary ?? AcceptanceVerificationSummary.PassedWithNoUnmetCriteria),
             recentHeartbeatGrace: TimeSpan.FromDays(1),
             attemptCompletionGateForTests: _completionGate);
     }
