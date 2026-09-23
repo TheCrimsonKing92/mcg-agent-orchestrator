@@ -30,8 +30,37 @@ internal sealed partial class ConductorDriver
                 HoldApparatusRedRegate(goal, goalPrefix, policy, acceptance, reading, regate),
             ApparatusRedDisposition.BoundExhausted bound =>
                 EscalateApparatusRedBound(goal, goalPrefix, policy, bound),
-            _ => null
+            ApparatusRedDisposition.Genuine genuine =>
+                RecordApparatusRedGenuine(goal, acceptance, genuine)
         };
+    }
+
+    private ConductorAdvanceResult? RecordApparatusRedGenuine(
+        Goal goal,
+        AcceptanceVerificationSummary acceptance,
+        ApparatusRedDisposition.Genuine genuine)
+    {
+        if (string.IsNullOrWhiteSpace(_executionDirectory))
+        {
+            return null;
+        }
+
+        try
+        {
+            var observedHeads = _resolveAcceptanceHeads(goal);
+            GoalOperationJournal.AcceptanceApparatusGenuine(
+                _executionDirectory,
+                goal,
+                acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha,
+                acceptance.MainHeadSha ?? observedHeads.MainHeadSha,
+                genuine.Reason);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The classification record is observability; losing it cannot change the gate outcome.
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -102,6 +102,114 @@ public sealed class ConductorDriverTestsApparatusRedRegate
         }
     }
 
+    [Fact(DisplayName = "ConductorDriver_bbcc2fd2_rollup_shape_regates_on_prior_cross_goal_failures")]
+    public void CoveredRollupUsesIdentityBearingChecksForCrossGoalRegate()
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            const string sourcePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchHostTests.cs";
+            WriteTestSource(root, sourcePath);
+            var now = DateTimeOffset.Parse("2026-09-23T13:37:23Z", null);
+            var index = CreateIndex(root);
+            index.Append(
+                [
+                    Census("6cd11d28", now.AddDays(-2)),
+                    Census("36169fb0", now.AddDays(-1))
+                ],
+                now.AddDays(-1));
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            var focused = FailingCheck("focused CLI infrastructure tests", HeartbeatIdentity, "Fast-forwarded was absent");
+            var rollup = IdentitylessCheck("infrastructure tests", [focused.Name]);
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => RedSummary(focused, rollup),
+                retryTaskWithCause: (_, _, _, _, _) =>
+                    throw new InvalidOperationException("A covered apparatus RED must not reopen a Developer."),
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+                getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs"],
+                executionDirectory: root,
+                apparatusRedGate: CreateGate(root, index, now));
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            Assert.Equal(GoalLifecycleState.Verified, held.State);
+            Assert.Contains(ApparatusRedClassifier.CrossGoalEvidenceKind, held.Reason, StringComparison.Ordinal);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.DoesNotContain(
+                GoalOperationJournal.Read(root, goal.Id).Entries,
+                entry => entry.Operation == GoalOperationJournal.AcceptanceApparatusGenuineOperation);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory(DisplayName = "ConductorDriver_incomplete_rollup_evidence_fails_closed_and_records_genuine_reason")]
+    [InlineData("covering-passed")]
+    [InlineData("identityless-coverer")]
+    [InlineData("non-rollup")]
+    [InlineData("inside-changed-paths")]
+    public void IncompleteRollupEvidenceReopensDeveloperAndRecordsGenuineReason(string scenario)
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            const string sourcePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchHostTests.cs";
+            WriteTestSource(root, sourcePath);
+            var now = DateTimeOffset.Parse("2026-09-23T13:37:23Z", null);
+            var index = CreateIndex(root);
+            index.Append([Census("6cd11d28", now.AddDays(-1))], now.AddDays(-1));
+            var focused = FailingCheck("focused CLI infrastructure tests", HeartbeatIdentity, "Fast-forwarded was absent");
+            AcceptanceCheckResult[] checks = scenario switch
+            {
+                "covering-passed" =>
+                [
+                    focused with { Passed = true },
+                    IdentitylessCheck("infrastructure tests", [focused.Name])
+                ],
+                "identityless-coverer" =>
+                [
+                    IdentitylessCheck(focused.Name),
+                    IdentitylessCheck("infrastructure tests", [focused.Name])
+                ],
+                "non-rollup" => [IdentitylessCheck("infrastructure tests")],
+                "inside-changed-paths" => [focused, IdentitylessCheck("infrastructure tests", [focused.Name])],
+                _ => throw new ArgumentOutOfRangeException(nameof(scenario))
+            };
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => RedSummary(checks),
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                    kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind, retryCause: cause),
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+                getLandingFileScopes: _ => scenario == "inside-changed-paths" ? [sourcePath] : ["src/Unrelated.cs"],
+                executionDirectory: root,
+                apparatusRedGate: CreateGate(root, index, now));
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.Equal(1, task.CriterionRetryCount);
+            var entry = Assert.Single(GoalOperationJournal.Read(root, goal.Id).Entries.Where(candidate =>
+                candidate.Operation == GoalOperationJournal.AcceptanceApparatusGenuineOperation));
+            Assert.Equal("candidate-a", entry.BranchHeadSha);
+            Assert.False(string.IsNullOrWhiteSpace(entry.Detail));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact(DisplayName = "ConductorDriver_bf434fdb_shape_regates_on_infrastructure_exception_and_journals_it")]
     public void InfrastructureExceptionOutsideChangedPathsRegatesAndJournalsClassification()
     {
@@ -158,6 +266,9 @@ public sealed class ConductorDriverTestsApparatusRedRegate
                 entry.Detail!,
                 StringComparison.Ordinal);
             Assert.Contains(CanaryIdentity, entry.Detail!, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                GoalOperationJournal.Read(root, goal.Id).Entries,
+                candidate => candidate.Operation == GoalOperationJournal.AcceptanceApparatusGenuineOperation);
         }
         finally
         {
@@ -288,6 +399,7 @@ public sealed class ConductorDriverTestsApparatusRedRegate
                 },
                 recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
                 getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs"],
+                executionDirectory: root,
                 apparatusRedGate: CreateGate(root, CreateIndex(root), now, perGoalRegateCap: 1));
 
             var first = MakeBoundedDriver().AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
@@ -305,6 +417,9 @@ public sealed class ConductorDriverTestsApparatusRedRegate
             Assert.DoesNotContain("retrying task with feedback", escalated.Reason, StringComparison.Ordinal);
             Assert.False(retryCalled);
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.DoesNotContain(
+                GoalOperationJournal.Read(root, goal.Id).Entries,
+                candidate => candidate.Operation == GoalOperationJournal.AcceptanceApparatusGenuineOperation);
         }
         finally
         {
@@ -343,20 +458,31 @@ public sealed class ConductorDriverTestsApparatusRedRegate
                     "main is attested green for this identity")
             ]);
 
-    private static AcceptanceVerificationSummary RedSummary(AcceptanceCheckResult unmet) =>
+    private static AcceptanceCheckResult IdentitylessCheck(string name, IReadOnlyList<string>? coveredBy = null) =>
+        new(name, false, 1, "roll-up failure", CoveredBy: coveredBy);
+
+    private static AcceptanceFailingTestIndexRecord Census(string goalId, DateTimeOffset recordedAt) =>
+        new(
+            AcceptanceFailingTestIndex.ContractVersion,
+            AcceptanceFailingTestIndexKinds.GateFailure,
+            goalId,
+            recordedAt,
+            CheckName: "focused CLI infrastructure tests",
+            TestIdentity: HeartbeatIdentity,
+            ResolvedSourcePath: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchHostTests.cs",
+            InsideChangedPaths: false);
+
+    private static AcceptanceVerificationSummary RedSummary(params AcceptanceCheckResult[] unmet) =>
         new(
             false,
-            [unmet],
-            FailedChecks: [unmet.Name],
+            unmet,
+            FailedChecks: unmet.Where(check => !check.Passed).Select(check => check.Name).ToArray(),
             BranchHeadSha: "candidate-a",
             MainHeadSha: "main-a",
-            CheckAttributions:
-            [
-                new AcceptanceCheckAttribution(
-                    unmet.Name,
-                    AcceptanceFailureOrigin.Introduced,
-                    "main is attested green")
-            ]);
+            CheckAttributions: unmet.Select(check => new AcceptanceCheckAttribution(
+                check.Name,
+                AcceptanceFailureOrigin.Introduced,
+                "main is attested green")).ToArray());
 
     private static void WriteTestSource(string root, string relativePath)
     {

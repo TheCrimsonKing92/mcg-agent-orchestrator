@@ -71,6 +71,7 @@ internal static class CliCommandHelp
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
     public const string StateDatabaseMaintenanceUsage = "Usage: state-db-maintenance plan | state-db-maintenance execute --confirm-offline | state-db-maintenance convert-copy --output <path> --confirm-offline | state-db-maintenance convert-live --confirm-offline --confirm-live-replacement";
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
+    public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -494,6 +495,11 @@ internal static class CliCommandHelp
         "Show one stored run event by sequence, including goal-less event receipt text.",
         ["--format", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry FlakeCensus = new(
+        FlakeCensusUsage,
+        "Summarize recurring test failures from the retained acceptance failing-test index.",
+        ["--min-goals", "--since", "--help", "-h"]);
+
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
@@ -904,6 +910,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("run-event", StringComparison.OrdinalIgnoreCase))
         {
             entry = RunEvent;
+            return true;
+        }
+
+        if (args[0].Equals("flake-census", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = FlakeCensus;
             return true;
         }
 

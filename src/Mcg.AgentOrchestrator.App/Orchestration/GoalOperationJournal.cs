@@ -131,6 +131,7 @@ internal static class GoalOperationJournal
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
     public const string LandingIntentOperation = "conductor:landing-intent";
     public const string AcceptanceApparatusRegateOperation = "conductor:acceptance-apparatus-regate";
+    public const string AcceptanceApparatusGenuineOperation = "conductor:acceptance-apparatus-genuine";
     public const string ApparatusRegateAcceptanceOutcome = "apparatus-regate";
     internal static Action<GoalLandingIntent>? BeforeLandingIntentAppend { get; set; }
     internal static Action? BeforeAcceptanceRetryAppend { get; set; }
@@ -426,6 +427,23 @@ internal static class GoalOperationJournal
             NormalizeSha(mainHeadSha),
             acceptanceOutcome: ApparatusRegateAcceptanceOutcome,
             failedCheckNames: failedCheckNames);
+
+    public static void AcceptanceApparatusGenuine(
+        string executionDirectory,
+        Goal goal,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string reason) =>
+        Append(
+            executionDirectory,
+            goal.Id,
+            $"{CandidateKey(goal.Id, AcceptanceApparatusGenuineOperation, branchHeadSha, mainHeadSha)}:{Guid.NewGuid():N}",
+            AcceptanceApparatusGenuineOperation,
+            GoalOperationStatus.Completed,
+            reason,
+            NormalizeSha(branchHeadSha),
+            NormalizeSha(mainHeadSha),
+            acceptanceOutcome: "genuine");
 
     public static void AcceptanceRetried(
         string executionDirectory,

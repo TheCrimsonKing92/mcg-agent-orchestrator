@@ -444,7 +444,8 @@ internal static class AcceptancePolicyShardPlanner
                 coveringResult.LeaseId,
                 coveringResult.DurationMilliseconds,
                 coveringResult.LockRemediationApplied,
-                $"covered by: {coveringCheck.Name}; changed file in dependency closure; {policyShardPlan.Evidence}"));
+                $"covered by: {coveringCheck.Name}; changed file in dependency closure; {policyShardPlan.Evidence}",
+                CoveredBy: [coveringCheck.Name]));
         }
     }
 }

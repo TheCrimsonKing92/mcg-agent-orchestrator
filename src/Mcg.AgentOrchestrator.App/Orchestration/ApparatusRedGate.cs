@@ -159,6 +159,12 @@ internal sealed class ApparatusRedGate
             .ToArray();
         var failingTests = new List<ApparatusRedFailingTest>();
         var everyCheckHasIdentities = true;
+        var failedIdentityBearingChecks = acceptance.RequiredUnmetCriteria
+            .Where(check =>
+                !check.Passed &&
+                check.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) == true)
+            .Select(check => check.Name)
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var check in acceptance.RequiredUnmetCriteria)
         {
             var identities = check.FailingTestIdentities?
@@ -167,6 +173,12 @@ internal sealed class ApparatusRedGate
                 .ToArray() ?? [];
             if (identities.Length == 0)
             {
+                if (check.CoveredBy is { Count: > 0 } coveredBy &&
+                    coveredBy.All(failedIdentityBearingChecks.Contains))
+                {
+                    continue;
+                }
+
                 everyCheckHasIdentities = false;
                 continue;
             }
