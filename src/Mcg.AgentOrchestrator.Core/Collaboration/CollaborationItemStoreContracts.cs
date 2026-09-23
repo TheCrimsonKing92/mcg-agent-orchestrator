@@ -118,6 +118,20 @@ public interface ICollaborationItemStore
         string result,
         DateTimeOffset appliedAt,
         CancellationToken cancellationToken = default);
+
+    Task<DecisionEffectApplyResult> TryApplyDecisionEffectAsync(
+        string requestId,
+        string decisionReceiptId,
+        DecisionActionRef actionRef,
+        long? currentGoalStateVersion,
+        string result,
+        DateTimeOffset appliedAt,
+        string? rejectionReason,
+        CancellationToken cancellationToken = default) =>
+        rejectionReason is null
+            ? TryApplyDecisionEffectAsync(
+                requestId, decisionReceiptId, actionRef, currentGoalStateVersion, result, appliedAt, cancellationToken)
+            : throw new NotSupportedException("This collaboration store cannot record a caller-classified rejected decision effect.");
 }
 
 public sealed record CollaborationActionBinding(

@@ -198,7 +198,9 @@ internal static class SourceSizeRatchet
             // Raised eight lines for metadata-only goals and terminal-sweep caller ownership;
             // five further lines preserve conduct-loop and global-reconcile scheduler cadence.
             // The operation owner threads through this runner's own call sites.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4863),
+            // Goal 798f1c58 adds only adjudicate routing and typed actor-kind attribution call sites;
+            // payload parsing and version lookup live in CliCommandHandlers.Adjudicate.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4870),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),

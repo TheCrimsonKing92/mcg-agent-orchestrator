@@ -23,6 +23,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "note", "--help" }, "note", "--text-file")]
     [Xunit.InlineData(new[] { "progress", "--help" }, "progress", "--text-file")]
     [Xunit.InlineData(new[] { "verify-manual", "--help" }, "verify-manual", "--text-file")]
+    [Xunit.InlineData(new[] { "adjudicate", "--help" }, "adjudicate", "--evidence")]
     [Xunit.InlineData(new[] { "recover", "--help" }, "recover", "--text-file")]
     [Xunit.InlineData(new[] { "answer", "--help" }, "answer", "--text-file")]
     [Xunit.InlineData(new[] { "supersede", "--help" }, "supersede", "--text-file")]

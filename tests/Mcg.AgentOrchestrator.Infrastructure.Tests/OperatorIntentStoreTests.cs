@@ -43,6 +43,7 @@ public sealed class OperatorIntentStoreTests
             Xunit.Assert.Empty(failures);
             var persisted = await store.ListForGoalAsync("goal-chaos", intentCount);
             Xunit.Assert.Equal(intentCount, persisted.Count);
+            Xunit.Assert.All(persisted, intent => Xunit.Assert.Equal(OperatorActorKind.Human, intent.ActorKind));
             Xunit.Assert.Equal(intentCount, persisted.Select(intent => intent.Id).Distinct(StringComparer.Ordinal).Count());
         }
         finally
