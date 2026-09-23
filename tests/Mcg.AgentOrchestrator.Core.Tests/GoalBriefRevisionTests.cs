@@ -282,6 +282,72 @@ public sealed class GoalBriefRevisionTests
     }
 
     [Xunit.Fact]
+    public void ReviseGoalBrief_StandaloneAcceptanceLabel_ReDerivesFourCriteriaWithoutRewritingBrief()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Original brief.");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Original behavior.",
+            ["The objective is achieved."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        var plainLabel = "  aCcEpTaNcE cRiTeRiA:  ";
+        var revisedBrief = $"""
+            Revised brief.
+
+            {plainLabel}
+            1. First revised criterion.
+            2. Second revised criterion.
+            3. Third revised criterion.
+            4. Fourth revised criterion.
+            """;
+
+        clock.Advance();
+        var result = kernel.ReviseGoalBrief(goal.Id, revisedBrief);
+
+        Assert.True(result.RefinedCriteriaReDerived);
+        Assert.Equal(4, result.RefinedCriteriaCount);
+        Assert.Equal(
+            [
+                "First revised criterion.",
+                "Second revised criterion.",
+                "Third revised criterion.",
+                "Fourth revised criterion."
+            ],
+            goal.RefinedSpec!.AcceptanceCriteria);
+        Assert.Equal(revisedBrief, goal.Objective);
+        Assert.Equal(2, goal.BriefVersions.Count);
+        Assert.Equal(2, goal.AuthoritativeRefinedSpecVersion!.BriefVersion);
+    }
+
+    [Xunit.Fact]
+    public void FromSnapshot_PlainLabelBrief_DoesNotReDeriveExistingFallbackCriteria()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("""
+            Existing brief.
+
+            Acceptance criteria:
+            1. Explicit criterion that was not yet revised.
+            """);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Existing behavior.",
+            ["The objective is achieved."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock).GetGoal(goal.Id);
+
+        Assert.Equal(["The objective is achieved."], restored.RefinedSpec!.AcceptanceCriteria);
+        Assert.Single(restored.RefinedSpecVersions);
+        Assert.Single(restored.BriefVersions);
+    }
+
+    [Xunit.Fact]
     public void RoleContextLabelsUnstampedLegacyAnswerVersionAsUnknown()
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
