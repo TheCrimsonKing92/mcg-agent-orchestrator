@@ -1087,7 +1087,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
                 context.WorkerProfiles,
-                context.Worktrees.TryResolve));
+                context.Worktrees.TryResolve,
+                context.Kernel.Goals));
             return readinessSweep.Changed;
 
         case "goal-recovery":
@@ -1362,7 +1363,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 context.Agents,
                 context.WorkerProfiles,
-                task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents)));
+                task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents),
+                providerHoldScope: context.Kernel.Goals));
             return false;
 
         case "advance":

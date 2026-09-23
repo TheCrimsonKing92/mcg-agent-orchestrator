@@ -17,7 +17,11 @@ internal static class GoalMonitoringStream
         OrchestratorWorkspace workspace)
     {
         var inbox = DashboardApplicationServices.BuildOperatorInbox(kernel, agents, workerProfiles, workspace, goal.Id.Value[..8], includeAcknowledged: false);
-        var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles);
+        var subscriptionPlan = SubscriptionPlanBuilder.Build(
+            goal,
+            agents,
+            workerProfiles,
+            providerHoldScope: kernel.Goals);
         var conductorDisposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(workspace.RunEventStorePath, goal);
         var lifecycleState = GoalLifecycle.ResolveState(goal, DashboardApplicationServices.ReadLifecycleFacts(workspace, goal));
         var batch = DashboardMonitoringEvents.BuildBatch(

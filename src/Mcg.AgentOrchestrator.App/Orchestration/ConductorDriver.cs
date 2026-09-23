@@ -1004,7 +1004,7 @@ internal sealed partial class ConductorDriver
         _recoverSandboxPrep = action => action.Execute();
         _evaluateReadiness = goal =>
         {
-            var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+            var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, providerHoldScope: kernel.Goals);
             return DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
         };
         _getLandingFileScopes = goal =>

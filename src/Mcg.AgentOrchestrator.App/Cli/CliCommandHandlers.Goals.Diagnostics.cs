@@ -94,7 +94,8 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
         context.Agents,
         context.Workspace.ExecutionDirectory,
         context.WorkerProfiles,
-        context.Worktrees.TryResolve));
+        context.Worktrees.TryResolve,
+        context.Kernel.Goals));
     ConsoleViews.PrintEvidenceSummary(goal, context.Kernel.BuildGoalEvidenceSummary(goal.Id));
     ConsoleViews.PrintStageReadinessReport(goal, context.Kernel.BuildStageReadinessReport(goal.Id), context.Agents);
     ConsoleViews.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));
@@ -104,7 +105,8 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
         goal,
         context.Agents,
         context.WorkerProfiles,
-        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, goal, task, context.Agents)));
+        task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, goal, task, context.Agents),
+        providerHoldScope: context.Kernel.Goals));
     ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
     ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
     ConsoleViews.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));

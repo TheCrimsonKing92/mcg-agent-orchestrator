@@ -120,10 +120,13 @@ public sealed record SubscriptionPlanItem(
     int? TaskBriefCharacterBudget = null,
     int? TaskBriefHeadroom = null,
     WorkerRouteDecision? Route = null,
-    string? ReasoningEffortReason = null);
+    string? ReasoningEffortReason = null,
+    ProviderBudgetExhaustionHold? ProviderBudgetHold = null);
 
 public static class SubscriptionPlanBuilder
 {
+    private static readonly WorkerProviderCatalog DefaultWorkerProviders = WorkerProviderCatalog.Default();
+
     public static SubscriptionPlan Build(
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
@@ -132,13 +135,19 @@ public static class SubscriptionPlanBuilder
         IReadOnlyList<ModelOutcomeRecord>? scorecard = null,
         DateTimeOffset? now = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        IReadOnlyCollection<Goal>? providerHoldScope = null,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
     {
         var validations = OrchestratorHealthInspector
             .InspectWorkerProfiles(profiles, commandExists)
             .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 
         var scorecardLookup = BuildScorecardLookup(scorecard);
+        var resolvedSandboxOptions = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
+        var sourceClaudeAuthProbe = claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight();
+        var sharedClaudeAuthState = new Lazy<ClaudeCliAuthState>(sourceClaudeAuthProbe);
+        Func<ClaudeCliAuthState> sharedClaudeAuthProbe = () => sharedClaudeAuthState.Value;
 
         var allowCheapLaneInPlan = scorecard is not null;
         var items = goal.Tasks
@@ -152,8 +161,10 @@ public static class SubscriptionPlanBuilder
                 scorecardLookup,
                 now,
                 allowCheapLaneInPlan,
-                sandboxOptions,
-                commandExists))
+                resolvedSandboxOptions,
+                commandExists,
+                providerHoldScope,
+                sharedClaudeAuthProbe))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -194,7 +205,9 @@ public static class SubscriptionPlanBuilder
         DateTimeOffset? now = null,
         bool allowCheapLane = false,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        IReadOnlyCollection<Goal>? providerHoldScope = null,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -315,6 +328,15 @@ public static class SubscriptionPlanBuilder
                 dispatchProviderName,
                 effectiveNow,
                 out var providerCooldown);
+            var providerCredentialBinding = ResolveProviderCredentialBinding(
+                profile,
+                sandboxOptions,
+                claudeAuthProbe);
+            var providerBindingHeld = DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+                providerHoldScope ?? [goal],
+                dispatchProviderName,
+                providerCredentialBinding,
+                out var providerHold);
             var retryDelaySeconds = retryDeferred
                 ? Math.Max(0, (int)Math.Ceiling((retryAfter - effectiveNow).TotalSeconds))
                 : providerCoolingDown
@@ -329,6 +351,7 @@ public static class SubscriptionPlanBuilder
                 AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy) &&
                 !retryDeferred &&
                 !providerCoolingDown &&
+                !providerBindingHeld &&
                 !requiresLimitReview;
             var estimatedPromptCharacterCount = canPrepare
                 ? estimatePromptCharacterCount?.Invoke(task)
@@ -357,6 +380,8 @@ public static class SubscriptionPlanBuilder
                     ? $"Recoverable subscription usage limit ({previousLimitFailures}); retry after {retryAfter:u}."
                 : providerCoolingDown
                     ? $"Provider {providerCooldown.ProviderName} is cooling down after a recoverable subscription usage limit on task {TaskDisplayNumber.Resolve(goal, providerCooldown.SourceTaskId)}; retry after {providerCooldown.RetryAfter:u}."
+                : providerBindingHeld
+                    ? $"Provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); blocked by goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}."
                 : requiresLimitReview
                     ? $"Repeated recoverable subscription usage limit ({previousLimitFailures}); inspect model, profile, or timing before redispatch."
                 : !hasProfile
@@ -388,6 +413,8 @@ public static class SubscriptionPlanBuilder
                 patchCapability,
                 retryDeferred,
                 providerCoolingDown,
+                providerBindingHeld,
+                providerBindingHeld ? providerHold : null,
                 requiresLimitReview,
                 recoverableLimitFailures,
                 costGuardPromptCharacterCount,
@@ -427,7 +454,8 @@ public static class SubscriptionPlanBuilder
                 taskBriefCharacterBudget,
                 taskBriefHeadroom,
                 route,
-                reasoningEffortReason);
+                reasoningEffortReason,
+                providerBindingHeld ? providerHold : null);
         }
         catch (InvalidOperationException ex)
         {
@@ -482,6 +510,8 @@ public static class SubscriptionPlanBuilder
         WorkerProfilePatchCapability patchCapability,
         bool retryDeferred,
         bool providerCoolingDown,
+        bool providerBindingHeld,
+        ProviderBudgetExhaustionHold? providerHold,
         bool requiresLimitReview,
         int recoverableLimitFailures,
         int? costGuardPromptCharacterCount,
@@ -594,6 +624,16 @@ public static class SubscriptionPlanBuilder
             alternatives.Add("Wait for retry-after or route to a different provider profile.");
         }
 
+        if (providerBindingHeld && providerHold is not null)
+        {
+            reasons.Add(
+                $"provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
+                $"receipt={providerHold.EvidenceReceipt}");
+            alternatives.Add(
+                $"After replenishing binding {providerHold.BindingKey}, retry source goal " +
+                $"{providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} to clear the hold explicitly.");
+        }
+
         if (requiresLimitReview)
         {
             alternatives.Add("Acknowledge limit review with notes or route to a different provider.");
@@ -622,6 +662,23 @@ public static class SubscriptionPlanBuilder
             OutputTextPreview.CreateTimeline(recommendation).Text,
             reasons,
             alternatives.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static string? ResolveProviderCredentialBinding(
+        WorkerProfile? profile,
+        WorkerSandboxOptions? sandboxOptions,
+        Func<ClaudeCliAuthState>? claudeAuthProbe)
+    {
+        if (profile is null ||
+            DefaultWorkerProviders.ResolveProfile(profile.Name).Identity.Kind != ProviderKind.AnthropicClaudeCli ||
+            !(sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled)
+        {
+            return null;
+        }
+
+        return (claudeAuthProbe ?? ClaudeCliAuthProbe.ForOneDispatchPreflight())()
+            .ToTransportedSelection()
+            ?.DirectoryPath;
     }
 
     private static IReadOnlyDictionary<string, ModelOutcomeRecord>? BuildScorecardLookup(
@@ -669,7 +726,7 @@ public static class SubscriptionPlanBuilder
 
     private static IWorkerProvider ResolveWorkerProviderForPlan(string profileName, string providerName)
     {
-        var catalog = WorkerProviderCatalog.Default();
+        var catalog = DefaultWorkerProviders;
         var provider = catalog.ResolveProfile(profileName);
         if (provider.Identity.Kind != ProviderKind.Unknown)
         {
@@ -688,7 +745,7 @@ public static class SubscriptionPlanBuilder
 
     private static string ResolveDispatchProviderName(string selectedProviderName, string profileName)
     {
-        var provider = WorkerProviderCatalog.Default().ResolveProfile(profileName);
+        var provider = DefaultWorkerProviders.ResolveProfile(profileName);
         return provider.Identity.Kind == ProviderKind.Unknown
             ? selectedProviderName
             : provider.ProviderName;

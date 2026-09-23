@@ -19,7 +19,11 @@ internal static class GoalMonitoringQuery
             goal,
             GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, goal));
         var inbox = OperatorInbox.Build(kernel, agents, workerProfiles, workspace, goal.Id.Value[..8], includeAcknowledged: false);
-        var capacity = SubscriptionPlanBuilder.Build(goal, agents, workerProfiles).CapacitySchedule;
+        var capacity = SubscriptionPlanBuilder.Build(
+            goal,
+            agents,
+            workerProfiles,
+            providerHoldScope: kernel.Goals).CapacitySchedule;
         var disposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(workspace.RunEventStorePath, goal);
         var snapshot = new GoalMonitoringSnapshot(
             goal.Id.Value,

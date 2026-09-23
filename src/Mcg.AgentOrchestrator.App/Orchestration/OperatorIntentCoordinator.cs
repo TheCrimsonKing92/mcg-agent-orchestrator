@@ -338,7 +338,7 @@ internal sealed class OperatorIntentCoordinator
                 "The operator retry request has an Unknown retry cause. Classify the cause as " +
                 "NewSourceFinding, NewTestFinding, CriterionEvidenceOwnerMismatch, " +
                 "EnvironmentApparatusFailure, ContractClarification, MainDriftConflict, " +
-                "ProviderInterruption, or UnchangedContextRepeat. The original retry will resume automatically after this answer.",
+                "ProviderInterruption, UnchangedContextRepeat, or ProviderBudgetRecovery. The original retry will resume automatically after this answer.",
                 HumanWaitKind.SpecClarification,
                 isAutoDefaultable: false,
                 isDismissible: false,
@@ -428,7 +428,7 @@ internal sealed class OperatorIntentCoordinator
             "The retry cause answer was not a supported explicit retry cause. Answer with " +
             "NewSourceFinding, NewTestFinding, CriterionEvidenceOwnerMismatch, " +
             "EnvironmentApparatusFailure, ContractClarification, MainDriftConflict, " +
-            "ProviderInterruption, or UnchangedContextRepeat. The original retry remains pending and resumes automatically.",
+            "ProviderInterruption, UnchangedContextRepeat, or ProviderBudgetRecovery. The original retry remains pending and resumes automatically.",
             HumanWaitKind.SpecClarification,
             isAutoDefaultable: false,
             isDismissible: false,

@@ -270,7 +270,8 @@ internal static partial class DashboardEndpoints
             goal,
             agents,
             profiles,
-            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(current, goal, task, agents));
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(current, goal, task, agents),
+            providerHoldScope: current.Goals);
         return Json(DashboardResponseMapper.ToSubscriptionPlanDto(plan));
     }
 
@@ -589,7 +590,8 @@ internal static partial class DashboardEndpoints
                     return Task.FromResult(largePaidSubscriptionStartConfirmation);
                 }
 
-                var readinessConfirmation = RequireGoalReadinessStartConfirmation(context, goal, agents, operation, services.Workspace);
+                var readinessConfirmation = RequireGoalReadinessStartConfirmation(
+                    context, current, goal, agents, operation, services.Workspace);
                 if (readinessConfirmation is not null)
                 {
                     return Task.FromResult(readinessConfirmation);
@@ -705,6 +707,7 @@ internal static partial class DashboardEndpoints
 
     private static IResult? RequireGoalReadinessStartConfirmation(
         HttpContext context,
+        AgentOrchestratorKernel kernel,
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         string operation,
@@ -716,7 +719,12 @@ internal static partial class DashboardEndpoints
         }
 
         var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-        var report = GoalReadinessPreflight.Build(goal, agents, workspace.ExecutionDirectory, profiles);
+        var report = GoalReadinessPreflight.Build(
+            goal,
+            agents,
+            workspace.ExecutionDirectory,
+            profiles,
+            providerHoldScope: kernel.Goals);
         if (report.AllowsStart(HasQueryConfirmation(context, "confirmReadinessRisk")))
         {
             return null;

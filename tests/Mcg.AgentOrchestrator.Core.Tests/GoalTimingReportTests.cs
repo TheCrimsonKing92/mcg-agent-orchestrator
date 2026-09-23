@@ -363,6 +363,38 @@ public sealed class GoalTimingReportTests
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderInterruption.ToString(), round.WasteSource);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchValueReport classifies provider budget exhaustion as environmental waste")]
+    public void DispatchValueReportClassifiesProviderBudgetExhaustionAsEnvironmentalWaste()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Report provider budget exhaustion", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Provider budget exhaustion timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        RecordRound(
+            kernel,
+            clock,
+            goal.Id,
+            task.Id,
+            Verification(
+                1,
+                clock.UtcNow,
+                string.Empty,
+                "API error (status 402 Payment Required): usage balance exhausted",
+                "provider-budget") with
+            {
+                ProviderFailureKind = ProviderFailureKind.BudgetExhausted
+            });
+
+        var report = kernel.BuildDispatchValueReport();
+        var round = Xunit.Assert.Single(Xunit.Assert.Single(report.Goals).Rounds);
+
+        Xunit.Assert.Equal(DispatchRoundValueClass.WastedEnvironmental, round.ValueClass);
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderBudgetExhausted, round.OutcomeVerdict);
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderBudgetExhausted.ToString(), round.WasteSource);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchValueReport_classifies_known_round_types_and_rolls_up_per_goal")]
     public void DispatchValueReportClassifiesKnownRoundTypesAndRollsUpPerGoal()
     {

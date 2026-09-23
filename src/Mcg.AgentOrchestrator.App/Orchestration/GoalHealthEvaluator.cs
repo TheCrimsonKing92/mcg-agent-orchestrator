@@ -44,7 +44,8 @@ public static class GoalHealthEvaluator
             goal,
             agents,
             workerProfiles,
-            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents)).CapacitySchedule;
+            task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents),
+            providerHoldScope: kernel.Goals).CapacitySchedule;
         var reasons = new List<string>();
 
         if (recovery.WorktreeDirty == true)

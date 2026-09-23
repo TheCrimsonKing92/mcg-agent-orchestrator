@@ -293,13 +293,13 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-subscription-ready [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
             if (!startReadyPolicy.Allows(AutonomyAction.DispatchStart))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "autonomy-policy");
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "autonomy-policy");
             }
 
             startReadyPolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "start-subscription-ready");
             if (!HasCliConfirmation(parts, "--confirm-batch-start"))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "start-gate");
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "start-gate");
             }
 
             EnsureCliConfirmation(
@@ -320,10 +320,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
                 context.WorkerProfiles,
-                context.Worktrees.TryResolve);
+                context.Worktrees.TryResolve,
+                context.Kernel.Goals);
             if (!readiness.AllowsStart(HasCliConfirmation(parts, "--confirm-readiness-risk")))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "start-gate");
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "start-gate");
             }
 
             EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
@@ -336,7 +337,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             if (startReadyRisk is { IsAnomalous: true } &&
                 !HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, "prompt-size-cost");
+                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "prompt-size-cost");
             }
 
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
@@ -525,9 +526,14 @@ private static void EmitReadyBlockedDiagnosticsForAssigned(
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
+    IReadOnlyCollection<Goal> providerHoldScope,
     string reason)
 {
-    var planItems = SubscriptionPlanBuilder.Build(goal, agents, profiles)
+    var planItems = SubscriptionPlanBuilder.Build(
+            goal,
+            agents,
+            profiles,
+            providerHoldScope: providerHoldScope)
         .Items
         .Where(item => item.TaskStatus == WorkTaskStatus.Assigned)
         .OrderBy(item => item.TaskNumber);
@@ -541,8 +547,23 @@ private static void EmitReadyBlockedDiagnosticsForAssigned(
             ? item.ProfileName
             : WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
         provider = string.IsNullOrWhiteSpace(provider) ? "unknown" : provider;
-        Console.Error.WriteLine(
-            $"READY_BLOCKED goal={goal.Id.Value[..8]} task={item.TaskNumber} provider={provider} reason={reason}");
+        var hold = item.ProviderBudgetHold;
+        var diagnostic = new ReadyBlockedDiagnostic(
+            goal.Id.Value[..8],
+            item.TaskNumber,
+            item.TaskId,
+            provider,
+            hold is null ? reason : "provider-budget-exhausted",
+            hold is null
+                ? null
+                :
+                [
+                    $"binding={hold.BindingKey}",
+                    $"scope={hold.BindingScope}",
+                    $"source={hold.SourceGoalId.Value[..8]}/{hold.SourceTaskId.Value[..8]}",
+                    $"receipt={hold.EvidenceReceipt}"
+                ]);
+        Console.Error.WriteLine(diagnostic.ToLine());
     }
 }
 

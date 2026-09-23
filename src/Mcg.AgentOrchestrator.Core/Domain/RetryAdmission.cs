@@ -16,7 +16,8 @@ public enum RetryCause
     ContractClarification,
     MainDriftConflict,
     ProviderInterruption,
-    UnchangedContextRepeat
+    UnchangedContextRepeat,
+    ProviderBudgetRecovery
 }
 
 public enum PaidRouteClassification

@@ -1464,6 +1464,68 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=autonomy-policy", line);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_start_subscription_ready_surfaces_cross_goal_provider_budget_hold")]
+    public void CliStartSubscriptionReadySurfacesCrossGoalProviderBudgetHold()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var sourceGoal = kernel.CreateGoal(
+            "Observe exhausted OpenAI binding",
+            [new TaskSpec(TaskId.New(), "Run provider work", AgentRole.Developer)]);
+        var targetGoal = kernel.CreateGoal(
+            "Avoid exhausted OpenAI binding",
+            [new TaskSpec(TaskId.New(), "Run later provider work", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = targetGoal;
+        kernel.ActivateGoal(sourceGoal.Id, agents);
+        kernel.ActivateGoal(targetGoal.Id, agents);
+        var sourceTask = sourceGoal.Tasks.Single();
+        var dispatchedAt = DateTimeOffset.Parse("2026-09-06T19:24:00Z");
+        kernel.RecordTaskDispatch(
+            sourceGoal.Id,
+            sourceTask.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "codex exec",
+                root,
+                dispatchedAt,
+                ProviderName: "OpenAI",
+                GoalId: sourceGoal.Id));
+        kernel.RecordTaskVerification(
+            sourceGoal.Id,
+            sourceTask.Id,
+            new TaskVerificationRecord(
+                "codex exec",
+                root,
+                1,
+                string.Empty,
+                "API error (status 402 Payment Required): usage balance exhausted",
+                dispatchedAt.AddMinutes(1),
+                StandardErrorPath: "provider.err.log",
+                ProviderFailureKind: ProviderFailureKind.BudgetExhausted,
+                DispatchStartedAt: dispatchedAt));
+
+        var stderr = CaptureConsoleError(() =>
+        {
+            _ = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+                ["start-subscription-ready", "--confirm-batch-start", "--autonomy", "observe"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+        });
+
+        var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
+        Xunit.Assert.Contains("reason=provider-budget-exhausted", line, StringComparison.Ordinal);
+        Xunit.Assert.Contains("binding=openai::<provider-default>", line, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("receipt=provider.err.log", line, StringComparison.Ordinal);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_run_goal_requires_confirm_batch_start_flag")]
     public void CliRunGoalRequiresConfirmBatchStartFlag()

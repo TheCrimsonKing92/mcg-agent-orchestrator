@@ -15,7 +15,8 @@ public sealed class RetryAdmissionTests
             nameof(RetryCause.ContractClarification),
             nameof(RetryCause.MainDriftConflict),
             nameof(RetryCause.ProviderInterruption),
-            nameof(RetryCause.UnchangedContextRepeat)
+            nameof(RetryCause.UnchangedContextRepeat),
+            nameof(RetryCause.ProviderBudgetRecovery)
         };
 
         Assert.Equal(expected, Enum.GetNames<RetryCause>());

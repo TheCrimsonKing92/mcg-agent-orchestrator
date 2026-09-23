@@ -28,7 +28,8 @@ public enum DispatchOutcomeKind
     DirtyWorktreeRecoverable,
     VerificationInconclusive,
     UnknownFailure,
-    ProviderInterruption
+    ProviderInterruption,
+    ProviderBudgetExhausted
 }
 
 public sealed record DispatchOutcome(
@@ -46,6 +47,15 @@ public sealed record ProviderSubscriptionCooldown(
     string ProviderName,
     TaskId SourceTaskId,
     DateTimeOffset RetryAfter);
+
+public sealed record ProviderBudgetExhaustionHold(
+    string ProviderName,
+    string BindingKey,
+    string BindingScope,
+    GoalId SourceGoalId,
+    TaskId SourceTaskId,
+    DateTimeOffset PlacedAt,
+    string EvidenceReceipt);
 
 public enum DispatchRoleOutputCapability
 {
@@ -263,6 +273,17 @@ public static class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.AutoRetry,
+                evidenceSummary),
+                exitCode),
+            ProviderFailureKind.BudgetExhausted => WithClassifierReceipt(
+                TaskOutcomeRules.ProviderBudgetExhausted,
+                new DispatchOutcome(
+                DispatchOutcomeKind.ProviderBudgetExhausted,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
                 evidenceSummary),
                 exitCode),
             ProviderFailureKind.Connectivity => WithClassifierReceipt(
@@ -802,6 +823,23 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification));
             return BuildOutcome(
                 TaskOutcomeRules.ProviderSandboxLaunch1312,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                providerOutcome);
+        }
+
+        if (providerFailureKind == ProviderFailureKind.BudgetExhausted &&
+            !HasWorkerEvidenceThatOutranksSubscriptionLimit(verification, workerResultPresent, hasCommittedChanges))
+        {
+            var providerOutcome = ClassifyProviderFailure(
+                providerFailureKind,
+                exitCode,
+                hasZeroByteOutput,
+                BuildProviderBudgetExhaustionEvidenceSummary(task, verification));
+            return BuildOutcome(
+                TaskOutcomeRules.ProviderBudgetExhausted,
                 task,
                 verification,
                 workerResultPresent,
@@ -1557,6 +1595,20 @@ public static class DispatchFailureClassifier
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
 
+    private static string BuildProviderBudgetExhaustionEvidenceSummary(
+        TaskSpec task,
+        TaskVerificationRecord verification)
+    {
+        var dispatch = FindDispatchForVerification(task, verification) ?? task.LastDispatch;
+        var providerName = dispatch?.ProviderName ?? dispatch?.WorkerName ?? "unknown";
+        var binding = BuildProviderBindingKey(providerName, dispatch?.ClaudeCredentialSourceDirectory);
+        var evidence = TryGetProviderBudgetExhaustionLine(verification, out var line)
+            ? TruncateEvidence(line)
+            : "typed provider budget-exhaustion disposition";
+        return $"provider-budget-exhausted source=stderr provider={providerName} " +
+            $"binding={binding.Key} binding-scope={binding.Scope} receipt={verification.CompletedAt:O}; evidence={evidence}";
+    }
+
     private static string BuildProviderModelRejectionEvidenceSummary(TaskVerificationRecord verification) =>
         TryGetProviderModelRejectionLine(verification, out var line)
             ? TruncateEvidence(line)
@@ -2267,6 +2319,137 @@ public static class DispatchFailureClassifier
         return cooldown is not null;
     }
 
+    public static bool TryGetProviderBudgetExhaustionHold(
+        IEnumerable<Goal> goals,
+        string providerName,
+        string? credentialBinding,
+        out ProviderBudgetExhaustionHold hold)
+    {
+        ArgumentNullException.ThrowIfNull(goals);
+        var goalList = goals.ToArray();
+        var requestedBinding = BuildProviderBindingKey(providerName, credentialBinding);
+        var observations = new List<(
+            Goal Goal,
+            TaskSpec Task,
+            TaskVerificationRecord Verification,
+            string ProviderName,
+            ProviderBindingKey Binding)>();
+        ProviderBudgetExhaustionHold? latest = null;
+
+        foreach (var goal in goalList)
+        {
+            foreach (var task in goal.Tasks)
+            {
+                foreach (var verification in task.VerificationHistory)
+                {
+                    var dispatch = FindDispatchForVerification(task, verification);
+                    if (dispatch is null)
+                    {
+                        continue;
+                    }
+
+                    var observedBinding = BuildProviderBindingKey(
+                        dispatch.ProviderName ?? dispatch.WorkerName,
+                        dispatch.ClaudeCredentialSourceDirectory);
+                    observations.Add((
+                        goal,
+                        task,
+                        verification,
+                        dispatch.ProviderName ?? dispatch.WorkerName,
+                        observedBinding));
+                }
+            }
+        }
+
+        var latestAvailabilityAt = observations
+            .Where(observation =>
+                observation.Binding.Equals(requestedBinding) &&
+                observation.Verification.Succeeded)
+            .Select(observation => (DateTimeOffset?)observation.Verification.CompletedAt)
+            .Max();
+
+        foreach (var observation in observations)
+        {
+            var (goal, task, verification, observedProviderName, observedBinding) = observation;
+            if (verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted ||
+                !observedBinding.Equals(requestedBinding) ||
+                HasExplicitBudgetRecoveryForBinding(task, observedBinding, verification.CompletedAt) ||
+                latestAvailabilityAt > verification.CompletedAt)
+            {
+                continue;
+            }
+
+            var receipt = !string.IsNullOrWhiteSpace(verification.StandardErrorPath)
+                ? verification.StandardErrorPath!
+                : $"verification:{verification.CompletedAt:O}";
+            var candidate = new ProviderBudgetExhaustionHold(
+                observedProviderName,
+                observedBinding.Key,
+                observedBinding.Scope,
+                goal.Id,
+                task.Id,
+                verification.CompletedAt,
+                receipt);
+            if (latest is null || candidate.PlacedAt > latest.PlacedAt)
+            {
+                latest = candidate;
+            }
+        }
+
+        hold = latest!;
+        return latest is not null;
+    }
+
+    private static bool HasExplicitBudgetRecoveryForBinding(
+        TaskSpec task,
+        ProviderBindingKey observedBinding,
+        DateTimeOffset exhaustedAt)
+    {
+        if (task.LatestProviderBudgetRecoveryAt is not { } recoveredAt || recoveredAt <= exhaustedAt)
+        {
+            return false;
+        }
+
+        var recoveredDispatch = task.DispatchHistory
+            .LastOrDefault(dispatch => dispatch.DispatchedAt <= recoveredAt);
+        return recoveredDispatch is not null &&
+            BuildProviderBindingKey(
+                recoveredDispatch.ProviderName ?? recoveredDispatch.WorkerName,
+                recoveredDispatch.ClaudeCredentialSourceDirectory)
+            .Equals(observedBinding);
+    }
+
+    private static TaskDispatchRecord? FindDispatchForVerification(
+        TaskSpec task,
+        TaskVerificationRecord verification)
+    {
+        if (verification.DispatchStartedAt is { } dispatchStartedAt)
+        {
+            var exact = task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt == dispatchStartedAt);
+            if (exact is not null)
+            {
+                return exact;
+            }
+        }
+
+        return task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt <= verification.CompletedAt);
+    }
+
+    private static ProviderBindingKey BuildProviderBindingKey(string providerName, string? credentialBinding)
+    {
+        var provider = string.IsNullOrWhiteSpace(providerName) ? "unknown" : providerName.Trim();
+        if (string.IsNullOrWhiteSpace(credentialBinding))
+        {
+            return new ProviderBindingKey($"{provider.ToLowerInvariant()}::<provider-default>", "provider-only");
+        }
+
+        return new ProviderBindingKey(
+            $"{provider.ToLowerInvariant()}::{credentialBinding.Trim().ToLowerInvariant()}",
+            "provider+credential");
+    }
+
+    private sealed record ProviderBindingKey(string Key, string Scope);
+
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {
         retryAfter = default;
@@ -2371,6 +2554,11 @@ public static class DispatchFailureClassifier
             EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
             out line);
 
+    private static bool TryGetProviderBudgetExhaustionLine(TaskVerificationRecord verification, out string line) =>
+        ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(
+            EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true),
+            out line);
+
     private static bool TryGetRelativeRetryAfter(string output, out TimeSpan retryAfter)
     {
         var tryAgainMatch = TryAgainInPattern.Match(output);
@@ -2435,7 +2623,8 @@ public static class DispatchFailureClassifier
             ProviderKind.AnthropicClaudeCli or
             ProviderKind.OpenAICodexSpark or
             ProviderKind.OpenAICodexOssCli or
-            ProviderKind.OllamaQwenCodeCli)
+            ProviderKind.OllamaQwenCodeCli or
+            ProviderKind.XaiGrokCli)
         {
             return true;
         }
@@ -2444,7 +2633,8 @@ public static class DispatchFailureClassifier
             dispatch.WorkerName.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) ||
             dispatch.WorkerName.Equals("codex-spark", StringComparison.OrdinalIgnoreCase) ||
             dispatch.WorkerName.Equals("codex-oss-cli", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.WorkerName.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase);
+            dispatch.WorkerName.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase) ||
+            dispatch.WorkerName.Equals("grok-cli", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsRecoverableProviderConnectivityText(string text)

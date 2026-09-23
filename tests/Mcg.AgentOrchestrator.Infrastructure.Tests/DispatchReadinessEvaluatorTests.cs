@@ -167,6 +167,33 @@ public sealed class DispatchReadinessEvaluatorTests
         Xunit.Assert.False(blocked.HasCandidates);
     }
 
+    [Xunit.Fact(DisplayName = "GoalReadinessPreflight_does_not_hard_block_when_no_assigned_candidates_exist")]
+    public void GoalReadinessPreflightDoesNotHardBlockWhenNoAssignedCandidatesExist()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Inspect docs/usage.md", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Inspect docs/usage.md", [task]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        var dispatchedAt = Now;
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("worker", "exe", "dir", dispatchedAt));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("exe", "dir", 0, "ok", "", dispatchedAt.AddSeconds(1)));
+
+        var report = GoalReadinessPreflight.Build(kernel.GetGoal(goal.Id), agents, Path.GetTempPath());
+
+        Xunit.Assert.False(report.HasHardBlockers);
+        Xunit.Assert.True(report.AllowsStart(confirmed: false));
+        var finding = Xunit.Assert.Single(report.Findings, finding => finding.Kind == "dispatch-not-ready");
+        Xunit.Assert.Equal(GoalReadinessSeverity.Info, finding.Severity);
+        Xunit.Assert.True(finding.CanOverride);
+    }
+
     [Xunit.Fact(DisplayName = "EvaluateDispatchReadiness_returns_Blocked_with_candidates_when_assigned_tasks_cannot_prepare")]
     public void EvaluateDispatchReadinessReturnsBlockedWithCandidatesWhenAssignedTasksCannotPrepare()
     {

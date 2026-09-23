@@ -98,7 +98,8 @@ public static class GoalReadinessPreflight
         IReadOnlyList<AgentDefinition> agents,
         string executionDirectory,
         WorkerProfileCatalog? profiles = null,
-        Func<string, GoalId, string?>? resolveWorktree = null)
+        Func<string, GoalId, string?>? resolveWorktree = null,
+        IReadOnlyCollection<Goal>? providerHoldScope = null)
     {
         var findings = new List<GoalReadinessFinding>();
         var text = $"{goal.Objective}\n{string.Join('\n', goal.Tasks.Select(task => $"{task.Description}\n{task.VerificationPlan}"))}";
@@ -174,36 +175,51 @@ public static class GoalReadinessPreflight
                 CanOverride: true));
         }
 
-        if (findings.Count == 0)
+        // Always evaluate the canonical dispatch verdict when profiles are available. Existing
+        // workspace/risk findings must not mask a held provider binding in ordinary status.
+        var readinessVerdict = profiles is not null
+            ? DispatchReadinessEvaluator.EvaluateDispatchReadiness(
+                goal,
+                SubscriptionPlanBuilder.Build(goal, agents, profiles, providerHoldScope: providerHoldScope),
+                DateTimeOffset.UtcNow)
+            : DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
+                ? (DispatchReadinessVerdict)new DispatchReadinessReady()
+                : new DispatchReadinessBlocked("No assigned dispatch candidates");
+        switch (readinessVerdict)
         {
-            // Use the canonical DispatchReadinessEvaluator (when profiles are available) so the
-            // preflight verdict always agrees with the conductor's ready-batch and planner decisions.
-            var readinessVerdict = profiles is not null
-                ? DispatchReadinessEvaluator.EvaluateDispatchReadiness(
-                    goal,
-                    SubscriptionPlanBuilder.Build(goal, agents, profiles),
-                    DateTimeOffset.UtcNow)
-                : DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
-                    ? (DispatchReadinessVerdict)new DispatchReadinessReady()
-                    : new DispatchReadinessBlocked("No assigned dispatch candidates");
-            findings.Add(readinessVerdict switch
-            {
-                DispatchReadinessDeferred deferred => new GoalReadinessFinding(
+            case DispatchReadinessDeferred deferred:
+                findings.Add(new GoalReadinessFinding(
                     GoalReadinessSeverity.Info,
                     "deferred",
                     $"Readiness preflight found no blockers; assigned tasks are deferred by provider cooldown. {deferred.Reason}.",
-                    CanOverride: true),
-                DispatchReadinessReady => new GoalReadinessFinding(
+                    CanOverride: true));
+                break;
+            case DispatchReadinessReady when findings.Count == 0:
+                findings.Add(new GoalReadinessFinding(
                     GoalReadinessSeverity.Info,
                     "ready",
                     "Readiness preflight found no blockers; assigned tasks are in a dispatchable state.",
-                    CanOverride: true),
-                _ => new GoalReadinessFinding(
+                    CanOverride: true));
+                break;
+            case DispatchReadinessReady:
+                break;
+            case DispatchReadinessBlocked { ProviderBudgetHold: not null } blocked:
+                findings.Add(new GoalReadinessFinding(
+                    GoalReadinessSeverity.Blocker,
+                    "provider-budget-exhausted",
+                    blocked.Reason,
+                    CanOverride: false));
+                break;
+            case DispatchReadinessBlocked blocked:
+                findings.Add(new GoalReadinessFinding(
                     GoalReadinessSeverity.Info,
-                    "ready",
-                    "Readiness preflight found no blockers for unattended start.",
-                    CanOverride: true)
-            });
+                    "dispatch-not-ready",
+                    blocked.Reason,
+                    CanOverride: true));
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unsupported dispatch-readiness verdict '{readinessVerdict.GetType().Name}'.");
         }
 
         var hardBlockers = findings.Any(finding => finding is { Severity: GoalReadinessSeverity.Blocker, CanOverride: false });

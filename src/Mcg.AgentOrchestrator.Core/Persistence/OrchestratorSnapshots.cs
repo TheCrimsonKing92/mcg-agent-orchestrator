@@ -130,7 +130,8 @@ public sealed record TaskSnapshot(
     int PreReviewEvidenceAttemptCount = 0,
     InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint = null,
     int ConductorRoutingRevision = 0,
-    PreDispatchIntegrationReceipt? PendingPreDispatchIntegrationReceipt = null);
+    PreDispatchIntegrationReceipt? PendingPreDispatchIntegrationReceipt = null,
+    DateTimeOffset? LatestProviderBudgetRecoveryAt = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
