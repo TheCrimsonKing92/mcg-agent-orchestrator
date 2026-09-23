@@ -10,6 +10,9 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
     public const string OpenAiSolSubscriptionModelAlias = "gpt-5.6-sol";
     public const string OpenAiTerraSubscriptionModelAlias = "gpt-5.6-terra";
     public const string OpenAiLunaSubscriptionModelAlias = "gpt-5.6-luna";
+    public const string OpenAiGpt6SolSubscriptionModelAlias = "gpt-6-sol";
+    public const string OpenAiGpt6LunaSubscriptionModelAlias = "gpt-6-luna";
+    public const string OpenAiGpt6AstraSubscriptionModelAlias = "gpt-6-astra";
     public const string StaleOpenAiCodexSubscriptionModelAlias = "gpt-5.3-codex";
     public const int RoutineApiMaxOutputTokens = OutputTokenPolicy.RoutinePaidMaxOutputTokens;
     public const int ComplexApiMaxOutputTokens = OutputTokenPolicy.ComplexPaidMaxOutputTokens;
@@ -26,7 +29,10 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
         return modelAlias is not null &&
             (modelAlias.Equals(OpenAiTerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
-             modelAlias.Equals(OpenAiLunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
+             modelAlias.Equals(OpenAiLunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
+             modelAlias.Equals(OpenAiGpt6SolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
+             modelAlias.Equals(OpenAiGpt6LunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
+             modelAlias.Equals(OpenAiGpt6AstraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
             ? "medium"
             : RoutineSubscriptionReasoningEffort;
     }
