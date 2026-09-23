@@ -18,7 +18,8 @@ internal sealed partial class ConductorDriver
         out FocusedEvidenceRunResult evidence,
         out IReadOnlyList<FindingEvidenceArmReceipt> arms,
         out string receiptIdentity,
-        out FailedGoalFindingObservation decision)
+        out FailedGoalFindingObservation decision,
+        string? existingCandidateReceiptId = null)
     {
         evidence = initialEvidence;
         arms = initialArms;
@@ -31,7 +32,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var candidateReceiptId = CreateFindingEvidenceReceiptId(
+        var candidateReceiptId = existingCandidateReceiptId ?? CreateFindingEvidenceReceiptId(
             candidateSha, findingRoundFingerprint, receiptIdentity);
         var baselineContext = requestContext with { BatchId = requestContext.BatchId + "-baseline-arm" };
         if (!TryReconcileFocusedEvidenceAttempt(
@@ -143,6 +144,8 @@ internal sealed partial class ConductorDriver
         string requestIdentity,
         string candidateSha,
         string executionBasisIdentity,
+        ConductorAutonomyPolicy policy,
+        string findingRoundFingerprint,
         out FailedGoalFindingObservation decision)
     {
         decision = FailedGoalFindingObservation.None;
@@ -158,15 +161,84 @@ internal sealed partial class ConductorDriver
             requestIdentity, executorRequest, request, [finding], [group]);
         ReattachReusableRedFindingEvidence(
             goal, requestingTask, finding, requestIdentity, receipt);
+        var arms = receipt.Arms ?? [];
+        var routedReceiptId = receipt.ReceiptId;
+        var requestDispositions = BuildInitialRequestDispositions([batch], batch);
+        var requestContext = new ConductorFocusedEvidenceRequestContext(
+            findingRoundFingerprint,
+            CreateFindingEvidenceBatchId(candidateSha, findingRoundFingerprint, policy.Name, batch.Identity),
+            requestDispositions);
+        var retainedEvidence = new FocusedEvidenceRunResult(
+            executorRequest,
+            receipt.Accepted,
+            receipt.Passed,
+            receipt.Summary,
+            [],
+            OutcomeReason: FindingEvidenceOutcomeReason.CandidateRed);
+        if (!TryResolveMissingBaseline(
+                goal, policy, batch, candidateSha, findingRoundFingerprint, requestContext,
+                retainedEvidence, arms,
+                out var evidence, out var resolvedArms, out var receiptIdentity, out decision,
+                existingCandidateReceiptId: receipt.ReceiptId))
+        {
+            return true;
+        }
+
+        if (arms.All(arm => arm.Arm != FindingEvidenceArm.Baseline) &&
+            resolvedArms.Any(arm => arm.Arm == FindingEvidenceArm.Baseline))
+        {
+            routedReceiptId = CreateFindingEvidenceReceiptId(
+                candidateSha, findingRoundFingerprint, receiptIdentity);
+            var resolvedReceipt = new FindingEvidenceReceipt(
+                routedReceiptId,
+                candidateSha,
+                request,
+                evidence.Accepted,
+                evidence.IsValidEvidence,
+                evidence.Summary,
+                resolvedArms,
+                requestDispositions,
+                findingRoundFingerprint,
+                executionBasisIdentity);
+            _recordFindingEvidenceOutcome(
+                goal.Id,
+                requestingTask.Id,
+                finding.StableId,
+                new FindingEvidenceOutcome(
+                    Honoured: true,
+                    ReceiptId: routedReceiptId,
+                    ResultReason: FindingEvidenceOutcomeReason.CandidateRed,
+                    RequestedSelectionIdentity: requestIdentity,
+                    DecisionReason: "reused-red-baseline-attribution",
+                    SourceReceiptIds: [receipt.ReceiptId, routedReceiptId]),
+                resolvedReceipt);
+            _recordFindingEvidenceRequest(
+                goal.Id,
+                requestingTask.Id,
+                $"finding-evidence disposition=reused-red-baseline; role={requestingTask.RequiredRole}; " +
+                $"task_id={requestingTask.Id}; finding_id={finding.StableId}; candidate_sha={candidateSha}; " +
+                $"source_receipt_id={receipt.ReceiptId}; receipt_id={routedReceiptId}");
+            arms = resolvedArms;
+        }
+
         var attribution = TryAttributeActionableCandidateRed(
-            goal, candidateSha, receipt.Arms ?? [], batch);
-        decision = attribution is not null
-            ? BuildActionableCandidateRedDecision(
-                goal, requestingTask, candidateSha, receipt.ReceiptId, attribution)
-            : FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
-                $"Reusable candidate RED receipt {receipt.ReceiptId} at candidate {candidateSha} for finding {finding.StableId} " +
-                "could not be attributed without Baseline evidence. No paid worker was dispatched.");
+            goal, candidateSha, arms, batch);
+        if (attribution is not null)
+        {
+            decision = BuildActionableCandidateRedDecision(
+                goal, requestingTask, candidateSha, routedReceiptId, attribution);
+            return true;
+        }
+        if (TryBuildUnattributableRedEscalation(
+                candidateSha, arms, batch, routedReceiptId, out decision))
+        {
+            return true;
+        }
+
+        decision = FailedGoalFindingObservation.Observed(
+            FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
+            $"Reusable candidate RED receipt {routedReceiptId} at candidate {candidateSha} for finding {finding.StableId} " +
+            "could not be attributed without Baseline evidence. No paid worker was dispatched.");
         return true;
     }
 

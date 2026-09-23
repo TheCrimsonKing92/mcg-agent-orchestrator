@@ -163,6 +163,73 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
     }
 
     [Xunit.Fact]
+    public void ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper()
+    {
+        const string candidateSha = "abc1234";
+        const string failingTest =
+            "ConductorDriverTestsFindingEvidenceReuse.ReusedCandidateOnlyRedOutsideChangedFilesRunsBaselineOnceThenRoutesToDeveloper";
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        var finding = EvidenceFindingWithRequest(
+            "A historical candidate-only red receipt needs Baseline attribution.",
+            id: "reused-red-needs-baseline",
+            category: FindingCategory.TestEvidence,
+            classes: ["ConductorDriverTestsFindingEvidenceReuse"]);
+        var focusedRuns = 0;
+        TaskId? retriedTaskId = null;
+        string? escalation = null;
+        FocusedEvidenceRunResult RunEvidence(string request)
+        {
+            focusedRuns++;
+            return focusedRuns == 1
+                ? CandidateOnlyRedWithExecutedCount(request, candidateSha, failingTest)
+                : CandidateRedFindingEvidence(request, candidateSha, failingTest);
+        }
+
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        var seedDriver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) => RunEvidence(request),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            getLandingFileScopes: _ =>
+                ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidenceReuse.cs"],
+            executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+        seedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        PassVerification(kernel, goal, developer, hasCommittedChanges: false);
+        kernel.RetryTask(goal.Id, tester.Id, "Replay the historical red receipt without changing the candidate.");
+        RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
+        var replayDriver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+            runFocusedEvidence: (_, request) => RunEvidence(request),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"],
+            writeEscalation: (_, _, message) => escalation = message,
+            executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+
+        replayDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(2, focusedRuns);
+        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Null(escalation);
+    }
+
+    [Xunit.Fact]
     public void ThirdEvidenceDeliveryRetryEscalatesWithoutDispatchingWorker()
     {
         const string candidateSha = "abc1234";

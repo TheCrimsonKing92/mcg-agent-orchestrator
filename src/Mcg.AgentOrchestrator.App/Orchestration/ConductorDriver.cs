@@ -2143,7 +2143,7 @@ internal sealed partial class ConductorDriver
 
             if (TryRouteReusableRedFindingEvidence(
                     goal, requestingTask, finding, typedRequest, request, identity,
-                    telemetryCandidateSha, executionBasisIdentity, out decision))
+                    telemetryCandidateSha, executionBasisIdentity, policy, findingRoundFingerprint, out decision))
             {
                 return true;
             }
