@@ -693,6 +693,12 @@ public sealed partial class AgentOrchestratorKernel
             .Where(evt => evt.Kind == ProgressKind.HumanInputSuperseded)
             .SelectMany(evt =>
             {
+                if (evt.HumanInputSuperseded is { } payload)
+                {
+                    return payload.ResolvedStableIds
+                        .Select(stableId => (StableId: stableId, evt.OccurredAt));
+                }
+
                 var start = evt.Message.IndexOf(marker, StringComparison.Ordinal);
                 if (start < 0)
                 {

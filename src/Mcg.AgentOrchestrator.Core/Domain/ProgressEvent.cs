@@ -8,7 +8,11 @@ public sealed record ProgressEvent(
     DateTimeOffset OccurredAt,
     TaskRequeueSkippedPayload? RequeueSkipped = null,
     IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
-    OperatorIntentAppliedPayload? OperatorIntentApplied = null);
+    OperatorIntentAppliedPayload? OperatorIntentApplied = null,
+    HumanInputSupersededPayload? HumanInputSuperseded = null);
+
+public sealed record HumanInputSupersededPayload(
+    IReadOnlyList<string> ResolvedStableIds);
 
 public sealed record OperatorIntentAppliedPayload(
     string IntentId,
