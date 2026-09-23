@@ -108,8 +108,10 @@ public sealed class GateOwnedCriterionDeferralTests
                  })
         {
             Xunit.Assert.Contains("ACCEPTANCE-GATE-OWNED", requirements, StringComparison.Ordinal);
+            Xunit.Assert.Contains("OPERATOR-OWNED", requirements, StringComparison.Ordinal);
             Xunit.Assert.Contains("not-verifiable", requirements, StringComparison.Ordinal);
-            Xunit.Assert.Contains("does not fail the round", requirements, StringComparison.Ordinal);
+            Xunit.Assert.Contains("otherwise attest met", requirements, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("does not fail the round", requirements, StringComparison.Ordinal);
         }
 
         var compactReviewer = SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer, TaskComplexity.Simple);

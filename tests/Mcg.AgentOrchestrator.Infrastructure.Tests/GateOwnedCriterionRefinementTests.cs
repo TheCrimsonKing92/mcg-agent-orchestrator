@@ -9,6 +9,139 @@ public sealed class GateOwnedCriterionRefinementTests
 {
     private const string Candidate = "candidate-c";
 
+    [Xunit.Theory]
+    [Xunit.InlineData("Acceptance executes")]
+    [Xunit.InlineData("ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("executed by the acceptance gate")]
+    public async Task MarkerTextDeterministicallyCreatesGateOwnershipAndAcceptanceObligation(string marker)
+    {
+        var criterion = $"The focused behavior works. {marker}.";
+        var objective = $"""
+            Implement the focused behavior.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Implement the focused behavior.",
+              "acceptanceCriteria": [
+                {"text": {{System.Text.Json.JsonSerializer.Serialize(criterion)}}, "declared_index": 1}
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        var obligation = Xunit.Assert.Single(recorded.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+        Xunit.Assert.Equal(0, obligation.CriterionIndex);
+        Xunit.Assert.Equal(recorded.AuthoritativeRefinedSpecVersion!.Version, obligation.CriterionVersion);
+    }
+
+    [Xunit.Fact]
+    public async Task MixedOperatorAndGateMarkerKeepsOperatorOwnershipWhileUnmarkedCriterionStaysWorkerOwned()
+    {
+        const string mixedCriterion =
+            "The operator owns this criterion; Acceptance executes. TEST-VERIFIABLE.";
+        const string unmarkedCriterion = "The focused behavior remains unchanged. TEST-VERIFIABLE.";
+        var objective = $"""
+            Implement the focused behavior.
+
+            ## Acceptance criteria
+
+            1. {mixedCriterion}
+            2. {unmarkedCriterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Implement the focused behavior.",
+              "acceptanceCriteria": [
+                {"text": {{System.Text.Json.JsonSerializer.Serialize(mixedCriterion)}}, "declared_index": 1},
+                {"text": {{System.Text.Json.JsonSerializer.Serialize(unmarkedCriterion)}}, "declared_index": 2}
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([mixedCriterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        var obligation = Xunit.Assert.Single(recorded.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(0, obligation.CriterionIndex);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+    }
+
+    [Xunit.Fact]
+    public async Task ModelAndMarkerGateOwnershipUnionProducesOneAcceptanceObligation()
+    {
+        const string criterion = "The focused suite passes. ACCEPTANCE-GATE-OWNED.";
+        var objective = $"""
+            Implement the focused behavior.
+
+            ## Acceptance criteria
+
+            1. {criterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Implement the focused behavior.",
+              "acceptanceCriteria": [
+                {"text": {{System.Text.Json.JsonSerializer.Serialize(criterion)}}, "declared_index": 1, "evidence_owner": "acceptance-gate"}
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+
+        var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        var obligation = Xunit.Assert.Single(recorded.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+    }
+
+    [Xunit.Fact]
+    public async Task MarkerDerivedGateCriterionDefersButWorkerCriterionNotVerifiableStillFailsClosed()
+    {
+        const string gateCriterion = "The focused suite passes. Acceptance executes.";
+        const string workerCriterion = "The implementation returns the expected result.";
+
+        var accepted = await CreateMarkerReviewScenario(gateCriterion, workerCriterion);
+        RecordReviewerRound(accepted, gateVerdict: "not-verifiable", workerVerdict: "met");
+
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, accepted.Reviewer.Status);
+        Xunit.Assert.Equal(GoalStatus.Verified, accepted.Goal.Status);
+        var gateObligation = Xunit.Assert.Single(accepted.Goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, gateObligation.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, gateObligation.State);
+        Xunit.Assert.Equal(Candidate, gateObligation.ExpectedCandidateSha);
+
+        var rejected = await CreateMarkerReviewScenario(gateCriterion, workerCriterion);
+        RecordReviewerRound(rejected, gateVerdict: "met", workerVerdict: "not-verifiable");
+
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, rejected.Reviewer.Status);
+        var failure = Xunit.Assert.Single(rejected.Goal.Timeline.Where(item =>
+            item.Kind == ProgressKind.TaskFailed));
+        Xunit.Assert.Contains("attestation rejected", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("criterion-evidence-map --goal", failure.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public void UnknownEvidenceOwnerDegradesToWorkerWithParseDiagnostic()
     {
@@ -522,7 +655,8 @@ public sealed class GateOwnedCriterionRefinementTests
             string response,
             string objective = "Integrate the billing system",
             bool blockRawOutputDirectory = false,
-            string? rawOutputStamp = null)
+            string? rawOutputStamp = null,
+            IReadOnlyList<TaskSpec>? tasks = null)
     {
         var provider = new FakeSmokeProvider(response, providerName: "fake-refiner");
         var collaboration = new FakeCollaborationItemStore();
@@ -544,8 +678,63 @@ public sealed class GateOwnedCriterionRefinementTests
             rawOutputDirectory: rawOutputDirectory,
             rawOutputStamp: rawOutputStamp);
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal(objective);
+        var goal = tasks is null
+            ? kernel.CreateGoal(objective)
+            : kernel.CreateGoal(objective, tasks);
         return (service, kernel, goal, collaboration);
+    }
+
+    private static async Task<(AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Reviewer)>
+        CreateMarkerReviewScenario(string gateCriterion, string workerCriterion)
+    {
+        var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var objective = $"""
+            Implement the focused behavior.
+
+            ## Acceptance criteria
+
+            1. {gateCriterion}
+            2. {workerCriterion}
+            """;
+        var response = $$"""
+            {
+              "behavioralContract": "Implement the focused behavior.",
+              "acceptanceCriteria": [
+                {"text": {{System.Text.Json.JsonSerializer.Serialize(gateCriterion)}}, "declared_index": 1},
+                {"text": {{System.Text.Json.JsonSerializer.Serialize(workerCriterion)}}, "declared_index": 2}
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            """;
+        var scenario = CreateRefinementScenario(response, objective, tasks: [reviewer]);
+        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        scenario.Kernel.ActivateGoal(scenario.Goal.Id, AgentCatalog.Default().Agents);
+        scenario.Kernel.RecordTaskDispatch(scenario.Goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "fixture", "review", "C:\\fixture", DateTimeOffset.UtcNow));
+        scenario.Kernel.RecordDispatchBaseCommit(scenario.Goal.Id, reviewer.Id, Candidate);
+        return (scenario.Kernel, scenario.Goal, reviewer);
+    }
+
+    private static void RecordReviewerRound(
+        (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Reviewer) scenario,
+        string gateVerdict,
+        string workerVerdict)
+    {
+        var output = string.Join(Environment.NewLine,
+            "WORKER_RESULT:", "files: none", "commands: review",
+            "tests: pass - deterministic fixture", "commit: none", "blockers: none",
+            "findings: []", "touched_anchors: []",
+            $"criteria_verdicts: [{{\"criterion_index\":0,\"verdict\":\"{gateVerdict}\",\"evidence\":\"focused acceptance gate\"}},{{\"criterion_index\":1,\"verdict\":\"{workerVerdict}\",\"evidence\":\"source and tests\"}}]",
+            "verdict: pass", "model_fit: fixture/model - adequate - deterministic review",
+            "skills: none", "confidence: high", "END_WORKER_RESULT");
+        scenario.Kernel.RecordDispatchExecutionResult(
+            scenario.Goal.Id,
+            scenario.Reviewer.Id,
+            new TaskVerificationRecord(
+                "review", "C:\\fixture", 0, output, string.Empty, DateTimeOffset.UtcNow,
+                WorkerResultPresent: true, ReviewedCommit: Candidate));
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateBoundGateScenario()
