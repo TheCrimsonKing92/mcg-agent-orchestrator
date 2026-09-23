@@ -47,7 +47,7 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task MixedOperatorAndGateMarkerKeepsOperatorOwnershipWhileUnmarkedCriterionStaysWorkerOwned()
+    public async Task MixedMarkersKeepOperatorOwnershipAndUnmarkedStaysWorkerOwned()
     {
         const string mixedCriterion =
             "The operator owns this criterion; Acceptance executes. TEST-VERIFIABLE.";

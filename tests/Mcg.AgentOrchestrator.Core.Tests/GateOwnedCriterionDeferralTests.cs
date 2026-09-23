@@ -108,11 +108,11 @@ public sealed class GateOwnedCriterionDeferralTests
                  })
         {
             Xunit.Assert.Contains(
-                "Criterion under OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
+                "Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
                 requirements,
                 StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain(
-                "OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED criterion in brief: not-verifiable",
+                "Criterion under OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable",
                 requirements,
                 StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("does not fail the round", requirements, StringComparison.Ordinal);
