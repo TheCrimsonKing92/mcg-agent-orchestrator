@@ -746,6 +746,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new InvalidOperationException(
                     $"goal-mark-landed is only valid for Verifying, Verified, or Completed goals; goal {landedGp} is {landedGoal.Status}. " +
                     "Active or InProgress goals self-heal via the conductor; only verified force-landed goals need this command.");
+            var completionRefusal = context.Kernel.DescribeMergeEvidenceCompletionRefusal(landedId);
+            if (completionRefusal is not null)
+                throw new InvalidOperationException(completionRefusal);
             var landedDir = context.Workspace.ExecutionDirectory;
             var landedBranch = context.Worktrees.BranchName(landedId);
             var forceCleanup = HasCliConfirmation(parts, "--force");
@@ -801,6 +804,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 landedMergeSha = hasResolvedLandingSha ? head.Output.Trim() : "force-unverified";
             }
 
+            var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
+            context.Kernel.CompleteGoalFromMergeEvidence(
+                landedId,
+                landedMergeSha,
+                "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
             GoalOperationJournal.RecordLandingIntent(
                 landedDir,
                 landedGoal,
@@ -822,11 +830,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     GoalTerminalDispositionSource.MergeEvidence));
             JournalAutoCloseSourceBacklogItem(context, landedGoal);
 
-            var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
-            context.Kernel.CompleteGoalFromMergeEvidence(
-                landedId,
-                landedMergeSha,
-                "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
             var resolvedAttentionItems = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory)
                 .ResolveOpenForGoalAsync(
                     landedId.Value,

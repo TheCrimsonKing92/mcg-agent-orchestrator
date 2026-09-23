@@ -3527,6 +3527,160 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
     }
 
     [Xunit.Fact]
+    public async Task GoalMarkLanded_OutstandingObligation_RefusesWithoutDurableWrites()
+    {
+        var fixture = await CreateGoalMarkLandedRefusalFixtureAsync("Outstanding landing evidence");
+        var (root, workspace, backlogStore, backlogItem, kernel, goal) = fixture;
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+            goal.Objective,
+            ["Acceptance evidence is recorded"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.MapCriterionEvidenceOwner(
+            goal.Id,
+            0,
+            1,
+            CriterionEvidenceOwner.Acceptance,
+            "operator",
+            CriterionEvidenceScopes.FullAcceptanceGate,
+            expectedCandidateSha: "candidate-a");
+
+        await AssertGoalMarkLandedRefusalHasNoDurableSideEffectsAsync(
+            root,
+            workspace,
+            backlogStore,
+            backlogItem,
+            kernel,
+            goal,
+            "cannot complete from merge evidence while criterion evidence obligations remain outstanding",
+            force: true);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task GoalMarkLanded_BlockedTask_RefusesWithoutDurableWrites(bool liveProcess)
+    {
+        var fixture = await CreateGoalMarkLandedRefusalFixtureAsync("Blocked landing task");
+        var (root, workspace, backlogStore, backlogItem, kernel, originalGoal) = fixture;
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Xunit.Assert.Single(snapshot.Goals);
+        var taskSnapshot = Xunit.Assert.Single(goalSnapshot.Tasks);
+        var blockedTask = liveProcess
+            ? taskSnapshot with
+            {
+                LastProcess = new TaskProcessSnapshot(
+                    1234,
+                    "worker",
+                    root,
+                    Path.Combine(root, "worker.out.log"),
+                    Path.Combine(root, "worker.err.log"),
+                    Path.Combine(root, "worker.exit.txt"),
+                    DateTimeOffset.UtcNow,
+                    null,
+                    null)
+            }
+            : taskSnapshot with { Status = WorkTaskStatus.Assigned };
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [goalSnapshot with { Tasks = [blockedTask] }]
+        });
+        var goal = kernel.GetGoal(originalGoal.Id);
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+        Xunit.Assert.Equal(liveProcess, goal.Tasks.Single().LastProcess is { IsRunning: true });
+        Xunit.Assert.Equal(
+            liveProcess ? WorkTaskStatus.Completed : WorkTaskStatus.Assigned,
+            goal.Tasks.Single().Status);
+
+        await AssertGoalMarkLandedRefusalHasNoDurableSideEffectsAsync(
+            root,
+            workspace,
+            backlogStore,
+            backlogItem,
+            kernel,
+            goal,
+            "cannot complete from merge evidence while any task is non-terminal or has a live process",
+            force: false);
+    }
+
+    private static async Task<(
+        string Root,
+        OrchestratorWorkspace Workspace,
+        BacklogStore BacklogStore,
+        BacklogItem BacklogItem,
+        AgentOrchestratorKernel Kernel,
+        Goal Goal)> CreateGoalMarkLandedRefusalFixtureAsync(string backlogTitle)
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "seed.txt");
+        RunGit(root, "commit", "-m", "Seed");
+        var workspace = CreateRefinedWorkspace(root);
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var backlogItem = await backlogStore.AddAsync(backlogTitle);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Refuse unsafe landing", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+        kernel.SetGoalSourceBacklogItemLink(goal.Id, backlogItem.Id, SourceBacklogCoverage.Full);
+        File.WriteAllText(Path.Combine(root, "landed.txt"), "landed");
+        RunGit(root, "add", "landed.txt");
+        RunGit(root, "commit", "-m", $"Integrate {GoalWorktrees.BranchName(goal.Id)}");
+        return (root, workspace, backlogStore, backlogItem, kernel, goal);
+    }
+
+    private static async Task AssertGoalMarkLandedRefusalHasNoDurableSideEffectsAsync(
+        string root,
+        OrchestratorWorkspace workspace,
+        BacklogStore backlogStore,
+        BacklogItem backlogItem,
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        string expectedMessage,
+        bool force)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var parts = force
+            ? new[] { "goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed", "--force" }
+            : ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"];
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            cleanupContext: CreateIsolatedCleanupContext(workspace)));
+
+        Xunit.Assert.Contains(expectedMessage, error.Message, StringComparison.Ordinal);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.DoesNotContain(journal.Entries, entry =>
+            entry.Operation == GoalOperationJournal.LandingIntentOperation);
+        Xunit.Assert.DoesNotContain(journal.Entries, entry => entry.Operation == "conductor:land");
+        Xunit.Assert.DoesNotContain(journal.Entries, entry =>
+            entry.Operation == GoalOperationJournal.TerminalDispositionOperation);
+        Xunit.Assert.Null(await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value));
+        var unchangedBacklogItem = await backlogStore.GetByExactIdAsync(backlogItem.Id);
+        Xunit.Assert.NotNull(unchangedBacklogItem);
+        Xunit.Assert.Equal(BacklogItemStatus.Open, unchangedBacklogItem!.Status);
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+    }
+
+    [Xunit.Fact]
     public async Task GoalMarkLanded_MissingBranchWithIntegrateCommit_CompletesAndResolvesAttention()
     {
         var root = CreateTempDirectory();
