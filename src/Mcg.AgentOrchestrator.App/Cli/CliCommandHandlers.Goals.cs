@@ -1629,6 +1629,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var intentGoalReloadObservations = new Dictionary<string, ConductorGoalReloadObservation>(StringComparer.Ordinal);
                 var parkedGoalSafetyNetTick = 0;
                 var scheduledLoadHold = context.InitialConductLoopLoadHold;
+                var suppressGoalRefinementForMaxDurationDeferral = false;
+                var maxDurationDeferralCeiling = AcceptanceGateEngineSettings
+                    .Load(context.Workspace.ExecutionDirectory)
+                    .ResolveCheckTimeout(null);
                 TerminalGoalSweepResult reconcileSweep(
                     AgentOrchestratorKernel loopKernel,
                     IReadOnlySet<string> checkpointHeldGoalIds)
@@ -1775,9 +1779,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
-                    GoalRefinementWorkCoordinator.TryLaunchFirstPending(
-                        new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
-                        context.Workspace);
+                    if (!suppressGoalRefinementForMaxDurationDeferral)
+                    {
+                        GoalRefinementWorkCoordinator.TryLaunchFirstPending(
+                            new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
+                            context.Workspace);
+                    }
                     RunEventMaintenanceCadence.TryRunIfDue(
                         context.Workspace.RunEventStorePath,
                         context.Workspace.ConductEventsLogPath,
@@ -1833,7 +1840,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
                         : null,
                     checkpointGoalTick: context.CheckpointGoals,
-                    hasTransientLoadHold: () => scheduledLoadHold is not null);
+                    hasTransientLoadHold: () => scheduledLoadHold is not null,
+                    maxDurationDeferralCeiling: maxDurationDeferralCeiling,
+                    onMaxDurationDeferralStateChanged: active => suppressGoalRefinementForMaxDurationDeferral = active);
                 if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                 {
                     ConductorContinuityExitArtifact.Write(
@@ -1887,12 +1896,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchPollSeconds = ResolveConductPollSeconds(parts);
                 TimeSpan? watchMax = int.TryParse(GetFlagValue(parts, "--max-duration"), out var wmd)
                     ? TimeSpan.FromSeconds(wmd) : null;
+                var watchMaxDurationDeferralCeiling = AcceptanceGateEngineSettings
+                    .Load(context.Workspace.ExecutionDirectory)
+                    .ResolveCheckTimeout(null);
                 var watchReaper = new BackgroundDispatchRunner();
+                var suppressWatchRefinementForMaxDurationDeferral = false;
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
-                    GoalRefinementWorkCoordinator.TryLaunchFirstPending(
-                        new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
-                        context.Workspace);
+                    if (!suppressWatchRefinementForMaxDurationDeferral)
+                    {
+                        GoalRefinementWorkCoordinator.TryLaunchFirstPending(
+                            new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
+                            context.Workspace);
+                    }
                     watchReaper.BeginRefreshCycle();
                     foreach (var resolved in wk.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
                     {
@@ -1939,7 +1955,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     reloadPolicy: conductPolicyName is null
                         ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
                         : null,
-                    checkpointGoalTick: context.CheckpointGoals);
+                    checkpointGoalTick: context.CheckpointGoals,
+                    maxDurationDeferralCeiling: watchMaxDurationDeferralCeiling,
+                    onMaxDurationDeferralStateChanged: active => suppressWatchRefinementForMaxDurationDeferral = active);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
             }
