@@ -66,10 +66,14 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
 
             Assert.NotNull(attemptId);
             Assert.True(summary!.Handoff?.Started);
-            Assert.Equal(GoalStatus.Completed, running.Status);
+            Assert.Equal(GoalStatus.Verified, running.Status);
             Assert.Equal(0, paidWorkerStarts);
             Assert.Empty(fixture.AttemptCoordinator.GetUnreconciledAttempts([waitingAcceptance!.Id.Value]));
             var lines = outputText.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Contains(lines, line =>
+                line.StartsWith($"ACCEPTANCE goal={running.Id.Value[..8]} ", StringComparison.Ordinal) &&
+                line.Contains("result=passed", StringComparison.Ordinal) &&
+                line.Contains($"attempt={attemptId}", StringComparison.Ordinal));
             var deferred = Assert.Single(lines, line => line.StartsWith("LOOP_STOP_DEFERRED ", StringComparison.Ordinal));
             Assert.Contains(attemptId, deferred, StringComparison.Ordinal);
             Assert.Contains("attempt_elapsed_ms=", deferred, StringComparison.Ordinal);
