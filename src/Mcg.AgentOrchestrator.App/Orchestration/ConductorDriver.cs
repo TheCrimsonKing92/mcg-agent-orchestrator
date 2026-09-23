@@ -4052,14 +4052,14 @@ internal sealed partial class ConductorDriver
     internal ConductorAdvanceResult EscalateParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        string reason) =>
-        Escalate(candidate.Goal, candidate.GoalPrefix, policy, GoalLifecycleState.Verified, reason);
+        string reason, ConductorEscalationKind? kind = null) =>
+        Escalate(candidate.Goal, candidate.GoalPrefix, policy, GoalLifecycleState.Verified, reason, kind);
 
     internal ConductorAdvanceResult EscalateParallelLandingAcceptance(
         Goal goal,
         ConductorAutonomyPolicy policy,
-        string reason) =>
-        Escalate(goal, goal.Id.Value[..8], policy, GoalLifecycleState.Verified, reason);
+        string reason, ConductorEscalationKind? kind = null) =>
+        Escalate(goal, goal.Id.Value[..8], policy, GoalLifecycleState.Verified, reason, kind);
 
     private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
         goal.Tasks.Count > 0 &&
@@ -5834,7 +5834,7 @@ internal sealed partial class ConductorDriver
                 (timedOut
                     ? "Acceptance verification timed out; rerun acceptance after clearing the blocker."
                     : "Acceptance verification failed; review and fix before landing.") +
-                FormatFailureTail(acceptance.FailureDetail));
+                FormatFailureTail(acceptance.FailureDetail), timedOut ? null : ConductorEscalationKind.AcceptanceVerificationFailed);
         }
 
         if (acceptance.Passed)
@@ -6025,11 +6025,11 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy,
         GoalLifecycleState state,
-        string reason)
+        string reason, ConductorEscalationKind? kind = null)
     {
         RecordEscalation(goal, state, reason);
         return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Escalated(state, reason));
+            new ConductorAdvanceOutcome.Escalated(state, reason, kind));
     }
 
     private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason)

@@ -9,7 +9,13 @@ public sealed record ProgressEvent(
     TaskRequeueSkippedPayload? RequeueSkipped = null,
     IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
     OperatorIntentAppliedPayload? OperatorIntentApplied = null,
-    HumanInputSupersededPayload? HumanInputSuperseded = null);
+    HumanInputSupersededPayload? HumanInputSuperseded = null,
+    ConductorTickOutcomePayload? TickOutcome = null);
+
+public sealed record ConductorTickOutcomePayload(
+    string OutcomeKind,
+    string LifecycleState,
+    string? EscalationKind);
 
 public sealed record HumanInputSupersededPayload(
     IReadOnlyList<string> ResolvedStableIds);

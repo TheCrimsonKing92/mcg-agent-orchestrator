@@ -2,11 +2,18 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Core.Conductor;
 
+public enum ConductorEscalationKind
+{
+    Unspecified,
+    AcceptanceVerificationFailed,
+    BackgroundAcceptanceFailed
+}
+
 public abstract record ConductorAdvanceOutcome
 {
     public sealed record Executed(GoalLifecycleState FromState, string Description) : ConductorAdvanceOutcome;
     public sealed record Held(GoalLifecycleState State, string Reason, string? StableIdentity = null) : ConductorAdvanceOutcome;
-    public sealed record Escalated(GoalLifecycleState State, string Reason) : ConductorAdvanceOutcome;
+    public sealed record Escalated(GoalLifecycleState State, string Reason, ConductorEscalationKind? Kind = null) : ConductorAdvanceOutcome;
     public sealed record Done(GoalLifecycleState State) : ConductorAdvanceOutcome;
 }
 

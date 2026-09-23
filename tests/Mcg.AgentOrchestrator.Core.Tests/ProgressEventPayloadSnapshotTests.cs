@@ -58,4 +58,19 @@ public sealed class ProgressEventPayloadSnapshotTests
             ["finding-b", "finding-a"],
             Assert.IsType<HumanInputSupersededPayload>(restoredEvent.HumanInputSuperseded).ResolvedStableIds);
     }
+
+    [Xunit.Fact]
+    public void ToSnapshot_ConductorTickOutcomePayload_RoundTrips()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal("Persist typed acceptance escalation.");
+        var payload = new ConductorTickOutcomePayload("Escalated", "Verified", "AcceptanceVerificationFailed");
+        kernel.RecordGoalPolicyDecision(goal.Id, "Reason wording can change.", payload);
+
+        var restored = Goal.FromSnapshot(goal.ToSnapshot());
+
+        var evt = Assert.Single(restored.Timeline, item => item.TickOutcome is not null);
+        Assert.Equal(payload, evt.TickOutcome);
+        Assert.Equal("Reason wording can change.", evt.Message);
+    }
 }

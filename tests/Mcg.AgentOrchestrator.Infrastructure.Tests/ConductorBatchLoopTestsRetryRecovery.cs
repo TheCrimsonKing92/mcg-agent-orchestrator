@@ -65,6 +65,49 @@ public sealed class ConductorBatchLoopTestsRetryRecovery : ConductorBatchLoopTes
         Assert.Equal(2, summary.Retried);
         Assert.True(escalationWritten);
         Assert.Equal(1, summary.Escalated);
+        var tick = Assert.Single(goal.Timeline, evt => evt.Kind == ProgressKind.GoalPolicyDecision
+            && evt.TickOutcome?.EscalationKind == nameof(ConductorEscalationKind.AcceptanceVerificationFailed));
+        Assert.Equal("Escalated", tick.TickOutcome!.OutcomeKind);
+        Assert.Equal("Verified", tick.TickOutcome.LifecycleState);
+        Assert.Contains("Acceptance verification failed", tick.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopSkipsRewordedTypedVerifiedAcceptanceEscalation()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        kernel.RecordGoalPolicyDecision(goal.Id, "Operator review is required.",
+            new ConductorTickOutcomePayload("Escalated", "Verified", nameof(ConductorEscalationKind.AcceptanceVerificationFailed)));
+        var acceptanceAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ => { acceptanceAttempts++; return false; });
+
+        var summary = new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+            NoStopPath(), maxIterations: 1, maxVerifyRetries: 2);
+
+        Assert.Equal(0, acceptanceAttempts);
+        Assert.Equal(0, summary.Retried);
+        Assert.Equal(1, summary.Escalated);
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopIgnoresOldAcceptancePhrasesWhenTypedKindDiffers()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        kernel.RecordGoalPolicyDecision(goal.Id, "Batch loop tick 1: escalated at Verified — Acceptance verification failed",
+            new ConductorTickOutcomePayload("Escalated", "Verified", nameof(ConductorEscalationKind.Unspecified)));
+        var acceptanceAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptance: _ => { acceptanceAttempts++; return true; });
+
+        new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+            NoStopPath(), maxIterations: 1);
+
+        Assert.Equal(1, acceptanceAttempts);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_skips_prior_verified_acceptance_escalation_without_spending_retry_budget")]

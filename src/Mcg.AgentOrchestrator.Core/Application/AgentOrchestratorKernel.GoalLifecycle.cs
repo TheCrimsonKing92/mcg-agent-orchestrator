@@ -2425,10 +2425,13 @@ public sealed partial class AgentOrchestratorKernel
 
     public IReadOnlyList<ProgressEvent> GetTimeline(GoalId goalId) => GetGoal(goalId).Timeline;
 
-    public void RecordGoalPolicyDecision(GoalId goalId, string message)
+    public void RecordGoalPolicyDecision(GoalId goalId, string message) =>
+        RecordGoalPolicyDecision(goalId, message, null);
+
+    public void RecordGoalPolicyDecision(GoalId goalId, string message, ConductorTickOutcomePayload? tickOutcome)
     {
         var goal = GetGoal(goalId);
-        Append(goal, null, ProgressKind.GoalPolicyDecision, message);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, message, tickOutcome: tickOutcome);
     }
 
     public GoalHoldObservation ObserveGoalHold(

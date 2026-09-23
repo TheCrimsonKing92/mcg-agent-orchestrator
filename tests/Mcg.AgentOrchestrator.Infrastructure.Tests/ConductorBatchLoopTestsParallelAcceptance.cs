@@ -1998,7 +1998,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap - 1, summary.Held);
             Assert.Equal(1, summary.Escalated);
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
-            Assert.Single(escalations);
+            Assert.Contains(goal.Timeline, evt => evt.TickOutcome?.EscalationKind == nameof(ConductorEscalationKind.BackgroundAcceptanceFailed));
             Assert.Contains("background acceptance launch-failed", escalations.Single(), StringComparison.OrdinalIgnoreCase);
             Assert.Equal(GoalStatus.Verifying, goal.Status);
             Assert.Null(goal.LatestAcceptanceFailure);
@@ -2063,7 +2063,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred, latest.Outcome);
-            Assert.Single(escalations);
+            Assert.Contains(goal.Timeline, evt => evt.TickOutcome?.EscalationKind == nameof(ConductorEscalationKind.BackgroundAcceptanceFailed));
             Assert.Contains("infrastructure-deferred", escalations.Single(), StringComparison.OrdinalIgnoreCase);
             Assert.Equal(GoalStatus.Verifying, goal.Status);
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
@@ -2148,7 +2148,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.GateEngineFault, latest.Outcome);
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
-            Assert.Single(escalations);
+            Assert.Contains(goal.Timeline, evt => evt.TickOutcome?.EscalationKind == nameof(ConductorEscalationKind.BackgroundAcceptanceFailed));
             Assert.Contains("gate-engine fault", escalations.Single(), StringComparison.OrdinalIgnoreCase);
             Assert.Equal(GoalStatus.Verifying, goal.Status);
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
@@ -2348,7 +2348,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
             Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
             Assert.Equal(RegistrationFailure, latest.Detail);
-            Assert.Single(escalations);
+            Assert.Contains(goal.Timeline, evt => evt.TickOutcome?.EscalationKind == nameof(ConductorEscalationKind.BackgroundAcceptanceFailed));
             Assert.Contains(RegistrationFailure, escalations.Single(), StringComparison.Ordinal);
             Assert.DoesNotContain(OuterFailure, escalations.Single(), StringComparison.Ordinal);
             Assert.Equal(GoalStatus.Verifying, goal.Status);

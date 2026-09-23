@@ -61,7 +61,7 @@ internal sealed partial class ConductorBatchLoop
     internal static readonly TimeSpan DefaultGoalStallThreshold = TimeSpan.FromMinutes(10);
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = false;
-    private const string SetAsideSelfClearDecisionPrefix = "Set-aside self-cleared:";
+    internal const string SetAsideSelfClearDecisionPrefix = "Set-aside self-cleared:";
     private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
@@ -1177,7 +1177,7 @@ internal sealed partial class ConductorBatchLoop
                     continue;
                 }
 
-                if (HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver))
+                if (VerifiedAcceptanceEscalationDecision.HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver))
                 {
                     var progressLine = $"GOAL goal={label} result=escalated state={GoalLifecycleState.Verified}";
                     if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
@@ -1288,11 +1288,11 @@ internal sealed partial class ConductorBatchLoop
 
                 // Auto-retry transient acceptance verification failures (up to maxVerifyRetries re-verifications)
                 var serialRetryRan = false;
-                if (!isDeferringMaxDurationStop && result.WasEscalated && IsTransientVerificationFailure(result))
+                if (!isDeferringMaxDurationStop && result.WasEscalated && VerifiedAcceptanceEscalationDecision.IsTransientVerificationFailure(result))
                 {
                     retryCounts.TryGetValue(goal.Id.Value, out var retries);
                     var retryAdvanceFaulted = false;
-                    while (retries < maxVerifyRetries && result.WasEscalated && IsTransientVerificationFailure(result))
+                    while (retries < maxVerifyRetries && result.WasEscalated && VerifiedAcceptanceEscalationDecision.IsTransientVerificationFailure(result))
                     {
                         var nextRetry = retries + 1;
                         if (!TryAdvanceGoal(
@@ -1374,7 +1374,8 @@ internal sealed partial class ConductorBatchLoop
                     if (!result.IsHeld)
                         changedGoalIds.Add(goal.Id);
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
-                    kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}");
+                    kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {FormatOutcome(result.Outcome)}",
+                        VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(result.Outcome));
                 }
 
                 if (result.WasExecuted)        { tickAdvanced++; }
@@ -2865,7 +2866,7 @@ internal sealed partial class ConductorBatchLoop
                 goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
                 HasCompletedPassedVerificationForAllTasks(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
-                TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
+                VerifiedAcceptanceEscalationDecision.TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
         var activeReservations = BuildActiveParallelAcceptanceReservations(
             driver.ParallelAcceptanceAttemptCoordinator,
@@ -4020,18 +4021,6 @@ internal sealed partial class ConductorBatchLoop
         }
     }
 
-    private static bool? TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
-    {
-        try
-        {
-            return HasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     internal static TerminalGoalRemedyExecutionResult ExecuteReconcileSweepAcceptanceRemedy(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
@@ -4151,7 +4140,8 @@ internal sealed partial class ConductorBatchLoop
                     return driver.EscalateParallelLandingAcceptance(
                         run.Candidate,
                         policy,
-                        $"background acceptance gate-engine fault: {SanitizeReason(gateEngineFault.Message)}");
+                        $"background acceptance gate-engine fault: {SanitizeReason(gateEngineFault.Message)}",
+                        ConductorEscalationKind.BackgroundAcceptanceFailed);
                 }
 
                 return ParallelAcceptanceHeld(
@@ -4168,7 +4158,8 @@ internal sealed partial class ConductorBatchLoop
                     return driver.EscalateParallelLandingAcceptance(
                         run.Candidate,
                         policy,
-                        $"background acceptance infrastructure-deferred: {SanitizeReason(infrastructureDeferred.Message)}");
+                        $"background acceptance infrastructure-deferred: {SanitizeReason(infrastructureDeferred.Message)}",
+                        ConductorEscalationKind.BackgroundAcceptanceFailed);
                 }
 
                 return ParallelAcceptanceHeld(
@@ -4205,7 +4196,8 @@ internal sealed partial class ConductorBatchLoop
                     return driver.EscalateParallelLandingAcceptance(
                         run.Candidate,
                         policy,
-                        $"background acceptance blocked-build-lock: {FormatBuildLockBlocked(buildLock.Attribution)}");
+                        $"background acceptance blocked-build-lock: {FormatBuildLockBlocked(buildLock.Attribution)}",
+                        ConductorEscalationKind.BackgroundAcceptanceFailed);
                 }
 
                 return new ConductorAdvanceResult(
@@ -4341,7 +4333,8 @@ internal sealed partial class ConductorBatchLoop
         return driver.EscalateParallelLandingAcceptance(
             candidate,
             policy,
-            $"background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {SanitizeReason(attempt.Detail ?? attempt.AttemptId)}");
+            $"background acceptance {AcceptanceAttemptOutcomeToken(attempt.Outcome)}: {SanitizeReason(attempt.Detail ?? attempt.AttemptId)}",
+            ConductorEscalationKind.BackgroundAcceptanceFailed);
     }
 
     private static ConductorAdvanceResult ParallelAcceptanceFault(
@@ -4369,7 +4362,8 @@ internal sealed partial class ConductorBatchLoop
             return driver.EscalateParallelLandingAcceptance(
                 candidate,
                 policy,
-                $"background acceptance worker-process registration fault: {registrationFault}");
+                $"background acceptance worker-process registration fault: {registrationFault}",
+                ConductorEscalationKind.BackgroundAcceptanceFailed);
         }
 
         return ParallelAcceptanceUnclassifiedFault(driver, candidate, policy, exception);
@@ -5015,60 +5009,6 @@ internal sealed partial class ConductorBatchLoop
     private static bool IsStaleTerminalGoalWithAssignedWork(Goal goal) =>
         (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed) &&
         goal.Tasks.Any(task => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman);
-
-    private static bool IsTransientVerificationFailure(ConductorAdvanceResult result) =>
-        result.Outcome is ConductorAdvanceOutcome.Escalated esc
-        && esc.State == GoalLifecycleState.Verified
-        && esc.Reason.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase);
-
-    private static bool HasPersistedVerifiedAcceptanceEscalation(Goal goal)
-    {
-        foreach (var evt in goal.Timeline.Reverse())
-        {
-            if (ClearsPersistedVerifiedAcceptanceEscalation(evt))
-            {
-                return false;
-            }
-
-            if (evt.Kind == ProgressKind.GoalPolicyDecision
-                && evt.Message.Contains("escalated at Verified", StringComparison.OrdinalIgnoreCase)
-                && IsPersistedVerifiedAcceptanceEscalationMessage(evt.Message))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool IsPersistedVerifiedAcceptanceEscalationMessage(string message) =>
-        message.Contains("Acceptance verification failed", StringComparison.OrdinalIgnoreCase) ||
-        message.Contains("background acceptance", StringComparison.OrdinalIgnoreCase);
-
-    private static bool HasUnresolvedPersistedVerifiedAcceptanceEscalation(Goal goal, ConductorDriver driver)
-    {
-        if (!HasPersistedVerifiedAcceptanceEscalation(goal))
-        {
-            return false;
-        }
-
-        try
-        {
-            return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)) != GoalLifecycleState.CleanedUp;
-        }
-        catch
-        {
-            return true;
-        }
-    }
-
-    private static bool ClearsPersistedVerifiedAcceptanceEscalation(ProgressEvent evt) =>
-        evt.Kind is ProgressKind.TaskRetried or ProgressKind.GoalCancelled or ProgressKind.GoalSuperseded
-        || (evt.Kind is ProgressKind.HumanInputRequested or ProgressKind.GoalPolicyDecision
-            && evt.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))
-        || (evt.Kind == ProgressKind.GoalPolicyDecision
-            && evt.Message.StartsWith(SetAsideSelfClearDecisionPrefix, StringComparison.Ordinal))
-        || evt.Kind == ProgressKind.HumanInputReceived;
 
     private static bool IsStopRequested(string stopFilePath) =>
         !string.IsNullOrEmpty(stopFilePath) && File.Exists(stopFilePath);

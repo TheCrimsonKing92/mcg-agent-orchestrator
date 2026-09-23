@@ -927,7 +927,8 @@ public sealed class Goal
                 evt.RequeueSkipped,
                 evt.OperatorGates,
                 evt.OperatorIntentApplied,
-                evt.HumanInputSuperseded)).ToList(),
+                evt.HumanInputSuperseded,
+                evt.TickOutcome)).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
             RefinedSpec is null ? null : ToRefinedSpecSnapshot(RefinedSpec),
@@ -1015,7 +1016,8 @@ public sealed class Goal
                 evt.RequeueSkipped,
                 evt.OperatorGates,
                 evt.OperatorIntentApplied,
-                evt.HumanInputSuperseded));
+                evt.HumanInputSuperseded,
+                evt.TickOutcome));
         }
 
         foreach (var depId in snapshot.DependsOn ?? [])
