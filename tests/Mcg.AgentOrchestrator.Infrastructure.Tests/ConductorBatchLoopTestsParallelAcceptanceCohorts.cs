@@ -23,8 +23,12 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var branchRevisions = goals.ToDictionary(
             goal => goal.Id,
             goal => goal.Id.Value.PadRight(40, 'b')[..40]);
-        var paths = goals.Select((goal, index) => (goal.Id, Paths: (IReadOnlyList<string>)[$"src/Member{index}.cs"]))
-            .ToDictionary(item => item.Id, item => item.Paths);
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/BlockedMember.cs"],
+            [goals[1].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortMember.razor"],
+            [goals[2].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortMember.cs"]
+        };
         kernel.RecordGoalRefinement(goals[0].Id, new RefinedSpec(
             goals[0].Objective,
             ["Operator confirms the landed behavior"],
@@ -38,7 +42,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             CriterionEvidenceOwner.Operator,
             "operator",
             "operator:real-world",
-            branchRevisions[goals[0].Id]);
+            expectedCandidateSha: branchRevisions[goals[0].Id]);
         var projector = new GateReadyCandidateProjector(
             goalId => new GateReadyCandidateRevisionPair(branchRevisions[goalId], mainRevision),
             goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
