@@ -1333,7 +1333,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             root);
         var classNames = Assert.Single(plan.Checks,
             check => check.TestProject == RepositoryTestProject.Infrastructure).TestClassSelections!;
-        Assert.Equal(36, classNames.Count);
+        Assert.Equal(37, classNames.Count);
         var filter = string.Join('|', classNames.Select(name => $"FullyQualifiedName~{name}"));
         Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", filter, out var items));
         Assert.Equal(2, items.Count);
