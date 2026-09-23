@@ -2120,14 +2120,18 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(fingerprint => !string.IsNullOrWhiteSpace(fingerprint))
                 .Distinct(StringComparer.Ordinal)
                 .Count();
-            Append(
-                goal,
+            var progressEvent = new ProgressEvent(
+                goal.Id,
                 request.TaskId,
                 ProgressKind.HumanInputSuperseded,
                 $"kind=human-input-superseded request={request.Id.Value} replacedAnswer={previousAnswer.Id} " +
                 $"authoritativeAnswer={replacement.Id} clearedFindings={clearedBlockerCount} " +
                 $"resolvedStableIds={(resolvedStableIds.Length == 0 ? "none" : string.Join(',', resolvedStableIds))} " +
-                $"resolvedRequests={resolvedRequests.Length} unblockedTasks={affectedTasks.Length}");
+                $"resolvedRequests={resolvedRequests.Length} unblockedTasks={affectedTasks.Length}",
+                _clock.UtcNow,
+                HumanInputSuperseded: new HumanInputSupersededPayload(resolvedStableIds));
+            goal.Append(progressEvent);
+            _eventWriter.AppendTimelineEvent(progressEvent);
             return replacement;
         }
     }

@@ -225,6 +225,166 @@ public sealed class HumanInputSupersedeTests
     }
 
     [Xunit.Fact]
+    public void Supersede_WritesTypedResolvedFindingPayload_AndSurvivesSnapshotRoundTrip()
+    {
+        const string derivedBlocker = "exact-blocker - conflicting 1s/5s floor requires clarification";
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist resolved finding ids.", [reviewer]);
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            null,
+            $"Which floor?{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {derivedBlocker}");
+        kernel.SubmitHumanInput(request.Id, "1 second");
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"}]"""));
+
+        clock.Advance();
+        kernel.SupersedeHumanInput(goal.Id, request.Id, "5 seconds", HumanInputAnswerOrigin.Operator);
+
+        var supersedeEvent = Assert.Single(
+            goal.Timeline,
+            evt => evt.Kind == ProgressKind.HumanInputSuperseded);
+        Assert.Equal(["derived"], Assert.IsType<HumanInputSupersededPayload>(supersedeEvent.HumanInputSuperseded).ResolvedStableIds);
+
+        var restored = Goal.FromSnapshot(goal.ToSnapshot());
+        var restoredEvent = Assert.Single(
+            restored.Timeline,
+            evt => evt.Kind == ProgressKind.HumanInputSuperseded);
+        Assert.Equal(["derived"], Assert.IsType<HumanInputSupersededPayload>(restoredEvent.HumanInputSuperseded).ResolvedStableIds);
+    }
+
+    [Xunit.Fact]
+    public void Supersede_TypedPayloadWins_WhenMessageMarkerDisagrees()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Prefer typed resolution evidence.", [reviewer]);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."},{"stable_id":"unrelated","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Unrelated finding."}]"""));
+
+        clock.Advance();
+        goal.Append(new ProgressEvent(
+            goal.Id,
+            null,
+            ProgressKind.HumanInputSuperseded,
+            "resolvedStableIds=unrelated",
+            clock.UtcNow,
+            HumanInputSuperseded: new HumanInputSupersededPayload(["derived"])));
+
+        var findings = kernel.GetReviewFindingState(goal.Id);
+        Assert.DoesNotContain(findings, finding => finding.StableId == "derived");
+        Assert.Contains(findings, finding => finding.StableId == "unrelated");
+    }
+
+    [Xunit.Fact]
+    public void LegacySupersedeEvent_WithoutPayload_ResolvesFromMessageMarker()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Read legacy resolution evidence.", [reviewer]);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
+
+        clock.Advance();
+        goal.Append(new ProgressEvent(
+            goal.Id,
+            null,
+            ProgressKind.HumanInputSuperseded,
+            "resolvedStableIds=derived",
+            clock.UtcNow));
+
+        Assert.DoesNotContain(kernel.GetReviewFindingState(goal.Id), finding => finding.StableId == "derived");
+    }
+
+    [Xunit.Fact]
+    public void LegacySupersedeEvent_WithNoneMarker_ResolvesNothing()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Read legacy empty resolution evidence.", [reviewer]);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
+
+        clock.Advance();
+        goal.Append(new ProgressEvent(
+            goal.Id,
+            null,
+            ProgressKind.HumanInputSuperseded,
+            "resolvedStableIds=none",
+            clock.UtcNow));
+
+        Assert.Contains(kernel.GetReviewFindingState(goal.Id), finding => finding.StableId == "derived");
+    }
+
+    [Xunit.Fact]
+    public void ResolvedStableIdsMarker_OnOtherProgressKind_DoesNotResolveFinding()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Ignore unrelated event messages.", [reviewer]);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            """[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Derived blocker."}]"""));
+
+        clock.Advance();
+        goal.Append(new ProgressEvent(
+            goal.Id,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            "resolvedStableIds=derived",
+            clock.UtcNow));
+
+        Assert.Contains(kernel.GetReviewFindingState(goal.Id), finding => finding.StableId == "derived");
+    }
+
+    [Xunit.Fact]
+    public void Supersede_ResolvingNothing_WritesEmptyPayload_AndIgnoresMessageMarker()
+    {
+        const string unresolvedFinding = "An unrelated finding that must remain open.";
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist an empty resolution payload.", [reviewer]);
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            null,
+            $"Which floor?{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: A different blocker.");
+        kernel.SubmitHumanInput(request.Id, "1 second");
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{unresolvedFinding}}"}]"""));
+
+        clock.Advance();
+        kernel.SupersedeHumanInput(goal.Id, request.Id, "5 seconds", HumanInputAnswerOrigin.Operator);
+
+        var supersedeEvent = Assert.Single(
+            goal.Timeline,
+            evt => evt.Kind == ProgressKind.HumanInputSuperseded);
+        Assert.Empty(Assert.IsType<HumanInputSupersededPayload>(supersedeEvent.HumanInputSuperseded).ResolvedStableIds);
+
+        clock.Advance();
+        goal.Append(new ProgressEvent(
+            goal.Id,
+            null,
+            ProgressKind.HumanInputSuperseded,
+            "resolvedStableIds=derived",
+            clock.UtcNow,
+            HumanInputSuperseded: new HumanInputSupersededPayload([])));
+
+        Assert.Contains(kernel.GetReviewFindingState(goal.Id), finding => finding.StableId == "derived");
+    }
+
+    [Xunit.Fact]
     public void Supersede_RejectsWorkerOrigin_AndOrdinaryAnswerNamesCorrectionPath()
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
