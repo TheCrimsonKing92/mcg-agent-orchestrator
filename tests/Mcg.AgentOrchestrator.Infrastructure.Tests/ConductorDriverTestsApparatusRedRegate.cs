@@ -150,11 +150,15 @@ public sealed class ConductorDriverTestsApparatusRedRegate
     }
 
     [Theory(DisplayName = "ConductorDriver_incomplete_rollup_evidence_fails_closed_and_records_genuine_reason")]
-    [InlineData("covering-passed")]
-    [InlineData("identityless-coverer")]
-    [InlineData("non-rollup")]
-    [InlineData("inside-changed-paths")]
-    public void IncompleteRollupEvidenceReopensDeveloperAndRecordsGenuineReason(string scenario)
+    [InlineData("covering-passed", "a failing check carries no test identity, so there is nothing to locate outside the candidate")]
+    [InlineData("identityless-coverer", "a failing check carries no test identity, so there is nothing to locate outside the candidate")]
+    [InlineData("non-rollup", "a failing check carries no test identity, so there is nothing to locate outside the candidate")]
+    [InlineData(
+        "inside-changed-paths",
+        "failing test Mcg.AgentOrchestrator.Infrastructure.Tests.WorkerDispatchHostTests.HeartbeatObserverTimingRace lives inside the candidate's changed paths")]
+    public void IncompleteRollupEvidenceReopensDeveloperAndRecordsGenuineReason(
+        string scenario,
+        string expectedReason)
     {
         var root = ConductorDriverTests.CreateTempDirectory();
         try
@@ -202,7 +206,7 @@ public sealed class ConductorDriverTestsApparatusRedRegate
             var entry = Assert.Single(GoalOperationJournal.Read(root, goal.Id).Entries.Where(candidate =>
                 candidate.Operation == GoalOperationJournal.AcceptanceApparatusGenuineOperation));
             Assert.Equal("candidate-a", entry.BranchHeadSha);
-            Assert.False(string.IsNullOrWhiteSpace(entry.Detail));
+            Assert.Equal(expectedReason, entry.Detail);
         }
         finally
         {

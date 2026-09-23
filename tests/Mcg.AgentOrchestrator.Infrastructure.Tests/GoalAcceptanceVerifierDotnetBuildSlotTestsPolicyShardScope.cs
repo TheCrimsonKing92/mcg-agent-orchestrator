@@ -53,13 +53,61 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Worker profiles");
         Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-        Assert.Contains(result.Checks!, check =>
-            check.Name == "infrastructure tests" &&
-            check.Passed &&
-            check.ResultSummary?.StartsWith(
-                $"covered by {laneCount} partitioned checks; changed file in dependency closure; ",
-                StringComparison.Ordinal) == true);
+        var infrastructureRollup = Assert.Single(result.Checks!, check => check.Name == "infrastructure tests");
+        Assert.True(infrastructureRollup.Passed);
+        Assert.StartsWith(
+            $"covered by {laneCount} partitioned checks; changed file in dependency closure; ",
+            infrastructureRollup.ResultSummary,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            result.Checks
+                .Where(check => check.Name.StartsWith("infrastructure tests: ", StringComparison.Ordinal))
+                .Select(check => check.Name),
+            infrastructureRollup.CoveredBy);
         DeleteDirectoryWithRetry(root);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failed_partition_rollup_records_structured_coverer_without_changing_summary")]
+    public async Task GoalAcceptanceVerifierFailedPartitionRollupRecordsStructuredCovererWithoutChangingSummary()
+    {
+        var root = CreatePartitionedInfrastructureManifestWorkspace();
+        var failingLaneName = "Worker profiles";
+        string[] changedFiles = ["src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs"];
+        var policyShardPlan = AcceptancePolicyShardPlanner.BuildPolicyShardPlan(changedFiles);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    var fails = HasArgumentPair(args, "--filter-class", "*WorkerProfileTests*");
+                    WriteMtpTrx(args, fails ? MtpFailureFixturePath() : null);
+                    return Task.FromResult(fails
+                        ? new GoalAcceptanceVerifier.CommandResult(1, "Worker profiles partition failed.")
+                        : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                changedFiles: changedFiles);
+
+            Assert.False(result.Passed);
+            var failedShard = Assert.Single(result.Checks!, check => check.Name == $"infrastructure tests: {failingLaneName}");
+            Assert.False(failedShard.Passed);
+            var rollup = Assert.Single(result.Checks, check => check.Name == "infrastructure tests");
+            Assert.False(rollup.Passed);
+            Assert.Equal(
+                $"covered by failed partition: {failedShard.Name}; changed file in dependency closure; {policyShardPlan.Evidence}",
+                rollup.ResultSummary);
+            Assert.Equal([failedShard.Name], rollup.CoveredBy);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_focused_infrastructure_filter_for_cli_only_changes")]
@@ -553,12 +601,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var coreCheck = result.Checks.Single(c => c.Name == "core tests");
         Assert.True(coreCheck.Passed);
         Assert.Equal("covered by: full dotnet tests", coreCheck.ResultSummary);
+        Assert.Equal([fullCheck.Name], coreCheck.CoveredBy);
         Assert.Equal(fullCheck.ArtifactsPath, coreCheck.ArtifactsPath);
         Assert.Equal(fullCheck.LeaseId, coreCheck.LeaseId);
 
         var infraCheck = result.Checks.Single(c => c.Name == "infrastructure tests");
         Assert.True(infraCheck.Passed);
         Assert.Equal("covered by: full dotnet tests", infraCheck.ResultSummary);
+        Assert.Equal([fullCheck.Name], infraCheck.CoveredBy);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failing_solution_run_marks_deferred_checks_failed")]
@@ -1022,6 +1072,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var policyAlias = result.Checks.Single(c => c.Name == "core tests");
         Assert.True(policyAlias.Passed);
         Assert.Equal("covered by: renamed core coverage", policyAlias.ResultSummary);
+        Assert.Equal(["renamed core coverage"], policyAlias.CoveredBy);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failing_injected_policy_check_blocks_merge")]
