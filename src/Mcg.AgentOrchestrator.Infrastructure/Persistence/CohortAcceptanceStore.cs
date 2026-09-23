@@ -159,6 +159,29 @@ public sealed class CohortAcceptanceStore
         return ReadReceipt(connection, cohortId, transaction: null);
     }
 
+    public IReadOnlyList<AcceptanceCohortReceipt> ReadPassedReceiptsForGoal(GoalId goalId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT cohort_id FROM cohort_members WHERE goal_id=$goal ORDER BY rowid DESC;";
+        command.Parameters.AddWithValue("$goal", goalId.Value);
+        using var reader = command.ExecuteReader();
+        var cohortIds = new List<string>();
+        while (reader.Read())
+        {
+            cohortIds.Add(reader.GetString(0));
+        }
+
+        reader.Close();
+        return cohortIds
+            .Select(cohortId => ReadReceipt(connection, cohortId, transaction: null))
+            .Where(receipt => receipt?.HasAuthoritativeLandingEvidence == true)
+            .Cast<AcceptanceCohortReceipt>()
+            .OrderByDescending(receipt => receipt.CompletedAt)
+            .ThenByDescending(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public AcceptanceCohortMaterializationFailure SaveMaterializationFailure(
         IReadOnlyList<AcceptanceCohortMemberBinding> members,
         string observedMainRevision,

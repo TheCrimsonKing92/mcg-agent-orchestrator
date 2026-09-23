@@ -35,7 +35,8 @@ internal static class ConductorMergeTrainSelector
 
     internal static ConductorMergeTrainSelection? Select(
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> orderedCandidates,
-        IReadOnlySet<string>? suppressedPairFingerprints = null)
+        IReadOnlySet<string>? suppressedPairFingerprints = null,
+        IReadOnlySet<string>? ineligibleGoalIds = null)
     {
         ArgumentNullException.ThrowIfNull(orderedCandidates);
         var selected = new List<GateReadyCandidateProjection>(MaximumMembers);
@@ -46,7 +47,8 @@ internal static class ConductorMergeTrainSelector
                 continue;
             }
             var projection = ready.Projection;
-            if (projection.GoalId != candidate.GoalId ||
+            if (ineligibleGoalIds?.Contains(candidate.GoalId.Value) == true ||
+                projection.GoalId != candidate.GoalId ||
                 projection.LandingPaths.Count == 0 ||
                 projection.ResourceKeys.Count == 0 ||
                 GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(projection.LandingPaths) ==
