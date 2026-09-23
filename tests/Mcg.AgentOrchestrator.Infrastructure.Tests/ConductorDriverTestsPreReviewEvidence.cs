@@ -1336,6 +1336,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         Assert.Equal(36, classNames.Count);
         var filter = string.Join('|', classNames.Select(name => $"FullyQualifiedName~{name}"));
         Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", filter, out var items));
+        Assert.Equal(2, items.Count);
 
         var accepted = GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
             string.Join("; ", items), AcceptanceGateEngineSettings.Load(root), root,
@@ -1401,6 +1402,42 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             "Infrastructure.Tests", $"{positivePrefix}&FullyQualifiedName~Required", out _));
         Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
             "Infrastructure.Tests", $"{positivePrefix}|FullyQualifiedName!~Excluded", out _));
+    }
+
+    [Xunit.Fact]
+    public void FocusedRequestSplitter_ExactBrokerBoundaryPreservesOneToOneCoverage()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var classNames = Assert.Single(RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"], root).Checks,
+            check => check.TestProject == RepositoryTestProject.Infrastructure).TestClassSelections!;
+        var clauses = new List<string>();
+        foreach (var clause in classNames.Select(name => $"FullyQualifiedName~{name}"))
+        {
+            if (string.Join('|', clauses.Append(clause)).Length > 1000)
+            {
+                break;
+            }
+            clauses.Add(clause);
+        }
+        Assert.True(clauses.Count > 1);
+        var unpadded = string.Join('|', clauses);
+        clauses[0] = clauses[0].Replace("~", "~" + new string(' ',
+            PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength - unpadded.Length));
+        var boundaryFilter = string.Join('|', clauses);
+        Assert.Equal(PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength, boundaryFilter.Length);
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", boundaryFilter, out var items));
+        Assert.Single(items);
+        Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            string.Join("; ", items), AcceptanceGateEngineSettings.Load(root), root,
+            out var checks, out _, out var rejection), $"{rejection.Code}: {rejection.Detail}");
+        var context = new PreReviewEvidenceContext("boundary-sha", items,
+            string.Join("; ", items), "Exact broker boundary.", false, false);
+        var result = new FocusedEvidenceRunResult(context.FocusedRequest!, true, true, "green",
+            checks.Select(check => new AcceptanceCheckResult(check.Name, true, 0, null)).ToArray());
+
+        Assert.True(PreReviewEvidenceReceipts.ValidateCoverage(context, result, out var failure), failure);
     }
 
     [Xunit.Fact]

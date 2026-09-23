@@ -240,7 +240,7 @@ internal static class SourceSizeRatchet
             // Goal aab291fd extracted manifest-declared project resolution controls to their own partial.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
             // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1431),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1468),
             // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1228),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),
