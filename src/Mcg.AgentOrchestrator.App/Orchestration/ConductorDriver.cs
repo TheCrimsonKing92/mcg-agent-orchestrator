@@ -2141,6 +2141,13 @@ internal sealed partial class ConductorDriver
                 coverageDecisionReason = coverageReason;
             }
 
+            if (TryRouteReusableRedFindingEvidence(
+                    goal, requestingTask, finding, typedRequest, request, identity,
+                    telemetryCandidateSha, executionBasisIdentity, out decision))
+            {
+                return true;
+            }
+
             var groupIndex = groups.FindIndex(group => string.Equals(group.Identity, identity, StringComparison.Ordinal));
             if (groupIndex < 0)
             {
@@ -2160,16 +2167,16 @@ internal sealed partial class ConductorDriver
 
         if (groups.Count == 0 && normalizationRefused)
         {
-            decision = BuildFindingEvidenceDeliveryRetry(
-                requestingTask,
+            decision = BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, telemetryCandidateSha, requestingFindings, [],
                 "Every current evidence request was refused during normalization; typed refusal details were attached.");
             return true;
         }
 
         if (groups.Count == 0 && reusedGreenReceipt)
         {
-            decision = BuildFindingEvidenceDeliveryRetry(
-                requestingTask,
+            decision = BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, telemetryCandidateSha, requestingFindings, [],
                 "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.");
             return true;
         }
@@ -2191,7 +2198,9 @@ internal sealed partial class ConductorDriver
                     "No validated candidate SHA was available for the requested evidence run.",
                     telemetryCandidateSha);
             }
-            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "Evidence requests could not run because the candidate SHA was unavailable.");
+            decision = BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, telemetryCandidateSha, requestingFindings, [],
+                "Evidence requests could not run because the candidate SHA was unavailable.");
             return true;
         }
 
@@ -2204,7 +2213,9 @@ internal sealed partial class ConductorDriver
                     goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.ExecutorUnavailable,
                     "No focused evidence executor was configured.", telemetryCandidateSha);
             }
-            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "Evidence requests could not run because the executor was unavailable.");
+            decision = BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, telemetryCandidateSha, requestingFindings, [],
+                "Evidence requests could not run because the executor was unavailable.");
             return true;
         }
 
@@ -2235,7 +2246,9 @@ internal sealed partial class ConductorDriver
                         goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed,
                         decision.Evidence, telemetryCandidateSha);
                 }
-                decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor failed; a typed refusal was attached.");
+                decision = BuildCappedFindingEvidenceDeliveryRetry(
+                    goal, requestingTask, telemetryCandidateSha, runnable.Findings, [],
+                    "The focused evidence executor failed; a typed refusal was attached.");
             }
             return true;
         }
@@ -2259,17 +2272,26 @@ internal sealed partial class ConductorDriver
                     goal.Id, requestingTask, finding, reason,
                     detail, telemetryCandidateSha);
             }
-            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor did not accept the request.");
+            decision = BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, telemetryCandidateSha, runnable.Findings, [],
+                "The focused evidence executor did not accept the request.");
             return true;
         }
 
-        var receiptId = CreateFindingEvidenceReceiptId(
-            candidateSha!, findingRoundFingerprint, runnable.Identity);
-        var armReceipts = (evidence.Arms ?? [])
+        var initialArmReceipts = (evidence.Arms ?? [])
             .Select(CreateFindingEvidenceArmReceipt)
             .ToArray();
+        if (!TryResolveMissingBaseline(
+                goal, policy, runnable, candidateSha!, findingRoundFingerprint, requestContext,
+                evidence, initialArmReceipts,
+                out evidence, out var armReceipts, out var receiptIdentity, out decision))
+        {
+            return true;
+        }
+        var receiptId = CreateFindingEvidenceReceiptId(
+            candidateSha!, findingRoundFingerprint, receiptIdentity);
         var actionableCandidateRed = TryAttributeActionableCandidateRed(
-            candidateSha!, evidence, armReceipts, runnable);
+            goal, candidateSha!, armReceipts, runnable);
         var requestDispositions = actionableCandidateRed is not null
             ? executedRequestDispositions
                 .Concat(batches.Skip(1).SelectMany(batch => batch.Members).SelectMany(member =>
@@ -2334,8 +2356,8 @@ internal sealed partial class ConductorDriver
                 return true;
             }
 
-            decision = BuildFindingEvidenceDeliveryRetry(
-                requestingTask,
+            decision = BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, candidateSha!, runnable.Findings, [receiptId],
                 "Focused evidence selected zero tests; its apparatus receipt was attached for correction and reissue.");
             return true;
         }
@@ -2421,27 +2443,13 @@ internal sealed partial class ConductorDriver
 
         if (actionableCandidateRed is not null)
         {
-            var developer = goal.Tasks
-                .TakeWhile(task => task.Id != requestingTask.Id)
-                .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
-            var failingTests = string.Join(",", actionableCandidateRed.FailingTestIdentities);
-            var findingIds = string.Join(",", actionableCandidateRed.Findings.Select(finding => finding.StableId));
-            if (developer is null)
-            {
-                decision = FailedGoalFindingObservation.Observed(
-                    FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable,
-                    $"Actionable candidate RED receipt {receiptId} at candidate {candidateSha} could not be routed because no upstream Developer task exists; " +
-                    $"finding_ids={findingIds}; failing_tests={failingTests}. No downstream Tester or Reviewer was started.");
-                return true;
-            }
-
-            decision = FailedGoalFindingObservation.Routed(
-                FailedGoalFindingObservationKind.FindingActionableRed,
-                developer.Id,
-                BuildFailedGoalAttemptIdentity(developer),
-                $"ACTIONABLE_CANDIDATE_RED candidate_sha={candidateSha}; receipt_id={receiptId}; finding_ids={findingIds}; " +
-                $"failing_tests={failingTests}. Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.",
-                null);
+            decision = BuildActionableCandidateRedDecision(
+                goal, requestingTask, candidateSha!, receiptId, actionableCandidateRed);
+            return true;
+        }
+        if (TryBuildUnattributableRedEscalation(
+                candidateSha!, armReceipts, runnable, receiptId, out decision))
+        {
             return true;
         }
 
@@ -2449,8 +2457,13 @@ internal sealed partial class ConductorDriver
             ? FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence completed; another distinct request from the same finding round remains pending.")
-            : BuildFindingEvidenceDeliveryRetry(
-                requestingTask, "Focused evidence completed and its receipt was attached to the requesting finding.");
+            : BuildCappedFindingEvidenceDeliveryRetry(
+                goal,
+                requestingTask,
+                candidateSha!,
+                runnable.Findings,
+                [receiptId],
+                "Focused evidence completed and its receipt was attached to the requesting finding.");
         return true;
     }
 
@@ -2471,15 +2484,6 @@ internal sealed partial class ConductorDriver
             $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id=none; " +
             $"reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)}; detail={TrimForConductorMessage(detail)}");
     }
-
-    private static FailedGoalFindingObservation BuildFindingEvidenceDeliveryRetry(TaskSpec task, string summary) =>
-        FailedGoalFindingObservation.Routed(
-            FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded,
-            task.Id,
-            BuildFailedGoalAttemptIdentity(task),
-            $"{FindingEvidenceRetryMessagePrefix} role={task.RequiredRole}; task={task.Id.Value[..8]}; {summary} " +
-            "Review the finding-bound outcome in this round's context.",
-            null);
 
     private static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,
@@ -2746,17 +2750,12 @@ internal sealed partial class ConductorDriver
                 : "incompatible-filter-semantics";
     }
 
-    private static ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
+    private ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
+        Goal goal,
         string candidateSha,
-        FocusedEvidenceRunResult evidence,
         IReadOnlyList<FindingEvidenceArmReceipt> arms,
         FindingEvidenceBatch batch)
     {
-        if (evidence.OutcomeReason != FindingEvidenceOutcomeReason.CandidateRed)
-        {
-            return null;
-        }
-
         var candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
         var baseline = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
         if (candidate is not
@@ -2766,8 +2765,9 @@ internal sealed partial class ConductorDriver
                     FailingTestIdentities.Count: > 0
                 } ||
             !string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
-            baseline is null ||
-            baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)
+            (baseline is null
+                ? !EveryFailingTestIsInsideCandidateChanges(goal, batch, candidate.FailingTestIdentities)
+                : baseline.Disposition != FindingEvidenceArmDisposition.Green))
         {
             return null;
         }

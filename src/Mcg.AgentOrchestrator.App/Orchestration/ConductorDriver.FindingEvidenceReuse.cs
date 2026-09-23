@@ -203,6 +203,74 @@ internal sealed partial class ConductorDriver
         }
     }
 
+    private static bool TryResolveReusableRedFindingEvidenceReceipt(
+        TaskSpec requestingTask,
+        FindingEvidenceRequest normalizedRequest,
+        string candidateSha,
+        string executionBasisIdentity,
+        out FindingEvidenceReceipt receipt)
+    {
+        receipt = null!;
+        if (candidateSha == "unavailable" ||
+            string.IsNullOrWhiteSpace(executionBasisIdentity) ||
+            !TryGetFindingEvidenceCoverage(normalizedRequest, out var requestedCoverage))
+        {
+            return false;
+        }
+
+        foreach (var candidateReceipt in requestingTask.VerificationHistory
+                     .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+                     .Reverse())
+        {
+            var candidateArm = candidateReceipt.Arms?
+                .SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
+            if (candidateReceipt is not { Accepted: true, Passed: false } ||
+                !string.Equals(candidateReceipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(candidateReceipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
+                candidateArm is not
+                {
+                    Accepted: true,
+                    Disposition: FindingEvidenceArmDisposition.Red,
+                    ExecutedTestCount: > 0,
+                    FailingTestIdentities.Count: > 0
+                } ||
+                (candidateReceipt.Arms ?? []).Any(arm => arm.Disposition is
+                    FindingEvidenceArmDisposition.ApparatusFailure or FindingEvidenceArmDisposition.Inconclusive) ||
+                !TryGetFindingEvidenceCoverage(candidateReceipt.Request, out var executedCoverage) ||
+                !requestedCoverage.SetEquals(executedCoverage))
+            {
+                continue;
+            }
+
+            receipt = candidateReceipt;
+            return true;
+        }
+
+        return false;
+    }
+
+    private void ReattachReusableRedFindingEvidence(
+        Goal goal,
+        TaskSpec requestingTask,
+        ReviewFinding finding,
+        string requestIdentity,
+        FindingEvidenceReceipt receipt)
+    {
+        var outcome = new FindingEvidenceOutcome(
+            Honoured: true,
+            ReceiptId: receipt.ReceiptId,
+            ResultReason: FindingEvidenceOutcomeReason.CandidateRed,
+            RequestedSelectionIdentity: requestIdentity,
+            DecisionReason: "reused-red",
+            SourceReceiptIds: [receipt.ReceiptId]);
+        _recordFindingEvidenceOutcome(goal.Id, requestingTask.Id, finding.StableId, outcome, receipt);
+        _recordFindingEvidenceRequest(
+            goal.Id,
+            requestingTask.Id,
+            $"finding-evidence disposition=reused-red; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
+            $"finding_id={finding.StableId}; candidate_sha={receipt.CandidateSha}; receipt_id={receipt.ReceiptId}");
+    }
+
     private bool TryResolveFindingEvidenceCoverage(
         TaskSpec requestingTask,
         FindingEvidenceRequest normalizedRequest,

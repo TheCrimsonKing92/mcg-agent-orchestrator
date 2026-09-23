@@ -35,6 +35,21 @@ public static class FindingEvidenceExecutionClassifier
     private const string ExecutedDispositionPrefix = "executed-";
     private const string SupersededDispositionPrefix = "superseded";
 
+    public static int CountEvidenceDeliveryRetries(
+        IReadOnlyList<ProgressEvent> timeline,
+        TaskId taskId,
+        string candidateSha,
+        string findingStableId) =>
+        timeline.Count(evt =>
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.TaskId == taskId &&
+            evt.Message.StartsWith("finding evidence-on-demand:", StringComparison.Ordinal) &&
+            TryReadMarker(evt.Message, "candidate_sha", out var recordedCandidate) &&
+            string.Equals(recordedCandidate, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+            TryReadMarker(evt.Message, "finding_ids", out var findingIds) &&
+            findingIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Contains(findingStableId, StringComparer.Ordinal));
+
     public static string ToWireValue(FindingEvidenceExecutionState state) => state switch
     {
         FindingEvidenceExecutionState.NoneRequested => "none-requested",
@@ -152,6 +167,22 @@ public static class FindingEvidenceExecutionClassifier
                 CoversFindingOutcome(receipt, outcomeReceiptId) ||
                 CoversFindingDisposition(receipt, finding.StableId) ||
                 CoversRequestIdentity(receipt, finding.StableId, identity));
+    }
+
+    private static bool TryReadMarker(string message, string marker, out string value)
+    {
+        value = string.Empty;
+        var prefix = marker + "=";
+        var start = message.IndexOf(prefix, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return false;
+        }
+
+        start += prefix.Length;
+        var end = message.IndexOf(';', start);
+        value = message[start..(end < 0 ? message.Length : end)].Trim();
+        return value.Length > 0;
     }
 
     private static bool CoversFindingOutcome(FindingEvidenceReceipt receipt, string? outcomeReceiptId) =>
