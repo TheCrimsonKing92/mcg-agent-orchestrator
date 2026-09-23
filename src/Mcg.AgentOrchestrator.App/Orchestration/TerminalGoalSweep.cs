@@ -529,6 +529,7 @@ internal static partial class TerminalGoalSweep
                 executionDirectory,
                 orchestratorDirectory,
                 branchFactIndex.MainSha,
+                branchFactIndex.TryGetGoalBranchTip(goalPendingRecovery.Id),
                 mergeTrainAcceptanceStore,
                 cohortAcceptanceStore,
                 gitRunner);

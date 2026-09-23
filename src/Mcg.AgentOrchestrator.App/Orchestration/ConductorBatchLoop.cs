@@ -3058,10 +3058,8 @@ internal sealed partial class ConductorBatchLoop
             .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value) &&
                            !activeCohortMemberGoalIds.Contains(goal.Id.Value))
             .ToArray();
-        var productionCandidates = speculativeCandidates
-            .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value) &&
-                                !activeCohortMemberGoalIds.Contains(candidate.GoalId.Value))
-            .ToArray();
+        var productionCandidates = ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
+            speculativeCandidates, cohortEligible, liveAttemptGoalIds, activeCohortMemberGoalIds);
         var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
         if (trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
@@ -3071,7 +3069,7 @@ internal sealed partial class ConductorBatchLoop
                 _acceptanceEngineCircuit?.Read())) &&
             ConductorMergeTrainSelector.Select(
                 productionCandidates,
-                driver.ReadSuppressedCohortPairs(), cohortEligible.Where(goal => goal.OutstandingCriterionEvidenceObligations.Any(obligation => obligation.Owner != CriterionEvidenceOwner.Acceptance)).Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal)) is { } trainSelection)
+                driver.ReadSuppressedCohortPairs()) is { } trainSelection)
         {
             var trainRun = driver.RunMergeTrain(
                 trainSelection,

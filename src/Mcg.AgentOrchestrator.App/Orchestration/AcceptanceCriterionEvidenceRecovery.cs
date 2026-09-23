@@ -24,12 +24,15 @@ internal static class AcceptanceCriterionEvidenceRecovery
         string executionDirectory,
         string orchestratorDirectory,
         string? mainSha,
+        string? currentBranchSha,
         MergeTrainAcceptanceStore mergeTrainStore,
         CohortAcceptanceStore cohortStore,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
         if (goal.Status != GoalStatus.Verified ||
             string.IsNullOrWhiteSpace(mainSha) ||
+            (!string.IsNullOrWhiteSpace(currentBranchSha) &&
+             !IsAncestor(executionDirectory, currentBranchSha, mainSha, gitRunner)) ||
             !goal.OutstandingCriterionEvidenceObligations.Any(IsPendingAcceptanceObligation))
         {
             return null;

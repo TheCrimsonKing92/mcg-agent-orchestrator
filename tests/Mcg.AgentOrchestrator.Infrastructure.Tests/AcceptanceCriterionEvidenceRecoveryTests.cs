@@ -175,6 +175,29 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
     }
 
     [Fact]
+    public void PassedReceiptForMergedCandidateDoesNotRecoverAfterGoalBranchAdvancesOffMain()
+    {
+        var fixture = CreateFixture(withOperatorObligation: false);
+        try
+        {
+            MergeCandidateIntoMain(fixture);
+            SavePassedTrainReceipt(fixture, "stale-train-receipt", fixture.CandidateSha);
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(fixture.Root, fixture.Goal.Id));
+            File.WriteAllText(Path.Combine(worktree, "new-unmerged-work.txt"), "new candidate");
+            RunGit(worktree, "add", "new-unmerged-work.txt");
+            RunGit(worktree, "commit", "-m", "Advance goal after older candidate landed");
+
+            RunSweep(fixture);
+
+            AssertStillPending(fixture);
+        }
+        finally
+        {
+            Cleanup(fixture);
+        }
+    }
+
+    [Fact]
     public void OperatorOwnedObligationRemainsPendingAfterAcceptanceEvidenceRecovery()
     {
         var fixture = CreateFixture(withOperatorObligation: true);
