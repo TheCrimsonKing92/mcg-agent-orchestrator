@@ -105,6 +105,38 @@ internal static class AcceptanceCriterionEvidence
         return $"Acceptance completed but required criterion evidence remains outstanding: {detail}.";
     }
 
+    public static string? RebindRecordFromPassedCandidateAndDescribeOutstanding(
+        Goal goal,
+        string candidateSha,
+        string mainSha,
+        AgentOrchestratorKernel kernel,
+        string executionDirectory)
+    {
+        var hasPendingAcceptanceObligation = goal.OutstandingCriterionEvidenceObligations.Any(item =>
+            item.Owner == CriterionEvidenceOwner.Acceptance &&
+            item.State == CriterionEvidenceState.Pending &&
+            string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal));
+        var passedOutcome = hasPendingAcceptanceObligation
+            ? GoalOperationJournal.NewestAcceptanceOutcomeForCandidate(
+                GoalOperationJournal.Read(executionDirectory, goal.Id),
+                candidateSha,
+                mainSha)
+            : null;
+        if (hasPendingAcceptanceObligation &&
+            passedOutcome?.AcceptanceOutcome is not ("passed" or "gate-passed"))
+        {
+            return $"Acceptance-owned criterion evidence remains outstanding, but no deterministic passed acceptance outcome matches candidate {candidateSha} on main {mainSha}. No obligation was resolved.";
+        }
+
+        return RebindRecordAndDescribeOutstanding(
+            goal,
+            candidateSha,
+            kernel,
+            passedOutcome is null
+                ? "landing-executor current deterministic acceptance outcome"
+                : $"goal-operation:{passedOutcome.Operation}");
+    }
+
     private static string? RecordFullAcceptanceEvidence(
         Goal goal,
         string? candidateSha,

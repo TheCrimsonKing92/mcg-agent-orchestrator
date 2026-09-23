@@ -148,6 +148,33 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {acceptanceDecision.Reason}");
         }
 
+        var evidenceCandidateSha = ResolveRef(executionDirectory, goalBranch);
+        var boundMainRevision = ResolveRef(executionDirectory, "main");
+        var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordFromPassedCandidateAndDescribeOutstanding(
+            goal,
+            evidenceCandidateSha,
+            boundMainRevision,
+            kernel,
+            executionDirectory);
+        if (evidenceDiagnostic is not null)
+        {
+            var evidenceDecision = new LandingDecision.Escalate(evidenceDiagnostic);
+            OperatorInbox.RecordLandingEscalation(workspace, goal, evidenceDiagnostic, IntegrationBranchName, channel);
+            eventWriter?.AppendGoalEscalated(
+                goal.Id,
+                GoalLifecycleState.Verified,
+                goal.Status,
+                evidenceDiagnostic,
+                IntegrationBranchName);
+            return new LandingResult(
+                goal.Id.Value,
+                goalPrefix,
+                evidenceDecision,
+                IntegrationBranchName,
+                false,
+                $"Parked on {IntegrationBranchName}: {evidenceDiagnostic}");
+        }
+
         var ownershipGuard = RepositoryOwnershipMap.GuardWriteSet(changedFiles);
         if (ownershipGuard.RequiresOperatorApproval && policy?.AllowsAutonomousHighRiskOwnership != true)
         {
@@ -170,7 +197,6 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {unknownReason}");
         }
 
-        var boundMainRevision = ResolveRef(executionDirectory, "main");
         var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
         if (previousIntegrationRevision is not null &&
             RunGit(executionDirectory, "merge-base", "--is-ancestor", previousIntegrationRevision, boundMainRevision).ExitCode != 0)
