@@ -1410,11 +1410,11 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         const string relativePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OversizedSelectionTests.cs";
         try
         {
+            File.WriteAllText(Path.Combine(root, ".git"), string.Empty);
             var absolutePath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
             File.WriteAllText(absolutePath,
                 $"public sealed class {new string('A', 1100)} {{ [Xunit.Fact] public void Runs() {{ }} }}");
-
             var context = ConductorDriver.BuildPreReviewEvidenceContext(
                 "oversized-clause-sha", [relativePath], root);
 
