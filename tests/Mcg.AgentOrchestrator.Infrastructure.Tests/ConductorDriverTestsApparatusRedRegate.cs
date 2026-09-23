@@ -214,6 +214,51 @@ public sealed class ConductorDriverTestsApparatusRedRegate
         }
     }
 
+    [Fact(DisplayName = "ConductorDriver_genuine_journal_failure_stops_before_developer_reopen")]
+    public void GenuineJournalFailureStopsBeforeDeveloperReopen()
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            const string sourcePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchHostTests.cs";
+            WriteTestSource(root, sourcePath);
+            var blockedExecutionDirectory = Path.Combine(root, "not-a-directory");
+            File.WriteAllText(blockedExecutionDirectory, "blocks journal directory creation");
+            var now = DateTimeOffset.Parse("2026-09-23T13:37:23Z", null);
+            var index = CreateIndex(root);
+            index.Append([Census("6cd11d28", now.AddDays(-1))], now.AddDays(-1));
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            var retryCalled = false;
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => RedSummary(FailingCheck(
+                    "focused CLI infrastructure tests",
+                    HeartbeatIdentity,
+                    "Fast-forwarded was absent")),
+                retryTaskWithCause: (_, _, _, _, _) =>
+                {
+                    retryCalled = true;
+                    throw new InvalidOperationException("Developer reopen must not run after journal failure.");
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+                getLandingFileScopes: _ => [sourcePath],
+                executionDirectory: blockedExecutionDirectory,
+                apparatusRedGate: CreateGate(root, index, now));
+
+            Assert.ThrowsAny<IOException>(() =>
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
+            Assert.False(retryCalled);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Equal(0, task.CriterionRetryCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact(DisplayName = "ConductorDriver_bf434fdb_shape_regates_on_infrastructure_exception_and_journals_it")]
     public void InfrastructureExceptionOutsideChangedPathsRegatesAndJournalsClassification()
     {

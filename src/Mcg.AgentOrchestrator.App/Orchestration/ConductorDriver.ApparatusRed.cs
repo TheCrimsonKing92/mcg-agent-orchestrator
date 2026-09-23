@@ -45,20 +45,13 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        try
-        {
-            var observedHeads = _resolveAcceptanceHeads(goal);
-            GoalOperationJournal.AcceptanceApparatusGenuine(
-                _executionDirectory,
-                goal,
-                acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha,
-                acceptance.MainHeadSha ?? observedHeads.MainHeadSha,
-                genuine.Reason);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // The classification record is observability; losing it cannot change the gate outcome.
-        }
+        var observedHeads = _resolveAcceptanceHeads(goal);
+        GoalOperationJournal.AcceptanceApparatusGenuine(
+            _executionDirectory,
+            goal,
+            acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha,
+            acceptance.MainHeadSha ?? observedHeads.MainHeadSha,
+            genuine.Reason);
 
         return null;
     }
