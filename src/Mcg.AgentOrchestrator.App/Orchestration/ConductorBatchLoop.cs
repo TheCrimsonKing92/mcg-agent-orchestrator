@@ -187,7 +187,9 @@ internal sealed partial class ConductorBatchLoop
         string policySource = "preset",
         Func<ConductorPolicyResolution>? reloadPolicy = null,
         Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null,
-        Func<bool>? hasTransientLoadHold = null)
+        Func<bool>? hasTransientLoadHold = null,
+        TimeSpan? maxDurationDeferralCeiling = null,
+        Action<bool>? onMaxDurationDeferralStateChanged = null)
     {
         var leaseDirectory = Path.GetDirectoryName(Path.GetFullPath(stopFilePath)) ?? Directory.GetCurrentDirectory();
         var leaseAcquisition = AcquireActiveDatabaseLeases(leaseDirectory, busyWriteDelay);
@@ -271,6 +273,10 @@ internal sealed partial class ConductorBatchLoop
         var totalDone = 0;
         var stopRequested = false;
         var maxDurationReached = false;
+        var isDeferringMaxDurationStop = false;
+        var maxDurationDeferralAnnounced = false;
+        DateTimeOffset? maxDurationDeferralStartedAt = null;
+        HashSet<string>? maxDurationDeferredAttemptIds = null;
         ConductorSelfRelaunchRequest? pendingSelfRelaunch = null;
         ConductorSelfRelaunchRequest? deferredSelfRelaunch = null;
         int? selfRelaunchRetryAfterTick = null;
@@ -539,14 +545,37 @@ internal sealed partial class ConductorBatchLoop
                 maxDuration.HasValue &&
                 _utcNow() - started >= maxDuration.Value)
             {
-                StopLoop("max-duration", $"seconds={(int)maxDuration.Value.TotalSeconds}");
-                Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
-                DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                PersistGracefulDetachCheckpoint(
-                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay,
-                    checkpointGoalTick, checkpointHeldGoals);
-                maxDurationReached = true;
-                break;
+                var now = _utcNow();
+                maxDurationDeferralStartedAt ??= now;
+                var snapshot = BuildMaxDurationAcceptanceSnapshot(kernel, driver, maxDurationDeferredAttemptIds);
+                var verdict = snapshot.Failure is null
+                    ? ConductorMaxDurationStopDeferral.Decide(
+                        now,
+                        maxDurationDeferralStartedAt.Value,
+                        snapshot.Attempts,
+                        maxDurationDeferralCeiling ?? AcceptanceCheckTimeouts.DefaultTimeout)
+                    : new ConductorMaxDurationStopVerdict(ConductorMaxDurationStopVerdictKind.Stop, []);
+                if (verdict.Kind == ConductorMaxDurationStopVerdictKind.Defer)
+                {
+                    isDeferringMaxDurationStop = true;
+                    maxDurationDeferredAttemptIds ??= verdict.Attempts.Select(attempt => attempt.AttemptId).ToHashSet(StringComparer.Ordinal);
+                    onMaxDurationDeferralStateChanged?.Invoke(true);
+                    if (!maxDurationDeferralAnnounced)
+                        EmitProgress(ConductorMaxDurationStopDeferral.FormatDeferredEvent(totalTicks, now, maxDurationDeferralStartedAt.Value, maxDurationDeferralCeiling ?? AcceptanceCheckTimeouts.DefaultTimeout, verdict.Attempts));
+                    maxDurationDeferralAnnounced = true;
+                }
+                else
+                {
+                    onMaxDurationDeferralStateChanged?.Invoke(false);
+                    StopLoop("max-duration", ConductorMaxDurationStopDeferral.FormatStopDetail(maxDuration.Value, verdict, snapshot.Failure));
+                    Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
+                    DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                    PersistGracefulDetachCheckpoint(
+                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay,
+                        checkpointGoalTick, checkpointHeldGoals);
+                    maxDurationReached = true;
+                    break;
+                }
             }
 
             var nextTick = totalTicks + 1;
@@ -1038,7 +1067,8 @@ internal sealed partial class ConductorBatchLoop
                 escalatedGoals,
                 totalTicks,
                 changedGoalLines,
-                changedGoalIds);
+                changedGoalIds,
+                suppressNewAcceptanceAdmission: isDeferringMaxDurationStop);
 
             var previousPhaseTimingSink = driver.PhaseTimingSink;
             var perGoalPhaseTimingLines = new List<string>();
@@ -1051,6 +1081,12 @@ internal sealed partial class ConductorBatchLoop
                 : kernel.BuildTaskDurationStats();
             foreach (var goal in eligible)
             {
+                if (isDeferringMaxDurationStop &&
+                    !parallelLandingResults.ContainsKey(goal.Id.Value))
+                {
+                    _refreshGoalDispatchesBeforeAdvance(kernel, goal);
+                    continue;
+                }
                 if (pendingSelfRelaunch is not null &&
                     !parallelLandingResults.ContainsKey(goal.Id.Value))
                 {
@@ -1966,6 +2002,7 @@ internal sealed partial class ConductorBatchLoop
             "LOOP_JANITORIAL_RETRY_SUCCEEDED" => "loop-janitorial-retry",
             "LOOP_START" => "loop-start",
             "LOOP_START_DEFERRED" => "loop-start-deferred",
+            "LOOP_STOP_DEFERRED" => "loop-stop-deferred",
             "LOOP_STOP" => "loop-stop",
             "POLICY_RELOAD" => "policy-reload",
             "POLICY_RELOAD_FAILED" => "policy-reload-failed",
@@ -2811,7 +2848,8 @@ internal sealed partial class ConductorBatchLoop
         HashSet<string> escalatedGoals,
         int tick,
         List<string> changedGoalLines,
-        HashSet<GoalId> changedGoalIds)
+        HashSet<GoalId> changedGoalIds,
+        bool suppressNewAcceptanceAdmission)
     {
         var configuredAcceptanceWidth = policy.AcceptanceWidth;
         if (configuredAcceptanceWidth < ConductorAutonomyPolicy.MinimumAcceptanceWidth)
@@ -3061,7 +3099,8 @@ internal sealed partial class ConductorBatchLoop
         var productionCandidates = ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
             speculativeCandidates, cohortEligible, liveAttemptGoalIds, activeCohortMemberGoalIds);
         var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
-        if (trainAdmission.IsAdmitted &&
+        if (!suppressNewAcceptanceAdmission &&
+            trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -3093,7 +3132,8 @@ internal sealed partial class ConductorBatchLoop
         }
         ConductorAcceptanceCohortFairnessPriority? forcedCohortPriority = null;
         var cohortAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
-        if (cohortAdmission.IsAdmitted &&
+        if (!suppressNewAcceptanceAdmission &&
+            cohortAdmission.IsAdmitted &&
             driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -3211,6 +3251,10 @@ internal sealed partial class ConductorBatchLoop
             RecordParallelAcceptanceProgress(
                 $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result=held {cohortHoldDetail}",
                 changedGoalLines);
+        }
+        if (suppressNewAcceptanceAdmission)
+        {
+            return results;
         }
         var oldestWaiterObservation = ObserveOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
         var oldestWaiter = oldestWaiterObservation.Waiter;

@@ -100,7 +100,9 @@ internal static class SourceSizeRatchet
             // retry/candidate task state independently of the kernel goal instance reloaded by admission.
             // Goal 1592104a moved unloaded-intent disposition to a collaborator that retains reload evidence.
             // Goal 0285f012 attributes all nine pre-tick sweep operations without changing their order.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5266),
+            // Goal 5a8a1fc8 adds only max-duration deferral state and drain-only admission call sites;
+            // the decision, snapshot mapping, and event formatting remain in the dedicated collaborator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5310),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
