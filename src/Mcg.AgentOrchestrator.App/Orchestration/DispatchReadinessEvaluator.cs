@@ -17,7 +17,8 @@ internal sealed record DispatchReadinessDeferred(
 // (e.g. missing profile) — operator action needed but conductor should hold, not escalate.
 internal sealed record DispatchReadinessBlocked(
     string Reason,
-    bool HasCandidates = false) : DispatchReadinessVerdict;
+    bool HasCandidates = false,
+    ProviderBudgetExhaustionHold? ProviderBudgetHold = null) : DispatchReadinessVerdict;
 
 internal static class DispatchReadinessEvaluator
 {
@@ -60,9 +61,15 @@ internal static class DispatchReadinessEvaluator
             return new DispatchReadinessDeferred(minRetryAfter, reason);
         }
 
-        var blockReason = assignedItems.Count > 0
-            ? assignedItems[0].Detail
-            : "No assigned tasks can be prepared for dispatch";
-        return new DispatchReadinessBlocked(blockReason, HasCandidates: true);
+        var heldItem = assignedItems.FirstOrDefault(item => item.ProviderBudgetHold is not null);
+        var blockReason = heldItem is not null
+            ? heldItem.Detail
+            : assignedItems.Count > 0
+                ? assignedItems[0].Detail
+                : "No assigned tasks can be prepared for dispatch";
+        return new DispatchReadinessBlocked(
+            blockReason,
+            HasCandidates: true,
+            ProviderBudgetHold: heldItem?.ProviderBudgetHold);
     }
 }

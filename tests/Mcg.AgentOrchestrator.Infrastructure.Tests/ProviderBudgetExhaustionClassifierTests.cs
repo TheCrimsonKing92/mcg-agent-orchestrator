@@ -35,6 +35,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
     [Xunit.InlineData("\u001b[31mAPI error (status 402 Payment Required): Grok Build usage balance exhausted\u001b[0m")]
     [Xunit.InlineData("{\"error\":{\"message\":\"Grok Build usage balance exhausted\",\"http_status\":402}}")]
     [Xunit.InlineData("{\n  \"error\": {\n    \"message\": \"Grok Build usage balance exhausted\",\n    \"http_status\": 402\n  }\n}")]
+    [Xunit.InlineData("{\n  \"http_status\": 402,\n  \"error\": {\n    \"message\": \"Grok Build usage balance exhausted\"\n  }\n}")]
     public void WorkerProviderRecognizesConstructedAnsiAndStructuredWrapper(string standardError)
     {
         var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");

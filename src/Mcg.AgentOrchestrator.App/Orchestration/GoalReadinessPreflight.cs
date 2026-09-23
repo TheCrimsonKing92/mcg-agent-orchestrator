@@ -203,12 +203,19 @@ public static class GoalReadinessPreflight
                 break;
             case DispatchReadinessReady:
                 break;
-            case DispatchReadinessBlocked blocked:
+            case DispatchReadinessBlocked { ProviderBudgetHold: not null } blocked:
                 findings.Add(new GoalReadinessFinding(
                     GoalReadinessSeverity.Blocker,
-                    "dispatch-blocked",
+                    "provider-budget-exhausted",
                     blocked.Reason,
                     CanOverride: false));
+                break;
+            case DispatchReadinessBlocked blocked:
+                findings.Add(new GoalReadinessFinding(
+                    GoalReadinessSeverity.Info,
+                    "dispatch-not-ready",
+                    blocked.Reason,
+                    CanOverride: true));
                 break;
             default:
                 throw new InvalidOperationException(

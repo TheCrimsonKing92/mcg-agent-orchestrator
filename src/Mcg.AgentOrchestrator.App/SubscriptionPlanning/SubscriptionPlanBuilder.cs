@@ -120,7 +120,8 @@ public sealed record SubscriptionPlanItem(
     int? TaskBriefCharacterBudget = null,
     int? TaskBriefHeadroom = null,
     WorkerRouteDecision? Route = null,
-    string? ReasoningEffortReason = null);
+    string? ReasoningEffortReason = null,
+    ProviderBudgetExhaustionHold? ProviderBudgetHold = null);
 
 public static class SubscriptionPlanBuilder
 {
@@ -453,7 +454,8 @@ public static class SubscriptionPlanBuilder
                 taskBriefCharacterBudget,
                 taskBriefHeadroom,
                 route,
-                reasoningEffortReason);
+                reasoningEffortReason,
+                providerBindingHeld ? providerHold : null);
         }
         catch (InvalidOperationException ex)
         {

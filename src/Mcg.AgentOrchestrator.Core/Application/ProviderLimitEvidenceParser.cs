@@ -131,13 +131,17 @@ public static partial class ProviderLimitEvidenceParser
     private static bool ContainsBudgetExhaustionEvidence(string text)
     {
         var normalized = CollapseWhitespace(AnsiControlSequence().Replace(text, string.Empty));
-        var hasPaymentRequired = Http402Status().IsMatch(normalized) ||
-            normalized.Contains("Payment Required", StringComparison.OrdinalIgnoreCase);
-        var hasExhaustedBalance = normalized.Contains("usage balance exhausted", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("balance is exhausted", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("balance exhausted", StringComparison.OrdinalIgnoreCase);
-        return hasPaymentRequired && hasExhaustedBalance;
+        return ContainsPaymentRequiredEvidence(normalized) && ContainsExhaustedBalanceEvidence(normalized);
     }
+
+    private static bool ContainsPaymentRequiredEvidence(string normalized) =>
+        Http402Status().IsMatch(normalized) ||
+        normalized.Contains("Payment Required", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsExhaustedBalanceEvidence(string normalized) =>
+        normalized.Contains("usage balance exhausted", StringComparison.OrdinalIgnoreCase) ||
+        normalized.Contains("balance is exhausted", StringComparison.OrdinalIgnoreCase) ||
+        normalized.Contains("balance exhausted", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryGetStructuredBudgetExhaustionEvidence(string text)
     {
@@ -174,11 +178,14 @@ public static partial class ProviderLimitEvidenceParser
         return false;
     }
 
-    private static bool ContainsBudgetExhaustionObject(JsonElement element)
+    private static bool ContainsBudgetExhaustionObject(
+        JsonElement element,
+        bool ancestorHasPaymentRequired = false)
     {
         if (element.ValueKind == JsonValueKind.Array)
         {
-            return element.EnumerateArray().Any(ContainsBudgetExhaustionObject);
+            return element.EnumerateArray().Any(item =>
+                ContainsBudgetExhaustionObject(item, ancestorHasPaymentRequired));
         }
 
         if (element.ValueKind != JsonValueKind.Object)
@@ -186,21 +193,22 @@ public static partial class ProviderLimitEvidenceParser
             return false;
         }
 
-        foreach (var property in element.EnumerateObject())
-        {
-            if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array &&
-                ContainsBudgetExhaustionObject(property.Value))
-            {
-                return true;
-            }
-        }
-
         var directFields = string.Join(
             ' ',
             element.EnumerateObject()
                 .Where(property => property.Value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
                 .Select(property => $"{property.Name} {property.Value.GetRawText()}"));
-        return ContainsBudgetExhaustionEvidence(directFields);
+        var normalizedDirectFields = CollapseWhitespace(AnsiControlSequence().Replace(directFields, string.Empty));
+        var hasPaymentRequired = ancestorHasPaymentRequired ||
+            ContainsPaymentRequiredEvidence(normalizedDirectFields);
+        if (hasPaymentRequired && ContainsExhaustedBalanceEvidence(normalizedDirectFields))
+        {
+            return true;
+        }
+
+        return element.EnumerateObject().Any(property =>
+            property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array &&
+            ContainsBudgetExhaustionObject(property.Value, hasPaymentRequired));
     }
 
     private static string CollapseWhitespace(string value) =>

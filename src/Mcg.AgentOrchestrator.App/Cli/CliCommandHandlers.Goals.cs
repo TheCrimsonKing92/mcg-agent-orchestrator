@@ -1363,7 +1363,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 context.Agents,
                 context.WorkerProfiles,
-                task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents)));
+                task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, context.CurrentGoal, task, context.Agents),
+                providerHoldScope: context.Kernel.Goals));
             return false;
 
         case "advance":
