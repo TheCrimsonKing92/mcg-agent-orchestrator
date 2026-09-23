@@ -33,7 +33,7 @@ internal static partial class PreReviewFocusedRequestSplitter
 
         var clauses = filterText.Split('|');
         if (!IsPositiveDisjunction(clauses) ||
-            clauses.Any(clause => BuildItem(alias, clause).Length > MaxFocusedEvidenceFilterLength))
+            clauses.Any(clause => MeasuredExpressionLength(clause) > MaxFocusedEvidenceFilterLength))
         {
             items = [originalItem];
             return false;
@@ -44,7 +44,7 @@ internal static partial class PreReviewFocusedRequestSplitter
         foreach (var clause in clauses.Skip(1))
         {
             var candidate = $"{current}|{clause}";
-            if (BuildItem(alias, candidate).Length <= MaxFocusedEvidenceFilterLength)
+            if (MeasuredExpressionLength(candidate) <= MaxFocusedEvidenceFilterLength)
             {
                 current = candidate;
                 continue;
