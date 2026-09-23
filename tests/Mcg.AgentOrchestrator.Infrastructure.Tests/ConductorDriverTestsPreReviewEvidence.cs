@@ -1296,4 +1296,173 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             CliArgumentParser.SplitCommand(command));
     }
 
+    [Xunit.Fact]
+    public void BuildPreReviewEvidenceContext_SplitsOversizedFocusedFilterAtClauseBoundaries()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        string[] changedFiles = [
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
+            "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchOutcomeClassifyTests.cs"];
+        var plan = RepositoryTestImpactPlanner.Plan(changedFiles, root);
+        var infrastructureCheck = Assert.Single(plan.Checks,
+            check => check.TestProject == RepositoryTestProject.Infrastructure);
+        var originalFilter = infrastructureCheck.Command[^1];
+
+        var context = ConductorDriver.BuildPreReviewEvidenceContext("wide-impact-sha", changedFiles, root);
+        var emitted = context.SelectedFocusedTests.Where(item =>
+                item.StartsWith("Infrastructure.Tests: ", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.False(context.MappingNeedsInput);
+        Assert.True(emitted.Length >= 2);
+        Assert.All(emitted, item => Assert.True(
+            item[(item.IndexOf(':', StringComparison.Ordinal) + 1)..].Length <=
+                PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength,
+            $"Broker-measured expression was {item[(item.IndexOf(':', StringComparison.Ordinal) + 1)..].Length} characters."));
+        Assert.Equal(
+            originalFilter.Split('|'),
+            emitted.SelectMany(item => item[(item.IndexOf(": ", StringComparison.Ordinal) + 2)..].Split('|')));
+    }
+
+    [Xunit.Fact]
+    public void PremiseInfrastructureSelection_SplitItemsPassBrokerValidation()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"],
+            root);
+        var classNames = Assert.Single(plan.Checks,
+            check => check.TestProject == RepositoryTestProject.Infrastructure).TestClassSelections!;
+        Assert.Equal(36, classNames.Count);
+        var filter = string.Join('|', classNames.Select(name => $"FullyQualifiedName~{name}"));
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", filter, out var items));
+        Assert.Equal(2, items.Count);
+
+        var accepted = GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            string.Join("; ", items), AcceptanceGateEngineSettings.Load(root), root,
+            out var checks, out _, out var rejection);
+
+        Assert.True(accepted, $"{rejection.Code}: {rejection.Detail}");
+        Assert.NotEqual(FocusedEvidenceRejectionCode.OversizedFilter, rejection.Code);
+        Assert.Equal(items.Count, checks.Count);
+    }
+
+    [Xunit.Fact]
+    public void SplitFocusedItems_RequireOneGreenEvidenceCheckPerItem()
+    {
+        var filter = string.Join('|', Enumerable.Range(1, 60).Select(
+            index => $"FullyQualifiedName~SplitCoverageClass{index:D2}"));
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", filter, out var items));
+        var context = new PreReviewEvidenceContext("coverage-sha", items,
+            string.Join("; ", items), "Split focused coverage.", NoApplicableTests: false,
+            MappingNeedsInput: false);
+        var allChecks = items.Select(item => new AcceptanceCheckResult(item, true, 0, null))
+            .ToArray();
+        var complete = new FocusedEvidenceRunResult(
+            context.FocusedRequest!, true, true, "all split checks passed", allChecks);
+        var partial = complete with { Checks = allChecks[..^1] };
+
+        Assert.True(PreReviewEvidenceReceipts.ValidateCoverage(context, complete, out var completeFailure));
+        Assert.Equal(string.Empty, completeFailure);
+        Assert.False(PreReviewEvidenceReceipts.ValidateCoverage(context, partial, out var partialFailure));
+        Assert.Equal($"cardinality mismatch: planned={items.Count} actual={items.Count - 1}", partialFailure);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRequestSplitter_PreservesUnderLimitItemAndRefusesUnsafeOversizedShapes()
+    {
+        const string underLimit = "FullyQualifiedName~ConductorDriverTestsPreReviewEvidence";
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", underLimit, out var unchanged));
+        Assert.Equal(["Infrastructure.Tests: " + underLimit], unchanged);
+
+        var oversizedClause = "FullyQualifiedName~" + new string('A', 1100);
+        var withFittingSibling = $"FullyQualifiedName~SmallTests|{oversizedClause}";
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", withFittingSibling, out var unsplittable));
+        Assert.Equal(["Infrastructure.Tests: " + withFittingSibling], unsplittable);
+
+        var nearLimitClause = "FullyQualifiedName~" + new string('A', 1010 - "FullyQualifiedName~".Length);
+        var safelySplittable = $"FullyQualifiedName~SmallTests|{nearLimitClause}";
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", safelySplittable, out var nearLimitItems));
+        Assert.Equal(2, nearLimitItems.Count);
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            string.Join("; ", nearLimitItems), AcceptanceGateEngineSettings.Load(root), root,
+            out var nearLimitChecks, out _, out var nearLimitRejection),
+            $"{nearLimitRejection.Code}: {nearLimitRejection.Detail}");
+        Assert.Equal(nearLimitItems.Count, nearLimitChecks.Count);
+
+        var positivePrefix = string.Join('|', Enumerable.Range(1, 50).Select(index => $"FullyQualifiedName~ShapeClass{index:D2}"));
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", $"{positivePrefix}&FullyQualifiedName~Required", out _));
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", $"{positivePrefix}|FullyQualifiedName!~Excluded", out _));
+        var unsafePrefixes = new[] { "FullyQualifiedName~ExactBoundary&", "FullyQualifiedName!~", "FullyQualifiedName~" };
+        foreach (var prefix in unsafePrefixes)
+        {
+            var exactBoundary = prefix + new string('A', PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength - prefix.Length);
+            Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", exactBoundary, out var unsafeItems));
+            Assert.Equal(["Infrastructure.Tests: " + exactBoundary], unsafeItems);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FocusedRequestSplitter_ExactBrokerBoundaryPreservesOneToOneCoverage()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var classNames = Assert.Single(RepositoryTestImpactPlanner.Plan([
+            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"], root).Checks,
+            check => check.TestProject == RepositoryTestProject.Infrastructure).TestClassSelections!;
+        var clauses = new List<string>();
+        foreach (var clause in classNames.Select(name => $"FullyQualifiedName~{name}"))
+        {
+            if (string.Join('|', clauses.Append(clause)).Length > 1000)
+            {
+                break;
+            }
+            clauses.Add(clause);
+        }
+        Assert.True(clauses.Count > 1);
+        var unpadded = string.Join('|', clauses);
+        clauses[0] = clauses[0].Replace("~", "~" + new string(' ',
+            PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength - unpadded.Length));
+        var boundaryFilter = string.Join('|', clauses);
+        Assert.Equal(PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength, boundaryFilter.Length);
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
+            "Infrastructure.Tests", boundaryFilter, out var items));
+        Assert.Single(items);
+        Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            string.Join("; ", items), AcceptanceGateEngineSettings.Load(root), root,
+            out var checks, out _, out var rejection), $"{rejection.Code}: {rejection.Detail}");
+        var context = new PreReviewEvidenceContext("boundary-sha", items,
+            string.Join("; ", items), "Exact broker boundary.", false, false);
+        var result = new FocusedEvidenceRunResult(context.FocusedRequest!, true, true, "green",
+            checks.Select(check => new AcceptanceCheckResult(check.Name, true, 0, null)).ToArray());
+
+        Assert.True(PreReviewEvidenceReceipts.ValidateCoverage(context, result, out var failure), failure);
+    }
+
+    [Xunit.Fact]
+    public void BuildPreReviewEvidenceContext_OversizedSingleClauseNeedsInputWithoutPartialEmission()
+    {
+        var root = CreateTempDirectory();
+        const string relativePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OversizedSelectionTests.cs";
+        try
+        {
+            File.WriteAllText(Path.Combine(root, ".git"), string.Empty);
+            var absolutePath = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
+            File.WriteAllText(absolutePath,
+                $"public sealed class {new string('A', 1100)} {{ [Xunit.Fact] public void Runs() {{ }} }}");
+            var context = ConductorDriver.BuildPreReviewEvidenceContext(
+                "oversized-clause-sha", [relativePath], root);
+
+            Assert.True(context.MappingNeedsInput);
+            Assert.False(context.NoApplicableTests);
+            Assert.Null(context.FocusedRequest);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
 }

@@ -590,7 +590,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
     }
 
     [Xunit.Fact]
-    public void FocusedChildProcess_AcceptancePriority_KillsDescendantTree()
+    public async Task FocusedChildProcess_AcceptancePriority_KillsDescendantTree()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -608,10 +608,15 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
         try
         {
             var source = ReadIsolatedDotnetScript();
-            var functionStart = source.IndexOf("function Invoke-FocusedChildProcess", StringComparison.Ordinal);
-            var functionEnd = source.IndexOf("function Set-FocusedChildProcessReceipt", functionStart, StringComparison.Ordinal);
-            Assert.True(functionStart >= 0 && functionEnd > functionStart);
-            var focusedChildFunction = source[functionStart..functionEnd];
+            var identityFunctionStart = source.IndexOf("function Get-FocusedChildProcessIdentity", StringComparison.Ordinal);
+            var invokeFunctionStart = source.IndexOf("function Invoke-FocusedChildProcess", StringComparison.Ordinal);
+            var functionEnd = source.IndexOf("function Set-FocusedChildProcessReceipt", invokeFunctionStart, StringComparison.Ordinal);
+            Assert.True(
+                identityFunctionStart >= 0 &&
+                invokeFunctionStart > identityFunctionStart &&
+                functionEnd > invokeFunctionStart,
+                "Expected Get-FocusedChildProcessIdentity before Invoke-FocusedChildProcess before Set-FocusedChildProcessReceipt.");
+            var focusedChildFunctions = source[identityFunctionStart..functionEnd];
 
             File.WriteAllText(
                 fixturePath,
@@ -653,7 +658,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = "Stop"
                 $script:RepositoryRoot = $env:FOCUSED_TREE_ROOT
-                {{focusedChildFunction}}
+                {{focusedChildFunctions}}
                 $result = Invoke-FocusedChildProcess `
                     -FileName $env:FOCUSED_TREE_SHELL `
                     -ProcessArguments @("-NoProfile", "-NonInteractive", "-File", $env:FOCUSED_TREE_FIXTURE) `
@@ -693,6 +698,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
 
             harness = Process.Start(startInfo) ??
                 throw new InvalidOperationException("Failed to start the focused child-process harness.");
+            var stdoutTask = harness.StandardOutput.ReadToEndAsync();
+            var stderrTask = harness.StandardError.ReadToEndAsync();
             JsonDocument? publishedDescendantIdentity = null;
             Assert.True(
                 SpinWait.SpinUntil(
@@ -737,8 +744,27 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 }
             }
 
-            var stdout = harness.StandardOutput.ReadToEnd();
-            var stderr = harness.StandardError.ReadToEnd();
+            if (harness.ExitCode != 0)
+            {
+                StopFocusedProcessIdentity(descendantIdentityPath);
+            }
+
+            try
+            {
+                await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (TimeoutException)
+            {
+                var boundedStderr = stderrTask.IsCompletedSuccessfully
+                    ? stderrTask.Result
+                    : "<stderr stream remained open>";
+                Assert.Fail(
+                    $"The focused child harness output streams did not close within 10 seconds.{Environment.NewLine}" +
+                    $"harnessExitCode={harness.ExitCode}{Environment.NewLine}stderr={boundedStderr}");
+            }
+
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
             var diagnostics = $"harnessExitCode={harness.ExitCode}{Environment.NewLine}stdout={stdout}{Environment.NewLine}stderr={stderr}";
             if (harness.ExitCode != 0)
             {
@@ -898,6 +924,34 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
         Assert.False(inspectionAttempted);
         Assert.Equal("identity-unconfirmed:pid-only", inspectionStatus);
         Assert.Equal("identity-unconfirmed:pid-only", GetFocusedChildIdentityState(receipt.RootElement));
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_TransientIdentityFailureIsRetriedOnlyWhileChildLives()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var supervisionLoop = source.IndexOf(
+            "while (-not $completed -and [DateTime]::UtcNow -lt $Deadline)",
+            StringComparison.Ordinal);
+        Assert.True(supervisionLoop >= 0, "Focused child supervision loop must remain present.");
+
+        var waitForExit = source.IndexOf("$completed = $process.WaitForExit", supervisionLoop, StringComparison.Ordinal);
+        Assert.True(waitForExit > supervisionLoop, "Identity retry must observe the child's exit signal first.");
+
+        var retryGuard = source.IndexOf(
+            "$identityCaptureAttempts -lt $maximumIdentityCaptureAttempts",
+            waitForExit,
+            StringComparison.Ordinal);
+        Assert.True(retryGuard > waitForExit, "A transient identity failure must be retried only for a live child and within a fixed attempt cap.");
+
+        var retryCapture = source.IndexOf(
+            "Get-FocusedChildProcessIdentity -Process $process",
+            retryGuard,
+            StringComparison.Ordinal);
+        Assert.True(retryCapture > retryGuard, "The live-child retry guard must recapture process identity.");
+
+        var termination = source.IndexOf("$process.Kill($true)", retryCapture, StringComparison.Ordinal);
+        Assert.True(termination > retryCapture, "Identity recapture must occur before bounded tree termination.");
     }
 
     [Xunit.Fact]

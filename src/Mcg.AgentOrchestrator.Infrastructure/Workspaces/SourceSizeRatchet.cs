@@ -81,7 +81,9 @@ internal static class SourceSizeRatchet
             // Raised again for goal cf64014b, integrated by operator squash on 2026-09-22: goal-evidence
             // lease recovery is admitted at the existing acceptance ownership seam, and classification and
             // journal parsing remain extracted. Ceiling re-measured at the integrated head.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6442),
+            // Raised deliberately by six for goal e46c3d92: the only addition is the candidate-currency
+            // guard that defers to VerifyingFindingCurrency.IsCurrent, whose logic lives in the model.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6448),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
@@ -239,8 +241,8 @@ internal static class SourceSizeRatchet
             // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
             // Goal aab291fd extracted manifest-declared project resolution controls to their own partial.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
-            // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1299),
+            // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1468),
             // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1228),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),

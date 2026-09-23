@@ -593,7 +593,14 @@ public sealed partial class AgentOrchestratorKernel
     public bool NormalizeGoalLifecycleState(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
-        return ReopenTerminalGoalWithNonTerminalTasks(goal, reason);
+        var reconciled = ReconcileSupersededFailedDownstreamTasks(goal, _clock.UtcNow);
+
+        if (reconciled)
+        {
+            RefreshGoalStatus(goal);
+        }
+
+        return ReopenTerminalGoalWithNonTerminalTasks(goal, reason) || reconciled;
     }
 
     public bool ReopenVerifyingGoalAfterAcceptanceAttemptInvalidated(GoalId goalId, string reason)
@@ -1554,6 +1561,51 @@ public sealed partial class AgentOrchestratorKernel
                 ProgressKind.TaskRetried,
                 $"Invalidated {downstream.RequiredRole} task because retried upstream {retriedTask.RequiredRole} task {retriedTask.Id.Value[..8]} {invalidationReason}.");
         }
+
+        ReconcileSupersededFailedDownstreamTasks(goal, reconciledAt);
+    }
+
+    private bool ReconcileSupersededFailedDownstreamTasks(
+        Goal goal,
+        DateTimeOffset reconciledAt)
+    {
+        if (goal.Status is GoalStatus.Parked or GoalStatus.WaitingForHuman)
+        {
+            return false;
+        }
+
+        var reconciled = false;
+        foreach (var downstream in goal.Tasks.Where(task =>
+                     task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
+                     task.Status == WorkTaskStatus.Failed &&
+                     task.LastProcess is not { IsRunning: true } &&
+                     task.LastVerification is not null))
+        {
+            var decision = VerifyingFindingCurrency.Evaluate(goal, downstream, downstream.LastVerification!);
+            if (decision.Disposition == VerifyingFindingDisposition.Current)
+            {
+                continue;
+            }
+
+            var reviewedCandidate = string.IsNullOrWhiteSpace(downstream.LastVerification!.ReviewedCommit)
+                ? "unknown"
+                : downstream.LastVerification.ReviewedCommit.Trim();
+            var repairTask = decision.RepairTaskId is { } repairTaskId
+                ? goal.FindTask(repairTaskId)
+                : null;
+            ResetTaskForRetry(downstream, reconciledAt, repairTask?.PendingRetryCause ?? downstream.PendingRetryCause);
+            var reason = decision.Disposition == VerifyingFindingDisposition.SupersededByCompletedRepair
+                ? $"completed Developer repair {repairTask!.Id.Value[..8]} produced candidate {decision.RepairedCandidate}"
+                : "a later verification superseded that stored verdict";
+            Append(
+                goal,
+                downstream.Id,
+                ProgressKind.TaskRetried,
+                $"Invalidated superseded {downstream.RequiredRole} verdict for reviewed candidate {reviewedCandidate} because {reason}; historical findings remain in verification history.");
+            reconciled = true;
+        }
+
+        return reconciled;
     }
 
     private static void EnsureNoRunningDownstreamTasks(Goal goal, TaskSpec retriedTask)
