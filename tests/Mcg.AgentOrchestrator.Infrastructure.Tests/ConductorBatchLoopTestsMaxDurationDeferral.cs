@@ -90,6 +90,75 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
     }
 
     [Xunit.Fact(Timeout = 30_000)]
+    public async Task MaxDurationDeferral_FailedTerminalAttempt_DoesNotStartSerialAcceptanceRetry()
+    {
+        var time = new ManualConductorTimeProviderForTests(
+            new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
+        await using var fixture = new HoldingAcceptanceAttemptsAcrossTicksFixture(
+            time,
+            AcceptanceVerificationSummary.Failed);
+        var root = CreateTempDirectory("mcg-max-duration-failed-drain");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var running = CreateVerifiedSimpleGoal(kernel, "Update src/FailedAtMaxDuration.cs");
+            var sleepCount = 0;
+            var driver = MakeAcceptanceDriver(fixture, () => { });
+            BatchLoopSummary? summary = null;
+
+            var outputText = CaptureConsole(() => summary = new ConductorBatchLoop(
+                handoffOnMaxDuration: _ => ConductorLoopHandoffResult.StartedProcess(1234, "out.log", "err.log"),
+                utcNow: time.GetUtcNow).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                Path.Combine(root, ConductorBatchLoop.StopFileName),
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ =>
+                {
+                    sleepCount++;
+                    if (sleepCount == 1)
+                    {
+                        time.AdvanceForTests(TimeSpan.FromSeconds(2));
+                    }
+                    else if (sleepCount == 2)
+                    {
+                        fixture.RequiredHandleForTests(running).CompleteForTests();
+                        time.AdvanceForTests(TimeSpan.FromSeconds(1));
+                    }
+                    else if (sleepCount <= 4)
+                    {
+                        time.AdvanceForTests(TimeSpan.FromSeconds(1));
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException("Failed-attempt deferral exceeded its deterministic tick budget.");
+                    }
+
+                    return false;
+                },
+                maxIterations: 4,
+                maxDuration: TimeSpan.FromSeconds(1),
+                keepAliveWhenIdle: true,
+                maxDurationDeferralCeiling: TimeSpan.FromSeconds(30)));
+
+            Assert.Equal(0, summary!.Retried);
+            Assert.Equal(0, fixture.HeldAttemptCount);
+            Assert.DoesNotContain("result=retry", outputText, StringComparison.Ordinal);
+            Assert.Contains(kernel.GetGoal(running.Id).Timeline, item =>
+                item.Message.Contains("Acceptance verification failed", StringComparison.Ordinal));
+            var stopped = Assert.Single(
+                outputText.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries),
+                line => line.StartsWith("LOOP_STOP ", StringComparison.Ordinal));
+            Assert.Contains("reason=max-duration", stopped, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
     public void MaxDurationBoundary_WithoutInFlightAttempt_StopsWithoutDeferral()
     {
         var (kernel, _) = SimpleGoal();

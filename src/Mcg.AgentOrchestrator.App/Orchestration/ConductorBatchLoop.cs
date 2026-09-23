@@ -1288,7 +1288,7 @@ internal sealed partial class ConductorBatchLoop
 
                 // Auto-retry transient acceptance verification failures (up to maxVerifyRetries re-verifications)
                 var serialRetryRan = false;
-                if (result.WasEscalated && IsTransientVerificationFailure(result))
+                if (!isDeferringMaxDurationStop && result.WasEscalated && IsTransientVerificationFailure(result))
                 {
                     retryCounts.TryGetValue(goal.Id.Value, out var retries);
                     var retryAdvanceFaulted = false;
