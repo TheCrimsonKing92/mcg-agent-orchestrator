@@ -33,11 +33,17 @@ The boundaries below come from these live controls:
   Reviewer findings, Reviewer criterion verdicts, and an explicit `tests` state that may be `deferred`
   (`src/Mcg.AgentOrchestrator.Core/AgentOutputDirectives.cs:12-42` and
   `src/Mcg.AgentOrchestrator.Core/AgentOutputDirectives.cs:56-89`).
-- Every task brief says its decision context is embedded and forbids workers from reaching dashboard APIs
-  or orchestrator state (`src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.TaskBriefs.cs:180-189`).
+- Every task brief says its decision context is embedded and tells workers not to reach dashboard APIs
+  or orchestrator state (`src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.TaskBriefs.cs:253`).
   Packaged prior-task evidence is selected from earlier tasks in the same goal
   (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerArtifactWriter.cs:329-332`); it is not an
-  authority to inspect `state.db`, `.orchestrator/goal-events`, or another goal.
+  authority to inspect `state.db`, `.orchestrator/goal-events`, or another goal. Cross-goal evidence reaches a
+  worker when a brief cites the goal or task id, through
+  `src/Mcg.AgentOrchestrator.Infrastructure/Workers/CitedPriorEvidenceResolver.cs`.
+- This describes current behavior so criteria are routed to a role that can satisfy them. It is not an
+  operator policy decision about worker memory: the brief sentence originated as a reachability fix
+  (dashboard APIs were unreachable from worker sandboxes), and whether workers should receive more
+  cross-goal history is an open design question.
 
 ## Matrix
 
