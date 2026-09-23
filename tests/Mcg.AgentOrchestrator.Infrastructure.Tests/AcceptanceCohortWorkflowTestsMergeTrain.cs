@@ -48,62 +48,83 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
     [Fact]
     public void ExactTestedMergeTrainCommit_LandsThreeGoalsWithPerGoalCoverage()
     {
-        var repo = CreateAcceptanceCohortRepository();
+        var repo = CreateReducedAcceptanceCohortRepository();
+        var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
             AddAcceptanceManifest(repo);
+            AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 1));
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second train member", repo);
             var thirdGoal = CreateCompletedGoal(kernel, "Third train member", repo);
             var main = RunGitOutput(repo, "rev-parse", "main").Trim();
-            var first = CreateCandidate(repo, firstGoal.Id.Value, "src/TrainFirst.cs", "first");
-            var second = CreateCandidate(repo, secondGoal.Id.Value, "tests/TrainSecond.cs", "second");
-            var third = CreateCandidate(repo, thirdGoal.Id.Value, "docs/train-third.md", "third");
-            var bindings = new[]
+            var first = CreateWorktreeCandidate(
+                repo, firstGoal.Id, "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", "first");
+            var second = CreateWorktreeCandidate(
+                repo, secondGoal.Id, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs", "second");
+            var third = CreateWorktreeCandidate(
+                repo, thirdGoal.Id, "tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs", "third");
+            foreach (var (goal, candidate) in new[]
+                     {
+                         (firstGoal, first),
+                         (secondGoal, second),
+                         (thirdGoal, third)
+                     })
             {
-                TrainBind(first.GoalId, first.Revision, "src/TrainFirst.cs", "resource:first"),
-                TrainBind(second.GoalId, second.Revision, "tests/TrainSecond.cs", "resource:second"),
-                TrainBind(third.GoalId, third.Revision, "docs/train-third.md", "resource:third")
-            };
-            var orchestratorWorkspace = OrchestratorWorkspace.ForDirectory(repo);
-            var store = new MergeTrainAcceptanceStore(
-                Path.Combine(orchestratorWorkspace.OrchestratorDirectory, "merge-train-acceptance.db"));
+                kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                    goal.Objective,
+                    ["The merge train full gate passes for this member"],
+                    VerificationClass.TestVerifiable,
+                    [],
+                    []));
+                kernel.MapCriterionEvidenceOwner(
+                    goal.Id,
+                    0,
+                    1,
+                    CriterionEvidenceOwner.Acceptance,
+                    "test",
+                    CriterionEvidenceScopes.FullAcceptanceGate,
+                    expectedCandidateSha: main);
+            }
+            var verifier = new SequenceAcceptanceVerifier(
+            [
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("merge train", true, 0, null)],
+                    TestResultPaths: [WritePassingTrx(repo, "receipt-train-shared.trx")])
+            ]);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanupContext.Hooks);
+            var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
+            var landings = new List<ConductorLandingReceipt>();
+            driver.SuccessfulLandingSink = landings.Add;
 
-            using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings);
-            var identity = MergeTrainIdentity.Create(
-                integration.Members,
-                main,
-                integration.TreeRevision,
-                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
-                    integration.Path,
-                    bindings.SelectMany(member => member.LandingPaths).ToArray()));
-            var receipt = store.SaveGateReceipt(new MergeTrainReceipt(
-                "receipt-train-shared",
-                identity,
-                MergeTrainGateOutcome.Passed,
-                DateTimeOffset.UtcNow,
-                100,
-                [],
-                GateExitCode: 0,
-                GateTestResultPaths: [WritePassingTrx(repo, "receipt-train-shared.trx")],
-                ValidForLanding: true));
-
-            var result = LandingExecutor.ExecuteMergeTrain(
-                kernel,
+            var result = driver.RunMergeTrain(
+                selection,
                 [firstGoal, secondGoal, thirdGoal],
-                orchestratorWorkspace,
-                receipt,
-                integration.CommitRevision,
-                store,
-                ConductorAutonomyPolicy.Conservative);
+                ConductorAutonomyPolicy.Permissive);
 
-            Assert.True(result.MainAdvanced);
-            Assert.Equal(integration.TreeRevision, RunGitOutput(repo, "rev-parse", "main^{tree}").Trim());
-            Assert.Equal(3, Assert.IsAssignableFrom<IReadOnlyList<AcceptanceCohortCoverage>>(result.Coverage).Count);
-            Assert.All(result.Coverage!, coverage => Assert.True(coverage.Landed));
-            Assert.All([firstGoal, secondGoal, thirdGoal], goal =>
+            Assert.Equal(1, verifier.RunCount);
+            Assert.Equal(MergeTrainGateOutcome.Passed, result.Receipt?.Outcome);
+            Assert.Equal(3, result.MemberResults.Count);
+            Assert.Equal(3, landings.Count);
+            foreach (var (goal, candidate) in new[]
             {
+                (firstGoal, first),
+                (secondGoal, second),
+                (thirdGoal, third)
+            })
+            {
+                var obligation = Assert.Single(goal.CriterionEvidenceObligations);
+                Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
+                Assert.Equal(candidate, obligation.CandidateSha);
+                Assert.Equal($"full-acceptance:{candidate}", obligation.ReceiptId);
                 var intent = GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(repo, goal.Id));
                 Assert.NotNull(intent);
                 Assert.Equal(main, intent.BoundMainRevision);
@@ -111,8 +132,102 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                 Assert.Contains(
                     GoalOperationJournal.Read(repo, goal.Id).Entries,
                     operation => operation.Operation == "conductor:land" && operation.Status == GoalOperationStatus.Completed);
-            });
-            store.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
+                Assert.True(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).WasExecuted);
+                Assert.True(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).WasExecuted);
+                Assert.Equal(GoalStatus.Completed, goal.Status);
+            }
+            AssertNoMergeTrainWorkspaces(repo);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void ExactTestedMergeTrainCommit_OperatorOwnedObligationHoldsWholeTrainBeforeMutation()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goals = new[]
+            {
+                CreateCompletedGoal(kernel, "First held train member", repo),
+                CreateCompletedGoal(kernel, "Second held train member", repo),
+                CreateCompletedGoal(kernel, "Third held train member", repo)
+            };
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var candidates = new[]
+            {
+                CreateCandidate(repo, goals[0].Id.Value, "src/HeldTrainFirst.cs", "first"),
+                CreateCandidate(repo, goals[1].Id.Value, "tests/HeldTrainSecond.cs", "second"),
+                CreateCandidate(repo, goals[2].Id.Value, "docs/held-train-third.md", "third")
+            };
+            foreach (var (goal, candidate) in goals.Zip(candidates))
+            {
+                kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                    goal.Objective,
+                    ["Full gate passes", "Operator observes the native result"],
+                    VerificationClass.TestVerifiable,
+                    [],
+                    []));
+                kernel.MapCriterionEvidenceOwner(
+                    goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance, "test",
+                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: main);
+                if (goal == goals[0])
+                {
+                    kernel.MapCriterionEvidenceOwner(
+                        goal.Id, 1, 1, CriterionEvidenceOwner.Operator, "test",
+                        "operator:native-observation", expectedCandidateSha: candidate.Revision);
+                }
+            }
+
+            var bindings = new[]
+            {
+                TrainBind(candidates[0].GoalId, candidates[0].Revision, "src/HeldTrainFirst.cs", "resource:first"),
+                TrainBind(candidates[1].GoalId, candidates[1].Revision, "tests/HeldTrainSecond.cs", "resource:second"),
+                TrainBind(candidates[2].GoalId, candidates[2].Revision, "docs/held-train-third.md", "resource:third")
+            };
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var databasePath = Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db");
+            var store = new MergeTrainAcceptanceStore(databasePath);
+            using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings);
+            var identity = MergeTrainIdentity.Create(integration.Members, main, integration.TreeRevision, "manifest-v1");
+            var receipt = store.SaveGateReceipt(new MergeTrainReceipt(
+                "receipt-train-held",
+                identity,
+                MergeTrainGateOutcome.Passed,
+                DateTimeOffset.UtcNow,
+                100,
+                [],
+                0,
+                [WritePassingTrx(repo, "receipt-train-held.trx")],
+                ValidForLanding: true));
+
+            var result = LandingExecutor.ExecuteMergeTrain(
+                kernel,
+                goals,
+                workspace,
+                receipt,
+                integration.CommitRevision,
+                store,
+                ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(AcceptanceCohortLandingOutcome.RetryableHold, result.Outcome);
+            Assert.Contains(goals[0].Id.Value[..8], result.Message, StringComparison.Ordinal);
+            Assert.Contains("criterion-v1-1:Operator:Pending", result.Message, StringComparison.Ordinal);
+            Assert.Equal(main, RunGitOutput(repo, "rev-parse", "main").Trim());
+            Assert.All(goals, goal => Assert.Null(
+                GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(repo, goal.Id))));
+            Assert.Equal(CriterionEvidenceState.Satisfied, goals[0].CriterionEvidenceObligations[0].State);
+            Assert.Equal(CriterionEvidenceState.Pending, goals[0].CriterionEvidenceObligations[1].State);
+            using var connection = new SqliteConnection($"Data Source={databasePath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM merge_train_landings;";
+            Assert.Equal(0L, (long)command.ExecuteScalar()!);
         }
         finally
         {

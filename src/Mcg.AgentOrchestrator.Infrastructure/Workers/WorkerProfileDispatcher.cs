@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using SubscriptionModelSelection = Mcg.AgentOrchestrator.Infrastructure.WorkerSubscriptionModelResolver.SubscriptionModelSelection;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -90,7 +91,6 @@ public static class WorkerProfileDispatcher
     public const string ArtifactTooLargeErrorCode = "artifact-too-large";
     public const string UnsupportedClaudeReasoningEffortErrorCode = "unsupported-claude-reasoning-effort";
     private const string HighRiskReviewerReasoningEffort = "xhigh";
-    private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
     private static readonly IReadOnlyDictionary<string, RegistryArtifactSource> RegistryArtifactSources =
         new Dictionary<string, RegistryArtifactSource>(StringComparer.Ordinal)
@@ -1488,7 +1488,7 @@ public static class WorkerProfileDispatcher
                 allowCheapLane: allowCheapLane));
     }
 
-    private static string ResolveSubscriptionProfileName(AgentDefinition agent, SubscriptionModelSelection selection)
+    internal static string ResolveSubscriptionProfileName(AgentDefinition agent, SubscriptionModelSelection selection)
     {
         return string.IsNullOrWhiteSpace(selection.LaunchProfileName)
             ? ResolveSubscriptionProfileName(agent, selection.Model)
@@ -1612,7 +1612,7 @@ public static class WorkerProfileDispatcher
         TaskSpec task,
         SubscriptionModelSelection selection)
     {
-        if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
+        if (task.RequiredRole == AgentRole.Reviewer && WorkerSubscriptionModelResolver.HasHighRiskOrComplexIntakeRiskLabel(goal))
         {
             return new EffectiveReasoningEffortSelection(HighRiskReviewerReasoningEffort, "intake-risk");
         }
@@ -1736,18 +1736,6 @@ public static class WorkerProfileDispatcher
         return string.IsNullOrWhiteSpace(identity) ? null : identity;
     }
 
-    private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
-    {
-        var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, agent.Role);
-        var model = TaskComplexityEstimator.ResolveModel(
-            agent,
-            complexity,
-            task.Description,
-            goal.Objective,
-            ModelFitEvidence.BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes)));
-        return new SubscriptionModelSelection(complexity, model, UsesComplexModel(agent, model));
-    }
-
     private static SubscriptionModelSelection ResolveEffectiveSubscriptionModelSelection(
         AgentDefinition agent,
         Goal goal,
@@ -1759,401 +1747,18 @@ public static class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null,
         bool allowCheapLane = true)
     {
-        var fullSelection = ResolveSubscriptionModel(agent, goal, task);
-        return modelOverride is not null
-            ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
-            : ResolveRoleModelSelection(agent, goal, task, fullSelection, profiles, claudeAuthProbe, sandboxOptions, commandExists, allowCheapLane);
+        return WorkerSubscriptionModelResolver.ResolveEffectiveSubscriptionModelSelection(
+            agent,
+            goal,
+            task,
+            DefaultProviders,
+            sandboxOptions is null ? WorkerSandboxOptions.FromEnvironment : () => sandboxOptions!,
+            claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment,
+            modelOverride,
+            profiles,
+            commandExists,
+            allowCheapLane);
     }
-
-    private static SubscriptionModelSelection ResolveRoleModelSelection(
-        AgentDefinition agent,
-        Goal goal,
-        TaskSpec task,
-        SubscriptionModelSelection fullSelection,
-        WorkerProfileCatalog? profiles,
-        Func<ClaudeCliAuthState>? claudeAuthProbe,
-        WorkerSandboxOptions? sandboxOptions,
-        Func<string, bool>? commandExists,
-        bool allowCheapLane)
-    {
-        if (!IsLightReadOnlyRole(task.RequiredRole))
-        {
-            if (agent.IsProviderRoutingConstrained == true)
-            {
-                return fullSelection with
-                {
-                    Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
-                };
-            }
-
-            if (allowCheapLane &&
-                TrySelectCheapLane(agent, goal, task, fullSelection, profiles, out var cheapSelection))
-            {
-                return cheapSelection;
-            }
-
-            return fullSelection with { Reason = "full-profile: role is write-capable or gate-heavy" };
-        }
-
-        if (HasCustomWorkerProfileOverride(agent))
-        {
-            return fullSelection with { Reason = "full-profile: role has custom subscription worker profile" };
-        }
-
-        if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
-        {
-            return fullSelection with { Reason = "full-profile: Reviewer high-risk/complex intake labels require exhaustive review" };
-        }
-
-        if (TryFindRoleGuardrailFailure(task, out var guardrailFailure))
-        {
-            return fullSelection with { Reason = $"fallback-full-profile: {guardrailFailure}" };
-        }
-
-        if (agent.IsProviderRoutingConstrained == true)
-        {
-            return fullSelection with
-            {
-                Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
-            };
-        }
-
-        if (profiles is not null &&
-            !TryValidateLightRoleProfile(profiles, claudeAuthProbe, sandboxOptions, commandExists, out var unavailableReason))
-        {
-            return fullSelection with { Reason = $"full-profile: light-role profile unavailable ({unavailableReason})" };
-        }
-
-        return new SubscriptionModelSelection(
-            fullSelection.Complexity,
-            new ModelProfile(
-                "Anthropic",
-                LightRoleAnthropicModelName,
-                agent.Model.Capabilities,
-                SubscriptionMode.ApiKey,
-                MaxOutputTokens: agent.Model.MaxOutputTokens),
-            UsesComplexModel: false,
-            UsesSubscriptionLaunchProfile: false,
-            Reason: $"light-role: {task.RequiredRole} uses {AnthropicSubscriptionProfileName}/{LightRoleAnthropicModelName}");
-    }
-
-    private static bool TrySelectCheapLane(
-        AgentDefinition agent,
-        Goal goal,
-        TaskSpec task,
-        SubscriptionModelSelection fullSelection,
-        WorkerProfileCatalog? profiles,
-        out SubscriptionModelSelection selection)
-    {
-        selection = fullSelection;
-        var mechanicalRetry = task.PendingRetryRoundKind == RetryRoundKind.Mechanical;
-        if (!agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
-            HasCustomWorkerProfileOverride(agent))
-        {
-            return false;
-        }
-
-        if (!mechanicalRetry && task.RequiredRole != AgentRole.Developer)
-        {
-            return false;
-        }
-
-        if (!mechanicalRetry &&
-            fullSelection.UsesComplexModel &&
-            fullSelection.Complexity is not TaskComplexity.Complex)
-        {
-            return false;
-        }
-
-        var smallTask = (fullSelection.Complexity is not TaskComplexity.Complex || HasExplicitSmallTaskIntakeLabel(goal)) &&
-            !HasHighRiskOrComplexIntakeRiskLabel(goal);
-        if (!mechanicalRetry && !smallTask)
-        {
-            return false;
-        }
-
-        var triggerReason = mechanicalRetry
-            ? "mechanical-retry"
-            : fullSelection.Complexity is TaskComplexity.Complex
-                ? "small-task-label"
-                : "small-task";
-
-        var unavailableReason = "worker profile catalog unavailable";
-        if (profiles is null ||
-            !TryValidateSparkProfile(profiles, out unavailableReason))
-        {
-            selection = fullSelection with
-            {
-                Reason = $"fallback-default-lane: spark unavailable ({unavailableReason})",
-                DispatchLane = ResolveSubscriptionProfileName(agent, fullSelection)
-            };
-            return true;
-        }
-
-        selection = new SubscriptionModelSelection(
-            fullSelection.Complexity,
-            new ModelProfile(
-                "OpenAI",
-                OpenAiSparkSubscriptionModelName,
-                agent.Model.Capabilities,
-                SubscriptionMode.ApiKey,
-                AgentCatalog.RoutineSubscriptionReasoningEffort,
-                agent.Model.MaxOutputTokens),
-            UsesComplexModel: false,
-            UsesSubscriptionLaunchProfile: false,
-            Reason: $"cheap-lane: {task.RequiredRole} {triggerReason} uses {OpenAiSparkSubscriptionProfileName}/{OpenAiSparkSubscriptionModelName}",
-            LaunchProfileName: OpenAiSparkSubscriptionProfileName,
-            DispatchLane: OpenAiSparkSubscriptionProfileName);
-        return true;
-    }
-
-    private static bool TryValidateSparkProfile(WorkerProfileCatalog profiles, out string unavailableReason)
-    {
-        try
-        {
-            var profile = profiles.Profiles.FirstOrDefault(profile =>
-                profile.Name.Equals(OpenAiSparkSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
-            if (profile is null)
-            {
-                unavailableReason = $"worker profile '{OpenAiSparkSubscriptionProfileName}' was not found";
-                return false;
-            }
-
-            if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
-            {
-                unavailableReason = $"worker profile '{OpenAiSparkSubscriptionProfileName}' only echoes prompt path";
-                return false;
-            }
-
-            if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
-            {
-                unavailableReason = $"worker profile '{OpenAiSparkSubscriptionProfileName}' does not include {{subscriptionModelName}}";
-                return false;
-            }
-
-            if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
-            {
-                unavailableReason = $"worker profile '{OpenAiSparkSubscriptionProfileName}' does not include {{subscriptionReasoningEffort}}";
-                return false;
-            }
-
-            var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(
-                profile,
-                DefaultProviders.Resolve(ProviderKind.OpenAICodexSpark));
-            if (!capability.IsPatchCapable)
-            {
-                unavailableReason = capability.Detail;
-                return false;
-            }
-
-            unavailableReason = string.Empty;
-            return true;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
-        {
-            unavailableReason = ex.Message;
-            return false;
-        }
-    }
-
-    private static bool TryValidateLightRoleProfile(
-        WorkerProfileCatalog profiles,
-        Func<ClaudeCliAuthState>? claudeAuthProbe,
-        WorkerSandboxOptions? sandboxOptions,
-        Func<string, bool>? commandExists,
-        out string unavailableReason)
-    {
-        var profile = profiles.Profiles.FirstOrDefault(profile =>
-            profile.Name.Equals(AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
-        if (profile is null)
-        {
-            unavailableReason = $"{AnthropicSubscriptionProfileName} not configured";
-            return false;
-        }
-
-        if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
-        {
-            unavailableReason = $"{AnthropicSubscriptionProfileName} is echo-only";
-            return false;
-        }
-
-        if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
-        {
-            unavailableReason = $"{AnthropicSubscriptionProfileName} does not pin selected model";
-            return false;
-        }
-
-        var launcher = WorkerProfileDiagnostics.EvaluateRealLauncher(
-            profile,
-            DefaultProviders.ResolveProfile(AnthropicSubscriptionProfileName),
-            commandExists);
-        if (!launcher.IsRealLauncher)
-        {
-            unavailableReason = launcher.Detail;
-            return false;
-        }
-
-        var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
-        if (sandbox.Enabled)
-        {
-            var authState = (claudeAuthProbe ?? ClaudeCliAuthProbe.FromEnvironment)();
-            if (!authState.HasAnthropicApiKey && !authState.HasCliCredentialArtifact)
-            {
-                unavailableReason = "Claude CLI auth unavailable: no ANTHROPIC_API_KEY and no CLI credential artifact to seed";
-                return false;
-            }
-        }
-
-        unavailableReason = string.Empty;
-        return true;
-    }
-
-    private static bool IsLightReadOnlyRole(AgentRole role)
-    {
-        return role is AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer;
-    }
-
-    private static bool HasHighRiskOrComplexIntakeRiskLabel(Goal goal)
-    {
-        return EnumerateStoredIntakeRiskLabels(goal).Any(label =>
-            label.Equals("high-risk", StringComparison.OrdinalIgnoreCase) ||
-            label.Equals("complex", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool HasExplicitSmallTaskIntakeLabel(Goal goal)
-    {
-        return EnumerateStoredIntakeRiskLabels(goal).Any(label =>
-            label.Equals("small-task", StringComparison.OrdinalIgnoreCase) ||
-            label.Equals("small", StringComparison.OrdinalIgnoreCase) ||
-            label.Equals("simple", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static IEnumerable<string> EnumerateStoredIntakeRiskLabels(Goal goal)
-    {
-        foreach (var evt in goal.Timeline.Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision))
-        {
-            var markerIndex = evt.Message.IndexOf(IntakeRiskLabelsMarker, StringComparison.OrdinalIgnoreCase);
-            if (markerIndex < 0)
-            {
-                continue;
-            }
-
-            var labelsText = evt.Message[(markerIndex + IntakeRiskLabelsMarker.Length)..].Trim();
-            var sentenceEnd = labelsText.IndexOf('.');
-            if (sentenceEnd >= 0)
-            {
-                labelsText = labelsText[..sentenceEnd];
-            }
-
-            foreach (var label in labelsText.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            {
-                yield return label;
-            }
-        }
-    }
-
-    private static bool HasCustomWorkerProfileOverride(AgentDefinition agent)
-    {
-        if (agent.Subscription?.WorkerProfileName is not { Length: > 0 } profileName)
-        {
-            return false;
-        }
-
-        try
-        {
-            var defaultProfileName = DefaultProviders.ResolveModelProvider(agent.Model.ProviderName).ProfileName;
-            return !profileName.Equals(defaultProfileName, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (InvalidOperationException)
-        {
-            return true;
-        }
-    }
-
-    private static bool TryFindRoleGuardrailFailure(TaskSpec task, out string reason)
-    {
-        reason = string.Empty;
-        if (task.LastVerification is not { } verification)
-        {
-            return false;
-        }
-
-        var text = $"{verification.StandardOutput}\n{verification.StandardError}";
-        if (!WorkerResultParser.TryParseFields(text, out var fields, out var diagnostic))
-        {
-            reason = $"prior {task.RequiredRole} WORKER_RESULT invalid ({diagnostic})";
-            return true;
-        }
-
-        var missingFields = WorkerResultRequiredFieldsForLightRole(task.RequiredRole)
-            .Where(field => !fields.ContainsKey(field))
-            .ToArray();
-        if (missingFields.Length > 0)
-        {
-            reason = $"prior {task.RequiredRole} WORKER_RESULT missing field(s): {string.Join(", ", missingFields)}";
-            return true;
-        }
-
-        if (task.RequiredRole == AgentRole.Researcher && !HasSubstantiveField(fields, "citations"))
-        {
-            reason = "prior Researcher WORKER_RESULT missing citations";
-            return true;
-        }
-
-        if (task.RequiredRole == AgentRole.Reviewer && !HasSubstantiveField(fields, "verdict"))
-        {
-            reason = "prior Reviewer WORKER_RESULT missing verdict";
-            return true;
-        }
-
-        if (task.RequiredRole == AgentRole.Reviewer && !HasPresentField(fields, "blockers"))
-        {
-            reason = "prior Reviewer WORKER_RESULT missing blockers";
-            return true;
-        }
-
-        return false;
-    }
-
-    private static IReadOnlyList<string> WorkerResultRequiredFieldsForLightRole(AgentRole role)
-    {
-        return AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(role);
-    }
-
-    private static bool HasPresentField(IReadOnlyDictionary<string, string> fields, string fieldName)
-    {
-        return fields.TryGetValue(fieldName, out var value) &&
-            !string.IsNullOrWhiteSpace(value) &&
-            !value.StartsWith('<') &&
-            !value.EndsWith('>');
-    }
-
-    private static bool HasSubstantiveField(IReadOnlyDictionary<string, string> fields, string fieldName)
-    {
-        return fields.TryGetValue(fieldName, out var value) &&
-            !string.IsNullOrWhiteSpace(value) &&
-            !value.Equals("none", StringComparison.OrdinalIgnoreCase) &&
-            !value.StartsWith('<') &&
-            !value.EndsWith('>');
-    }
-
-    private static bool UsesComplexModel(AgentDefinition agent, ModelProfile model)
-    {
-        return agent.ComplexModel is not null &&
-            agent.ComplexModel.ProviderName.Equals(model.ProviderName, StringComparison.OrdinalIgnoreCase) &&
-            agent.ComplexModel.ModelName.Equals(model.ModelName, StringComparison.OrdinalIgnoreCase);
-    }
-
-    internal sealed record SubscriptionModelSelection(
-        TaskComplexity Complexity,
-        ModelProfile Model,
-        bool UsesComplexModel,
-        bool UsesSubscriptionLaunchProfile = true,
-        string Reason = "full-profile: default subscription model selection",
-        string? ReasoningEffortOverride = null,
-        string ReasoningEffortReason = "base",
-        string? LaunchProfileName = null,
-        string? DispatchLane = null);
 
     private sealed record EffectiveReasoningEffortSelection(string? Effort, string Reason);
 

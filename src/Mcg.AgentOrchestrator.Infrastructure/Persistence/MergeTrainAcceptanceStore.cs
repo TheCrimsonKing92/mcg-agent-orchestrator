@@ -87,6 +87,28 @@ public sealed class MergeTrainAcceptanceStore
         return payload is null ? null : FromDto(JsonSerializer.Deserialize<ReceiptDto>(payload, JsonOptions)!);
     }
 
+    public IReadOnlyList<MergeTrainReceipt> ReadPassedReceiptsForGoal(GoalId goalId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT payload_json FROM merge_train_receipts ORDER BY rowid DESC;";
+        using var reader = command.ExecuteReader();
+        var receipts = new List<MergeTrainReceipt>();
+        while (reader.Read())
+        {
+            var receipt = FromDto(JsonSerializer.Deserialize<ReceiptDto>(reader.GetString(0), JsonOptions)!);
+            if (receipt.HasAuthoritativeLandingEvidence && receipt.Identity.Members.Any(member => member.GoalId == goalId))
+            {
+                receipts.Add(receipt);
+            }
+        }
+
+        return receipts
+            .OrderByDescending(receipt => receipt.CompletedAt)
+            .ThenByDescending(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public void RecordEjections(string trainAttemptId, IReadOnlyList<MergeTrainEjection> ejections)
     {
         if (ejections.Count == 0) return;

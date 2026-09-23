@@ -3206,8 +3206,7 @@ internal sealed partial class ConductorDriver
                 continue;
             }
 
-            var resolvedGoals = goals.Cast<Goal>().ToArray();
-            var evidenceMutationLeases = new Stack<IDisposable>();
+            var resolvedGoals = goals.Cast<Goal>().ToArray(); var evidenceMutationLeases = new Stack<IDisposable>();
             try
             {
                 foreach (var goal in resolvedGoals.OrderBy(goal => goal.Id.Value, StringComparer.Ordinal))
@@ -3229,6 +3228,7 @@ internal sealed partial class ConductorDriver
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Order(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
+                if (AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(resolvedGoals, goalId => recovery.Receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision, kernel, $"cohort-receipt:{recovery.Receipt.ReceiptId}") is { } evidenceDiagnostic) { Console.WriteLine($"COHORT_RECOVERY_HELD cohort={recovery.Receipt.Identity.Value} detail={evidenceDiagnostic}"); continue; }
                 foreach (var goal in resolvedGoals)
                 {
                     GoalOperationJournal.Completed(
