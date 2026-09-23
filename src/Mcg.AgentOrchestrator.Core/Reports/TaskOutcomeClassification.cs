@@ -33,6 +33,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule ProviderNeutralProgressStall = new("provider-neutral-progress-stall", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderModelRejection = new("provider-model-rejection", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderRateLimit = new("provider-rate-limit", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderBudgetExhausted = new("provider-budget-exhausted", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderSandboxLaunch1312 = new("provider-sandbox-launch-1312", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule SubscriptionLimit = new("subscription-limit", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule SilentLaunchFailure = new("silent-launch-failure", TaskOutcomeClass.Environmental);
@@ -77,6 +78,7 @@ internal static class TaskOutcomeRules
         ProviderNeutralProgressStall,
         ProviderModelRejection,
         ProviderRateLimit,
+        ProviderBudgetExhausted,
         ProviderSandboxLaunch1312,
         SubscriptionLimit,
         SilentLaunchFailure,

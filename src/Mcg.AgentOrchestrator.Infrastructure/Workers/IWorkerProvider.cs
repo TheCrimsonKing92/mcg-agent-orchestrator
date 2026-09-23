@@ -24,7 +24,8 @@ public sealed class StaticWorkerProvider : IWorkerProvider
         string profileName,
         string providerName,
         WorkerCapabilities capabilities,
-        WorkerQuota? quota = null)
+        WorkerQuota? quota = null,
+        bool recognizeBudgetExhaustion = true)
     {
         Identity = identity;
         ProfileName = string.IsNullOrWhiteSpace(profileName)
@@ -35,6 +36,7 @@ public sealed class StaticWorkerProvider : IWorkerProvider
             : providerName;
         Capabilities = capabilities;
         Quota = quota ?? new WorkerQuota();
+        RecognizeBudgetExhaustion = recognizeBudgetExhaustion;
     }
 
     public WorkerProviderIdentity Identity { get; }
@@ -47,6 +49,8 @@ public sealed class StaticWorkerProvider : IWorkerProvider
 
     public WorkerQuota Quota { get; }
 
+    internal bool RecognizeBudgetExhaustion { get; }
+
     public ProviderFailureKind ParseOutcome(WorkerProviderOutcome outcome)
     {
         if (outcome.ExitCode == 0)
@@ -55,6 +59,12 @@ public sealed class StaticWorkerProvider : IWorkerProvider
         }
 
         var text = StripWorkerResultBlocks(string.Join(Environment.NewLine, outcome.StandardOutput, outcome.StandardError));
+        if (RecognizeBudgetExhaustion &&
+            ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(outcome.StandardError, out _))
+        {
+            return ProviderFailureKind.BudgetExhausted;
+        }
+
         if (ProviderLimitEvidenceParser.TryGetEvidenceLine(
                 outcome.StandardOutput,
                 outcome.StandardError,
@@ -206,6 +216,15 @@ public sealed class WorkerProviderCatalog
             new WorkerProviderIdentity(ProviderKind.AnthropicClaudeCli, UsesCodexExitFileBehavior: false),
             WorkerProfileDispatcher.AnthropicSubscriptionProfileName,
             "Anthropic",
+            new WorkerCapabilities(
+                CanSelfCommit: true,
+                CanSelfVerify: true,
+                SupportsInteractiveSession: true,
+                SupportsPlanMode: true)),
+        new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.XaiGrokCli, UsesCodexExitFileBehavior: false),
+            WorkerProfileDispatcher.XaiSubscriptionProfileName,
+            "xAI",
             new WorkerCapabilities(
                 CanSelfCommit: true,
                 CanSelfVerify: true,

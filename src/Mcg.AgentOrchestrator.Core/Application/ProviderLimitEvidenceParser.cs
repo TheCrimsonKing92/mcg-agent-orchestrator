@@ -10,6 +10,39 @@ namespace Mcg.AgentOrchestrator.Core;
 /// </summary>
 public static partial class ProviderLimitEvidenceParser
 {
+    public static bool TryGetBudgetExhaustionEvidenceLine(
+        string? providerStandardError,
+        out string evidenceLine) =>
+        TryGetBudgetExhaustionEvidenceLine(SplitLines(providerStandardError), out evidenceLine);
+
+    public static bool TryGetBudgetExhaustionEvidenceLine(
+        IEnumerable<string> providerDiagnosticLines,
+        out string evidenceLine)
+    {
+        var retained = providerDiagnosticLines
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToArray();
+        foreach (var rawLine in retained)
+        {
+            if (ContainsBudgetExhaustionEvidence(rawLine))
+            {
+                evidenceLine = rawLine;
+                return true;
+            }
+        }
+
+        // Structured wrappers may carry the status and message in separate fields/lines.
+        var wrapper = string.Join('\n', retained);
+        if (ContainsBudgetExhaustionEvidence(wrapper))
+        {
+            evidenceLine = wrapper;
+            return true;
+        }
+
+        evidenceLine = string.Empty;
+        return false;
+    }
+
     public static bool TryGetEvidenceLine(
         string? standardOutput,
         string? standardError,
@@ -92,6 +125,20 @@ public static partial class ProviderLimitEvidenceParser
         text.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
 
+    private static bool ContainsBudgetExhaustionEvidence(string text)
+    {
+        var normalized = CollapseWhitespace(AnsiControlSequence().Replace(text, string.Empty));
+        var hasPaymentRequired = Http402Status().IsMatch(normalized) ||
+            normalized.Contains("Payment Required", StringComparison.OrdinalIgnoreCase);
+        var hasExhaustedBalance = normalized.Contains("usage balance exhausted", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("balance is exhausted", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("balance exhausted", StringComparison.OrdinalIgnoreCase);
+        return hasPaymentRequired && hasExhaustedBalance;
+    }
+
+    private static string CollapseWhitespace(string value) =>
+        WhitespaceRuns().Replace(value, " ").Trim();
+
     private static bool TryParseStructuredLimitEvent(string line)
     {
         var jsonStart = line.IndexOf('{');
@@ -163,4 +210,13 @@ public static partial class ProviderLimitEvidenceParser
 
     [GeneratedRegex(@"\b(?:429\s+Too\s+Many\s+Requests|HTTP(?:/\d(?:\.\d)?)?\s+429|(?:http(?:\s+status)?|status(?:\s+code)?|response(?:\s+status)?|error(?:\s+code)?)\s*[:=]?\s*429)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Http429Status();
+
+    [GeneratedRegex(@"\b(?:402\s+Payment\s+Required|HTTP(?:/\d(?:\.\d)?)?\s*402|(?:http(?:[_\s]+status)?|status(?:[_\s]+code)?|response(?:[_\s]+status)?|error(?:[_\s]+code)?)\s*[\x22']?\s*[:=]?\s*402)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex Http402Status();
+
+    [GeneratedRegex(@"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))", RegexOptions.CultureInvariant)]
+    private static partial Regex AnsiControlSequence();
+
+    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
+    private static partial Regex WhitespaceRuns();
 }

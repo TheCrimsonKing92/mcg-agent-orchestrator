@@ -19,7 +19,8 @@ public enum FailureTriageCause
     FailedVerification,
     MissingVerification,
     NoFileChangeCompletion,
-    None
+    None,
+    ProviderBudgetExhausted
 }
 
 public enum FailureTriageAction
@@ -197,6 +198,22 @@ public static class FailureTriagePlanner
         {
             var dispatchOutcome = DispatchFailureClassifier.Classify(task, verification);
             var output = $"{verification.StandardOutput}{Environment.NewLine}{verification.StandardError}";
+            if (dispatchOutcome.Kind == DispatchOutcomeKind.ProviderBudgetExhausted)
+            {
+                items.Add(Item(
+                    task,
+                    taskNumber,
+                    FailureTriageCause.ProviderBudgetExhausted,
+                    FailureTriageAction.RequestHumanInput,
+                    null,
+                    policyAllows: false,
+                    canAutoApply: false,
+                    gate: true,
+                    $"Provider budget exhausted for {task.RequiredRole}; {dispatchOutcome.EvidenceSummary}",
+                    $"replenish the named provider binding, then retry {taskNumber} with an operator recovery note"));
+                return;
+            }
+
             if (dispatchOutcome.Kind == DispatchOutcomeKind.DirtyWorktreeRecoverable)
             {
                 items.Add(Item(

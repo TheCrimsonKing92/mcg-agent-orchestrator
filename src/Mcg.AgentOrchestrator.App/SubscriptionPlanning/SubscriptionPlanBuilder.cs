@@ -132,7 +132,8 @@ public static class SubscriptionPlanBuilder
         IReadOnlyList<ModelOutcomeRecord>? scorecard = null,
         DateTimeOffset? now = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        IReadOnlyCollection<Goal>? providerHoldScope = null)
     {
         var validations = OrchestratorHealthInspector
             .InspectWorkerProfiles(profiles, commandExists)
@@ -153,7 +154,8 @@ public static class SubscriptionPlanBuilder
                 now,
                 allowCheapLaneInPlan,
                 sandboxOptions,
-                commandExists))
+                commandExists,
+                providerHoldScope))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -194,7 +196,8 @@ public static class SubscriptionPlanBuilder
         DateTimeOffset? now = null,
         bool allowCheapLane = false,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        IReadOnlyCollection<Goal>? providerHoldScope = null)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -315,6 +318,11 @@ public static class SubscriptionPlanBuilder
                 dispatchProviderName,
                 effectiveNow,
                 out var providerCooldown);
+            var providerBindingHeld = DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+                providerHoldScope ?? [goal],
+                dispatchProviderName,
+                credentialBinding: null,
+                out var providerHold);
             var retryDelaySeconds = retryDeferred
                 ? Math.Max(0, (int)Math.Ceiling((retryAfter - effectiveNow).TotalSeconds))
                 : providerCoolingDown
@@ -329,6 +337,7 @@ public static class SubscriptionPlanBuilder
                 AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy) &&
                 !retryDeferred &&
                 !providerCoolingDown &&
+                !providerBindingHeld &&
                 !requiresLimitReview;
             var estimatedPromptCharacterCount = canPrepare
                 ? estimatePromptCharacterCount?.Invoke(task)
@@ -357,6 +366,8 @@ public static class SubscriptionPlanBuilder
                     ? $"Recoverable subscription usage limit ({previousLimitFailures}); retry after {retryAfter:u}."
                 : providerCoolingDown
                     ? $"Provider {providerCooldown.ProviderName} is cooling down after a recoverable subscription usage limit on task {TaskDisplayNumber.Resolve(goal, providerCooldown.SourceTaskId)}; retry after {providerCooldown.RetryAfter:u}."
+                : providerBindingHeld
+                    ? $"Provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); blocked by goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}."
                 : requiresLimitReview
                     ? $"Repeated recoverable subscription usage limit ({previousLimitFailures}); inspect model, profile, or timing before redispatch."
                 : !hasProfile

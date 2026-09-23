@@ -40,7 +40,7 @@ public static class CrossGoalSubscriptionStartPlanner
     {
         var candidates = kernel.Goals
             .Where(goal => goal.Status is GoalStatus.Active or GoalStatus.WaitingForHuman)
-            .Select(goal => BuildCandidate(goal, agents, profiles))
+            .Select(goal => BuildCandidate(goal, agents, profiles, kernel.Goals))
             .Where(candidate => candidate is not null)
             .Select(candidate => candidate!)
             .ToList();
@@ -70,9 +70,10 @@ public static class CrossGoalSubscriptionStartPlanner
     private static CrossGoalSubscriptionStartCandidate? BuildCandidate(
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
-        WorkerProfileCatalog profiles)
+        WorkerProfileCatalog profiles,
+        IReadOnlyCollection<Goal> providerHoldScope)
     {
-        var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+        var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, profiles, providerHoldScope: providerHoldScope);
         var readinessVerdict = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, subscriptionPlan, DateTimeOffset.UtcNow);
         if (readinessVerdict is not DispatchReadinessReady)
         {

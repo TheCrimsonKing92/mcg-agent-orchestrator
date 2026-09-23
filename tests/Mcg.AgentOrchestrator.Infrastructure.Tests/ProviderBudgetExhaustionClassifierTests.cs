@@ -1,0 +1,352 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
+
+public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTestSupport
+{
+    private const string ObservedDiagnostic =
+        "API error (status 402 Payment Required): Grok Build usage balance exhausted";
+
+    [Xunit.Fact]
+    public void WorkerProviderCatalogRecognizesGrokBalanceExhaustion()
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+
+        Assert.NotEqual(ProviderKind.Unknown, provider.Identity.Kind);
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(
+            1,
+            string.Empty,
+            ObservedDiagnostic));
+
+        Assert.Equal("BudgetExhausted", failureKind.ToString());
+    }
+
+    [Xunit.Theory]
+    // ANSI framing is constructed around the verbatim observed message because log retention removed the original bytes.
+    [Xunit.InlineData("\u001b[31mAPI error (status 402 Payment Required): Grok Build usage balance exhausted\u001b[0m")]
+    [Xunit.InlineData("{\"error\":{\"message\":\"Grok Build usage balance exhausted\",\"http_status\":402}}")]
+    public void WorkerProviderRecognizesConstructedAnsiAndStructuredWrapper(string standardError)
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, string.Empty, standardError));
+
+        Assert.Equal(ProviderFailureKind.BudgetExhausted, failureKind);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("API error (status 402 Payment Required): request rejected", ProviderFailureKind.Unknown)]
+    [Xunit.InlineData("ERROR: HTTP 401 Unauthorized", ProviderFailureKind.Unknown)]
+    [Xunit.InlineData("tests failed: expected 402 but got 500", ProviderFailureKind.Unknown)]
+    [Xunit.InlineData("ERROR: HTTP 429 Too Many Requests", ProviderFailureKind.RateLimit)]
+    [Xunit.InlineData("connection refused", ProviderFailureKind.Connectivity)]
+    public void WorkerProviderKeepsBudgetExhaustionDistinct(
+        string standardError,
+        ProviderFailureKind expected)
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, string.Empty, standardError));
+
+        Assert.Equal(expected, failureKind);
+    }
+
+    [Xunit.Fact]
+    public void WorkerProviderIgnoresQuotedBudgetDiagnosticInWorkerProse()
+    {
+        var provider = WorkerProviderCatalog.Default().ResolveProfile("grok-cli");
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, ObservedDiagnostic, string.Empty));
+
+        Assert.Equal(ProviderFailureKind.Unknown, failureKind);
+    }
+
+    [Xunit.Fact]
+    public void CompletionPreservesBudgetExhaustionAheadOfMissingFileChange()
+    {
+        var (_, task, dispatchedAt) = DispatchedTask();
+        var verification = FailedVerification(
+            dispatchedAt,
+            $"{ObservedDiagnostic}\n{DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing)}",
+            ProviderFailureKind.BudgetExhausted);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Assert.Equal(DispatchOutcomeKind.ProviderBudgetExhausted, outcome.Kind);
+        Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Assert.Null(outcome.RetryAfter);
+        Assert.Null(outcome.Cooldown);
+        Assert.Contains("rule=provider-budget-exhausted", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("source=stderr", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Contains("binding=xai::<provider-default>", outcome.EvidenceSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact]
+    public void SuccessfulWorkerEvidenceOutranksUnrelatedProviderChatter()
+    {
+        var (_, task, dispatchedAt) = DispatchedTask();
+        var verification = new TaskVerificationRecord(
+            "grok",
+            "C:\\repo",
+            1,
+            WorkerResultBlock("src/A.cs", "build", "pass - 1 passed", commit: "abc123"),
+            ObservedDiagnostic,
+            dispatchedAt.AddMinutes(1),
+            WorkerResultPresent: true,
+            HasCommittedChanges: true,
+            ProviderFailureKind: ProviderFailureKind.BudgetExhausted,
+            DispatchStartedAt: dispatchedAt,
+            AssignedScopeComplete: true);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Assert.Contains("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void DisabledRecognitionReproducesOldDispositionAndNoAdmissionHold()
+    {
+        var provider = new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.XaiGrokCli, UsesCodexExitFileBehavior: false),
+            "grok-cli",
+            "xAI",
+            new WorkerCapabilities(true, true, true, true),
+            recognizeBudgetExhaustion: false);
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, string.Empty, ObservedDiagnostic));
+        var (kernel, task, dispatchedAt) = DispatchedTask();
+        var verification = FailedVerification(
+            dispatchedAt,
+            $"{ObservedDiagnostic}\n{DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing)}",
+            failureKind);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        kernel.RecordTaskVerification(task.LastDispatch!.GoalId!, task.Id, verification);
+
+        Assert.Equal(ProviderFailureKind.Unknown, failureKind);
+        Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            kernel.Goals,
+            "xAI",
+            credentialBinding: null,
+            out _));
+    }
+
+    [Xunit.Fact]
+    public void BudgetExhaustionRequiresOperatorTriageAndNeverAutomaticRetry()
+    {
+        var repository = CreateSeededDispatchRepository();
+        try
+        {
+            var (kernel, task, dispatchedAt) = DispatchedTask();
+            var verification = FailedVerification(
+                dispatchedAt,
+                ObservedDiagnostic,
+                ProviderFailureKind.BudgetExhausted);
+            kernel.RecordTaskVerification(task.LastDispatch!.GoalId!, task.Id, verification);
+            var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+            var item = FailureTriagePlanner.Build(
+                    kernel,
+                    kernel.GetGoal(task.LastDispatch.GoalId!),
+                    [XaiDeveloperAgent()],
+                    repository,
+                    AutonomyPolicy.Observe)
+                .Items
+                .Single(candidate => candidate.TaskId == task.Id);
+
+            Assert.Null(AutomaticWorkerRetryCause.Resolve(task, outcome));
+            Assert.Equal(FailureTriageCause.ProviderBudgetExhausted, item.Cause);
+            Assert.Equal(FailureTriageAction.RequestHumanInput, item.Action);
+            Assert.True(item.RequiresOperatorGate);
+            Assert.Contains("binding=xai::<provider-default>", item.Explanation, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(repository, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void ExhaustedBindingHoldPersistsAcrossSnapshotAndClearsOnFreshSuccess()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var sourceGoal = kernel.CreateGoal(
+            "Observe exhausted xAI binding",
+            [new TaskSpec(TaskId.New(), "Run provider work.", AgentRole.Developer)]);
+        var recoveryGoal = kernel.CreateGoal(
+            "Observe incidental provider recovery",
+            [new TaskSpec(TaskId.New(), "Run later provider work.", AgentRole.Developer)]);
+        var unrelatedGoal = kernel.CreateGoal(
+            "Continue unrelated provider work",
+            [new TaskSpec(TaskId.New(), "Run OpenAI work.", AgentRole.Developer)]);
+        var xaiAgent = XaiDeveloperAgent();
+        kernel.ActivateGoal(sourceGoal.Id, [xaiAgent]);
+        kernel.ActivateGoal(recoveryGoal.Id, [xaiAgent]);
+        kernel.ActivateGoal(unrelatedGoal.Id, [SubscriptionDeveloperAgent()]);
+        var sourceTask = sourceGoal.Tasks.Single();
+        var sourceDispatchAt = DateTimeOffset.Parse("2026-09-06T19:24:00Z");
+        kernel.RecordTaskDispatch(sourceGoal.Id, sourceTask.Id, GrokDispatch(sourceGoal.Id, sourceDispatchAt));
+        kernel.RecordTaskVerification(
+            sourceGoal.Id,
+            sourceTask.Id,
+            FailedVerification(sourceDispatchAt, ObservedDiagnostic, ProviderFailureKind.BudgetExhausted));
+        kernel.ReportTaskProgress(
+            sourceGoal.Id,
+            sourceTask.Id,
+            WorkTaskStatus.Failed,
+            "Provider budget exhausted; operator recovery required.");
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredRecoveryGoal = restored.GetGoal(recoveryGoal.Id);
+
+        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            restored.Goals,
+            "xAI",
+            credentialBinding: null,
+            out var hold));
+        Assert.Equal("provider-only", hold.BindingScope);
+        Assert.Equal(sourceGoal.Id, hold.SourceGoalId);
+        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            restored.Goals,
+            "OpenAI",
+            credentialBinding: null,
+            out _));
+
+        var heldPlan = SubscriptionPlanBuilder.Build(
+            restoredRecoveryGoal,
+            [xaiAgent],
+            WorkerProfileCatalog.Default(),
+            commandExists: _ => true,
+            providerHoldScope: restored.Goals);
+        var heldItem = Assert.Single(heldPlan.Items);
+        Assert.False(heldItem.CanPrepare);
+        Assert.Contains("Provider budget exhausted", heldItem.Detail, StringComparison.Ordinal);
+        Assert.Contains(hold.EvidenceReceipt, heldItem.Detail, StringComparison.Ordinal);
+
+        var unrelatedPlan = SubscriptionPlanBuilder.Build(
+            restored.GetGoal(unrelatedGoal.Id),
+            [SubscriptionDeveloperAgent()],
+            WorkerProfileCatalog.Default(),
+            commandExists: _ => true,
+            providerHoldScope: restored.Goals);
+        Assert.True(Assert.Single(unrelatedPlan.Items).CanPrepare);
+
+        var operatorRecovered = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        operatorRecovered.RetryTask(
+            sourceGoal.Id,
+            sourceTask.Id,
+            "Operator confirmed the named billing binding was replenished.",
+            RetryCause.ContractClarification);
+        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            operatorRecovered.Goals,
+            "xAI",
+            credentialBinding: null,
+            out _));
+
+        var recoveryTask = restoredRecoveryGoal.Tasks.Single();
+        var recoveryDispatchAt = DateTimeOffset.Parse("2026-09-06T20:00:00Z");
+        restored.RecordTaskDispatch(recoveryGoal.Id, recoveryTask.Id, GrokDispatch(recoveryGoal.Id, recoveryDispatchAt));
+        restored.RecordTaskVerification(
+            recoveryGoal.Id,
+            recoveryTask.Id,
+            new TaskVerificationRecord(
+                "grok",
+                "C:\\repo",
+                0,
+                "provider request completed",
+                string.Empty,
+                recoveryDispatchAt.AddMinutes(1),
+                DispatchStartedAt: recoveryDispatchAt));
+
+        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            restored.Goals,
+            "xAI",
+            credentialBinding: null,
+            out _));
+    }
+
+    [Xunit.Fact]
+    public async Task ExhaustedBindingHoldRoundTripsThroughStateDatabase()
+    {
+        var root = InfrastructureTestSupport.CreateTempDirectory();
+        try
+        {
+            var (kernel, task, dispatchedAt) = DispatchedTask();
+            kernel.RecordTaskVerification(
+                task.LastDispatch!.GoalId!,
+                task.Id,
+                FailedVerification(dispatchedAt, ObservedDiagnostic, ProviderFailureKind.BudgetExhausted));
+            var stateDbPath = Path.Combine(root, "state.db");
+            _ = StateDbMigrations.EnsureUpToDate(stateDbPath);
+            var repository = new SqliteOrchestratorStateRepository(stateDbPath);
+
+            await repository.SaveAsync(kernel);
+            var restored = await repository.LoadAsync();
+
+            Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+                restored.Goals,
+                "xAI",
+                credentialBinding: null,
+                out var hold));
+            Assert.Equal(task.Id, hold.SourceTaskId);
+            Assert.Equal("provider-only", hold.BindingScope);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static (AgentOrchestratorKernel Kernel, TaskSpec Task, DateTimeOffset DispatchedAt) DispatchedTask()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Classify provider budget exhaustion",
+            [new TaskSpec(TaskId.New(), "Implement provider behavior.", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, [SubscriptionDeveloperAgent()]);
+        var task = goal.Tasks.Single();
+        var dispatchedAt = DateTimeOffset.Parse("2026-09-06T19:24:00Z");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, GrokDispatch(goal.Id, dispatchedAt));
+        return (kernel, task, dispatchedAt);
+    }
+
+    private static TaskDispatchRecord GrokDispatch(GoalId goalId, DateTimeOffset dispatchedAt) => new(
+        "grok-cli",
+        "grok",
+        "C:\\repo",
+        dispatchedAt,
+        ProviderName: "xAI",
+        WorkerProviderKind: ProviderKind.XaiGrokCli,
+        GoalId: goalId);
+
+    private static TaskVerificationRecord FailedVerification(
+        DateTimeOffset dispatchedAt,
+        string standardError,
+        ProviderFailureKind failureKind) => new(
+        "grok",
+        "C:\\repo",
+        1,
+        string.Empty,
+        standardError,
+        dispatchedAt.AddMinutes(1),
+        ProviderFailureKind: failureKind,
+        DispatchStartedAt: dispatchedAt);
+
+    private static AgentDefinition XaiDeveloperAgent() => new(
+        new AgentId("xai-developer"),
+        "xAI Developer",
+        AgentRole.Developer,
+        new ModelProfile(
+            "xAI",
+            "grok-4.6",
+            ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
+            SubscriptionMode.ApiKey,
+            "high"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("grok-cli", "grok-4.6", "high"));
+}

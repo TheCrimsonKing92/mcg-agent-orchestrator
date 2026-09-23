@@ -531,7 +531,8 @@ public static class WorkerProfileDispatcher
             allowGitReference,
             claudeAuthProbe,
             sandbox,
-            commandExists);
+            commandExists,
+            providerHoldScope: kernel.Goals);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -580,7 +581,8 @@ public static class WorkerProfileDispatcher
         bool allowGitReference = false,
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        IEnumerable<Goal>? providerHoldScope = null)
     {
         var findings = new List<string>();
         ReviewerChangedFileScope? reviewerScope = null;
@@ -683,6 +685,17 @@ public static class WorkerProfileDispatcher
             {
                 findings.Add(
                     $"blocked: provider {providerCooldown.ProviderName} is cooling down after task {TaskDisplayNumber.Resolve(goal, providerCooldown.SourceTaskId)} until {providerCooldown.RetryAfter:u}");
+            }
+
+            if (DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+                providerHoldScope ?? [goal],
+                dispatchProviderName,
+                claudeCredentialSelection?.DirectoryPath,
+                out var providerHold))
+            {
+                findings.Add(
+                    $"blocked: provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
+                    $"source goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}");
             }
 
             if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))

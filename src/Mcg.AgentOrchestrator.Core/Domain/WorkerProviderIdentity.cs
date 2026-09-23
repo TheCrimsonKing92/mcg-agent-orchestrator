@@ -9,7 +9,8 @@ public enum ProviderKind
     OpenAICodexOssCli,
     // Qwen-code harness (how). Backend URL (what) is injected as {openaiBaseUrl}.
     OllamaQwenCodeCli,
-    HermesAcp
+    HermesAcp,
+    XaiGrokCli
 }
 
 public enum ProviderFailureKind
@@ -17,7 +18,8 @@ public enum ProviderFailureKind
     Unknown,
     RateLimit,
     Sandbox1312,
-    Connectivity
+    Connectivity,
+    BudgetExhausted
 }
 
 public sealed record WorkerProviderIdentity(
