@@ -58,6 +58,39 @@ public sealed class AcceptancePartitionVerdictCacheContentReuseTests : GoalAccep
         Assert.Null(changed.TryReuse(_lane));
     }
 
+    [Fact]
+    public void WithinAttemptRerun_PassingRecord_IsNeverExportedToClosureIndex()
+    {
+        Directory.CreateDirectory(_root);
+        CreateRepository();
+        var first = CreateCache(new GoalId("11111111111111111111111111111111"), "attempt-one", "tree-a", "main-a");
+        var firstRun = new AcceptanceCheckResult(
+            _lane.Name,
+            false,
+            1,
+            "first run failed",
+            CompletionDecision: new AcceptanceShardCompletionDecision(
+                false,
+                AcceptanceShardCompletionPredicates.NonzeroExit,
+                false,
+                1,
+                1,
+                1,
+                "failed"));
+        first.RecordWithinAttemptRetry(
+            _lane,
+            firstRun,
+            "attempt-one:content-reuse:0",
+            "attempt-one:content-reuse:1",
+            new AcceptanceRetainedDiagnostic("first-run.err", "first-run-sha"));
+        first.RecordExecution(_lane, PassedResult());
+        Assert.NotNull(first.CompleteAttempt());
+
+        var second = CreateCache(new GoalId("22222222222222222222222222222222"), "attempt-two", "tree-b", "main-b");
+
+        Assert.Null(second.TryReuse(_lane));
+    }
+
     public void Dispose()
     {
         DeleteDirectoryWithRetry(_root);
