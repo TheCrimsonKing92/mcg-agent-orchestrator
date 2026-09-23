@@ -1,14 +1,15 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Records only the obligations owned by a successful full gate; other evidence still blocks landing.
 internal static class AcceptanceCriterionEvidence
 {
-    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel)
+    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string? executionDirectory = null)
     {
-        var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel);
+        var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, executionDirectory);
         return diagnostic is null ? null : new ConductorAdvanceOutcome.Held(
             GoalLifecycleState.Verified, diagnostic, StableIdentity: HoldIdentity(goal, candidateSha));
     }
@@ -23,9 +24,9 @@ internal static class AcceptanceCriterionEvidence
             System.Text.Encoding.UTF8.GetBytes(payload)));
     }
 
-    public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel)
+    public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string? executionDirectory = null)
     {
-        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null, executionDirectory);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
             .Where(IsBoundOrNonAcceptanceObligation)
@@ -94,7 +95,7 @@ internal static class AcceptanceCriterionEvidence
             }
         }
 
-        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, executionDirectory: null);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(normalizedCandidate)
             .Where(IsBoundOrNonAcceptanceObligation)
@@ -141,7 +142,8 @@ internal static class AcceptanceCriterionEvidence
         Goal goal,
         string? candidateSha,
         AgentOrchestratorKernel? kernel,
-        string? evidenceSource)
+        string? evidenceSource,
+        string? executionDirectory)
     {
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
         if (outstanding.Count == 0) return null;
@@ -150,6 +152,8 @@ internal static class AcceptanceCriterionEvidence
             return "Acceptance passed but criterion evidence could not be recorded: the authoritative kernel or candidate SHA is unavailable. No obligation was resolved.";
         }
 
+        TryCarryPatchEquivalentBindings(goal, candidateSha, kernel, executionDirectory);
+        outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
         var matching = outstanding
             .Where(item =>
                 item.Owner == CriterionEvidenceOwner.Acceptance &&
@@ -177,6 +181,66 @@ internal static class AcceptanceCriterionEvidence
         }
 
         return null;
+    }
+
+    private static bool TryCarryPatchEquivalentBindings(
+        Goal goal,
+        string candidateSha,
+        AgentOrchestratorKernel kernel,
+        string? executionDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(executionDirectory)) return false;
+        var eligible = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+            .Where(item =>
+                !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
+                !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                (item.Owner == CriterionEvidenceOwner.Acceptance &&
+                 item.State == CriterionEvidenceState.Pending &&
+                 string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal) ||
+                 item.Owner == CriterionEvidenceOwner.Operator &&
+                 item.State == CriterionEvidenceState.Satisfied))
+            .ToArray();
+        var oldHeads = eligible.Select(item => item.ExpectedCandidateSha!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (eligible.Length == 0 || oldHeads.Length != 1 ||
+            !GoalWorktrees.TryComputePatchEquivalence(executionDirectory, oldHeads[0], candidateSha, out var evidence))
+        {
+            return false;
+        }
+
+        foreach (var obligation in eligible)
+        {
+            var oldReceiptId = obligation.ReceiptId;
+            kernel.MapCriterionEvidenceOwner(
+                goal.Id,
+                obligation.CriterionIndex,
+                obligation.CriterionVersion,
+                obligation.Owner,
+                "conductor patch-equivalent rebase carry",
+                obligation.RequiredScope,
+                obligation.FindingStableId,
+                candidateSha);
+            if (obligation.Owner == CriterionEvidenceOwner.Operator)
+            {
+                kernel.RecordCriterionEvidence(
+                    goal.Id,
+                    obligation.Id,
+                    CriterionEvidenceOwner.Operator,
+                    candidateSha,
+                    $"{oldReceiptId}:carried:{candidateSha}",
+                    obligation.RequiredScope,
+                    passed: true,
+                    detail: $"Carried operator evidence from {oldHeads[0]} to patch-equivalent candidate {candidateSha}; {evidence}.");
+            }
+        }
+
+        GoalOperationJournal.Completed(
+            executionDirectory,
+            goal,
+            "conductor:criterion-evidence-patch-carry",
+            $"oldHead={oldHeads[0]}; newHead={candidateSha}; equivalence={evidence}");
+        return true;
     }
 
     private static bool IsBoundOrNonAcceptanceObligation(CriterionEvidenceObligation obligation) =>
