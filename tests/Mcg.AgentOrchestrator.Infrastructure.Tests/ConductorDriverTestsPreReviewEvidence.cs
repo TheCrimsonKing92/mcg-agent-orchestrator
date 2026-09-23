@@ -1373,21 +1373,17 @@ public sealed class ConductorDriverTestsPreReviewEvidence
     public void FocusedRequestSplitter_PreservesUnderLimitItemAndRefusesUnsafeOversizedShapes()
     {
         const string underLimit = "FullyQualifiedName~ConductorDriverTestsPreReviewEvidence";
-        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
-            "Infrastructure.Tests", underLimit, out var unchanged));
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", underLimit, out var unchanged));
         Assert.Equal(["Infrastructure.Tests: " + underLimit], unchanged);
 
         var oversizedClause = "FullyQualifiedName~" + new string('A', 1100);
         var withFittingSibling = $"FullyQualifiedName~SmallTests|{oversizedClause}";
-        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
-            "Infrastructure.Tests", withFittingSibling, out var unsplittable));
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", withFittingSibling, out var unsplittable));
         Assert.Equal(["Infrastructure.Tests: " + withFittingSibling], unsplittable);
 
-        var nearLimitClause = "FullyQualifiedName~" +
-            new string('A', 1010 - "FullyQualifiedName~".Length);
+        var nearLimitClause = "FullyQualifiedName~" + new string('A', 1010 - "FullyQualifiedName~".Length);
         var safelySplittable = $"FullyQualifiedName~SmallTests|{nearLimitClause}";
-        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
-            "Infrastructure.Tests", safelySplittable, out var nearLimitItems));
+        Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", safelySplittable, out var nearLimitItems));
         Assert.Equal(2, nearLimitItems.Count);
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
@@ -1396,12 +1392,16 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             $"{nearLimitRejection.Code}: {nearLimitRejection.Detail}");
         Assert.Equal(nearLimitItems.Count, nearLimitChecks.Count);
 
-        var positivePrefix = string.Join('|', Enumerable.Range(1, 50)
-            .Select(index => $"FullyQualifiedName~ShapeClass{index:D2}"));
-        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
-            "Infrastructure.Tests", $"{positivePrefix}&FullyQualifiedName~Required", out _));
-        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems(
-            "Infrastructure.Tests", $"{positivePrefix}|FullyQualifiedName!~Excluded", out _));
+        var positivePrefix = string.Join('|', Enumerable.Range(1, 50).Select(index => $"FullyQualifiedName~ShapeClass{index:D2}"));
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", $"{positivePrefix}&FullyQualifiedName~Required", out _));
+        Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", $"{positivePrefix}|FullyQualifiedName!~Excluded", out _));
+        var unsafePrefixes = new[] { "FullyQualifiedName~ExactBoundary&", "FullyQualifiedName!~", "FullyQualifiedName~" };
+        foreach (var prefix in unsafePrefixes)
+        {
+            var exactBoundary = prefix + new string('A', PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength - prefix.Length);
+            Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", exactBoundary, out var unsafeItems));
+            Assert.Equal(["Infrastructure.Tests: " + exactBoundary], unsafeItems);
+        }
     }
 
     [Xunit.Fact]

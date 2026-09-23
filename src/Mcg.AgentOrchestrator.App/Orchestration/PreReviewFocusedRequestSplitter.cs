@@ -31,20 +31,20 @@ internal static partial class PreReviewFocusedRequestSplitter
             return true;
         }
 
-        // The broker counts the optional separator space before normalizing the filter. At the exact
-        // boundary, omit that space so it cannot split here and then repack the same canonical filter.
-        if (filterText.Length <= MaxFocusedEvidenceFilterLength)
-        {
-            items = [$"{alias}:{filterText}"];
-            return true;
-        }
-
         var clauses = filterText.Split('|');
         if (!IsPositiveDisjunction(clauses) ||
             clauses.Any(clause => MeasuredExpressionLength(clause) > MaxFocusedEvidenceFilterLength))
         {
             items = [originalItem];
             return false;
+        }
+
+        // The broker counts the optional separator space before normalizing the filter. At the exact
+        // boundary, omit that space so it cannot split here and then repack the same canonical filter.
+        if (filterText.Length <= MaxFocusedEvidenceFilterLength)
+        {
+            items = [$"{alias}:{filterText}"];
+            return true;
         }
 
         var splitItems = new List<string>();
