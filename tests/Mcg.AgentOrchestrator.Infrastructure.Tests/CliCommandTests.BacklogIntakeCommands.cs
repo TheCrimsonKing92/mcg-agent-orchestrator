@@ -841,9 +841,10 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel", "test", "--spine"]));
 
-        // Backlog commands that do not inspect dependencies skip state and stay concurrent with a conductor.
-        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title"]));
-        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
+        // Backlog commands that inspect neither dependencies nor similarity skip state and stay concurrent.
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title", "--no-similar"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title", "--depends-on", "abc"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-similar", "query"]));
@@ -866,7 +867,8 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-show", "abc"]));
         Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-depends", "abc", "--on", "def"]));
         Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-add", "title", "--depends-on", "abc"]));
-        Xunit.Assert.False(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-add", "title"]));
+        Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-add", "title"]));
+        Xunit.Assert.False(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-add", "title", "--no-similar"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["conduct", "abc123"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
@@ -1711,23 +1713,38 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var noteOnly = await store.AddAsync("Note-only pointer");
         await store.AppendNoteAsync(noteOnly.Id, "noteonlyuniqueword");
         var kernel = new AgentOrchestratorKernel();
-        var completedGoalId = new GoalId("abcdef12abcdef12abcdef12abcdef12");
-        kernel.AddTerminalGoalMetadataOnlyStubs([
-            new TerminalGoalMetadata(
-                completedGoalId,
-                GoalStatus.Completed,
-                "crossstatusuniqueword completed goal",
-                CreatedAt: new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero),
-                TerminatedAt: new DateTimeOffset(2026, 9, 2, 0, 0, 0, TimeSpan.Zero))
-        ]);
+        var completedGoal = kernel.CreateGoal(
+            "crossstatusuniqueword completed goal",
+            [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        kernel = WithGoalStatus(kernel, completedGoal.Id, GoalStatus.Completed);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
 
-        var statusOutput = ExecuteCliAndCapture(["backlog-similar", "crossstatusuniqueword"], kernel, workspace);
-        var noteOutput = ExecuteCliAndCapture(["backlog-similar", "noteonlyuniqueword"], kernel, workspace);
+        var statusOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-similar", "crossstatusuniqueword"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var noteOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-similar", "noteonlyuniqueword"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
 
         Xunit.Assert.Contains($"kind=backlog id={open.Id[..8]} status=Open title=Open pointer updated=", statusOutput);
         Xunit.Assert.Contains($"kind=backlog id={done.Id[..8]} status=Done title=Done pointer updated=", statusOutput);
         Xunit.Assert.Contains($"kind=backlog id={superseded.Id[..8]} status=Superseded title=Superseded pointer updated=", statusOutput);
-        Xunit.Assert.Contains($"kind=goal id={completedGoalId.Value[..8]} status=Completed title=crossstatusuniqueword completed goal updated=2026-09-02 rank=", statusOutput);
+        Xunit.Assert.Contains($"kind=goal id={completedGoal.Id.Value[..8]} status=Completed title=crossstatusuniqueword completed goal updated=", statusOutput);
         var firstPointer = noteOutput.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)[0];
         Xunit.Assert.Contains($"kind=backlog id={noteOnly.Id[..8]}", firstPointer);
         Xunit.Assert.DoesNotContain(" excerpt=", statusOutput);
@@ -1801,6 +1818,28 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.StartsWith("Added:", advisoryLines[0], StringComparison.Ordinal);
         Xunit.Assert.True(similarIndex > 0);
         Xunit.Assert.InRange(advisoryLines.Count(line => line.StartsWith("- kind=", StringComparison.Ordinal)), 1, 3);
+
+        var kernel = new AgentOrchestratorKernel();
+        var completedGoal = kernel.CreateGoal(
+            "goaladvisoryuniqueword completed goal",
+            [new TaskSpec(TaskId.New(), "Done", AgentRole.Developer)]);
+        kernel = WithGoalStatus(kernel, completedGoal.Id, GoalStatus.Completed);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var goalAdvisory = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-add", "Completed goal advisory", "goaladvisoryuniqueword"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        Xunit.Assert.Contains("Similar:", goalAdvisory);
+        Xunit.Assert.Contains($"kind=goal id={completedGoal.Id.Value[..8]} status=Completed", goalAdvisory);
 
         var suppressed = ExecuteCliAndCapture(
             ["backlog-add", "Suppressed advisory", "advisoryuniqueword", "--no-similar"],

@@ -349,7 +349,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
-        "Add a backlog item and print advisory similarity pointers unless suppressed.",
+        "Add a backlog item. Prints advisory similarity pointers unless suppressed.",
         ["--title", "--text-file", "--body-file", "--depends-on", "--no-similar", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogUpdate = new(
