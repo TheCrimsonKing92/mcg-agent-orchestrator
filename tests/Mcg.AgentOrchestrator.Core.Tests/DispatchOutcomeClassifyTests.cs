@@ -417,7 +417,7 @@ public sealed class DispatchOutcomeClassifyTests
     }
 
     [Xunit.Fact]
-    public void Classify_CheckpointResumedDeveloperWithChangedBaseline_Fails()
+    public void Classify_CheckpointResumedDeveloperWithChangedBaseline_Completes()
     {
         const string checkpointCommit = "48422231916172e8d172a0cc0428d13d222c071c";
         const string changedBaseline = "58422231916172e8d172a0cc0428d13d222c071c";
@@ -431,12 +431,12 @@ public sealed class DispatchOutcomeClassifyTests
                 WorkerResultStdout("pass - focused verification completed"),
                 standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
 
-        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void Classify_RetryDeveloperVerifiedNoChangeWithoutConvergenceReceipt_Fails()
+    public void Classify_RetryDeveloperVerifiedNoChangeWithoutConvergenceReceipt_Completes()
     {
         const string baseCommit = "48422231916172e8d172a0cc0428d13d222c071c";
         var verification = WorkerResultVerification(
@@ -448,7 +448,108 @@ public sealed class DispatchOutcomeClassifyTests
             RetryTaskWithBaseCommit(baseCommit, includeContextReceipt: false),
             verification);
 
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_FirstDispatchVerifiedNoChangeWithRecognisedEvidence_Completes()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            FirstDispatchTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            WorkerResultVerification(
+                1,
+                WorkerResultStdout("pass - focused verification completed"),
+                standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.None, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_VerifiedNoChangeRetainsWorkerResultArtifact_Completes()
+    {
+        var task = FirstDispatchTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c");
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed"),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true));
+        task.RecordVerification(verification);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        var retained = Xunit.Assert.Single(task.VerificationHistory);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
+        Xunit.Assert.Contains("WORKER_RESULT:", retained.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("END_WORKER_RESULT", retained.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.True(WorkerResultBlockers.TryFindTests(retained, out var tests));
+        Xunit.Assert.Equal("pass - focused verification completed", tests);
+        Xunit.Assert.Contains("tests: pass - focused verification completed", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_NoChangeWithoutWorkerResult_StillFails()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            FirstDispatchTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            Verification(
+                1,
+                WorkerResultStdout("pass - focused verification completed"),
+                VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_FirstDispatchNoChangeWithFailingTests_StillFails()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            FirstDispatchTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            WorkerResultVerification(
+                1,
+                WorkerResultStdout("fail - focused verification failed"),
+                standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_FirstDispatchNoChangeWithDeferredTests_StillFails()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            FirstDispatchTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            WorkerResultVerification(
+                1,
+                WorkerResultStdout("deferred - acceptance gate owns the out-of-scope check"),
+                standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true)));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Classify_IncompleteScopeWinsOverRecognisedNoChangeEvidence()
+    {
+        var verification = WorkerResultVerification(
+            1,
+            WorkerResultStdout("pass - focused verification completed", assignedScopeComplete: false),
+            standardError: VerifiedNoChangeDiagnostics(verificationRecognized: true))
+            with { AssignedScopeComplete = false };
+
+        var outcome = DispatchFailureClassifier.Classify(
+            FirstDispatchTaskWithBaseCommit("48422231916172e8d172a0cc0428d13d222c071c"),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=verified-no-change-round", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 

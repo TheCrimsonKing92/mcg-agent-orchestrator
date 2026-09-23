@@ -2097,10 +2097,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
-    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_hung_wrapper_fails_when_file_role_worktree_evidence_missing")]
-    [Xunit.InlineData(AgentRole.Developer)]
-    [Xunit.InlineData(AgentRole.Tester)]
-    public void BackgroundDispatchRunnerHungWrapperFailsWhenFileRoleWorktreeEvidenceMissing(AgentRole role)
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_hung_wrapper_applies_file_role_verification_evidence_policy")]
+    [Xunit.InlineData(AgentRole.Developer, WorkTaskStatus.Completed)]
+    [Xunit.InlineData(AgentRole.Tester, WorkTaskStatus.Failed)]
+    public void BackgroundDispatchRunnerHungWrapperAppliesFileRoleVerificationEvidencePolicy(AgentRole role, WorkTaskStatus expectedStatus)
 {
     var root = CreateSeededDispatchRepository();
     var now = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
@@ -2141,7 +2141,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     Assert.Equal(1, completed.ExitCode);
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(expectedStatus, task.Status);
     Assert.True(File.Exists(exit));
     AssertExitCode(exit, 1);
     Assert.Contains("wrapper appears hung after codex final output", task.LastVerification!.StandardError, StringComparison.Ordinal);
@@ -2855,7 +2855,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     }
 
     [Xunit.Fact]
-    public void BackgroundDispatchRunnerDeveloperPassingVerificationNoChangeReportsNoChangeEvidence()
+    public void BackgroundDispatchRunnerDeveloperPassingVerificationNoChangeCompletes()
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
@@ -2880,15 +2880,14 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        var failure = Assert.Single(goal.Timeline.Where(evt =>
-            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
-        Assert.Contains("DISPATCH_REJECTED role=Developer", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("verification_recognized=true", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("reason=no-change-evidence", failure.Message, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Contains("WORKER_RESULT:", task.LastVerification!.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+        Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("rule=verified-no-change-round", StringComparison.Ordinal));
         Assert.Contains(
-            "detail=\"recognized verification evidence but no relevant post-dispatch file change was recorded\"",
-            failure.Message,
+            "verification_recognized=true",
+            task.LastVerification.StandardError,
             StringComparison.Ordinal);
     }
 
@@ -3302,8 +3301,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             otherwiseSuccessfulEvidence with { HasFatalOrchestratorFailure = true }));
     }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciled_developer_without_change_still_fails_change_evidence")]
-    public void BackgroundDispatchRunnerReconciledDeveloperWithoutChangeStillFailsChangeEvidence()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciled_developer_with_verified_no_change_completes")]
+    public void BackgroundDispatchRunnerReconciledDeveloperWithVerifiedNoChangeCompletes()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -3325,7 +3324,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Equal(1, task.LastVerification.ObservedRootExitCode);
     Assert.Equal(0, task.LastVerification.ChildExitCode);
@@ -3340,7 +3339,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         task.LastVerification.StandardError,
         StringComparison.Ordinal);
     var classified = DispatchFailureClassifier.Classify(task, task.LastVerification);
-    Assert.Contains("rule=required-file-change-evidence-missing", classified.ClassifierReceipt, StringComparison.Ordinal);
+    Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, classified.Kind);
+    Assert.Contains("rule=verified-no-change-round", classified.ClassifierReceipt, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_clean_worktree_nonzero_exit_without_evidence_stays_failed")]
