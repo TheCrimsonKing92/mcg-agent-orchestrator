@@ -5,8 +5,6 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliAttentionQueryCommand
 {
-    private const int MaxHydratedGoals = 256;
-
     internal static bool IsAttentionQueryCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("attention", StringComparison.OrdinalIgnoreCase) &&
         (args.Count == 1 ||
@@ -29,7 +27,7 @@ internal static class CliAttentionQueryCommand
             return false;
 
         var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
-        if (metadata.Count > MaxHydratedGoals || metadata.Any(goal =>
+        if (metadata.Any(goal =>
                 goal.Status.Equals(nameof(GoalStatus.Parked), StringComparison.OrdinalIgnoreCase)))
             return false;
 

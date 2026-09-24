@@ -11,7 +11,6 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("attention", "dismiss", "abc10000")]
     [Xunit.InlineData("attention", "dismiss", "--item", "item-id")]
     [Xunit.InlineData("readiness", "abc10000")]
-    [Xunit.InlineData("next", "abc10000")]
     public async Task MutatingFormsStayOnWriterPath(params string[] args)
     {
         Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
@@ -22,6 +21,26 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
         Xunit.Assert.Contains("Full-kernel hydration", error.Message, StringComparison.Ordinal);
         Xunit.Assert.Equal(1, repository.FullLoadAttempts);
     }
+
+    [Xunit.Fact]
+    public async Task NextRetainsItsExistingQueryOnlyCompositionWhileUsingTheWriterPath()
+    {
+        var args = new[] { "next", "abc10000" };
+        Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+        Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
+        var repository = new ProbeStateRepository(new AgentOrchestratorKernel());
+        var error = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository));
+        Xunit.Assert.Contains("Full-kernel hydration", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(1, repository.FullLoadAttempts);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("attention")]
+    [Xunit.InlineData("attention", "list")]
+    [Xunit.InlineData("attention", "show")]
+    public void AttentionReadFormsRetainExecutionCompositionForDeclinedCalls(params string[] args) =>
+        Xunit.Assert.Equal(CliCommandCapability.Execution, CliCommandCapabilities.Classify(args));
 
     [Xunit.Theory]
     [Xunit.InlineData("attention")]
@@ -46,10 +65,13 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
                 ref agents, ref profiles, ref currentGoal, out _)));
             Xunit.Assert.Equal(string.Empty, output);
 
+            var declined = 0;
             var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
                 CliReadOnlyStartupHydration.ExecuteStartupCommand(args, repository, workspace,
-                    ref agents, providers, ref profiles, ref currentGoal, hydrated: false));
+                    ref agents, providers, ref profiles, ref currentGoal, hydrated: false,
+                    onReadOnlyDeclined: () => declined++));
             Xunit.Assert.Contains("Full-kernel hydration", error.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, declined);
             Xunit.Assert.Equal(1, repository.FullLoadAttempts);
         }
         finally

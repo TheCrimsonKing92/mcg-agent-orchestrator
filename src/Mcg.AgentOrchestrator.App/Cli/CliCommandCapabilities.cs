@@ -19,7 +19,7 @@ internal static class CliCommandCapabilities
         "tasks", "task", "status", "goals", "monitor-goal",
         "architecture", "config", "agent-list", "worker-profile-list", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-depends", "backlog-similar", "goal-events", "timeline",
-        "dashboard", "transcript", "owner-digest"
+        "dashboard", "transcript", "owner-digest", "next"
     };
 
     public static CliCommandCapability Classify(IReadOnlyList<string> args)
@@ -31,8 +31,6 @@ internal static class CliCommandCapabilities
             return CliCommandCapability.DashboardHost;
 
         return QueryCommands.Contains(args[0]) ||
-               CliAttentionQueryCommand.IsAttentionQueryCommand(args) ||
-               CliNextFullQueryCommand.IsNextFullQueryCommand(args) ||
                CliCommandHelp.IsCommandSpecificHelp(args)
             ? CliCommandCapability.QueryOnly
             : CliCommandCapability.Execution;
