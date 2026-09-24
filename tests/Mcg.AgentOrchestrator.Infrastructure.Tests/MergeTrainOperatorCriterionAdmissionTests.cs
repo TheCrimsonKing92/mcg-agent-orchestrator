@@ -23,7 +23,7 @@ public sealed class MergeTrainOperatorCriterionAdmissionTests
     }
 
     [Fact]
-    public void GoalsWithoutOperatorOwnedCriteriaRemainTrainEligible()
+    public void TrainAdmissionRequiresAuthoritativeSpecButNoOperatorCriteriaRemainEligible()
     {
         var (_, noSpec) = SimpleGoal("No authoritative refined spec");
         var (workerKernel, noObligations) = SimpleGoal("Refined with worker criterion only");
@@ -40,10 +40,10 @@ public sealed class MergeTrainOperatorCriterionAdmissionTests
         var excluded = ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds(
             [noSpec, noObligations, eligible]);
 
-        Assert.DoesNotContain(noSpec.Id.Value, excluded);
+        Assert.Contains(noSpec.Id.Value, excluded);
         Assert.DoesNotContain(noObligations.Id.Value, excluded);
         Assert.DoesNotContain(eligible.Id.Value, excluded);
-        Assert.Null(AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(noSpec));
+        Assert.Contains("authoritative refined spec", AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(noSpec));
         Assert.Null(AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(noObligations));
     }
 

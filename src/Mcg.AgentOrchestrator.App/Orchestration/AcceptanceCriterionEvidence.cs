@@ -29,7 +29,9 @@ internal static class AcceptanceCriterionEvidence
     internal static string? DescribeTrainOperatorEvidenceGap(Goal goal)
     {
         var version = goal.AuthoritativeRefinedSpecVersion;
-        if (version is null || version.Spec.OperatorOwnedAcceptanceCriteria.Count == 0)
+        if (version is null)
+            return "Train admission requires an authoritative refined spec to establish operator-owned criteria.";
+        if (version.Spec.OperatorOwnedAcceptanceCriteria.Count == 0)
             return null;
 
         var obligations = goal.CriterionEvidenceObligations
