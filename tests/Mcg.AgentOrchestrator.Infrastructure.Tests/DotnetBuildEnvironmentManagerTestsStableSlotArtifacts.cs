@@ -193,8 +193,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         Assert.Contains("busy", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_omits_unleased_active_testhost_from_busy_slot_diagnostic")]
-    public void DotnetBuildEnvironmentManagerOmitsUnleasedActiveTesthostFromBusySlotDiagnostic()
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_classifies_unleased_active_testhost_slot_as_busy")]
+    public void DotnetBuildEnvironmentManagerClassifiesUnleasedActiveTesthostSlotAsBusy()
     {
         var slot0 = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         using var sleeper = StartSleepProcess();
@@ -210,11 +210,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
             {
                 var ex = Assert.Throws<DotnetBuildSlotsBusyException>(() =>
                     DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(slot0, TimeSpan.Zero));
-                Assert.Empty(ex.SlotsBusy.BusySlots);
+                Assert.Contains(ex.SlotsBusy.BusySlots, slot => slot.SlotIndex == 0 && slot.OwnerProcessId == sleeper.Id);
             });
 
             Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
-            Assert.Contains("busySlots=none", output, StringComparison.Ordinal);
+            Assert.Contains($"slot-0:pid-{sleeper.Id}", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -668,11 +668,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
 
             var busy = Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(result);
             Assert.Equal(slot0.LeaseId, busy.WantedBy);
-            Assert.Empty(busy.BusySlots);
+            Assert.Contains(busy.BusySlots, slot => slot.SlotIndex == 0 && slot.OwnerProcessId == sleeper.Id);
             Assert.Contains("LOCK ", output, StringComparison.Ordinal);
             Assert.Contains($"path=\"{lockedPath}\"", output, StringComparison.Ordinal);
             Assert.Contains("SLOTS_BUSY ", output, StringComparison.Ordinal);
-            Assert.Contains("busySlots=none", output, StringComparison.Ordinal);
             Assert.DoesNotContain("BUILD_LOCK_BLOCKED ", output, StringComparison.Ordinal);
         }
         finally

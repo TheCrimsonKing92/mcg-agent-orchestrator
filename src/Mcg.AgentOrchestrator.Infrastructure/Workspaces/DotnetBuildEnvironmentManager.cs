@@ -1503,7 +1503,7 @@ public static class DotnetBuildEnvironmentManager
         for (var slot = 0; slot < slotCount; slot++)
         {
             var wait = TryReadStableSlotExecutionWait(slot, environmentForSlot(slot), processSnapshot, out var held);
-            if (held)
+            if (held || wait.OwnerProcessId.HasValue || wait.UnavailableProcessId.HasValue || wait.UnavailableStatus.HasValue)
             {
                 waits.Add(wait);
             }
@@ -1525,10 +1525,10 @@ public static class DotnetBuildEnvironmentManager
         out bool held)
     {
         held = IsExecutionLockHeld(environment.ExecutionLockPath);
-        var metadata = held ? TryReadExecutionLeaseMetadata(environment.ExecutionLockPath) : null;
+        var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         var ownerProcessId = TryFindActiveSlotArtifactConsumer(environment, snapshot)?.ProcessId ??
-            metadata?.OwnerProcessId;
+            (held ? metadata?.OwnerProcessId : null);
         var unavailable = FindUnavailableSlotCandidate(environment, snapshot, metadata);
         return new DotnetBuildStableSlotWait(
             slotIndex,

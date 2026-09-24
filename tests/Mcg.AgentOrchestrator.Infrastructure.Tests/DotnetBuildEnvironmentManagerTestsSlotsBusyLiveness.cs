@@ -9,8 +9,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness : Dotnet
         var heldEnvironment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var releasedEnvironment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 1);
         using var holder = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(heldEnvironment);
-        Directory.CreateDirectory(Path.GetDirectoryName(releasedEnvironment.ExecutionLockPath)!);
-        File.WriteAllText(releasedEnvironment.ExecutionLockPath, Environment.ProcessId.ToString());
+        using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(releasedEnvironment))
+        {
+        }
+        Assert.Contains(Environment.ProcessId.ToString(),
+            File.ReadAllText(releasedEnvironment.ExecutionLockPath), StringComparison.Ordinal);
         DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
             new ProcessCommandLineSnapshot(new Dictionary<int, string>());
         try
