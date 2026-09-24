@@ -2044,29 +2044,18 @@ internal sealed partial class ConductorDriver
                 string.Equals(candidateSha, reviewedCandidateSha, StringComparison.OrdinalIgnoreCase);
             if (writableBlockerIds.Length > 0 && requestTargetsCurrentCandidate)
             {
-                var reason = candidateShaAvailable
-                    ? "unresolved-writable-blockers-on-unchanged-candidate"
+                var reason = candidateShaAvailable ? "unresolved-writable-blockers-on-unchanged-candidate"
                     : "candidate-sha-unavailable-with-unresolved-writable-blockers";
-                foreach (var requestIdentity in requestingFindings
-                             .Select(finding => BuildFindingEvidenceIdentity(finding.EvidenceRequest!))
-                             .Distinct(StringComparer.Ordinal))
-                {
-                    var requestId = CreateFindingEvidenceRequestId(requestIdentity);
-                    _recordFindingEvidenceSuppressed(
-                        goal.Id,
-                        requestingTask.Id,
-                        telemetryCandidateSha,
-                        writableBlockerIds,
-                        requestId,
+                requestingFindings = ReviewerFindingEvidenceSuppressionRouting.SelectAndSuppress(
+                    writableBlockerIds, requestingFindings, requestingTask, candidateSha,
+                    BuildFindingEvidenceIdentity, requestIdentity => _recordFindingEvidenceSuppressed(
+                        goal.Id, requestingTask.Id, telemetryCandidateSha, writableBlockerIds,
+                        CreateFindingEvidenceRequestId(requestIdentity),
                         suppressionRoute.ChosenOwner ?? throw new InvalidOperationException("Writable finding suppression requires a feasible upstream owner."),
                         reason,
-                        CreateFindingEvidenceSuppressionIdentity(
-                            telemetryCandidateSha,
-                            requestIdentity,
-                            writableBlockerIds));
-                }
-
-                return false;
+                        CreateFindingEvidenceSuppressionIdentity(telemetryCandidateSha,
+                            requestIdentity, writableBlockerIds)));
+                if (requestingFindings.Length == 0) return false;
             }
         }
 

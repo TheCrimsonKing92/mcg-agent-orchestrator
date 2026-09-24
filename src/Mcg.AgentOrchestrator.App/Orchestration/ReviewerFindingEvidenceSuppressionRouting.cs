@@ -9,6 +9,42 @@ internal sealed record ReviewerFindingEvidenceSuppressionRoute(
 
 internal static class ReviewerFindingEvidenceSuppressionRouting
 {
+    internal static ReviewFinding[] SelectAndSuppress(
+        IReadOnlyList<string> writableBlockerIds,
+        ReviewFinding[] requestingFindings,
+        TaskSpec requestingTask,
+        string? candidateSha,
+        Func<FindingEvidenceRequest, string> requestIdentity,
+        Action<string> recordSuppression)
+    {
+        var selfExempt = SelectSelfExemptRequestingFindings(
+            writableBlockerIds, requestingFindings, requestingTask, candidateSha);
+        foreach (var identity in requestingFindings.Except(selfExempt)
+                     .Select(finding => requestIdentity(finding.EvidenceRequest!))
+                     .Distinct(StringComparer.Ordinal))
+        {
+            recordSuppression(identity);
+        }
+
+        return selfExempt;
+    }
+
+    internal static ReviewFinding[] SelectSelfExemptRequestingFindings(
+        IReadOnlyList<string> writableBlockerIds,
+        IReadOnlyList<ReviewFinding> requestingFindings,
+        TaskSpec requestingTask,
+        string? candidateSha) =>
+        requestingFindings.Where(finding =>
+            finding.State == ReviewFindingState.Open &&
+            finding.EvidenceRequest is { Selections.Count: > 0 } &&
+            !string.IsNullOrWhiteSpace(candidateSha) &&
+            string.Equals(requestingTask.LastVerification?.ReviewedCommit, candidateSha,
+                StringComparison.OrdinalIgnoreCase) &&
+            FindingEvidenceExecutionClassifier.Classify(requestingTask, finding, candidateSha) ==
+                FindingEvidenceExecutionState.PendingExecution &&
+            writableBlockerIds.All(id => string.Equals(id, finding.StableId, StringComparison.Ordinal)))
+            .ToArray();
+
     internal static ReviewerFindingEvidenceSuppressionRoute Resolve(
         TaskVerificationRecord? verification,
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
