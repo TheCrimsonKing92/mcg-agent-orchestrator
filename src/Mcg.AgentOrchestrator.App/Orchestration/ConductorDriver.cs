@@ -269,6 +269,7 @@ internal sealed partial class ConductorDriver
         _getWorkerAdmissionCapacity = () => ConductorBatchLoop.WorkerAdmissionCapacity;
         _parallelAcceptanceEnabled = true;
         _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
+        _workerBuildArtifactsPath = goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId, _cohortCleanupHooks.BuildStorageRoot);
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
@@ -808,6 +809,7 @@ internal sealed partial class ConductorDriver
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
             kernel.RetryTaskAutomatically(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
+        _workerBuildRecoveryRetry = kernel.RetryTaskAfterWorkerBuildCheckRecovery;
         ConfigureDeveloperCompletionStructuralPreflightRetry(kernel);
         _recordTaskNote = (goalId, taskId, message) =>
         {
@@ -1300,7 +1302,9 @@ internal sealed partial class ConductorDriver
         Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
         ApparatusRedGate? apparatusRedGate = null,
         Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null,
-        Action<Goal, DeveloperBranchIntegrationResult>? recordPreDispatchIntegrationReceipt = null)
+        Action<Goal, DeveloperBranchIntegrationResult>? recordPreDispatchIntegrationReceipt = null,
+        Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null,
+        Func<GoalId, string>? workerBuildArtifactsPath = null)
     {
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
@@ -1318,6 +1322,8 @@ internal sealed partial class ConductorDriver
             : (goal, _) => startRecordedDispatches(goal);
         _reconcileExitedDispatch = reconcileExitedDispatch ?? ((_, _) => false);
         _beforeFailedGoalRecoveryEffect = beforeFailedGoalRecoveryEffect;
+        _workerBuildRecoveryRetry = workerBuildRecoveryRetry;
+        _workerBuildArtifactsPath = workerBuildArtifactsPath ?? (goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId));
         _buildServerShutdownTimeout = buildServerShutdownTimeout ?? DefaultBuildServerShutdownTimeout;
         _buildServerShutdown = timeout => RunBoundedBuildServerShutdown(
             buildServerShutdown ?? (() => { }),
