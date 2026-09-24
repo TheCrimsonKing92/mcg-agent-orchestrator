@@ -4840,11 +4840,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     leaseLock?.Dispose();
                     leaseLock = null;
                     environment = nextEnvironment;
-                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-                        environment,
-                        cancellationToken,
-                        _timeProvider,
-                        _leaseSleep, _executionContext?.ArtifactCustody);
+                    _testOverrides.OnBuildArtifactIoRetryLeaseReleasedForTests?.Invoke();
+                    leaseLock = AcquireCheckPermit(environment, goalId, waitForPermit, cancellationToken);
                 },
                 cancellationToken).ConfigureAwait(false);
 

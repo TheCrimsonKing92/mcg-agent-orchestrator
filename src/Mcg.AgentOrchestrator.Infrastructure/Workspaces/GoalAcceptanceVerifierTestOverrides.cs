@@ -20,6 +20,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal TimeSpan? StructuralCoveragePermitWaitBound { get; set; }
     internal TimeSpan? StructuralCoveragePermitWaitHeartbeatInterval { get; set; }
     internal Action<AcceptanceGateProgress>? OnStructuralCoveragePermitWaitForTests { get; set; }
+    internal Action? OnBuildArtifactIoRetryLeaseReleasedForTests { get; set; }
     internal bool PartitionVerdictWithinAttemptRerunEnabled { get; set; } = true;
     internal DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
 
@@ -43,6 +44,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         StructuralCoveragePermitWaitBound = StructuralCoveragePermitWaitBound,
         StructuralCoveragePermitWaitHeartbeatInterval = StructuralCoveragePermitWaitHeartbeatInterval,
         OnStructuralCoveragePermitWaitForTests = OnStructuralCoveragePermitWaitForTests,
+        OnBuildArtifactIoRetryLeaseReleasedForTests = OnBuildArtifactIoRetryLeaseReleasedForTests,
         PartitionVerdictWithinAttemptRerunEnabled = PartitionVerdictWithinAttemptRerunEnabled,
         BaseBuildCacheForTests = BaseBuildCacheForTests
     };
