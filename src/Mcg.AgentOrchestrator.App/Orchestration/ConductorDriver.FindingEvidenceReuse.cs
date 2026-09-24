@@ -95,13 +95,29 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        _recordFindingEvidenceRequest(
-            goal.Id,
-            trigger.TriggeringTask.Id,
-            $"finding-evidence disposition=pending-execution-gate; role={trigger.TriggeringTask.RequiredRole}; " +
-            $"task_id={trigger.TriggeringTask.Id}; " +
-            $"finding_ids={string.Join(",", developerOwnedFindings.Select(item => item.StableId))}; " +
-            $"candidate_sha={candidateSha}; deferred_developer_task_id={upstreamDeveloper.Id}");
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(
+                trigger.TriggeringTask.LastVerification, out var round, out _))
+        {
+            throw new InvalidOperationException("Pending finding evidence has no review finding round.");
+        }
+
+        var findingRound = BuildFindingRoundFingerprint(trigger.TriggeringTask, round);
+        var requestIdentity = BuildFindingEvidenceRequestIdentity(developerOwnedFindings);
+        var guard = $"candidate_sha={candidateSha}; finding_round={findingRound}; request_identity={requestIdentity}";
+        if (!goal.Timeline.Any(evt =>
+                evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+                evt.TaskId == trigger.TriggeringTask.Id &&
+                evt.Message.Contains("disposition=pending-execution-gate;", StringComparison.Ordinal) &&
+                evt.Message.Contains(guard, StringComparison.Ordinal)))
+        {
+            _recordFindingEvidenceRequest(
+                goal.Id,
+                trigger.TriggeringTask.Id,
+                $"finding-evidence disposition=pending-execution-gate; role={trigger.TriggeringTask.RequiredRole}; " +
+                $"task_id={trigger.TriggeringTask.Id}; " +
+                $"finding_ids={string.Join(",", developerOwnedFindings.Select(item => item.StableId))}; " +
+                $"{guard}; deferred_developer_task_id={upstreamDeveloper.Id}");
+        }
         return true;
     }
 

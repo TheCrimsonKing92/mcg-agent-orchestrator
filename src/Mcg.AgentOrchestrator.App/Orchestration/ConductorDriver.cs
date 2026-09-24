@@ -2271,7 +2271,7 @@ internal sealed partial class ConductorDriver
             .Select(CreateFindingEvidenceArmReceipt)
             .ToArray();
         if (!TryResolveMissingBaseline(
-                goal, policy, runnable, candidateSha!, findingRoundFingerprint, requestContext,
+                goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint, requestContext,
                 evidence, initialArmReceipts,
                 out evidence, out var armReceipts, out var receiptIdentity, out decision))
         {
