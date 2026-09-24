@@ -3076,7 +3076,7 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        if (!HasCompletedPassedVerificationForAllTasks(goal))
+        if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
         {
             return null;
         }
@@ -4049,13 +4049,6 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         string reason, ConductorEscalationKind? kind = null) =>
         Escalate(goal, goal.Id.Value[..8], policy, GoalLifecycleState.Verified, reason, kind);
-
-    private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
-        goal.Tasks.Count > 0 &&
-        goal.Tasks.All(task =>
-            task.Status == WorkTaskStatus.Cancelled ||
-            (task.Status == WorkTaskStatus.Completed &&
-             task.LastVerification is { Succeeded: true }));
 
     internal static AcceptanceVerificationSummary NormalizeNamedFailedChecksForRetry(AcceptanceVerificationSummary acceptance)
     {
