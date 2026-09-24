@@ -19,11 +19,11 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             var kernel = new AgentOrchestratorKernel();
             var first = CreateCompletedGoal(kernel, "First passed cohort member", repo);
             var second = CreateCompletedGoal(kernel, "Second passed cohort member", repo);
-            _ = CreateWorktreeCandidate(repo, first.Id,
+            var firstCandidate = CreateWorktreeCandidate(repo, first.Id,
                 "src/Mcg.AgentOrchestrator.Core/PrelandFirst.cs", "first");
-            _ = CreateWorktreeCandidate(repo, second.Id,
+            var secondCandidate = CreateWorktreeCandidate(repo, second.Id,
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PrelandSecond.cs", "second");
-            foreach (var goal in new[] { first, second })
+            foreach (var (goal, candidate) in new[] { (first, firstCandidate), (second, secondCandidate) })
             {
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
@@ -32,7 +32,7 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 });
                 kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1,
                     CriterionEvidenceOwner.Acceptance, "test",
-                    CriterionEvidenceScopes.FullAcceptanceGate);
+                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
             }
             var trx = WritePassingTrx(repo, "preland-green.trx");
             var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
@@ -55,7 +55,7 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 TimeSpan.FromSeconds(15)), "The pair's passed receipt was not ready for landing.");
 
             var third = CreateCompletedGoal(kernel, "Third ready goal", repo);
-            _ = CreateWorktreeCandidate(repo, third.Id,
+            var thirdCandidate = CreateWorktreeCandidate(repo, third.Id,
                 "tests/Mcg.AgentOrchestrator.Dashboard.Tests/PrelandThird.cs", "third");
             kernel.RecordGoalRefinement(third.Id, new RefinedSpec(third.Objective,
                 ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
@@ -64,7 +64,7 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             });
             kernel.MapCriterionEvidenceOwner(third.Id, 0, 1,
                 CriterionEvidenceOwner.Acceptance, "test",
-                CriterionEvidenceScopes.FullAcceptanceGate);
+                CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: thirdCandidate);
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
             var logPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "preland.jsonl");

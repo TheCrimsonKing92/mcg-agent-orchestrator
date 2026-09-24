@@ -113,7 +113,16 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
             var first = CreateCompletedGoal(kernel, "First background train member", repo);
             var second = CreateCompletedGoal(kernel, "Second background train member", repo);
             var third = CreateCompletedGoal(kernel, "Third background train member", repo);
-            foreach (var goal in new[] { first, second, third })
+            var candidates = new[]
+            {
+                CreateWorktreeCandidate(repo, first.Id,
+                    "tests/Mcg.AgentOrchestrator.Core.Tests/BackgroundFirst.cs", "first"),
+                CreateWorktreeCandidate(repo, second.Id,
+                    "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/BackgroundSecond.cs", "second"),
+                CreateWorktreeCandidate(repo, third.Id,
+                    "tests/Mcg.AgentOrchestrator.Dashboard.Tests/BackgroundThird.cs", "third")
+            };
+            foreach (var (goal, candidate) in new[] { first, second, third }.Zip(candidates))
             {
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
@@ -122,14 +131,8 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                 });
                 kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1,
                     CriterionEvidenceOwner.Acceptance, "test",
-                    CriterionEvidenceScopes.FullAcceptanceGate);
+                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
             }
-            _ = CreateWorktreeCandidate(repo, first.Id,
-                "tests/Mcg.AgentOrchestrator.Core.Tests/BackgroundFirst.cs", "first");
-            _ = CreateWorktreeCandidate(repo, second.Id,
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/BackgroundSecond.cs", "second");
-            _ = CreateWorktreeCandidate(repo, third.Id,
-                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/BackgroundThird.cs", "third");
             var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
                 new AcceptanceVerificationResult(true, false, 0, null,
                     Checks: [new AcceptanceCheckResult("background train", true, 0, null)],
@@ -189,7 +192,16 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
             CreateCompletedGoal(kernel, "Second train member", repo),
             CreateCompletedGoal(kernel, "Third train member", repo)
         };
-        foreach (var goal in goals)
+        var candidates = new[]
+        {
+            CreateWorktreeCandidate(repo, goals[0].Id,
+                "tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs", "first"),
+            CreateWorktreeCandidate(repo, goals[1].Id,
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs", "second"),
+            CreateWorktreeCandidate(repo, goals[2].Id,
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs", "third")
+        };
+        foreach (var (goal, candidate) in goals.Zip(candidates))
         {
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                 ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
@@ -198,14 +210,8 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
             });
             kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1,
                 CriterionEvidenceOwner.Acceptance, "test",
-                CriterionEvidenceScopes.FullAcceptanceGate);
+                CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
         }
-        _ = CreateWorktreeCandidate(repo, goals[0].Id,
-            "tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs", "first");
-        _ = CreateWorktreeCandidate(repo, goals[1].Id,
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs", "second");
-        _ = CreateWorktreeCandidate(repo, goals[2].Id,
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs", "third");
         return (repo, kernel, goals);
     }
 }
