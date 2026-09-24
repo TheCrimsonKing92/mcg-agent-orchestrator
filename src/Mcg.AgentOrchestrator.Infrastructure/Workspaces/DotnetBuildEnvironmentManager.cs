@@ -1503,7 +1503,7 @@ public static class DotnetBuildEnvironmentManager
         for (var slot = 0; slot < slotCount; slot++)
         {
             var wait = TryReadStableSlotExecutionWait(slot, environmentForSlot(slot), processSnapshot, out var held);
-            if (held || wait.OwnerProcessId.HasValue || wait.UnavailableProcessId.HasValue || wait.UnavailableStatus.HasValue)
+            if (held)
             {
                 waits.Add(wait);
             }
