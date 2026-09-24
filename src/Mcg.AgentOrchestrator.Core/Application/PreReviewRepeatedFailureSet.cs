@@ -38,7 +38,7 @@ public static class PreReviewRepeatedFailureSet
             if (previous.Disposition != PreReviewEvidenceDisposition.Red)
                 break;
             if (string.Equals(previous.CandidateSha, lastSha, StringComparison.OrdinalIgnoreCase))
-                continue;
+                break;
             if (previous.FailingTestIdentities.Count != tests.Length ||
                 !previous.FailingTestIdentities.ToHashSet(StringComparer.Ordinal).SetEquals(tests))
                 break;

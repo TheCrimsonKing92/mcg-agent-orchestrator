@@ -48,6 +48,26 @@ public sealed class PreReviewRepeatedFailureSetTests
         Assert.Equal(1, summary.ConsecutiveRounds);
     }
 
+    [Fact]
+    public void InterleavedSameCandidateEndsConsecutiveRun()
+    {
+        var latestRepeated = PreReviewRepeatedFailureSet.Evaluate([
+            Receipt("sha-1", ["Example.A"]),
+            Receipt("sha-2", ["Example.A"]),
+            Receipt("sha-3", ["Example.A"]),
+            Receipt("sha-3", ["Example.A"])]);
+        var olderRepeated = PreReviewRepeatedFailureSet.Evaluate([
+            Receipt("sha-1", ["Example.A"]),
+            Receipt("sha-2", ["Example.A"]),
+            Receipt("sha-2", ["Example.A"]),
+            Receipt("sha-3", ["Example.A"])]);
+
+        Assert.Equal(1, latestRepeated.ConsecutiveRounds);
+        Assert.False(latestRepeated.HoldRequired);
+        Assert.Equal(2, olderRepeated.ConsecutiveRounds);
+        Assert.False(olderRepeated.HoldRequired);
+    }
+
     private static PreReviewEvidenceReceipt Receipt(
         string sha, string[] identities, PreReviewEvidenceDisposition disposition = PreReviewEvidenceDisposition.Red) =>
         new("goal", 1, sha, [], disposition, 0, 1, [], identities, "mapped", null, DateTimeOffset.UtcNow);
