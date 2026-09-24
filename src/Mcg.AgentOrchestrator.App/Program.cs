@@ -91,6 +91,16 @@ catch (ArgumentException ex)
     return 1;
 }
 
+try
+{
+    CliPersistentStateRunner.ValidateGoalRefinementStartupArguments(startupArgs);
+}
+catch (InvalidOperationException ex)
+{
+    Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+    return 1;
+}
+
 var commandCapability = CliCommandCapabilities.Classify(startupArgs);
 if (commandCapability == CliCommandCapability.DashboardHost)
 {

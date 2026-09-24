@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliArgumentParser
@@ -277,6 +279,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         command.Equals("agent-add", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeAgentArgs(args);
+    }
+
+    if (command.Equals(GoalRefinementWorkCoordinator.CommandName, StringComparison.OrdinalIgnoreCase))
+    {
+        return args;
     }
 
     if (IsSimpleCommand(command))

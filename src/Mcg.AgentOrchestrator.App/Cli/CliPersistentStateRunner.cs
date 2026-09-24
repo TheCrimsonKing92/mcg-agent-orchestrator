@@ -3671,8 +3671,7 @@ internal static partial class CliPersistentStateRunner
         WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
-        if (args.Count is < 2 or > 3 || string.IsNullOrWhiteSpace(args[1]))
-            throw new InvalidOperationException($"Usage: {GoalRefinementWorkCoordinator.CommandName} <goal-id> [executor-stamp]");
+        ValidateGoalRefinementArguments(args);
         if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
             throw new InvalidOperationException("Goal refinement requires durable outbox support.");
 
