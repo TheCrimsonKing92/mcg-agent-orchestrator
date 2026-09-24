@@ -20,8 +20,10 @@ public sealed class PriorWorkerResultProjectionTests
         Assert.Equal(WorkerVerificationEvidence.ContextProjectionValidation.Parsed, projection.Validation);
     }
 
-    [Fact]
-    public void OperatorAdjudicationPreservesHistoricalWorkerResultInDownstreamContext()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OperatorAdjudicationPreservesHistoricalWorkerResultInDownstreamContext(bool passed)
     {
         var root = Path.Combine(Path.GetTempPath(), $"prior-worker-result-{Guid.NewGuid():N}");
         var contextDirectory = Path.Combine(root, "context");
@@ -41,11 +43,12 @@ public sealed class PriorWorkerResultProjectionTests
                 FullStandardOutput: workerOutput));
             const string operatorText = "OPERATOR adjudication: audit reviewed; continue to Tester.";
             kernel.RecordTaskVerification(goal.Id, developer.Id, ManualVerificationRecorder.Create(
-                true, operatorText, root, DateTimeOffset.Parse("2026-09-24T00:49:19Z")));
+                passed, operatorText, root, DateTimeOffset.Parse("2026-09-24T00:49:19Z")));
 
             var prior = goal.Tasks.Single(task => task.Id == developer.Id);
             Assert.Equal(2, prior.VerificationHistory.Count);
-            Assert.Equal("manual-verification passed", prior.LastVerification!.Command);
+            Assert.Equal(passed ? "manual-verification passed" : "manual-verification failed",
+                prior.LastVerification!.Command);
             var brief = new TaskBrief(goal.Id, tester.Id, tester.RequiredRole, tester.Description,
                 "# Agent Task Brief\nInspect the prior Developer result.");
             var package = WorkerProfileDispatcher.BuildContextPackage(

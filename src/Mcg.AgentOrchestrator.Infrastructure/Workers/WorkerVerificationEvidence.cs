@@ -110,16 +110,20 @@ internal static class WorkerVerificationEvidence
         if (!latest.Command.StartsWith("manual-verification ", StringComparison.Ordinal))
             return latestProjection;
 
+        var operatorContent = latest.Command == "manual-verification failed"
+            ? BoundHeadAndTail(latest.AuthoritativeStandardError ?? latest.StandardError,
+                MalformedOutputExcerptMaxChars)
+            : latestProjection.Content;
         var worker = task.VerificationHistory.LastOrDefault(record => record.WorkerResultPresent);
         if (worker is null)
-            return latestProjection;
+            return new ContextProjection(operatorContent, latestProjection.Validation);
 
         var workerProjection = ProjectStandardOutputForContextWithValidation(task, worker);
         return new ContextProjection(string.Join(Environment.NewLine,
             "Worker-produced verification (last worker round):",
             workerProjection.Content,
             "Operator adjudication (latest verification):",
-            latestProjection.Content), workerProjection.Validation);
+            operatorContent), workerProjection.Validation);
     }
 
     public static ContextProjection ProjectStandardOutputForContextWithValidation(
