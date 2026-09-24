@@ -7,6 +7,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ConductorAcceptanceCohortGateFault>
+        _trainGateFaults = new(StringComparer.Ordinal);
+
     internal bool MergeTrainsEnabled =>
         !string.Equals(Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED"), "1", StringComparison.Ordinal) &&
         (_runMergeTrainOverride is not null ||
@@ -20,7 +23,9 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<Goal> orderedGoals,
         ConductorAutonomyPolicy policy,
         CancellationToken cancellationToken = default,
-        Action? onGateAdmitted = null)
+        Action? onGateAdmitted = null,
+        bool runGateInBackground = false,
+        bool gateOnly = false)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
@@ -46,6 +51,25 @@ internal sealed partial class ConductorDriver
         var originalBindings = selection.BindMembers();
         var attemptId = $"merge-train-attempt-{Guid.NewGuid():N}";
         var allEjections = new List<MergeTrainEjection>();
+        var selectedGoalIds = selection.Members.Select(member => member.GoalId.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        var trainKey = $"train:{string.Join('+', selectedGoalIds.Order(StringComparer.Ordinal))}";
+        if (runGateInBackground)
+        {
+            if (TryGetActiveCohortGateRun(selectedGoalIds, out var activeRun))
+            {
+                return InFlight(activeRun!);
+            }
+            SweepCompletedCohortGateRuns();
+            if (_trainGateFaults.TryRemove(trainKey, out var fault))
+            {
+                return new ConductorMergeTrainRunResult(
+                    null,
+                    new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                    [],
+                    $"gate infrastructure failure: {fault.FaultType}: {BoundCohortDetail(fault.Message)}");
+            }
+        }
         IReadOnlyList<MergeTrainMemberBinding> composition = originalBindings;
         var admitted = false;
 
@@ -105,6 +129,33 @@ internal sealed partial class ConductorDriver
             receipt ??= RunMergeTrainSourceSizePreflight(workspace.Path, identity, _mergeTrainAcceptanceStore);
             if (receipt is null)
             {
+                if (runGateInBackground)
+                {
+                    var run = new CohortGateRun(
+                        _utcNow(), selectedGoalIds, $"train:{identity.Value}",
+                        new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                    if (!TryRegisterCohortGateRun(trainKey, run, out var blockingRun))
+                    {
+                        return InFlight(blockingRun!);
+                    }
+
+                    _startCohortGateBackground(() =>
+                    {
+                        try
+                        {
+                            // The gate-only replay owns its workspace and writes receipts, including the
+                            // bounded RED bisection. A later tick replays those receipts and lands.
+                            _ = RunMergeTrain(selection, orderedGoals, policy, cancellationToken,
+                                onGateAdmitted, gateOnly: true);
+                            run.Completion.SetResult();
+                        }
+                        catch (Exception ex)
+                        {
+                            run.Completion.SetException(ex);
+                        }
+                    });
+                    return InFlight(run);
+                }
                 var clock = Stopwatch.StartNew();
                 DotnetBuildEnvironmentLease? stableSlotLease = null;
                 try
@@ -156,6 +207,10 @@ internal sealed partial class ConductorDriver
                     IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or
                     NotSupportedException)
                 {
+                    if (gateOnly)
+                    {
+                        throw;
+                    }
                     return Fallback($"gate infrastructure failure: {ex.GetType().Name}: {BoundCohortDetail(ex.Message)}");
                 }
                 finally
@@ -166,6 +221,12 @@ internal sealed partial class ConductorDriver
 
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
+                if (gateOnly)
+                {
+                    return new ConductorMergeTrainRunResult(receipt,
+                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                        allEjections, $"outcome=gate-passed receipt={receipt.ReceiptId}");
+                }
                 var goals = members.Select(member => goalsById[member.GoalId]).ToArray();
                 var originalSelection = selection.Members.ToDictionary(member => member.GoalId);
                 for (var index = 0; index < goals.Length; index++)
@@ -270,6 +331,14 @@ internal sealed partial class ConductorDriver
                     policy,
                     new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, detail)),
                 StringComparer.Ordinal);
+
+        ConductorMergeTrainRunResult InFlight(CohortGateRun run)
+        {
+            var detail = FormatCohortGateInFlightDetail(run, _utcNow());
+            return new ConductorMergeTrainRunResult(null,
+                Hold(selection.Members.Select(member => goalsById[member.GoalId]).ToArray(), detail),
+                allEjections, detail);
+        }
     }
 
     private void RecoverMergeTrainLandingEffects(

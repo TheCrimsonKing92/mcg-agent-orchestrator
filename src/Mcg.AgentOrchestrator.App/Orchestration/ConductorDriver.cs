@@ -100,6 +100,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
     private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
+    private readonly Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? _integrateMainBeforeReadOnlyDispatch;
     private readonly Action<Goal, DeveloperBranchIntegrationResult> _recordPreDispatchIntegrationReceipt;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
@@ -875,6 +876,8 @@ internal sealed partial class ConductorDriver
             var result = IntegrateMainBeforeDeveloperDispatch(dir, goal);
             return result;
         };
+        _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
+            IntegrateMainBeforeReadOnlyDispatch(dir, goal, role);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
         _recheckPreLandingRebaseConflict = goal =>
@@ -1079,144 +1082,7 @@ internal sealed partial class ConductorDriver
 
     internal static DeveloperBranchIntegrationResult IntegrateMainBeforeDeveloperDispatch(
         string executionDirectory,
-        Goal goal)
-    {
-        var branch = GoalWorktrees.BranchName(goal.Id);
-        var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-        if (worktreePath is null)
-        {
-            return DeveloperIntegrationFailure($"Goal branch {branch} has no registered worktree.");
-        }
-
-        if (GitCli.IsWorktreeDirty(worktreePath))
-        {
-            return DeveloperIntegrationFailure(
-                $"Goal branch {branch} has uncommitted changes; conductor integration cannot start from a dirty worktree.");
-        }
-
-        var currentBranch = GitCli.Run(worktreePath, "branch", "--show-current");
-        if (currentBranch.ExitCode != 0 ||
-            !string.Equals(currentBranch.Output.Trim(), branch, StringComparison.Ordinal))
-        {
-            return DeveloperIntegrationFailure(
-                $"Registered worktree for {branch} is not attached to the expected branch.");
-        }
-
-        var mainHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "main^{commit}");
-        var branchHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "HEAD^{commit}");
-        if (mainHead.ExitCode != 0 || branchHead.ExitCode != 0 ||
-            string.IsNullOrWhiteSpace(mainHead.Output) || string.IsNullOrWhiteSpace(branchHead.Output))
-        {
-            return DeveloperIntegrationFailure(
-                $"Could not resolve main and {branch} before Developer dispatch.");
-        }
-
-        var mainRevision = mainHead.Output.Trim();
-        var branchRevision = branchHead.Output.Trim();
-        if (GitCli.Run(worktreePath, "merge-base", "--is-ancestor", mainRevision, branchRevision).ExitCode == 0)
-        {
-            return new DeveloperBranchIntegrationResult(
-                DeveloperBranchIntegrationStatus.Current,
-                $"Goal branch {branch} is already current with main at {mainRevision[..12]}.",
-                []);
-        }
-
-        ReviewerMergeTreeStatus mergeTree;
-        try
-        {
-            mergeTree = new WorkerGitContext().ReadReviewerMergeTreeStatus(
-                worktreePath,
-                mainRevision,
-                branchRevision);
-        }
-        catch (ReviewerMergeTreeStatusException ex)
-        {
-            return DeveloperIntegrationFailure(
-                $"Conductor could not inspect divergence for {branch} before Developer dispatch: {ex.Message}");
-        }
-
-        if (!mergeTree.IsClean)
-        {
-            return new DeveloperBranchIntegrationResult(
-                DeveloperBranchIntegrationStatus.Conflict,
-                BuildDeveloperIntegrationConflictMessage(branch, mergeTree.ConflictPaths),
-                mergeTree.ConflictPaths);
-        }
-
-        var merge = GitCli.Run(
-            worktreePath,
-            "merge",
-            "--no-ff",
-            mainRevision,
-            "-m",
-            $"Integrate main into {branch} before Developer dispatch");
-        if (merge.ExitCode != 0)
-        {
-            var conflictPaths = ReadUnmergedPaths(worktreePath);
-            _ = GitCli.Run(worktreePath, "merge", "--abort");
-            if (conflictPaths.Length > 0)
-            {
-                return new DeveloperBranchIntegrationResult(
-                    DeveloperBranchIntegrationStatus.Conflict,
-                    BuildDeveloperIntegrationConflictMessage(branch, conflictPaths),
-                    conflictPaths);
-            }
-
-            var diagnostic = string.Join(
-                " | ",
-                new[] { merge.Error, merge.Output }
-                    .Where(value => !string.IsNullOrWhiteSpace(value))
-                    .Select(value => value.Trim().ReplaceLineEndings(" | ")));
-            return DeveloperIntegrationFailure(
-                $"Conductor could not integrate main into {branch} before Developer dispatch: " +
-                (diagnostic.Length == 0 ? $"git merge exited {merge.ExitCode}." : diagnostic));
-        }
-
-        var integratedHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "HEAD^{commit}");
-        var integrationIsCurrent = integratedHead.ExitCode == 0 &&
-            GitCli.Run(
-                worktreePath,
-                "merge-base",
-                "--is-ancestor",
-                mainRevision,
-                integratedHead.Output.Trim()).ExitCode == 0;
-        if (!integrationIsCurrent || GitCli.IsWorktreeDirty(worktreePath))
-        {
-            return DeveloperIntegrationFailure(
-                $"Conductor integrated main into {branch}, but the resulting branch failed the clean/current invariant; Developer dispatch is blocked.");
-        }
-
-        return new DeveloperBranchIntegrationResult(
-            DeveloperBranchIntegrationStatus.Integrated,
-            $"Conductor integrated main {mainRevision[..12]} into {branch} before Developer dispatch at {integratedHead.Output.Trim()[..12]}.",
-            [],
-            OriginalCandidateSha: branchRevision,
-            IntegratedMainSha: mainRevision,
-            ResultingCandidateSha: integratedHead.Output.Trim());
-    }
-
-    private static DeveloperBranchIntegrationResult DeveloperIntegrationFailure(string message) =>
-        new(DeveloperBranchIntegrationStatus.Failed, message, []);
-
-    private static string BuildDeveloperIntegrationConflictMessage(
-        string branch,
-        IReadOnlyList<string> conflictPaths) =>
-        $"Developer dispatch blocked: main conflicts with {branch} in {string.Join(", ", conflictPaths)}. " +
-        "Conflict resolution requires semantic ownership and must be performed by the conductor or operator; " +
-        "do not instruct a worker to rebase or resolve the branch integration.";
-
-    private static string[] ReadUnmergedPaths(string worktreePath)
-    {
-        var result = GitCli.Run(worktreePath, "diff", "--name-only", "--diff-filter=U");
-        return result.ExitCode == 0
-            ? result.Output
-                .ReplaceLineEndings("\n")
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
-                .ToArray()
-            : [];
-    }
+        Goal goal) => IntegrateMainBeforeDispatch(executionDirectory, goal, AgentRole.Developer);
 
     internal ConductorDriver(
         Func<Goal, GoalLifecycleFacts> getFacts,
@@ -1304,7 +1170,8 @@ internal sealed partial class ConductorDriver
         Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null,
         Action<Goal, DeveloperBranchIntegrationResult>? recordPreDispatchIntegrationReceipt = null,
         Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null,
-        Func<GoalId, string>? workerBuildArtifactsPath = null)
+        Func<GoalId, string>? workerBuildArtifactsPath = null,
+        Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? integrateMainBeforeReadOnlyDispatch = null)
     {
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
@@ -1315,6 +1182,7 @@ internal sealed partial class ConductorDriver
                 DeveloperBranchIntegrationStatus.Current,
                 "Goal branch is current with main.",
                 []));
+        _integrateMainBeforeReadOnlyDispatch = integrateMainBeforeReadOnlyDispatch;
         _recordPreDispatchIntegrationReceipt = recordPreDispatchIntegrationReceipt ?? ((_, _) => { });
         _dispatchAndStart = (goal, _) => dispatchAndStart(goal);
         _startRecordedDispatches = startRecordedDispatches is null
@@ -4381,6 +4249,12 @@ internal sealed partial class ConductorDriver
                     return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
                 }
             }
+        }
+
+        if (fromState == GoalLifecycleState.WorkspaceReady &&
+            TryIntegrateMainBeforeReadOnlyDispatch(goal, goalPrefix, policy, fromState, out var readOnlyIntegrationHold))
+        {
+            return readOnlyIntegrationHold;
         }
 
         if (TryRunDeveloperCompletionStructuralPreflight(goal, goalPrefix, policy, fromState, out var structuralPrecheck))
