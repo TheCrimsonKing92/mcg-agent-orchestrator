@@ -33,13 +33,7 @@ internal static partial class CliCommandHandlers
         GoalId goalId)
     {
         var goal = kernel.GetGoal(goalId);
-        var liveDispatches = goal.Tasks
-            .Select((task, index) => (Task: task, Number: index + 1))
-            .Where(item => item.Task.LastProcess is { IsRunning: true })
-            .Select(item => new GoalLiveDispatch(
-                item.Number, item.Task.RequiredRole, item.Task.Id, item.Task.LastProcess!.ProcessId))
-            .OrderBy(item => item.TaskNumber)
-            .ToArray();
+        var liveDispatches = CollectLiveDispatches(goal);
 
         if (!command.Confirmed)
         {
@@ -112,16 +106,22 @@ internal static partial class CliCommandHandlers
                 return;
 
             case GoalLifecycleTransitionDisposition.ConflictExhausted:
-                throw new InvalidOperationException(
-                    $"park-goal could not commit goal '{outcome.GoalId.Value[..8]}' because concurrent updates exhausted the retry budget. " +
-                    "No park success was reported. Inspect status and retry the command.");
+                throw CreateConflictExhaustedException("park-goal", outcome.GoalId);
 
             default:
                 throw new InvalidOperationException($"Unsupported park transition outcome: {outcome.Disposition}.");
         }
     }
 
-    private static void WriteLiveDispatches(IReadOnlyList<GoalLiveDispatch> dispatches)
+    internal static GoalLiveDispatch[] CollectLiveDispatches(Goal goal) => goal.Tasks
+        .Select((task, index) => (Task: task, Number: index + 1))
+        .Where(item => item.Task.LastProcess is { IsRunning: true })
+        .Select(item => new GoalLiveDispatch(
+            item.Number, item.Task.RequiredRole, item.Task.Id, item.Task.LastProcess!.ProcessId))
+        .OrderBy(item => item.TaskNumber)
+        .ToArray();
+
+    internal static void WriteLiveDispatches(IReadOnlyList<GoalLiveDispatch> dispatches)
     {
         foreach (var dispatch in dispatches)
         {

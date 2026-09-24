@@ -138,17 +138,21 @@ public sealed class StewardComposer : IStewardTriageEngine
         StewardBriefingBundle bundle,
         string next,
         decimal spend,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        IReadOnlyList<StewardShadowClassAgreementRate>? shadowAgreement = null)
     {
         var brief = new StewardDailyBrief(
             now,
             bundle.GoalTasks.Count(item => item.State.Equals("Landed", StringComparison.OrdinalIgnoreCase)),
             bundle.Escalations.Count(item => item.SeverityRank >= 3),
             next,
-            spend);
+            spend,
+            shadowAgreement);
         var receipt = Receipt(
             StewardOutputKind.DailyBrief,
-            new { bundle, next, spend },
+            shadowAgreement is null
+                ? new { bundle, next, spend } // Preserve hashes for briefs without shadow data.
+                : (object)new { bundle, next, spend, shadowAgreement },
             now,
             bundle.Escalations.Select(item => item.Id).ToList(),
             [],

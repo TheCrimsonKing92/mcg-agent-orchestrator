@@ -102,6 +102,7 @@ public abstract class CliGoalUnparkTestSupport : CliTaskQueryTestSupport
         public int WholeKernelLoadCount { get; private set; }
         public int WholeKernelSaveCount { get; private set; }
         public int ApplicationCount { get; private set; }
+        public string? OperationName { get; private set; }
         public int StateApplicationCount { get; private set; }
         public string? StateOperationName { get; private set; }
         public Func<int, GoalStateSnapshot, CancellationToken, Task>? StateAfterApplication { get; init; }
@@ -182,6 +183,7 @@ public abstract class CliGoalUnparkTestSupport : CliTaskQueryTestSupport
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
             CancellationToken cancellationToken = default)
         {
+            OperationName = operationName;
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var result = await inner.TransactGoalAsync(
                 operationName,

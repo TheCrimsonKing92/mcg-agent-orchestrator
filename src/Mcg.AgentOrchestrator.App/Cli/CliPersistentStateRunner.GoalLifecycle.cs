@@ -5,6 +5,9 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliPersistentStateRunner
 {
+    private static readonly HashSet<string> GoalScopedLifecycleVerbs =
+        new(StringComparer.OrdinalIgnoreCase) { "park-goal", "unpark-goal", "abandon-goal", "cancel-goal" };
+
     private static bool ExecuteGoalLifecycleDispositionCommand(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -19,6 +22,18 @@ internal static partial class CliPersistentStateRunner
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             return ExecuteGoalParkTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
+        if (args[0].Equals("abandon-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalAbandonTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
+        if (args[0].Equals("cancel-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalCancelTransition(args, stateRepository, workspace, ref currentGoal);
         }
 
         if (!args[0].Equals("unpark-goal", StringComparison.OrdinalIgnoreCase))
@@ -72,11 +87,24 @@ internal static partial class CliPersistentStateRunner
             return CliCommandHandlers.ApplyGoalUnparkWithoutRendering(command, kernel, goalId);
         }
 
+        return TransactGoalSnapshotTransition(
+            stateRepository, "cli:unpark-goal", goalId,
+            kernel => CliCommandHandlers.ApplyGoalUnparkWithoutRendering(command, kernel, goalId),
+            out _);
+    }
+
+    private static CliCommandHandlers.GoalLifecycleTransitionOutcome TransactGoalSnapshotTransition(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string operationName,
+        GoalId goalId,
+        Func<AgentOrchestratorKernel, CliCommandHandlers.GoalLifecycleTransitionOutcome> apply,
+        out AgentOrchestratorKernel? committedKernel)
+    {
+        AgentOrchestratorKernel? appliedKernel = null;
         try
         {
-            return stateRepository.TransactGoalAsync(
-                    "cli:unpark-goal",
-                    goalId,
+            var outcome = stateRepository.TransactGoalAsync(
+                    operationName, goalId,
                     (snapshot, _) =>
                     {
                         if (snapshot is null)
@@ -85,21 +113,21 @@ internal static partial class CliPersistentStateRunner
                         }
 
                         var kernel = RestoreGoalExactly(snapshot);
-                        var applicationOutcome = CliCommandHandlers.ApplyGoalUnparkWithoutRendering(command, kernel, goalId);
-                        var updatedSnapshot = applicationOutcome.ShouldSave
-                            ? ExportGoalSnapshot(kernel, goalId)
-                            : snapshot;
-                        return Task.FromResult((applicationOutcome.ShouldSave, updatedSnapshot, applicationOutcome));
+                        var result = apply(kernel);
+                        appliedKernel = kernel;
+                        var updated = result.ShouldSave ? ExportGoalSnapshot(kernel, goalId) : snapshot;
+                        return Task.FromResult((result.ShouldSave, updated, result));
                     })
-                .GetAwaiter()
-                .GetResult();
+                .GetAwaiter().GetResult();
+            committedKernel = appliedKernel;
+            return outcome;
         }
         catch (GoalTransactionConflictException)
         {
+            committedKernel = null;
             return new CliCommandHandlers.GoalLifecycleTransitionOutcome(
                 CliCommandHandlers.GoalLifecycleTransitionDisposition.ConflictExhausted,
-                goalId,
-                ObservedStatus: null);
+                goalId, ObservedStatus: null);
         }
     }
 
