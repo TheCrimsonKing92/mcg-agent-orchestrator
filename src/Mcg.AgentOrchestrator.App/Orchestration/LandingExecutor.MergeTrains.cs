@@ -71,6 +71,17 @@ internal static partial class LandingExecutor
             }
         }
 
+        foreach (var goal in goals)
+        {
+            var gap = AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal);
+            if (gap is not null)
+            {
+                return new AcceptanceCohortLandingResult(
+                    AcceptanceCohortLandingOutcome.RetryableHold,
+                    $"Merge train landing held before mutation because goal {goal.Id.Value[..8]}: {gap}");
+            }
+        }
+
         var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
             goals,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
@@ -81,6 +92,17 @@ internal static partial class LandingExecutor
             return new AcceptanceCohortLandingResult(
                 AcceptanceCohortLandingOutcome.RetryableHold,
                 $"Merge train landing held before mutation because {evidenceDiagnostic}");
+        }
+
+        foreach (var goal in goals)
+        {
+            var completionRefusal = kernel.DescribeMergeEvidenceCompletionRefusal(goal.Id);
+            if (completionRefusal is not null)
+            {
+                return new AcceptanceCohortLandingResult(
+                    AcceptanceCohortLandingOutcome.RetryableHold,
+                    $"Merge train landing held before mutation because {completionRefusal}");
+            }
         }
 
         var changedFiles = receipt.Identity.Members
@@ -189,10 +211,21 @@ internal static partial class LandingExecutor
                 goal,
                 "conductor:land",
                 $"Merge train receipt {receipt.ReceiptId} landed exact tree {receipt.Identity.TrainTreeRevision}.");
-            eventWriter?.AppendGoalLanded(
+            if (eventWriter is not null)
+                eventWriter.AppendGoalLanded(
+                    goal.Id,
+                    $"train/{receipt.Identity.Value}",
+                    GoalWorktrees.BranchName(goal.Id));
+            else
+                kernel.RecordGoalLandedFromMergeEvidence(
+                    goal.Id,
+                    GoalWorktrees.BranchName(goal.Id),
+                    commit,
+                    commit);
+            kernel.CompleteGoalFromMergeEvidence(
                 goal.Id,
-                $"train/{receipt.Identity.Value}",
-                GoalWorktrees.BranchName(goal.Id));
+                commit,
+                $"Landed by merge train receipt {receipt.ReceiptId}.");
             StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
         }
         return new AcceptanceCohortLandingResult(
