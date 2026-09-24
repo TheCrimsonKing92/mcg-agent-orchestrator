@@ -5834,42 +5834,17 @@ internal sealed partial class ConductorDriver
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
             var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
-            if (retryDisposition.ActionableCriteria.Count == 0)
+            var attemptedAllFlakyDisposition = false;
+            if (retryDisposition.ActionableCriteria.Count == 0 &&
+                TryDisposeExcludedAcceptanceFailures(
+                    goal, goalPrefix, policy, acceptance, apparatusRedReading,
+                    ref retryDisposition, out attemptedAllFlakyDisposition) is { } excludedResult)
             {
-                var observedHeads = _resolveAcceptanceHeads(goal);
-                var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
-                var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
-                var failedChecks = acceptance.FailedChecks is { Count: > 0 }
-                    ? acceptance.FailedChecks
-                    : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
-                _recordAcceptanceFailure(
-                    goal,
-                    failedChecks,
-                    branchHeadSha,
-                    mainHeadSha,
-                    acceptance.CheckAttributions,
-                    acceptance.BaselineAttestation);
-                var excludedSummary = string.Join(
-                    ", ",
-                    retryDisposition.ExcludedFailures.Select(FormatExcludedAcceptanceFailure));
-                var reason =
-                    $"Acceptance gate failures are all outside this goal's attributable scope: {excludedSummary}. " +
-                    "The candidate remains held at Verified for operator/main-red routing; no worker was reopened.";
-                RecordEscalation(goal, GoalLifecycleState.Verified, reason);
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        GoalLifecycleState.Verified,
-                        reason,
-                        StableIdentity: BuildUnattributableAcceptanceIdentity(
-                            branchHeadSha,
-                            mainHeadSha,
-                            retryDisposition.ExcludedFailures)));
+                return excludedResult;
             }
 
-            if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
+            if (!attemptedAllFlakyDisposition &&
+                TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
             {
                 return apparatusRed;
             }
@@ -6147,11 +6122,17 @@ internal sealed partial class ConductorDriver
                 foreach (var identity in failingIdentities)
                 {
                     if (byIdentity.TryGetValue(identity, out var attribution) &&
-                        attribution.Origin == AcceptanceTestFailureOrigin.Inherited)
+                        (attribution.Origin == AcceptanceTestFailureOrigin.Inherited ||
+                         (attribution.Origin == AcceptanceTestFailureOrigin.UnconfirmedIntroduced &&
+                          attribution.CandidateRerun?.Outcome == "Passed" &&
+                          !string.IsNullOrWhiteSpace(attribution.CandidateRerun.ReceiptPointer))))
                     {
                         excluded.Add(new ExcludedAcceptanceFailure(
                             identity,
-                            AcceptanceRetryExclusionKind.Inherited));
+                            attribution.Origin == AcceptanceTestFailureOrigin.Inherited
+                                ? AcceptanceRetryExclusionKind.Inherited
+                                : AcceptanceRetryExclusionKind.UnconfirmedIntroduced,
+                            attribution.CandidateRerun?.ReceiptPointer));
                     }
                     else
                     {
@@ -6175,9 +6156,6 @@ internal sealed partial class ConductorDriver
         return new AcceptanceRetryDisposition(actionable, excluded);
     }
 
-    private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
-        $"{failure.Identity} (pre-existing/main-red)";
-
     private static string BuildUnattributableAcceptanceIdentity(
         string? branchHeadSha,
         string? mainHeadSha,
@@ -6192,19 +6170,6 @@ internal sealed partial class ConductorDriver
         var fingerprint = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource))).ToLowerInvariant()[..16];
         return $"acceptance-unattributable:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:{fingerprint}";
-    }
-
-    private sealed record AcceptanceRetryDisposition(
-        IReadOnlyList<AcceptanceCheckResult> ActionableCriteria,
-        IReadOnlyList<ExcludedAcceptanceFailure> ExcludedFailures);
-
-    private sealed record ExcludedAcceptanceFailure(
-        string Identity,
-        AcceptanceRetryExclusionKind Kind);
-
-    private enum AcceptanceRetryExclusionKind
-    {
-        Inherited
     }
 
     private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)

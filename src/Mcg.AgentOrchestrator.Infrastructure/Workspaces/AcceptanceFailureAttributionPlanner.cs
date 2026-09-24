@@ -2,8 +2,28 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+internal sealed record CandidateFailureRerunResult(bool? Passed, string? ReceiptPointer, string? Error = null);
+
+internal interface ICandidateFailureRerunner
+{
+    Task<IReadOnlyDictionary<string, CandidateFailureRerunResult>> RerunAsync(
+        IReadOnlyList<string> identities,
+        CancellationToken cancellationToken);
+}
+
+internal sealed class CandidateFailureRerunner(
+    Func<IReadOnlyList<string>, CancellationToken,
+        Task<IReadOnlyDictionary<string, CandidateFailureRerunResult>>> run) : ICandidateFailureRerunner
+{
+    public Task<IReadOnlyDictionary<string, CandidateFailureRerunResult>> RerunAsync(
+        IReadOnlyList<string> identities,
+        CancellationToken cancellationToken) => run(identities, cancellationToken);
+}
+
 internal static class AcceptanceFailureAttributionPlanner
 {
+    internal const int MaxCandidateRerunIdentities = 10;
+
     internal sealed record CandidateSelectionPlan(
         bool Succeeded,
         IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> Checks,
@@ -23,6 +43,8 @@ internal static class AcceptanceFailureAttributionPlanner
     internal sealed class FocusedInvocationBudget(int cap)
     {
         private int _remaining = cap;
+        private IReadOnlyDictionary<string, CandidateFailureRerunResult>? _candidateRerunResults;
+        private bool _candidateRerunConsumed;
 
         internal BoundedIdentitySelection Select(IEnumerable<string> identities)
         {
@@ -55,6 +77,46 @@ internal static class AcceptanceFailureAttributionPlanner
             }
 
             _remaining -= consumed;
+        }
+
+        internal async Task<IReadOnlyDictionary<string, CandidateFailureRerunResult>> RerunOnceAsync(
+            IReadOnlyList<string> identities,
+            ICandidateFailureRerunner? rerunner,
+            CancellationToken cancellationToken)
+        {
+            if (_candidateRerunConsumed)
+            {
+                return _candidateRerunResults ?? new Dictionary<string, CandidateFailureRerunResult>();
+            }
+
+            _candidateRerunConsumed = true;
+            if (rerunner is null)
+            {
+                _candidateRerunResults = identities.ToDictionary(
+                    identity => identity,
+                    _ => new CandidateFailureRerunResult(null, null, "candidate rerunner unavailable"),
+                    StringComparer.Ordinal);
+                return _candidateRerunResults;
+            }
+
+            try
+            {
+                _candidateRerunResults = await rerunner.RerunAsync(identities, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _candidateRerunResults = identities.ToDictionary(
+                    identity => identity,
+                    _ => new CandidateFailureRerunResult(null, null, $"{ex.GetType().Name}: {ex.Message}"),
+                    StringComparer.Ordinal);
+            }
+
+            return _candidateRerunResults;
         }
     }
 
@@ -269,6 +331,79 @@ internal static class AcceptanceFailureAttributionPlanner
                     $"focused baseline was inconclusive at merge-base {baseline.Sha}");
         }).ToArray();
     }
+
+    internal static async Task<IReadOnlyList<AcceptanceTestFailureAttribution>> ApplyCandidateRerunAsync(
+        IReadOnlyList<AcceptanceTestFailureAttribution> attributions,
+        string baselineSha,
+        Func<string, IReadOnlyList<string>> resolveSourcePaths,
+        IReadOnlyList<string>? changedFiles,
+        FocusedInvocationBudget invocationBudget,
+        ICandidateFailureRerunner? rerunner,
+        CancellationToken cancellationToken)
+    {
+        var greenEvidence = $"focused identity was green at merge-base {baselineSha}";
+        if (changedFiles is null || changedFiles.Count == 0)
+        {
+            return attributions;
+        }
+
+        var changed = changedFiles.Select(NormalizePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var eligible = attributions
+            .GroupBy(attribution => attribution.TestIdentity, StringComparer.Ordinal)
+            .Where(group => group.All(attribution =>
+                attribution.Origin == AcceptanceTestFailureOrigin.Introduced &&
+                attribution.Evidence.Equals(greenEvidence, StringComparison.Ordinal)))
+            .Where(attribution =>
+            {
+                var paths = resolveSourcePaths(attribution.Key);
+                return paths.Count > 0 && paths.All(path => !changed.Contains(NormalizePath(path)));
+            })
+            .Select(group => group.Key)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (eligible.Length == 0 || eligible.Length > MaxCandidateRerunIdentities)
+        {
+            return attributions;
+        }
+
+        var outcomes = await invocationBudget.RerunOnceAsync(eligible, rerunner, cancellationToken)
+            .ConfigureAwait(false);
+        return attributions.Select(attribution =>
+        {
+            if (!eligible.Contains(attribution.TestIdentity, StringComparer.Ordinal))
+            {
+                return attribution;
+            }
+
+            var outcome = outcomes.TryGetValue(attribution.TestIdentity, out var result)
+                ? result
+                : new CandidateFailureRerunResult(null, null, "identity absent from candidate rerun result");
+            var evidence = new CandidateFailureRerunEvidence(
+                outcome.Passed switch { true => "Passed", false => "Failed", null => "NotExecuted" },
+                outcome.ReceiptPointer,
+                outcome.Error);
+            var passedWithReceipt = outcome.Passed == true &&
+                !string.IsNullOrWhiteSpace(outcome.ReceiptPointer);
+            if (outcome.Passed == true && !passedWithReceipt)
+            {
+                evidence = evidence with
+                {
+                    Outcome = "NotExecuted",
+                    Error = "candidate rerun receipt was missing"
+                };
+            }
+            return attribution with
+            {
+                Origin = passedWithReceipt
+                    ? AcceptanceTestFailureOrigin.UnconfirmedIntroduced
+                    : AcceptanceTestFailureOrigin.Introduced,
+                CandidateRerun = evidence
+            };
+        }).ToArray();
+    }
+
+    private static string NormalizePath(string path) =>
+        path.Replace('\\', '/').Trim().TrimStart('.', '/');
 
     private static AcceptanceTestFailureAttribution Attribution(
         string identity,

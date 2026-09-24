@@ -7,7 +7,9 @@ internal sealed record ApparatusRedFailingTest(
     string? ExceptionSignature,
     IReadOnlyList<string> ResolvedSourcePaths,
     bool InsideChangedPaths,
-    bool HasCrossGoalOccurrence);
+    bool HasCrossGoalOccurrence,
+    bool CandidateRerunPassed = false,
+    bool CandidateRerunFailed = false);
 
 /// <summary>Materialized classification inputs. No I/O happens below this record.</summary>
 internal sealed record ApparatusRedEvidence(
@@ -40,6 +42,7 @@ internal abstract record ApparatusRedDisposition
 internal static class ApparatusRedClassifier
 {
     internal const string CrossGoalEvidenceKind = "cross-goal-flake";
+    internal const string CandidateRerunEvidenceKind = "candidate-rerun-pass";
     internal const string BoundExhaustedToken = "apparatus-regate-bound-exhausted";
 
     /// <summary>
@@ -92,6 +95,18 @@ internal static class ApparatusRedClassifier
             if (failingTest.HasCrossGoalOccurrence)
             {
                 evidenceKinds.Add(CrossGoalEvidenceKind);
+                continue;
+            }
+
+            if (failingTest.CandidateRerunFailed)
+            {
+                return new ApparatusRedDisposition.Genuine(
+                    $"failing test {failingTest.TestIdentity} failed again on the candidate");
+            }
+
+            if (failingTest.CandidateRerunPassed)
+            {
+                evidenceKinds.Add(CandidateRerunEvidenceKind);
                 continue;
             }
 

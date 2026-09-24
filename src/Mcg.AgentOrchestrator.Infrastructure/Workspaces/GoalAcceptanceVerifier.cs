@@ -50,13 +50,20 @@ public enum AcceptanceTestFailureOrigin
 {
     Introduced,
     Inherited,
-    Unattributed
+    Unattributed,
+    UnconfirmedIntroduced
 }
 
 public sealed record AcceptanceTestFailureAttribution(
     string TestIdentity,
     AcceptanceTestFailureOrigin Origin,
-    string Evidence);
+    string Evidence,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CandidateFailureRerunEvidence? CandidateRerun = null);
+
+public sealed record CandidateFailureRerunEvidence(
+    string Outcome,
+    string? ReceiptPointer,
+    string? Error = null);
 
 public sealed record AcceptanceShardCompletionDecision(
     bool Passed,
@@ -1001,7 +1008,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             stableSlotLease,
             cancellationToken,
-            failureAttributionBudget).ConfigureAwait(false);
+            failureAttributionBudget,
+            changedFiles).ConfigureAwait(false);
         for (var index = 0; index < attributedChecks.Count; index++)
         {
             checks[index] = attributedChecks[index];
@@ -1045,7 +1053,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         IAcceptanceAttemptExecutionOwner executionOwner,
         CancellationToken cancellationToken,
-        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null)
+        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null,
+        IReadOnlyList<string>? changedFiles = null)
     {
         var owner = executionOwner as AcceptanceAttemptExecutionOwner ?? throw new ArgumentException(
             "Failure attribution requires an acceptance-attempt execution owner.", nameof(executionOwner));
@@ -1057,7 +1066,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             stableSlotLease,
             cancellationToken,
-            invocationBudget).ConfigureAwait(false);
+            invocationBudget,
+            changedFiles).ConfigureAwait(false);
         return attributed[0];
     }
 
@@ -1069,17 +1079,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken,
-        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null)
+        AcceptanceFailureAttributionPlanner.FocusedInvocationBudget? invocationBudget = null,
+        IReadOnlyList<string>? changedFiles = null)
     {
         invocationBudget ??= new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(
             MaxFailureAttributionFocusedEvidenceIdentities);
         var results = requests.Select(request => request.Check).ToArray();
-        var prepared = new List<(
-            int Index,
-            AcceptanceCheckResult Check,
-            AcceptanceFailureAttributionPlanner.BoundedIdentitySelection IdentitySelection,
-            string[] Selectors,
-            AcceptanceFailureAttributionPlanner.CandidateSelectionPlan SelectionPlan)>();
+        var prepared = new List<CandidateRerunPreparedCheck>();
         for (var index = 0; index < requests.Count; index++)
         {
             var (check, manifestCheck) = requests[index];
@@ -1141,7 +1147,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             invocationBudget.Consume(identitySelection);
-            prepared.Add((index, check, identitySelection, selectors, selectionPlan));
+            prepared.Add(new CandidateRerunPreparedCheck(index, check, identitySelection, selectors, selectionPlan));
         }
 
         if (prepared.Count == 0)
@@ -1209,6 +1215,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 MaxFailureAttributionFocusedEvidenceIdentities);
             results[item.Index] = item.Check with { FailingTestAttributions = attributions };
         }
+
+        await ApplyCandidateRerunToChecksAsync(prepared, results, baselineSha, worktreePath,
+            goalId, stableSlotIndex, stableSlotLease, changedFiles, invocationBudget,
+            cancellationToken).ConfigureAwait(false);
 
         return results;
 
