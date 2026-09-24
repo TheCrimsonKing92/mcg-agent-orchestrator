@@ -20,9 +20,9 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             var first = CreateCompletedGoal(kernel, "First passed cohort member", repo);
             var second = CreateCompletedGoal(kernel, "Second passed cohort member", repo);
             var firstCandidate = CreateWorktreeCandidate(repo, first.Id,
-                "src/Mcg.AgentOrchestrator.Core/PrelandFirst.cs", "first");
+                "src/Mcg.AgentOrchestrator.Infrastructure/PrelandFirst.cs", "first");
             var secondCandidate = CreateWorktreeCandidate(repo, second.Id,
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PrelandSecond.cs", "second");
+                "tests/PrelandSecond.cs", "second");
             foreach (var (goal, candidate) in new[] { (first, firstCandidate), (second, secondCandidate) })
             {
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
@@ -43,7 +43,12 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             var driver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks);
-            var started = driver.RunAcceptanceCohort(ProjectSelection(driver, first, second),
+            var pairCandidates = new[] { first, second }.Select(goal =>
+                new ConductorSpeculativeAcceptanceCandidate(goal.Id,
+                    driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive))).ToArray();
+            var pairSelection = ConductorAcceptanceCohortSelector.Select(pairCandidates).Selection;
+            Assert.NotNull(pairSelection);
+            var started = driver.RunAcceptanceCohort(pairSelection,
                 [first, second], ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Contains("outcome=inflight", started.Detail, StringComparison.Ordinal);
             Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The pair's background gate did not start.");
@@ -66,6 +71,13 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             kernel.MapCriterionEvidenceOwner(third.Id, 0, 1,
                 CriterionEvidenceOwner.Acceptance, "test",
                 CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: thirdCandidate);
+            var currentCandidates = new[] { first, second, third }.Select(goal =>
+                new ConductorSpeculativeAcceptanceCandidate(goal.Id,
+                    driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive))).ToArray();
+            Assert.True(driver.FindLandablePassedCohortSelections(currentCandidates).Any(selection =>
+                    selection.Members.Select(member => member.GoalId).SequenceEqual(
+                        pairSelection.Members.Select(member => member.GoalId))),
+                "The completed pair was discarded before the pre-landing pass despite its current passed receipt.");
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
             var logPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "preland.jsonl");
