@@ -145,7 +145,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     // The conductor generation that started this attempt, and the one that later adopted it across a
     // renewal. Null means an attempt written before generation identity was recorded: unknown, not mine.
     int? ConductorGenerationId = null,
-    int? AdoptedByGenerationId = null)
+    int? AdoptedByGenerationId = null,
+    bool FocusedEvidenceRunsBaselineArm = false,
+    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -153,7 +155,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
 internal sealed record ConductorFocusedEvidenceRequestContext(
     string FindingRoundFingerprint,
     string BatchId,
-    IReadOnlyList<FindingEvidenceRequestDisposition> RequestDispositions);
+    IReadOnlyList<FindingEvidenceRequestDisposition> RequestDispositions,
+    bool RunBaselineArm = false,
+    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null);
 
 internal sealed record ConductorParallelAcceptanceAttemptDecision(
     ConductorParallelAcceptanceAttemptDecisionKind Kind,
@@ -1173,16 +1177,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     throw new InvalidOperationException("pre-review evidence attempt metadata did not contain a request");
                 }
 
-                coordinator.RunAttempt(
-                    activeAttempt,
-                    candidate,
-                    policy,
-                    (attemptCandidate, _, lease, cancellationToken, _) =>
-                        driver.RunPreReviewFocusedEvidence(
-                            attemptCandidate,
-                            activeAttempt.FocusedEvidenceRequest,
-                            lease,
-                            cancellationToken));
+                RunPreReviewEvidenceAttempt(
+                    coordinator, activeAttempt, candidate, policy,
+                    (attemptCandidate, request, lease, runBaselineArm, cancellationToken) =>
+                        driver.RunPreReviewBaselineArmFocusedEvidence(
+                            attemptCandidate, request, lease, runBaselineArm, cancellationToken));
             }
             else
             {
@@ -1230,6 +1229,28 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             artifactLease?.Dispose();
         }
+    }
+
+    internal static void RunPreReviewEvidenceAttempt(
+        ConductorParallelAcceptanceAttemptCoordinator coordinator,
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        Func<ConductorParallelAcceptanceCandidate, string, DotnetBuildEnvironmentLease?, bool, CancellationToken,
+            ConductorParallelAcceptanceRunResult> runner)
+    {
+        if (!string.Equals(attempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(attempt.FocusedEvidenceRequest))
+        {
+            throw new InvalidOperationException("pre-review evidence attempt metadata did not contain a request");
+        }
+
+        var runBaselineArm = attempt.FocusedEvidenceRunsBaselineArm ||
+            (attempt.FocusedEvidenceBatchId?.EndsWith("-baseline-arm", StringComparison.Ordinal) ?? false);
+        coordinator.RunAttempt(
+            attempt, candidate, policy,
+            (attemptCandidate, _, lease, cancellationToken, _) =>
+                runner(attemptCandidate, attempt.FocusedEvidenceRequest, lease, runBaselineArm, cancellationToken));
     }
 
     private void RunAttemptWithArtifactLease(
@@ -1983,6 +2004,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             MonotonicTimestampFrequency: _timeProvider.TimestampFrequency,
             ConductEventLogPath: _conductEventLogWriter?.CurrentPath,
             FocusedEvidenceBatchId: focusedBatchId,
+            FocusedEvidenceRunsBaselineArm: requestContext?.RunBaselineArm ?? false,
+            CandidateEvidenceBeforeBaseline: requestContext?.CandidateEvidenceBeforeBaseline,
             FocusedEvidenceMemberRequests: focusedMembers,
             FocusedEvidenceRequestDisposition: requestContext?.RequestDispositions
                 .Select(disposition => disposition.Disposition)

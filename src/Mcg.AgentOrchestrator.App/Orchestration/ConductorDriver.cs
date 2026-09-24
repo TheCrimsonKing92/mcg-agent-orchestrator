@@ -2207,7 +2207,6 @@ internal sealed partial class ConductorDriver
                 "Evidence requests could not run because the executor was unavailable.");
             return true;
         }
-
         var initialRequestDispositions = BuildInitialRequestDispositions(batches, runnable);
         var executedRequestDispositions = initialRequestDispositions
             .Where(disposition => disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal))
@@ -2216,16 +2215,17 @@ internal sealed partial class ConductorDriver
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
             initialRequestDispositions);
-        if (!TryReconcileFocusedEvidenceAttempt(
+        if (!TryRestorePendingBaselineCandidate(goal, runnable.Request, candidateSha!, requestContext,
+                out var evidence, out var evidenceAttempt) && !TryReconcileFocusedEvidenceAttempt(
                 goal,
                 policy,
                 runnable.Request,
                 candidateSha!,
                 "finding-requested",
                 requestContext,
-                out var evidence,
-                out var evidenceAttempt,
-                out decision))
+                out evidence,
+                out evidenceAttempt,
+                out decision, out _))
         {
             if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
             {
@@ -2271,7 +2271,7 @@ internal sealed partial class ConductorDriver
             .Select(CreateFindingEvidenceArmReceipt)
             .ToArray();
         if (!TryResolveMissingBaseline(
-                goal, policy, runnable, candidateSha!, findingRoundFingerprint, requestContext,
+                goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint, requestContext,
                 evidence, initialArmReceipts,
                 out evidence, out var armReceipts, out var receiptIdentity, out decision))
         {
@@ -2870,11 +2870,12 @@ internal sealed partial class ConductorDriver
         ConductorFocusedEvidenceRequestContext? requestContext,
         out FocusedEvidenceRunResult evidence,
         out ConductorParallelAcceptanceAttempt? evidenceAttempt,
-        out FailedGoalFindingObservation decision)
+        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind)
     {
         evidence = null!;
         evidenceAttempt = null;
         decision = FailedGoalFindingObservation.None;
+        attemptKind = null;
         var candidate = ConductorParallelAcceptanceCandidate.Create(
             goal,
             slotIndex: 0,
@@ -2899,6 +2900,7 @@ internal sealed partial class ConductorDriver
             return false;
         }
         evidenceAttempt = attemptDecision.Attempt;
+        attemptKind = attemptDecision.Kind;
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
@@ -2908,14 +2910,13 @@ internal sealed partial class ConductorDriver
                 $"Background {source} focused evidence is running in attempt {attemptDecision.Attempt.AttemptId}.");
             return false;
         }
-
         if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||
             attemptDecision.Run?.Exception is
                 DotnetBuildSlotsBusyException or
                 BuildLockBlockedException or
                 OperationCanceledException)
         {
-            _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+            MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
                 $"Background {source} focused evidence did not run ({attemptDecision.Attempt.Outcome}); " +
@@ -2923,8 +2924,7 @@ internal sealed partial class ConductorDriver
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"));
             return false;
         }
-
-        _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+        MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
         if (attemptDecision.Run?.Exception is { } backgroundFailure)
         {
             decision = FailedGoalFindingObservation.Observed(
