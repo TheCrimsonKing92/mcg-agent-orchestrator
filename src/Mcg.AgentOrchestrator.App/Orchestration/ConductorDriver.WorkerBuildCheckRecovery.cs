@@ -20,7 +20,9 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<FailedGoalPendingNote> pendingNotes)
     {
         var task = goal.Tasks.FirstOrDefault(candidate =>
-            candidate.Id == decision.Identity.TaskId &&
+            (candidate.Id == decision.Identity.TaskId ||
+             (decision.Identity.TaskId is null &&
+              decision.DiscriminatingEvidence == "failed-terminal-fallthrough")) &&
             candidate.Status == WorkTaskStatus.Failed &&
             candidate.RequiredRole == AgentRole.Developer &&
             candidate.LastVerification is { } verification &&
