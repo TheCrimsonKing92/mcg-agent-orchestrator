@@ -133,7 +133,9 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                     GoalOperationJournal.Read(repo, goal.Id).Entries,
                     operation => operation.Operation == "conductor:land" && operation.Status == GoalOperationStatus.Completed);
                 Assert.Equal(GoalStatus.Completed, goal.Status);
-                Assert.Equal(GoalStatus.Completed, goal.Status);
+                Assert.Contains(
+                    File.ReadLines(Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl")),
+                    line => line.Contains("\"eventType\":\"GoalLanded\"", StringComparison.Ordinal));
             }
             AssertNoMergeTrainWorkspaces(repo);
         }
