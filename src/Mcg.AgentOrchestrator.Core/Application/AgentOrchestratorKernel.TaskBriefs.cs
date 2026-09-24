@@ -244,6 +244,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty
         };
         headerLines.AddRange(BuildAccumulatedRetryFeedbackBriefBlock(goal, task, workingDirectory, targetBranchName, targetHeadCommit));
+        headerLines.AddRange(BuildDeveloperPreReviewRepeatBriefBlock(goal, task));
         headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
