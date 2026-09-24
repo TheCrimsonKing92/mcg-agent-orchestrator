@@ -73,6 +73,50 @@ public sealed class ConductorSelfRelaunchTests
         Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
     }
 
+    [Xunit.Fact]
+    public void Build_failure_removes_partial_successor_output()
+    {
+        using var fixture = RealRelaunchFixture.Create();
+        var project = Path.Combine(fixture.Root, "partial-build.csproj");
+        var buildProof = Path.Combine(fixture.Root, "partial-build-executed.txt");
+        File.WriteAllText(project, $"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+              <Target Name="FailAfterPartialOutput" BeforeTargets="Build">
+                <MakeDir Directories="$(OutputPath)" />
+                <WriteLinesToFile File="$(OutputPath)/partial.txt" Lines="partial" Overwrite="true" />
+                <Error Condition="!Exists('$(OutputPath)/partial.txt')" Text="partial output was not written" />
+                <WriteLinesToFile File="{buildProof}" Lines="executed" Overwrite="true" />
+                <Error Text="intentional partial build failure" />
+              </Target>
+            </Project>
+            """);
+
+        var result = ConductorSelfRelaunch.Create(fixture.Options with { AppProjectPath = project })(
+            new ConductorSelfRelaunchRequest("goal-partial-build", 10));
+
+        Assert.False(result.HandedOff);
+        Assert.Equal("build", result.FailedPhase);
+        Assert.True(File.Exists(buildProof), result.Reason);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
+    }
+
+    [Xunit.Fact]
+    public void Resolver_failure_removes_built_successor_output()
+    {
+        using var fixture = RealRelaunchFixture.Create();
+        File.WriteAllText(fixture.Options.ResolveRunDirectoryScriptPath,
+            "param([string]$Dll)\r\nWrite-Error 'intentional resolver failure'\r\nexit 13\r\n");
+
+        var result = ConductorSelfRelaunch.Create(fixture.Options)(
+            new ConductorSelfRelaunchRequest("goal-resolver-failure", 11));
+
+        Assert.False(result.HandedOff);
+        Assert.Equal("stage", result.FailedPhase);
+        Assert.Contains("publish content-addressed run directory", result.Reason);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_launches_prepared_content_addressed_successor")]
     public void LaunchesPreparedContentAddressedSuccessor()
     {

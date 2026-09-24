@@ -6,8 +6,10 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 public sealed class PostLandingCanaryBuildLifecycleTests
 {
-    [Xunit.Fact]
-    public async Task Passed_run_removes_its_owned_build_output()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task Run_removes_its_owned_build_output_after_pass_or_probe_failure(bool failProbe)
     {
         var root = Path.Combine(Path.GetTempPath(), $"canary-build-pass-{Guid.NewGuid():N}");
         var repository = Path.Combine(root, "repository");
@@ -36,14 +38,24 @@ public sealed class PostLandingCanaryBuildLifecycleTests
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
             var runner = new PostLandingCanaryRunner(
                 repository,
+                dotnetPath: failProbe ? "git.exe" : null,
                 buildCacheRoot: buildRoot,
                 logDirectory: Path.Combine(root, "logs"),
                 applicationBinaryResolver: resolver);
 
-            var outcome = await runner.RunAsync(
-                new PostLandingCanaryRequest(sha, ["lifecycle-test"]), timeout.Token);
+            if (failProbe)
+            {
+                var failure = await Assert.ThrowsAsync<PostLandingCanaryEvaluationException>(() =>
+                    runner.RunAsync(new PostLandingCanaryRequest(sha, ["lifecycle-test"]), timeout.Token));
+                Assert.Contains("without a result contract", failure.Message);
+            }
+            else
+            {
+                var outcome = await runner.RunAsync(
+                    new PostLandingCanaryRequest(sha, ["lifecycle-test"]), timeout.Token);
+                Assert.True(outcome.Green, outcome.Detail);
+            }
 
-            Assert.True(outcome.Green, outcome.Detail);
             Assert.True(resolver.WroteIntoOwnedOutput);
             Assert.False(Directory.Exists(buildRoot));
         }
