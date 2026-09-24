@@ -68,8 +68,10 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         Xunit.Assert.NotEqual(developer.Id, retriedTaskId);
     }
 
-    [Xunit.Fact]
-    public void PermanentlyDeclinedTestEvidenceRequestRetriesTesterInsteadOfDeveloper()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PermanentlyDeclinedTestEvidenceRequestRoutesByOtherFindings(bool includeUnspecifiedFinding)
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -81,11 +83,16 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
             "Focused evidence request was declined.", FindingSeverity.Blocking,
             FindingCategory.TestEvidence,
             new FindingEvidenceRequest([new FindingEvidenceSelection("Infrastructure.Tests", "ConductorDriverTests")]));
+        var findings = includeUnspecifiedFinding
+            ? new[] { finding, new ReviewFinding("uncategorized-code-defect", ReviewFindingState.Open,
+                new ReviewFindingLocation("src/Worker.cs", "Worker.Run"),
+                "Developer must repair the source defect.", FindingSeverity.Blocking) }
+            : [finding];
         var output = string.Join(Environment.NewLine,
             "WORKER_RESULT:", "files: none", "commands: inspect receipt",
             "tests: fail - focused evidence was declined", "commit: none",
             "blockers: exact-blocker - focused evidence was declined",
-            $"findings: {JsonSerializer.Serialize(new[] { finding })}",
+            $"findings: {JsonSerializer.Serialize(findings)}",
             "touched_anchors: []", "verdict: needs-work",
             "model_fit: fixture/model - adequate - routing fixture", "skills: none",
             "confidence: high", "END_WORKER_RESULT");
@@ -117,8 +124,7 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Xunit.Assert.Equal(0, focusedRuns);
-        Xunit.Assert.Equal(tester.Id, retriedTaskId);
-        Xunit.Assert.NotEqual(developer.Id, retriedTaskId);
+        Xunit.Assert.Equal(includeUnspecifiedFinding ? developer.Id : tester.Id, retriedTaskId);
     }
 
     [Xunit.Fact]

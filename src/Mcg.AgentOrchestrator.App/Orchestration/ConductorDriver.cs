@@ -1982,10 +1982,10 @@ internal sealed partial class ConductorDriver
             var findings = AutoReviewRetryConvergenceBriefBuilder
                 .ReadStructuredReviewFindingState(goal, reviewerTask)
                 .Where(finding => finding.State == ReviewFindingState.Open &&
-                    finding.Severity == FindingSeverity.Blocking &&
-                    (reviewerTask.RequiredRole != AgentRole.Tester || finding.Category != FindingCategory.Unspecified))
+                    finding.Severity == FindingSeverity.Blocking)
                 .ToArray();
-            return reviewerTask.RequiredRole == AgentRole.Tester && findings.Length == 0
+            return reviewerTask.RequiredRole == AgentRole.Tester &&
+                (findings.Length == 0 || findings.Any(finding => finding.Category == FindingCategory.Unspecified))
                 ? null : ReviewFindingRouting.Resolve(findings, blockerProse);
         }
         catch (Exception ex) when (
