@@ -38,9 +38,12 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                     driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive))).ToArray()).Selection;
             Assert.NotNull(pair);
             var cohort = driver.RunAcceptanceCohortForTick(pair, goals.Take(2).ToArray(),
-                ConductorAutonomyPolicy.Permissive);
+                ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Null(cohort.Fault);
             Assert.DoesNotContain("gate infrastructure failure", cohort.Run.Detail, StringComparison.Ordinal);
+            Assert.True(SpinWait.SpinUntil(() =>
+                driver.GetActiveCohortGateMemberGoalIds().Count == 0,
+                TimeSpan.FromSeconds(15)), "The cohort gate did not finish.");
             var trainFault = driver.RunMergeTrain(train, goals,
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Contains("OperationCanceledException", trainFault.Detail, StringComparison.Ordinal);
