@@ -51,6 +51,9 @@ public static partial class AcceptanceCriterionOwnershipMarker
     public static bool HasOperatorOwnershipPhrase(string? text) =>
         !string.IsNullOrWhiteSpace(text) && OperatorOwnershipRegex().IsMatch(text);
 
+    public static bool HasAcceptanceGateOwnershipMarker(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && AcceptanceGateOwnershipRegex().IsMatch(text);
+
     public static string ExtractTrailingRegion(string? criterion)
     {
         if (string.IsNullOrWhiteSpace(criterion))
@@ -93,6 +96,11 @@ public static partial class AcceptanceCriterionOwnershipMarker
         @"\b(?<owner>developer|researcher|reviewer|tester|planner|acceptance)(?:\s+owns|\s+owned|\s*-\s*owned)\b|\b(?<owner>acceptance-gate|gate)(?:\s+owned|\s*-\s*owned)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex NonOperatorOwnershipRegex();
+
+    [GeneratedRegex(
+        @"\b(?:Acceptance\s+executes|ACCEPTANCE-GATE-OWNED|executed\s+by\s+the\s+acceptance\s+gate)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AcceptanceGateOwnershipRegex();
 
     [GeneratedRegex(@"\bREAL-WORLD-DEPENDENT\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex RealWorldDependentRegex();
