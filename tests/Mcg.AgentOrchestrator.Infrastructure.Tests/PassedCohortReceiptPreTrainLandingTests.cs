@@ -90,6 +90,10 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
 
             var progress = string.Join(" | ", observedTick?.ProgressLines ?? []);
             Assert.Contains($"prelanded=true outcome=passed receipt={passedReceipt.ReceiptId}", progress);
+            Assert.True(first.Status == GoalStatus.Completed,
+                $"Expected first cohort member to land; status={first.Status}; progress={progress}");
+            Assert.True(second.Status == GoalStatus.Completed,
+                $"Expected second cohort member to land; status={second.Status}; progress={progress}");
             Assert.Contains(landings, landing => landing.GoalId == first.Id.Value);
             Assert.Contains(landings, landing => landing.GoalId == second.Id.Value);
             Assert.DoesNotContain(File.ReadAllLines(logPath), line =>

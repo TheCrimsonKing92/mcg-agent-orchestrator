@@ -460,7 +460,26 @@ internal sealed partial class ConductorBatchLoop
             var run = driver.RunAcceptanceCohort(selection, eligible, policy, runGateInBackground: true);
             foreach (var member in run.MemberResults)
             {
-                results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
+                var result = member.Value;
+                if (run.Detail.StartsWith("outcome=passed", StringComparison.Ordinal))
+                {
+                    var goal = eligible.Single(goal => goal.Id.Value == member.Key);
+                    var recorded = driver.AdvanceOnce(goal, policy);
+                    if (recorded.Outcome is not ConductorAdvanceOutcome.Executed
+                        { FromState: GoalLifecycleState.Merged })
+                    {
+                        throw new InvalidOperationException(
+                            $"Pre-landed cohort goal {member.Key} did not record its landing.");
+                    }
+                    result = driver.AdvanceOnce(goal, policy);
+                    if (result.Outcome is not ConductorAdvanceOutcome.Executed
+                        { FromState: GoalLifecycleState.Recorded } || goal.Status != GoalStatus.Completed)
+                    {
+                        throw new InvalidOperationException(
+                            $"Pre-landed cohort goal {member.Key} did not complete after cleanup.");
+                    }
+                }
+                results[member.Key] = new ParallelLandingOutcome(result, SlotIndex: 0);
             }
             RecordParallelAcceptanceProgress(
                 $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', selection.Members.Select(member => member.GoalId.Value[..8]))} prelanded=true {run.Detail}",
