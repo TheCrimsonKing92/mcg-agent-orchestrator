@@ -132,8 +132,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                 Assert.Contains(
                     GoalOperationJournal.Read(repo, goal.Id).Entries,
                     operation => operation.Operation == "conductor:land" && operation.Status == GoalOperationStatus.Completed);
-                Assert.True(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).WasExecuted);
-                Assert.True(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).WasExecuted);
+                Assert.Equal(GoalStatus.Completed, goal.Status);
                 Assert.Equal(GoalStatus.Completed, goal.Status);
             }
             AssertNoMergeTrainWorkspaces(repo);
@@ -144,8 +143,10 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
         }
     }
 
-    [Fact]
-    public void ExactTestedMergeTrainCommit_OperatorOwnedObligationHoldsWholeTrainBeforeMutation()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExactTestedMergeTrainCommit_OperatorOwnedObligationHoldsWholeTrainBeforeMutation(bool missingObligations)
     {
         var repo = CreateAcceptanceCohortRepository();
         try
@@ -167,6 +168,8 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             };
             foreach (var (goal, candidate) in goals.Zip(candidates))
             {
+                if (missingObligations && goal == goals[0])
+                    continue;
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
                     goal.Objective,
                     ["Full gate passes", "Operator observes the native result"],
@@ -217,12 +220,20 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
 
             Assert.Equal(AcceptanceCohortLandingOutcome.RetryableHold, result.Outcome);
             Assert.Contains(goals[0].Id.Value[..8], result.Message, StringComparison.Ordinal);
-            Assert.Contains("criterion-v1-1:Operator:Pending", result.Message, StringComparison.Ordinal);
+            Assert.Contains(
+                missingObligations ? "authoritative refined spec not recorded" : "criterion-v1-1:Operator:Pending",
+                result.Message,
+                StringComparison.Ordinal);
             Assert.Equal(main, RunGitOutput(repo, "rev-parse", "main").Trim());
             Assert.All(goals, goal => Assert.Null(
                 GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(repo, goal.Id))));
-            Assert.Equal(CriterionEvidenceState.Satisfied, goals[0].CriterionEvidenceObligations[0].State);
-            Assert.Equal(CriterionEvidenceState.Pending, goals[0].CriterionEvidenceObligations[1].State);
+            if (missingObligations)
+                Assert.Empty(goals[0].CriterionEvidenceObligations);
+            else
+            {
+                Assert.Equal(CriterionEvidenceState.Satisfied, goals[0].CriterionEvidenceObligations[0].State);
+                Assert.Equal(CriterionEvidenceState.Pending, goals[0].CriterionEvidenceObligations[1].State);
+            }
             using var connection = new SqliteConnection($"Data Source={databasePath}");
             connection.Open();
             using var command = connection.CreateCommand();
@@ -300,6 +311,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             var firstGoal = CreateCompletedGoal(kernel, "First production train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second production train member", repo);
             var thirdGoal = CreateCompletedGoal(kernel, "Third production train member", repo);
+            RecordTrainAcceptanceOwnership(kernel, firstGoal, secondGoal, thirdGoal);
             _ = CreateWorktreeCandidate(
                 repo,
                 firstGoal.Id,
@@ -383,6 +395,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             var firstGoal = CreateCompletedGoal(kernel, "First RED train member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second RED train member", repo);
             var thirdGoal = CreateCompletedGoal(kernel, "Newest RED train member", repo);
+            RecordTrainAcceptanceOwnership(kernel, firstGoal, secondGoal, thirdGoal);
             _ = CreateWorktreeCandidate(
                 repo,
                 firstGoal.Id,
@@ -479,6 +492,22 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
         finally
         {
             DeleteDirectory(repo);
+        }
+    }
+
+    private static void RecordTrainAcceptanceOwnership(AgentOrchestratorKernel kernel, params Goal[] goals)
+    {
+        foreach (var goal in goals)
+        {
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective,
+                ["The full acceptance gate passes"],
+                VerificationClass.TestVerifiable,
+                [],
+                [])
+            {
+                AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
+            });
         }
     }
 

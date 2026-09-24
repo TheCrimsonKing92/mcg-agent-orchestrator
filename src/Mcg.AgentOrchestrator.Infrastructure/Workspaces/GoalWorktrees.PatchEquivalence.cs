@@ -17,18 +17,44 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string oldHeadSha,
         string newHeadSha,
-        out string evidence)
+        out string evidence) =>
+        TryComputePatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, out evidence, out _);
+
+    public static bool TryComputePatchEquivalence(
+        string executionDirectory,
+        string oldHeadSha,
+        string newHeadSha,
+        out string evidence,
+        out string refusalReason)
     {
         evidence = string.Empty;
-        if (string.IsNullOrWhiteSpace(executionDirectory) ||
-            !TryResolveCommit(executionDirectory, oldHeadSha, out var oldHead) ||
-            !TryResolveCommit(executionDirectory, newHeadSha, out var newHead) ||
-            !TryReadGit(executionDirectory, ["merge-base", "refs/heads/main", oldHead], out var oldBase) ||
-            !TryReadGit(executionDirectory, ["merge-base", "refs/heads/main", newHead], out var newBase) ||
-            !TryReadCommitCount(executionDirectory, oldBase, oldHead, out var oldCount) ||
-            !TryReadCommitCount(executionDirectory, newBase, newHead, out var newCount) ||
-            oldCount != newCount)
+        refusalReason = string.Empty;
+        if (string.IsNullOrWhiteSpace(executionDirectory) || !Directory.Exists(executionDirectory))
         {
+            refusalReason = "no-execution-directory";
+            return false;
+        }
+        if (!TryResolveCommit(executionDirectory, oldHeadSha, out var oldHead) ||
+            !TryResolveCommit(executionDirectory, newHeadSha, out var newHead))
+        {
+            refusalReason = "unresolvable-head";
+            return false;
+        }
+        if (!TryReadGit(executionDirectory, ["merge-base", "refs/heads/main", oldHead], out var oldBase) ||
+            !TryReadGit(executionDirectory, ["merge-base", "refs/heads/main", newHead], out var newBase))
+        {
+            refusalReason = "no-merge-base";
+            return false;
+        }
+        if (!TryReadCommitCount(executionDirectory, oldBase, oldHead, out var oldCount) ||
+            !TryReadCommitCount(executionDirectory, newBase, newHead, out var newCount))
+        {
+            refusalReason = "commit-count-unavailable";
+            return false;
+        }
+        if (oldCount != newCount)
+        {
+            refusalReason = "commit-count-mismatch";
             return false;
         }
 
@@ -40,6 +66,7 @@ public static partial class GoalWorktrees
             $"{newBase}..{newHead}");
         if (!rangeDiff.Succeeded || rangeDiff.DrainTimedOut || string.IsNullOrWhiteSpace(rangeDiff.Output))
         {
+            refusalReason = "range-diff-unavailable";
             return false;
         }
 
@@ -55,6 +82,7 @@ public static partial class GoalWorktrees
                     match.Groups["right"].Value,
                     StringComparison.Ordinal)))
         {
+            refusalReason = "range-diff-not-identical";
             return false;
         }
 
