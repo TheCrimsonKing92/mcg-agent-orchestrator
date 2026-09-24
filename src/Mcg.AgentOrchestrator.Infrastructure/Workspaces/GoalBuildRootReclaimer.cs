@@ -29,7 +29,13 @@ internal sealed class GoalBuildRootReclaimer(
             .Where(id => id.Length >= 8)
             .Select(id => id[..8])
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var root in Directory.EnumerateDirectories(goalsFolder).OrderBy(path => path, StringComparer.Ordinal))
+        string[] roots;
+        try { roots = Directory.GetDirectories(goalsFolder); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new GoalBuildRootReclaimResult([], [$"{goalsFolder}: {ex.Message}"]);
+        }
+        foreach (var root in roots.OrderBy(path => path, StringComparer.Ordinal))
         {
             if (reclaimed.Count >= maxReclaims)
                 break;
@@ -37,9 +43,10 @@ internal sealed class GoalBuildRootReclaimer(
             if (!storageRoot.ContainsPath(canonical) ||
                 storedPrefixes.Contains(Path.GetFileName(canonical)) ||
                 IsReparsePointOrMissing(canonical) ||
-                ownedRoots.ReadRegisteredPaths([canonical]).Contains(canonical) ||
                 !TryReadLease(canonical, out var goalId, out var ownerProcessId) ||
-                storedGoalIds.Contains(goalId) || _isOwnerRunning(ownerProcessId) ||
+                storedGoalIds.Contains(goalId) ||
+                ownedRoots.ReadRegisteredPaths([canonical]).Contains(canonical) ||
+                _isOwnerRunning(ownerProcessId) ||
                 !TryReadLease(canonical, out var confirmedId, out var confirmedOwner) ||
                 !string.Equals(goalId, confirmedId, StringComparison.OrdinalIgnoreCase) ||
                 ownerProcessId != confirmedOwner)
@@ -71,9 +78,7 @@ internal sealed class GoalBuildRootReclaimer(
             using var document = JsonDocument.Parse(File.ReadAllText(path));
             var lease = document.RootElement;
             if (!lease.TryGetProperty("goalId", out var id) || id.ValueKind != JsonValueKind.String ||
-                !lease.TryGetProperty("ownerProcessId", out var pid) || !pid.TryGetInt32(out ownerProcessId) ||
-                !lease.TryGetProperty("machineName", out var machine) ||
-                !string.Equals(machine.GetString(), Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+                !lease.TryGetProperty("ownerProcessId", out var pid) || !pid.TryGetInt32(out ownerProcessId))
                 return false;
             goalId = id.GetString() ?? string.Empty;
             return goalId.Length == 32 && goalId.All(Uri.IsHexDigit) && ownerProcessId > 0 &&

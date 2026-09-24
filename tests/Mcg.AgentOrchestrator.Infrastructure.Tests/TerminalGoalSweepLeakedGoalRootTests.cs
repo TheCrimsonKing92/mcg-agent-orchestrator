@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -6,6 +7,69 @@ using Microsoft.Data.Sqlite;
 
 public sealed class TerminalGoalSweepLeakedGoalRootTests
 {
+    [Fact]
+    public void Sweep_does_not_reclaim_an_ambient_root_from_an_unrelated_store()
+    {
+        var temp = Directory.CreateTempSubdirectory("goal-unowned-").FullName;
+        try
+        {
+            var storage = new DotnetBuildStorageRoot(Path.Combine(temp, "isolated"));
+            var db = Path.Combine(temp, "state.db");
+            StateDbMigrations.EnsureUpToDate(db);
+            var unownedRoot = DotnetBuildEnvironmentManager.CreateAttempt(
+                GoalId.New(), "acceptance", storageRoot: storage).RootPath;
+            File.WriteAllText(Path.Combine(unownedRoot, "keep.bin"), "unowned bytes");
+            var before = Snapshot(unownedRoot);
+
+            Assert.False(TerminalGoalSweep.IsCanonicalGoalRootStore(db));
+            var result = TerminalGoalSweep.ReapOwnedBuildRootsCore(
+                db, storage, new TerminalGoalSweep.OwnedRootSweepState(),
+                _ => false, usesSharedStorageRoot: true);
+
+            Assert.True(Directory.Exists(unownedRoot));
+            Assert.Equal(before, Snapshot(unownedRoot));
+            Assert.Empty(result.ReclaimedGoalRoots!);
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Sweep_retains_live_owner_and_reclaims_dead_owner_after_machine_rename()
+    {
+        var temp = Directory.CreateTempSubdirectory("goal-owner-").FullName;
+        try
+        {
+            var storage = new DotnetBuildStorageRoot(Path.Combine(temp, "isolated"));
+            var db = Path.Combine(temp, "state.db");
+            StateDbMigrations.EnsureUpToDate(db);
+            var liveRoot = DotnetBuildEnvironmentManager.CreateAttempt(
+                GoalId.New(), "acceptance", storageRoot: storage).RootPath;
+            var deadRoot = DotnetBuildEnvironmentManager.CreateAttempt(
+                GoalId.New(), "acceptance", storageRoot: storage).RootPath;
+            var leasePath = Path.Combine(deadRoot, "lease", "lease.json");
+            var lease = JsonNode.Parse(File.ReadAllText(leasePath))!;
+            lease["machineName"] = "prior-machine-name";
+            lease["ownerProcessId"] = int.MaxValue;
+            File.WriteAllText(leasePath, lease.ToJsonString());
+            var liveBytes = Snapshot(liveRoot);
+
+            var result = TerminalGoalSweep.ReapOwnedBuildRootsCore(
+                db, storage, new TerminalGoalSweep.OwnedRootSweepState(),
+                pid => pid == Environment.ProcessId);
+
+            Assert.Equal(liveBytes, Snapshot(liveRoot));
+            Assert.False(Directory.Exists(deadRoot));
+            Assert.Contains(deadRoot, result.ReclaimedGoalRoots!);
+        }
+        finally
+        {
+            Directory.Delete(temp, recursive: true);
+        }
+    }
+
     [Fact]
     public void Sweep_reclaims_only_absent_goal_with_dead_owner_and_readable_lease()
     {
