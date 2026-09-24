@@ -26,7 +26,8 @@ internal enum ConductorParallelAcceptanceAttemptOutcome
     GateEngineFault,
     LaunchFailed,
     Faulted,
-    Reconciled
+    Reconciled,
+    StructuralCoveragePermitUnavailable
 }
 
 internal enum WorkerRegistrationFaultDisposition
@@ -49,7 +50,8 @@ internal enum ConductorEvidenceAttemptOutcome
     InfrastructureDeferred,
     GateEngineFault,
     CorruptArtifacts,
-    Unknown
+    Unknown,
+    StructuralCoveragePermitUnavailable
 }
 
 internal enum ConductorEvidenceSupersessionCause
@@ -2275,6 +2277,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => ConductorEvidenceAttemptOutcome.BlockedBuildSlot,
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => ConductorEvidenceAttemptOutcome.BlockedBuildLock,
             ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred => ConductorEvidenceAttemptOutcome.InfrastructureDeferred,
+            ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable => ConductorEvidenceAttemptOutcome.StructuralCoveragePermitUnavailable,
             ConductorParallelAcceptanceAttemptOutcome.GateEngineFault => ConductorEvidenceAttemptOutcome.GateEngineFault,
             ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts => ConductorEvidenceAttemptOutcome.CorruptArtifacts,
             ConductorParallelAcceptanceAttemptOutcome.ProcessDied => ConductorEvidenceAttemptOutcome.Unknown,
@@ -2539,6 +2542,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 {
                     DotnetBuildSlotsBusyException => "blocked-build-slot",
                     BuildLockBlockedException => "blocked-build-lock",
+                    AcceptanceInfrastructureDeferredException deferred when
+                        deferred.ReasonCode == "structural-coverage-permit-unavailable" =>
+                        "structural-coverage-permit-unavailable",
                     AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
                     AcceptanceGateEngineException => "gate-engine-fault",
                     OperationCanceledException => "cancelled",
@@ -2690,6 +2696,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 new DotnetBuildLeaseAcquisition.SlotsBusy("background-acceptance", [])),
             "blocked-build-lock" => new BuildLockBlockedException(
                 new BuildLockAttribution("unknown", [], "background-acceptance", "acceptance", "background-acceptance")),
+            "structural-coverage-permit-unavailable" when
+                artifact.InfrastructureReasonCode == "structural-coverage-permit-unavailable" =>
+                new AcceptanceInfrastructureDeferredException(
+                    artifact.InfrastructureReasonCode,
+                    artifact.InfrastructureExitCode,
+                    artifact.InfrastructureOutputTail ?? artifact.FaultMessage,
+                    artifact.InfrastructureBuildLockAttribution),
+            "structural-coverage-permit-unavailable" =>
+                throw new InvalidDataException("Structural coverage permit fault has inconsistent reason code."),
             "infrastructure-deferred" => new AcceptanceInfrastructureDeferredException(
                 artifact.InfrastructureReasonCode ?? "background-acceptance-infrastructure-unavailable",
                 artifact.InfrastructureExitCode,
@@ -2720,6 +2735,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         if (run.Exception is BuildLockBlockedException)
         {
             return ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock;
+        }
+
+        if (run.Exception is AcceptanceInfrastructureDeferredException
+            { ReasonCode: "structural-coverage-permit-unavailable" })
+        {
+            return ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable;
         }
 
         if (run.Exception is AcceptanceInfrastructureDeferredException)
@@ -2774,6 +2795,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
             or ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred
+            or ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable
             or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
 
     private static bool IsReconciled(ConductorParallelAcceptanceAttempt attempt) =>
@@ -2994,6 +3016,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     internal static bool IsBoundedInfrastructureOutcome(ConductorParallelAcceptanceAttemptOutcome outcome) =>
         outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
             ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred or
+            ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable or
             ConductorParallelAcceptanceAttemptOutcome.GateEngineFault;
 
     internal static WorkerRegistrationFaultDisposition ClassifyWorkerRegistrationFault(Exception? exception)
