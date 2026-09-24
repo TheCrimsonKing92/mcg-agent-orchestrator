@@ -4681,6 +4681,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return [.. args];
     }
 
+    private DotnetBuildEnvironmentLease AcquireCheckPermit(DotnetBuildEnvironment environment, GoalId? goalId, bool wait, CancellationToken ct) =>
+        wait ? StructuralCoveragePermitWait.Acquire(environment, goalId, _storageRoot, _testOverrides, EmitGateProgress,
+            _timeProvider, _leaseSleep, _executionContext?.ArtifactCustody, ct) :
+        DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(environment, ct, _timeProvider, _leaseSleep,
+            _executionContext?.ArtifactCustody);
+
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetCheckAsync(
         AcceptanceManifestCheck check,
         string[] arguments,
@@ -4691,7 +4697,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string attemptName,
         CancellationToken cancellationToken,
         Action<DotnetBuildEnvironment>? afterLeasePrepared = null,
-        DotnetBuildEnvironment? executionEnvironment = null)
+        DotnetBuildEnvironment? executionEnvironment = null,
+        bool waitForPermit = false)
     {
         var elapsed = Stopwatch.StartNew();
         var environment = executionEnvironment ?? ResolveExecutionEnvironment(
@@ -4704,11 +4711,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             leaseLock = stableSlotLease?.IsExecutionLockHeld == true
                 ? null
-                : DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-                    environment,
-                    cancellationToken,
-                    _timeProvider,
-                    _leaseSleep, _executionContext?.ArtifactCustody);
+                : AcquireCheckPermit(environment, goalId, waitForPermit, cancellationToken);
             afterLeasePrepared?.Invoke(environment);
 
             var lockRemediationApplied = false;
@@ -4746,11 +4749,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         leaseLock?.Dispose();
                         leaseLock = null;
                         environment = nextEnvironment;
-                        leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-                            environment,
-                            cancellationToken,
-                            _timeProvider,
-                            _leaseSleep, _executionContext?.ArtifactCustody);
+                        leaseLock = AcquireCheckPermit(environment, goalId, waitForPermit, cancellationToken);
                     },
                     cancellationToken).ConfigureAwait(false);
             }
@@ -4841,11 +4840,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     leaseLock?.Dispose();
                     leaseLock = null;
                     environment = nextEnvironment;
-                    leaseLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-                        environment,
-                        cancellationToken,
-                        _timeProvider,
-                        _leaseSleep, _executionContext?.ArtifactCustody);
+                    _testOverrides.OnBuildArtifactIoRetryLeaseReleasedForTests?.Invoke();
+                    leaseLock = AcquireCheckPermit(environment, goalId, waitForPermit, cancellationToken);
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -5898,7 +5894,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         stableSlotLease,
                         operationName,
                         baselineCancellationToken,
-                        executionEnvironment: mainEnvironment)
+                        executionEnvironment: mainEnvironment,
+                        waitForPermit: true)
                         .ConfigureAwait(false);
                     mainBuild = managedBuild.Result;
                     lockRemediationApplied = managedBuild.Retried;

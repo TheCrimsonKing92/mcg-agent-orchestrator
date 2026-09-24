@@ -120,6 +120,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "PreReviewFocusedEvidenceVerifierTests",
                 "RealProcessShardAlphaSmokeTests",
                 "RealProcessShardBetaSmokeTests",
+                "StructuralCoverageVerifierPermitWaitTests",
                 "WorkerDispatchJobAccountingTests"
             ]);
 

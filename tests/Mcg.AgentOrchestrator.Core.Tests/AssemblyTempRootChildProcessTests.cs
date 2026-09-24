@@ -57,6 +57,19 @@ public sealed class AssemblyTempRootChildProcessTests
         Assert.Equal(afterFirst, fixture.OwnedRootCount);
     }
 
+    [Fact]
+    public void WaitForHandshakeToleratesChildStillWritingHandshake()
+    {
+        using var fixture = new ChildFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.HandshakePath)!);
+        using var writer = new FileStream(fixture.HandshakePath, FileMode.Create, FileAccess.Write, FileShare.Read);
+        var expected = fixture.Root;
+        writer.Write(System.Text.Encoding.UTF8.GetBytes(expected));
+        writer.Flush();
+
+        Assert.Equal(expected, fixture.WaitForHandshake(Process.GetCurrentProcess(), writer.Dispose));
+    }
+
     private sealed class ChildFixture : IDisposable
     {
         private readonly List<Process> children = [];
@@ -118,8 +131,9 @@ public sealed class AssemblyTempRootChildProcessTests
             return process;
         }
 
-        internal string WaitForHandshake(Process child)
+        internal string WaitForHandshake(Process child, Action? onHandshakeStillOpen = null)
         {
+            var deadline = DateTime.UtcNow.AddSeconds(15);
             var controlDirectory = Path.GetDirectoryName(HandshakePath)!;
             Directory.CreateDirectory(controlDirectory);
             using var watcher = new FileSystemWatcher(controlDirectory, Path.GetFileName(HandshakePath))
@@ -128,11 +142,24 @@ public sealed class AssemblyTempRootChildProcessTests
             };
             if (!File.Exists(HandshakePath))
             {
-                watcher.WaitForChanged(WatcherChangeTypes.Created, TimeSpan.FromSeconds(15));
+                watcher.WaitForChanged(WatcherChangeTypes.Created, deadline - DateTime.UtcNow);
             }
 
             Assert.True(File.Exists(HandshakePath), ReadFailure(child));
-            return File.ReadAllText(HandshakePath);
+            while (true)
+            {
+                try
+                {
+                    using var stream = new FileStream(HandshakePath, FileMode.Open, FileAccess.Read, FileShare.None);
+                    using var reader = new StreamReader(stream);
+                    return reader.ReadToEnd();
+                }
+                catch (IOException) when (DateTime.UtcNow < deadline)
+                {
+                    onHandshakeStillOpen?.Invoke();
+                    Thread.Sleep(10);
+                }
+            }
         }
 
         internal void RunToNormalExit()

@@ -304,7 +304,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         return previous;
     }
 
-    private static (string CandidateRoot, string MainRoot) CreateTrustedBaselineWorkspace()
+    internal static (string CandidateRoot, string MainRoot) CreateTrustedBaselineWorkspace()
     {
         var candidateRoot = CreateManifestWorkspace("""
             {
@@ -330,13 +330,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDis
         return (candidateRoot, mainRoot);
     }
 
-    private static bool IsVstestExecution(string[] args) =>
+    internal static bool IsVstestExecution(string[] args) =>
         args.Length >= 2 &&
         args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
         args[1].Equals("test", StringComparison.OrdinalIgnoreCase) &&
         !args.Contains("--list-tests", StringComparer.OrdinalIgnoreCase);
 
-    private static void WriteVstestTrx(string[] args, string testName)
+    internal static void WriteVstestTrx(string[] args, string testName)
     {
         var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
         var loggerIndex = Array.IndexOf(args, "--logger");
