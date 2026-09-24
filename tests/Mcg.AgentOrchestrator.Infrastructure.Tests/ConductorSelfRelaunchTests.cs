@@ -16,6 +16,7 @@ public sealed class ConductorSelfRelaunchTests
 
         Assert.True(result.HandedOff, result.Reason);
         Assert.NotNull(result.Successor);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
         Assert.Contains("schemaVersion=", result.Successor!.SelfCheckDetail, StringComparison.Ordinal);
         Assert.Contains("manifestChecks=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
         Assert.Contains("lanes=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
@@ -69,6 +70,7 @@ public sealed class ConductorSelfRelaunchTests
 
         Assert.False(result.HandedOff);
         Assert.Equal("self-check", result.FailedPhase);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
     }
 
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_launches_prepared_content_addressed_successor")]
@@ -78,12 +80,14 @@ public sealed class ConductorSelfRelaunchTests
         try
         {
             ConductLoopHandoffOptions? observedOptions = null;
+            using var runDirectoryLease = new MemoryStream();
             var prepared = new ConductorPreparedSuccessor(
                 Path.Combine(root, "mcg-run", "abc123"),
                 Path.Combine(root, "mcg-run", "abc123", "Mcg.AgentOrchestrator.App.dll"),
                 "deadbeef",
                 "deadbeef",
-                "LOOP_START selfCheck=true");
+                "LOOP_START selfCheck=true",
+                runDirectoryLease);
             var result = ConductorSelfRelaunch.TryRelaunch(
                 Options(root),
                 new ConductorSelfRelaunchRequest("goal1234", 7),
@@ -103,6 +107,7 @@ public sealed class ConductorSelfRelaunchTests
             Assert.Equal(
                 ["dotnet", prepared.AppDllPath],
                 observedOptions!.SuccessorCommandPrefix);
+            Assert.Throws<ObjectDisposedException>(() => runDirectoryLease.ReadByte());
         }
         finally
         {
@@ -343,6 +348,16 @@ public sealed class ConductorSelfRelaunchTests
                 .GetResult();
             var lease = ConductorLoopLeaseController.Acquire(orchestratorDirectory);
             var appOutputDirectory = Path.Combine(root, "build-output");
+            var resolverWrapper = Path.Combine(root, "resolve-test-run-dir.ps1");
+            var isolatedTemp = Path.Combine(root, "isolated-temp");
+            Directory.CreateDirectory(isolatedTemp);
+            static string Quote(string value) => value.Replace("'", "''", StringComparison.Ordinal);
+            File.WriteAllText(resolverWrapper, string.Join(Environment.NewLine,
+                "param([string]$Dll)",
+                "$ErrorActionPreference = 'Stop'",
+                $"$env:TEMP = '{Quote(isolatedTemp)}'",
+                $"$env:TMP = '{Quote(isolatedTemp)}'",
+                $"& '{Quote(Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"))}' -Dll $Dll"));
             var handoffOptions = new ConductLoopHandoffOptions(
                 Args: loopArgs ?? ["conduct", "--loop", "--max-iterations", "1"],
                 ExecutionDirectory: root,
@@ -363,7 +378,7 @@ public sealed class ConductorSelfRelaunchTests
                 AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
                 AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
                 UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
-                ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
+                ResolveRunDirectoryScriptPath: resolverWrapper,
                 StateStorePath: stateStorePath,
                 AgentCatalogPath: Path.Combine(orchestratorDirectory, "agents.json"),
                 WorkerProfilePath: Path.Combine(orchestratorDirectory, "worker-profiles.json"),

@@ -12,12 +12,14 @@ public sealed class ConductorContinuitySupervisorReadinessTests
         var releaseReadinessTimeout = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var handoffRecorded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var successorCancelled = false;
+        using var lease = new MemoryStream();
         var prepared = new ConductorPreparedSuccessor(
             "C:\\staged-run",
             "C:\\staged-run\\Mcg.AgentOrchestrator.App.dll",
             "repository-head",
             "staged-head",
-            "LOOP_START selfCheck=true");
+            "LOOP_START selfCheck=true",
+            lease);
         var host = new ScriptedSupervisorProcessHost(
             (request, _, _) =>
             {
@@ -91,6 +93,7 @@ public sealed class ConductorContinuitySupervisorReadinessTests
         Assert.Equal("completed", handoff.Status);
         Assert.Contains("stagedSourceCommit=staged-head", handoff.Detail, StringComparison.Ordinal);
         Assert.Contains("repositoryHead=repository-head", handoff.Detail, StringComparison.Ordinal);
+        Assert.Throws<ObjectDisposedException>(() => lease.ReadByte());
     }
 
     [Xunit.Fact]
@@ -100,12 +103,14 @@ public sealed class ConductorContinuitySupervisorReadinessTests
         var conductEvents = new List<string>();
         var stagedRequestSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseReadinessTimeout = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var lease = new MemoryStream();
         var prepared = new ConductorPreparedSuccessor(
             "C:\\staged-run",
             "C:\\staged-run\\Mcg.AgentOrchestrator.App.dll",
             "new-head",
             "new-head",
-            "LOOP_START selfCheck=true");
+            "LOOP_START selfCheck=true",
+            lease);
         var host = new ScriptedSupervisorProcessHost(
             (request, _, _) =>
             {
@@ -153,6 +158,7 @@ public sealed class ConductorContinuitySupervisorReadinessTests
         Assert.Contains(conductEvents, detail =>
             detail.Contains("LOOP_HANDOFF_FAILED", StringComparison.Ordinal) &&
             detail.Contains("phase=readiness", StringComparison.Ordinal));
+        Assert.Throws<ObjectDisposedException>(() => lease.ReadByte());
     }
 
     [Xunit.Fact]

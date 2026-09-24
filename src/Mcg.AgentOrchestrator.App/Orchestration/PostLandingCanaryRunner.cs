@@ -120,10 +120,17 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var canaryBuildEnvironmentRoot = Path.Combine(
             Path.GetTempPath(),
             $"mcg-pc-{Environment.ProcessId}-{Guid.NewGuid():N}"[..24]);
+        var repositoryKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(_repositoryRoot)))[..16];
+        var canaryBuildOutputRoot = Path.Combine(
+            _buildCacheRoot,
+            repositoryKey,
+            $"{request.LandingSha[..Math.Min(12, request.LandingSha.Length)]}-{Guid.NewGuid():N}");
         Exception? runFailure = null;
         try
         {
             Directory.CreateDirectory(canaryBuildEnvironmentRoot);
+            Directory.CreateDirectory(canaryBuildOutputRoot);
             var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
             if (!baseline.HeadSha.Equals(request.LandingSha, StringComparison.OrdinalIgnoreCase))
@@ -147,9 +154,10 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             using var fixture = PostLandingCanaryFixture.Materialize(canaryRepositoryRoot, request.LandingSha);
             await InitializeFixtureRepositoryAsync(fixture.RootPath, logs, cancellationToken).ConfigureAwait(false);
             var appDllPath = _applicationBinaryResolver is null
-                ? await ResolveOrBuildMainBinaryAsync(
+                ? await BuildMainBinaryAsync(
                         canaryRepositoryRoot,
                         baseline.HeadSha,
+                        canaryBuildOutputRoot,
                         logs,
                         cancellationToken)
                     .ConfigureAwait(false)
@@ -246,14 +254,27 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             {
                 try
                 {
-                    if (Directory.Exists(canaryBuildEnvironmentRoot))
-                    {
-                        Directory.Delete(canaryBuildEnvironmentRoot, recursive: true);
-                    }
+                    WholeDirectoryRemoval.Remove(canaryBuildOutputRoot, "Mcg.AgentOrchestrator.App.dll");
                 }
-                catch when (runFailure is not null)
+                catch (Exception cleanupFailure) when (runFailure is not null)
                 {
-                    // Preserve the primary canary failure; the isolated root contains only run-scoped build state.
+                    throw new AggregateException(
+                        $"Post-landing canary failed and its build output could not be removed: {canaryBuildOutputRoot}",
+                        runFailure!,
+                        cleanupFailure);
+                }
+                finally
+                {
+                    WholeDirectoryRemoval.TryRemoveEmptyDirectory(Path.GetDirectoryName(canaryBuildOutputRoot)!);
+                    WholeDirectoryRemoval.TryRemoveEmptyDirectory(_buildCacheRoot);
+                    try
+                    {
+                        WholeDirectoryRemoval.Remove(canaryBuildEnvironmentRoot);
+                    }
+                    catch when (runFailure is not null)
+                    {
+                        // Preserve the primary canary failure; this root contains only run-scoped build state.
+                    }
                 }
             }
         }
@@ -338,27 +359,15 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<string> ResolveOrBuildMainBinaryAsync(
+    private async Task<string> BuildMainBinaryAsync(
         string sourceRoot,
         string sourceSha,
+        string outputDirectory,
         PostLandingCanaryLogSession logs,
         CancellationToken cancellationToken)
     {
-        var repositoryKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(_repositoryRoot)))[..16];
-        var outputDirectory = Path.Combine(
-            _buildCacheRoot,
-            repositoryKey,
-            sourceSha);
         var appDllPath = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.App.dll");
         var markerPath = appDllPath + ".git-head";
-        if (File.Exists(appDllPath) &&
-            File.Exists(markerPath) &&
-            File.ReadAllText(markerPath).Trim().Equals(sourceSha, StringComparison.OrdinalIgnoreCase))
-        {
-            return appDllPath;
-        }
-
         Directory.CreateDirectory(outputDirectory);
         await EnsureSucceededAsync(
             "build freshly landed main binary",

@@ -78,12 +78,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\Update-AppDll
 del "%BUILD_LOG%" 2>nul
 
 :run_app
-:: Run from a per-build ISOLATED copy of the binary, not the in-tree output. A live run then holds its own
-:: copy (under %TEMP%\mcg-run\<build-hash>), leaving the in-tree binary free to rebuild while it runs -- so
-:: builds and real runs stop interfering. Content-addressed by the App.dll hash: identical builds reuse one
-:: copy, a new build gets a fresh one, and copies unused for 7 days are pruned (a live copy's dll is locked,
-:: so it survives the prune). Native SQLite assets are required in the isolated copy; fail before running
-:: the command if the build output cannot populate a complete run directory.
+:: Run from an isolated copy of the complete app closure under %TEMP%\mcg-run\v2\<digest>.
+:: The resolver reuses or repairs the current digest and removes other digest directories only when
+:: no process holds their App.dll open. A live run keeps its directory intact while the in-tree output
+:: can be rebuilt. Native SQLite assets are required; fail if the build output cannot supply them.
 set "RUNDIR="
 for /f "usebackq delims=" %%R in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\resolve-run-dir.ps1" "%APP_DLL%"`) do set "RUNDIR=%%R"
 if not defined RUNDIR (

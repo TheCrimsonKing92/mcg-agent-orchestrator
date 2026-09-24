@@ -56,15 +56,16 @@ function Get-OutputContentSnapshot {
     }
 
     $fileCount = 0
+    $files = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($file in (Get-ChildItem -LiteralPath $Path -Force -Recurse -File | Sort-Object FullName)) {
-        if ($ExcludeRunCacheMarker -and $file.Name.Equals($script:RunCacheMarkerName, [System.StringComparison]::Ordinal)) {
-            continue
-        }
         if (-not $file.FullName.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Cannot hash file outside output directory: $($file.FullName)"
         }
 
         $relativePath = $file.FullName.Substring($rootPath.Length).Replace('\', '/')
+        if ($ExcludeRunCacheMarker -and $relativePath.Equals($script:RunCacheMarkerName, [System.StringComparison]::Ordinal)) {
+            continue
+        }
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
         $stream = $null
         try {
@@ -82,6 +83,7 @@ function Get-OutputContentSnapshot {
         [void]$payload.Append(':')
         [void]$payload.Append($fileHash)
         [void]$payload.Append("`n")
+        $files.Add($relativePath, $fileHash)
         $fileCount++
     }
 
@@ -97,6 +99,197 @@ function Get-OutputContentSnapshot {
     return [pscustomobject]@{
         Digest = $digest
         FileCount = $fileCount
+        Files = $files
+    }
+}
+
+function Repair-PublishedRunDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)]$SourceSnapshot,
+        [Parameter(Mandatory = $true)][string]$AppLeaf
+    )
+
+    try {
+        if (-not [IO.Path]::GetFileName($Path).Equals($SourceSnapshot.Digest, [StringComparison]::Ordinal) -or
+            -not (Test-Path -LiteralPath $Path -PathType Container)) {
+            return $false
+        }
+
+        $sourceNow = Get-OutputContentSnapshot -Path $SourcePath
+        if (-not $sourceNow.Digest.Equals($SourceSnapshot.Digest, [StringComparison]::Ordinal) -or
+            $sourceNow.FileCount -ne $SourceSnapshot.FileCount) {
+            return $false
+        }
+
+        $markerPath = Join-Path $Path $script:RunCacheMarkerName
+        $markerMissing = -not (Test-Path -LiteralPath $markerPath -PathType Leaf)
+        if (-not $markerMissing) {
+            $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+            if ([int]$marker.schemaVersion -ne $script:RunCacheSchemaVersion -or
+                -not ([string]$marker.digest).Equals($SourceSnapshot.Digest, [StringComparison]::Ordinal) -or
+                [int]$marker.fileCount -ne $SourceSnapshot.FileCount) {
+                return $false
+            }
+        }
+
+        $published = Get-OutputContentSnapshot -Path $Path -ExcludeRunCacheMarker
+        foreach ($entry in $published.Files.GetEnumerator()) {
+            if (-not $SourceSnapshot.Files.ContainsKey($entry.Key) -or
+                -not $SourceSnapshot.Files[$entry.Key].Equals($entry.Value, [StringComparison]::Ordinal)) {
+                return $false
+            }
+        }
+        if ($published.FileCount -eq $SourceSnapshot.FileCount -and -not $markerMissing) {
+            return $false
+        }
+
+        foreach ($entry in $SourceSnapshot.Files.GetEnumerator()) {
+            if ($published.Files.ContainsKey($entry.Key)) {
+                continue
+            }
+            $relative = $entry.Key.Replace('/', [IO.Path]::DirectorySeparatorChar)
+            $sourceFile = Join-Path $SourcePath $relative
+            $targetFile = Join-Path $Path $relative
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($targetFile))
+            try {
+                [IO.File]::Copy($sourceFile, $targetFile, $false)
+            }
+            catch [IO.IOException] {
+                if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf) -or
+                    -not (Get-FileHash -LiteralPath $targetFile -Algorithm SHA256).Hash.Equals(
+                        $entry.Value, [StringComparison]::OrdinalIgnoreCase)) {
+                    throw
+                }
+            }
+        }
+
+        if ($markerMissing) {
+            $seal = [ordered]@{
+                schemaVersion = $script:RunCacheSchemaVersion
+                digest = $SourceSnapshot.Digest
+                fileCount = $SourceSnapshot.FileCount
+                sealedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+            } | ConvertTo-Json -Compress
+            $bytes = [Text.Encoding]::UTF8.GetBytes($seal)
+            try {
+                $stream = [IO.File]::Open($markerPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                try { $stream.Write($bytes, 0, $bytes.Length) }
+                finally { $stream.Dispose() }
+            }
+            catch [IO.IOException] {
+                if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { throw }
+            }
+        }
+
+        $sourceAfter = Get-OutputContentSnapshot -Path $SourcePath
+        return $sourceAfter.Digest.Equals($SourceSnapshot.Digest, [StringComparison]::Ordinal) -and
+            $sourceAfter.FileCount -eq $SourceSnapshot.FileCount -and
+            (Test-PublishedRunDirectory -Path $Path -ExpectedDigest $SourceSnapshot.Digest -AppLeaf $AppLeaf)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Remove-UnusedRunDirectories {
+    param(
+        [Parameter(Mandatory = $true)][string]$BasePath,
+        [Parameter(Mandatory = $true)][string]$CurrentDigest,
+        [Parameter(Mandatory = $true)][string]$AppLeaf
+    )
+
+    foreach ($candidate in (Get-ChildItem -LiteralPath $BasePath -Directory -Force -ErrorAction SilentlyContinue)) {
+        if (($candidate.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $candidate.Name -notmatch '^[0-9A-Fa-f]{64}$' -or
+            $candidate.Name.Equals($CurrentDigest, [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $appDll = Join-Path $candidate.FullName $AppLeaf
+        $probe = $null
+        $trash = $null
+        $deleting = $false
+        try {
+            if (Test-Path -LiteralPath $appDll -PathType Leaf) {
+                $probe = [IO.File]::Open($appDll, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+            }
+            # Rename is the boundary: if any child is held by a running process, Windows
+            # refuses the move and the original directory remains wholly untouched.
+            if ($null -ne $probe) { $probe.Dispose(); $probe = $null }
+            $trash = Join-Path $BasePath ".trash-$PID-$([Guid]::NewGuid().ToString('N'))"
+            [IO.Directory]::Move($candidate.FullName, $trash)
+            # A launcher may have opened this DLL between the first probe and the move.
+            # Check again before deleting any file and put the whole directory back if busy.
+            $retiredAppDll = Join-Path $trash $AppLeaf
+            if (Test-Path -LiteralPath $retiredAppDll -PathType Leaf) {
+                $probe = [IO.File]::Open($retiredAppDll, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+                $probe.Dispose()
+                $probe = $null
+            }
+            $deleting = $true
+            Remove-Item -LiteralPath $trash -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            # Retirement is best effort; it must never prevent launching the validated closure.
+            if ($null -ne $trash -and -not $deleting -and
+                (Test-Path -LiteralPath $trash -PathType Container) -and
+                -not (Test-Path -LiteralPath $candidate.FullName)) {
+                try { [IO.Directory]::Move($trash, $candidate.FullName) }
+                catch { }
+            }
+        }
+        finally {
+            if ($null -ne $probe) { $probe.Dispose() }
+        }
+    }
+
+    # An interrupted retirement can leave a renamed directory. Its creating resolver
+    # owns it while alive; a later resolver may reclaim it only after that PID exits.
+    foreach ($retired in (Get-ChildItem -LiteralPath $BasePath -Directory -Force -Filter '.trash-*' -ErrorAction SilentlyContinue)) {
+        if (($retired.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $retired.Name -notmatch '^\.trash-([0-9]+)-[0-9A-Fa-f]{32}$') {
+            continue
+        }
+        $ownerPid = 0
+        if (-not [int]::TryParse($Matches[1], [ref]$ownerPid)) { continue }
+        if (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue) {
+            continue
+        }
+
+        $probe = $null
+        $claimed = $null
+        $deleting = $false
+        try {
+            $retiredAppDll = Join-Path $retired.FullName $AppLeaf
+            if (Test-Path -LiteralPath $retiredAppDll -PathType Leaf) {
+                $probe = [IO.File]::Open($retiredAppDll, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+                $probe.Dispose()
+                $probe = $null
+            }
+            $claimed = Join-Path $BasePath ".trash-$PID-$([Guid]::NewGuid().ToString('N'))"
+            [IO.Directory]::Move($retired.FullName, $claimed)
+            $claimedAppDll = Join-Path $claimed $AppLeaf
+            if (Test-Path -LiteralPath $claimedAppDll -PathType Leaf) {
+                $probe = [IO.File]::Open($claimedAppDll, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+                $probe.Dispose()
+                $probe = $null
+            }
+            $deleting = $true
+            Remove-Item -LiteralPath $claimed -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            if ($null -ne $claimed -and -not $deleting -and
+                (Test-Path -LiteralPath $claimed -PathType Container) -and
+                -not (Test-Path -LiteralPath $retired.FullName)) {
+                try { [IO.Directory]::Move($claimed, $retired.FullName) }
+                catch { }
+            }
+        }
+        finally {
+            if ($null -ne $probe) { $probe.Dispose() }
+        }
     }
 }
 
@@ -158,6 +351,10 @@ for ($attempt = 1; $attempt -le $script:SourceSnapshotAttempts; $attempt++) {
 
         if (Test-Path -LiteralPath $run) {
             if (Test-PublishedRunDirectory -Path $run -ExpectedDigest $before.Digest -AppLeaf $leaf) {
+                $resolvedRun = $run
+                break
+            }
+            if (Repair-PublishedRunDirectory -Path $run -SourcePath $out -SourceSnapshot $before -AppLeaf $leaf) {
                 $resolvedRun = $run
                 break
             }
@@ -223,4 +420,5 @@ if ([string]::IsNullOrWhiteSpace($resolvedRun)) {
     throw "Could not seal a stable orchestrator application closure after $script:SourceSnapshotAttempts attempts. $lastSnapshotFailure"
 }
 
+Remove-UnusedRunDirectories -BasePath $base -CurrentDigest (Split-Path $resolvedRun -Leaf) -AppLeaf $leaf
 Write-Output $resolvedRun

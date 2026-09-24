@@ -117,6 +117,8 @@ internal sealed class ConductorContinuitySupervisor(
         ConductorPreparedSuccessor? pendingSuccessor = null;
         var attempt = 0;
 
+        try
+        {
         while (true)
         {
             attempt++;
@@ -186,6 +188,7 @@ internal sealed class ConductorContinuitySupervisor(
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         pendingSuccessor = null;
+                        successor.RunDirectoryLease?.Dispose();
                         consecutiveStagingFailures++;
                         stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
                         EmitHandoff(
@@ -209,6 +212,7 @@ internal sealed class ConductorContinuitySupervisor(
                         timeoutCts.Cancel();
                         consecutiveStagingFailures = 0;
                         pendingSuccessor = null;
+                        successor.RunDirectoryLease?.Dispose();
                         EmitHandoff(
                             "completed",
                             attempt,
@@ -247,6 +251,7 @@ internal sealed class ConductorContinuitySupervisor(
                         }
 
                         pendingSuccessor = null;
+                        successor.RunDirectoryLease?.Dispose();
                         consecutiveStagingFailures++;
                         stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
                         EmitHandoff(
@@ -300,6 +305,7 @@ internal sealed class ConductorContinuitySupervisor(
                     try
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        pendingSuccessor?.RunDirectoryLease?.Dispose();
                         pendingSuccessor = stageSuccessor(cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
                     }
@@ -366,6 +372,11 @@ internal sealed class ConductorContinuitySupervisor(
                 stdoutPath,
                 stderrPath);
             await _delay(backoff, cancellationToken).ConfigureAwait(false);
+        }
+        }
+        finally
+        {
+            pendingSuccessor?.RunDirectoryLease?.Dispose();
         }
     }
 

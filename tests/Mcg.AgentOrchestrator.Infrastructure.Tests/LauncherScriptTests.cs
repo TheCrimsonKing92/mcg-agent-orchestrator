@@ -1805,7 +1805,7 @@ public sealed class LauncherScriptTests
             var secondRunDirectory = Resolve();
 
             Assert.NotEqual(firstRunDirectory, secondRunDirectory);
-            Assert.True(Directory.Exists(firstRunDirectory));
+            Assert.False(Directory.Exists(firstRunDirectory));
             Assert.True(Directory.Exists(secondRunDirectory));
             Assert.Equal(
                 "dependency v2",

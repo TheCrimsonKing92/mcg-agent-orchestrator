@@ -59,7 +59,8 @@ internal sealed record ConductorPreparedSuccessor(
     string AppDllPath,
     string RepositoryHead,
     string StagedSourceCommit,
-    string SelfCheckDetail);
+    string SelfCheckDetail,
+    IDisposable? RunDirectoryLease = null);
 
 internal sealed record ConductorSelfRelaunchResult(
     bool HandedOff,
@@ -111,47 +112,54 @@ internal static class ConductorSelfRelaunch
                 $"{ex.GetType().Name}: {ex.Message}");
         }
 
-        var commandPrefix = new[] { options.DotnetPath, successor.AppDllPath };
-        var handoffOptions = options.HandoffOptions with { SuccessorCommandPrefix = commandPrefix };
-        ConductorLoopHandoffResult handoffResult;
         try
         {
-            handoffResult = handoff(
-                handoffOptions,
-                new ConductorLoopHandoffRequest(
-                    request.Tick,
-                    TimeSpan.Zero,
-                    Done: 0,
-                    LandedGoalDelta: 1));
-        }
-        catch (Exception ex)
-        {
+            var commandPrefix = new[] { options.DotnetPath, successor.AppDllPath };
+            var handoffOptions = options.HandoffOptions with { SuccessorCommandPrefix = commandPrefix };
+            ConductorLoopHandoffResult handoffResult;
             try
             {
-                handoffOptions.ReacquireCurrentLease?.Invoke();
+                handoffResult = handoff(
+                    handoffOptions,
+                    new ConductorLoopHandoffRequest(
+                        request.Tick,
+                        TimeSpan.Zero,
+                        Done: 0,
+                        LandedGoalDelta: 1));
             }
-            catch (Exception reacquireException)
+            catch (Exception ex)
             {
-                throw new InvalidOperationException(
-                    "Self-relaunch handoff failed and the incumbent could not reacquire its authority lease.",
-                    new AggregateException(ex, reacquireException));
-            }
+                try
+                {
+                    handoffOptions.ReacquireCurrentLease?.Invoke();
+                }
+                catch (Exception reacquireException)
+                {
+                    throw new InvalidOperationException(
+                        "Self-relaunch handoff failed and the incumbent could not reacquire its authority lease.",
+                        new AggregateException(ex, reacquireException));
+                }
 
-            return new ConductorSelfRelaunchResult(
-                false,
-                "handoff",
-                $"{ex.GetType().Name}: {ex.Message}",
-                Successor: successor);
+                return new ConductorSelfRelaunchResult(
+                    false,
+                    "handoff",
+                    $"{ex.GetType().Name}: {ex.Message}",
+                    Successor: successor);
+            }
+            return handoffResult.Started
+                ? new ConductorSelfRelaunchResult(true, null, null, handoffResult, successor)
+                : new ConductorSelfRelaunchResult(
+                    false,
+                    "handoff",
+                    handoffResult.Reason ?? "successor handoff did not start",
+                    handoffResult,
+                    successor,
+                    handoffResult.RollbackSucceeded);
         }
-        return handoffResult.Started
-            ? new ConductorSelfRelaunchResult(true, null, null, handoffResult, successor)
-            : new ConductorSelfRelaunchResult(
-                false,
-                "handoff",
-                handoffResult.Reason ?? "successor handoff did not start",
-                handoffResult,
-                successor,
-                handoffResult.RollbackSucceeded);
+        finally
+        {
+            successor.RunDirectoryLease?.Dispose();
+        }
     }
 
     internal static ConductorPreparedSuccessor PrepareSuccessor(
@@ -184,9 +192,12 @@ internal static class ConductorSelfRelaunch
         var buildOutputDirectory = Path.Combine(
             Path.GetDirectoryName(options.AppDllPath)
                 ?? throw new ConductorSelfRelaunchPreparationException("build", "App output directory was not configured."),
-            gitHead);
+            $"{gitHead}-{Guid.NewGuid():N}");
         var appDllPath = Path.Combine(buildOutputDirectory, Path.GetFileName(options.AppDllPath));
         var appHeadMarkerPath = appDllPath + ".git-head";
+        FileStream? runDirectoryLease = null;
+        try
+        {
         var build = RunProcess(
             options.DotnetPath,
             [
@@ -230,6 +241,8 @@ internal static class ConductorSelfRelaunch
         }
 
         var successorDll = Path.Combine(runDirectory, Path.GetFileName(appDllPath));
+        runDirectoryLease = File.Open(successorDll, FileMode.Open, FileAccess.Read, FileShare.Read);
+        WholeDirectoryRemoval.Remove(buildOutputDirectory, Path.GetFileName(appDllPath));
         var stagedSourceCommit = ReadStagedSourceCommit(
             runDirectory,
             Path.GetFileName(appDllPath),
@@ -262,12 +275,24 @@ internal static class ConductorSelfRelaunch
                 "Successor did not return the compatible LOOP_START readiness contract.");
         }
 
-        return new ConductorPreparedSuccessor(
+        var prepared = new ConductorPreparedSuccessor(
             runDirectory,
             successorDll,
             gitHead,
             stagedSourceCommit,
-            readiness);
+            readiness,
+            runDirectoryLease);
+        runDirectoryLease = null;
+        return prepared;
+        }
+        finally
+        {
+            runDirectoryLease?.Dispose();
+            WholeDirectoryRemoval.Remove(buildOutputDirectory, Path.GetFileName(appDllPath));
+            var repositoryBuildRoot = Path.GetDirectoryName(buildOutputDirectory)!;
+            WholeDirectoryRemoval.TryRemoveEmptyDirectory(repositoryBuildRoot);
+            WholeDirectoryRemoval.TryRemoveEmptyDirectory(Path.GetDirectoryName(repositoryBuildRoot)!);
+        }
     }
 
     internal static string ReadStagedSourceCommit(
