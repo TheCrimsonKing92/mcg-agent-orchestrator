@@ -28,10 +28,10 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                 cancellation.Token, runGateInBackground: true);
             Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The train gate did not start.");
             cancellation.Cancel();
-            gateRelease.Set();
             Assert.True(SpinWait.SpinUntil(() =>
                 driver.GetActiveCohortGateMemberGoalIds().Count == 0,
                 TimeSpan.FromSeconds(15)), "The faulted train gate did not finish.");
+            gateRelease.Set();
 
             var pair = ConductorAcceptanceCohortSelector.Select(goals.Take(2).Select(goal =>
                 new ConductorSpeculativeAcceptanceCandidate(goal.Id,
