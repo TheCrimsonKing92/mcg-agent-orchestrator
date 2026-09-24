@@ -15,6 +15,12 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
+        if (args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalParkTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
         if (!args[0].Equals("unpark-goal", StringComparison.OrdinalIgnoreCase))
         {
             return ExecuteCommandWithoutTransaction(

@@ -10,6 +10,7 @@ internal static partial class CliCommandHandlers
     internal enum GoalLifecycleTransitionDisposition
     {
         Applied,
+        AppliedWithLiveDispatches,
         DryRun,
         Rejected,
         ConflictExhausted
@@ -26,9 +27,13 @@ internal static partial class CliCommandHandlers
         GoalStatus? ObservedStatus,
         Goal? Goal = null,
         ProgressEvent? CommittedTimelineEvent = null,
-        string? RejectionReason = null)
+        string? RejectionReason = null,
+        IReadOnlyList<GoalLiveDispatch>? LiveDispatches = null,
+        int? ResolvedHumanWaits = null)
     {
-        internal bool ShouldSave => Disposition == GoalLifecycleTransitionDisposition.Applied;
+        internal bool ShouldSave => Disposition is
+            GoalLifecycleTransitionDisposition.Applied or
+            GoalLifecycleTransitionDisposition.AppliedWithLiveDispatches;
     }
 
     internal static GoalUnparkCommand PrepareGoalUnparkCommand(IReadOnlyList<string> parts)
