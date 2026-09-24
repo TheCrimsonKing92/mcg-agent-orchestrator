@@ -20,6 +20,7 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<FailedGoalPendingNote> pendingNotes)
     {
         var task = goal.Tasks.FirstOrDefault(candidate =>
+            candidate.Id == decision.Identity.TaskId &&
             candidate.Status == WorkTaskStatus.Failed &&
             candidate.RequiredRole == AgentRole.Developer &&
             candidate.LastVerification is { } verification &&
@@ -33,7 +34,10 @@ internal sealed partial class ConductorDriver
 
         var errors = WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
         if (errors is null)
-            return null;
+        {
+            ApplyPendingFailedGoalNotes(goal, pendingNotes);
+            return Escalate(goal, goalPrefix, policy, state, decision.Reason);
+        }
 
         _beforeFailedGoalRecoveryEffect?.Invoke(goal, decision);
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
