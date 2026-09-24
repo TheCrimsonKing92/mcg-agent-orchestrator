@@ -116,7 +116,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
                 now, null, null, OwnedProcessIds: [555]));
 
         var killed = new List<int>();
-        var runner = new BackgroundDispatchRunner(tryKillOwnedProcess: pid =>
+        // A fabricated pid can alias an unrelated live Windows process.
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false, tryKillOwnedProcess: pid =>
         {
             killed.Add(pid);
             return true;
@@ -165,7 +166,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             await repository.SaveAsync(kernel);
 
             var attempts = 0;
-            var runner = new BackgroundDispatchRunner();
+            // A fabricated pid can alias an unrelated live Windows process.
+            var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
             var stopFile = ExistingStopPath();
             try
             {
@@ -241,7 +243,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
 
         var attempts = 0;
         var delays = new List<TimeSpan>();
-        var runner = new BackgroundDispatchRunner();
+        // A fabricated pid can alias an unrelated live Windows process.
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
         var stopFile = ExistingStopPath();
         try
         {
@@ -419,7 +422,8 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var killed = new List<int>();
         var detachedGoals = new List<string>();
         var reapedGoals = new List<string>();
-        var runner = new BackgroundDispatchRunner(tryKillOwnedProcess: pid =>
+        // A fabricated pid can alias an unrelated live Windows process.
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false, tryKillOwnedProcess: pid =>
         {
             killed.Add(pid);
             return true;
@@ -469,7 +473,13 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var killed = new List<int>();
         var detachedGoals = new List<string>();
         var reapedGoals = new List<string>();
-        var runner = new BackgroundDispatchRunner(tryKillOwnedProcess: pid =>
+        var probedPids = new List<int>();
+        // A fabricated pid can alias an unrelated live Windows process.
+        var runner = new BackgroundDispatchRunner(isStillRunning: pid =>
+        {
+            probedPids.Add(pid);
+            return false;
+        }, tryKillOwnedProcess: pid =>
         {
             killed.Add(pid);
             return true;
@@ -496,10 +506,69 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.Equal(0, summary.Ticks);
         Assert.Empty(reapedGoals);
         Assert.Empty(killed);
+        Assert.Contains(555, probedPids);
         Xunit.Assert.Equal([goal.Id.Value], detachedGoals);
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
         Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_max_duration_alive_probe_records_conductor_cancellation_without_kill")]
+    public void BatchLoopMaxDurationAliveProbeRecordsConductorCancellationWithoutKill()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "duration bounded goal");
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.UtcNow;
+
+        kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new TaskDispatchRecord("test-worker", "worker.exe", "C:\\goal", now));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(555, "worker.exe", "C:\\goal", "out.log", "err.log", "exit.txt",
+                now, null, null, OwnedProcessIds: [555]));
+
+        var killed = new List<int>();
+        var detachedGoals = new List<string>();
+        var reapedGoals = new List<string>();
+        var probedPids = new List<int>();
+        // A fabricated pid can alias an unrelated live Windows process.
+        var runner = new BackgroundDispatchRunner(isStillRunning: pid =>
+        {
+            probedPids.Add(pid);
+            return true;
+        }, tryKillOwnedProcess: pid =>
+        {
+            killed.Add(pid);
+            return true;
+        });
+
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (loopKernel, loopGoal) =>
+            {
+                reapedGoals.Add(loopGoal.Id.Value);
+                runner.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id);
+            },
+            detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+            {
+                detachedGoals.Add(loopGoal.Id.Value);
+                runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id);
+            }).Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxDuration: TimeSpan.Zero,
+                onlyGoalId: goal.Id.Value);
+
+        Assert.Equal(0, summary.Ticks);
+        Assert.Empty(reapedGoals);
+        Assert.Empty(killed);
+        Assert.Contains(555, probedPids);
+        Xunit.Assert.Equal([goal.Id.Value], detachedGoals);
+        Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+        Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelledByConductor);
+        Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_bounded_exit_detached_orphan_running_task_is_requeued_and_dispatched")]
