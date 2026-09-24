@@ -45,7 +45,8 @@ internal static class GoalAbandonPlanner
         OrchestratorWorkspace workspace,
         string reason,
         GoalWorktreeCleanupHooks cleanupHooks,
-        bool dryRun = true)
+        bool dryRun = true,
+        bool leaveLiveDispatchesRunning = false)
     {
         ArgumentNullException.ThrowIfNull(cleanupHooks);
         var stopReason = NormalizeReason(reason);
@@ -97,9 +98,13 @@ internal static class GoalAbandonPlanner
                 runningTasks.Select(task => $"{task.Id.Value[..8]} pid={task.LastProcess!.ProcessId}"));
             steps.Add(new GoalAbandonStep(
                 GoalAbandonStepKind.RunningDispatches,
-                dryRun ? GoalAbandonDisposition.Apply : GoalAbandonDisposition.Applied,
-                $"Cancel running dispatch process record(s): {detail}.",
-                dryRun ? $"cancel-dispatch {goalPrefix} <task-number>" : null));
+                leaveLiveDispatchesRunning ? GoalAbandonDisposition.Keep :
+                    dryRun ? GoalAbandonDisposition.Apply : GoalAbandonDisposition.Applied,
+                leaveLiveDispatchesRunning
+                    ? $"Live dispatch process record(s) left running: {detail}."
+                    : $"Cancel running dispatch process record(s): {detail}.",
+                leaveLiveDispatchesRunning ? null :
+                    dryRun ? $"cancel-dispatch {goalPrefix} <task-number>" : null));
         }
         else
         {
@@ -116,6 +121,14 @@ internal static class GoalAbandonPlanner
                 GoalAbandonStepKind.Worktree,
                 GoalAbandonDisposition.Missing,
                 "No goal worktree is registered.",
+                null));
+        }
+        else if (leaveLiveDispatchesRunning && runningTasks.Count > 0)
+        {
+            steps.Add(new GoalAbandonStep(
+                GoalAbandonStepKind.Worktree,
+                GoalAbandonDisposition.Keep,
+                $"Worktree retained while live dispatches run: {worktree}",
                 null));
         }
         else if (dirty)
@@ -137,11 +150,16 @@ internal static class GoalAbandonPlanner
 
         steps.Add(new GoalAbandonStep(
             GoalAbandonStepKind.BuildLease,
-            lease.CanCleanup
+            leaveLiveDispatchesRunning && runningTasks.Count > 0
+                ? GoalAbandonDisposition.Keep
+                : lease.CanCleanup
                 ? dryRun ? GoalAbandonDisposition.Apply : GoalAbandonDisposition.Applied
                 : lease.RootExists ? GoalAbandonDisposition.Keep : GoalAbandonDisposition.Missing,
-            lease.Detail,
-            lease.CanCleanup && dryRun ? "build-lease-cleanup --confirm-build-lease-cleanup" : null));
+            leaveLiveDispatchesRunning && runningTasks.Count > 0
+                ? $"Build lease retained while live dispatches run: {lease.Detail}"
+                : lease.Detail,
+            leaveLiveDispatchesRunning && runningTasks.Count > 0 ? null :
+                lease.CanCleanup && dryRun ? "build-lease-cleanup --confirm-build-lease-cleanup" : null));
 
         steps.Add(new GoalAbandonStep(
             GoalAbandonStepKind.Retention,
@@ -177,12 +195,17 @@ internal static class GoalAbandonPlanner
             _ = kernel.CancelGoal(goal.Id, before.Reason);
         }
 
-        GoalOperationJournal.RecordTerminalDisposition(
-            workspace.ExecutionDirectory,
-            goal,
-            new GoalTerminalDisposition(
-                GoalTerminalDispositionKind.Retired,
-                $"Goal {goal.Id.Value[..8]} was abandoned by operator and is terminal: {before.Reason}"));
+        return CompleteAfterCommit(kernel, goal, workspace, before.Reason, cleanupHooks);
+    }
+
+    public static GoalAbandonPlan CompleteAfterCommit(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        string reason,
+        GoalWorktreeCleanupHooks cleanupHooks)
+    {
+        RecordAbandonedTerminalDisposition(goal, workspace, reason);
 
         _ = GoalWorktrees.RemoveTerminal(workspace.ExecutionDirectory, goal.Id, kernel, cleanupHooks);
 
@@ -196,6 +219,19 @@ internal static class GoalAbandonPlanner
         }
 
         return Build(kernel, goal, workspace, reason, cleanupHooks, dryRun: false);
+    }
+
+    public static void RecordAbandonedTerminalDisposition(
+        Goal goal,
+        OrchestratorWorkspace workspace,
+        string reason)
+    {
+        GoalOperationJournal.RecordTerminalDisposition(
+            workspace.ExecutionDirectory,
+            goal,
+            new GoalTerminalDisposition(
+                GoalTerminalDispositionKind.Retired,
+                $"Goal {goal.Id.Value[..8]} was abandoned by operator and is terminal: {reason}"));
     }
 
     private static string NormalizeReason(string reason)
