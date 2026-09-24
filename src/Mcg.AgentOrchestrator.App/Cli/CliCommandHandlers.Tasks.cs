@@ -16,7 +16,8 @@ internal sealed record GoalScopedTaskMutationCommand(
     RetryRoundKind? RetryRoundKind,
     AutonomyPolicy RetryPolicy,
     IReadOnlyList<string>? GatedDeliverableIds = null,
-    RetryCause? RetryCause = null)
+    RetryCause? RetryCause = null,
+    PreparedOperatorAdjudication? Adjudication = null)
 {
     internal string? SuppliedGoalSelector { get; init; }
 }
@@ -54,6 +55,7 @@ internal static GoalScopedTaskMutationCommand PrepareGoalScopedTaskMutationComma
         "progress" => PrepareProgressMutation(parts, hasInlineGoalPrefix),
         "verify-manual" => PrepareManualVerificationMutation(parts, hasInlineGoalPrefix, workspace),
         "retry" => PrepareRetryMutation(parts, hasInlineGoalPrefix),
+        "adjudicate" => PrepareAdjudicationMutation(parts, hasInlineGoalPrefix, workspace),
         "verification-plan" => PrepareVerificationPlanMutation(parts, hasInlineGoalPrefix),
         "note" => PrepareNoteMutation(parts, hasInlineGoalPrefix),
         _ => throw new ArgumentException($"Unsupported goal-scoped task mutation command: {parts[0]}")
@@ -144,6 +146,7 @@ internal static TaskSpec ResolveGoalScopedTaskMutationTarget(
         "progress" => "progress <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <running|completed|failed|cancelled> <message>",
         "verify-manual" => "verify-manual <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <passed|failed> <note>",
         "retry" => "retry <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>",
+        "adjudicate" => CliCommandHelp.AdjudicateUsage,
         "verification-plan" => "verification-plan <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [plan]",
         "note" => "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>",
         _ => throw new ArgumentException($"Unsupported goal-scoped task mutation command: {command.Command}")

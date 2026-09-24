@@ -17,6 +17,7 @@ internal sealed class OperatorIntentCoordinator
     private readonly IOperatorIntentStore _store;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<GoalId, string?>? _goalHeadResolver;
+    private readonly OperatorIntentAdjudication? _adjudication;
     private readonly Dictionary<string, List<(string IntentId, string Outcome)>> _pendingCompletions =
         new(StringComparer.Ordinal);
 
@@ -32,17 +33,27 @@ internal sealed class OperatorIntentCoordinator
     public OperatorIntentCoordinator(
         IOperatorIntentStore store,
         Func<DateTimeOffset>? utcNow = null,
-        Func<GoalId, string?>? goalHeadResolver = null)
+        Func<GoalId, string?>? goalHeadResolver = null,
+        ICollaborationItemStore? decisions = null,
+        Func<GoalId, long?>? goalStateVersionResolver = null)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _goalHeadResolver = goalHeadResolver;
+        if ((decisions is null) != (goalStateVersionResolver is null))
+            throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
+        _adjudication = decisions is null ? null : new OperatorIntentAdjudication(decisions, goalStateVersionResolver!);
     }
 
-    public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace) =>
-        new(
+    public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace)
+    {
+        var versionReader = OperatorChannelComposition.BuildGoalStateVersionReader(workspace.OrchestratorDirectory);
+        return new(
             SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
-            goalHeadResolver: goalId => ResolveGoalHead(workspace.ExecutionDirectory, goalId));
+            goalHeadResolver: goalId => ResolveGoalHead(workspace.ExecutionDirectory, goalId),
+            decisions: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+            goalStateVersionResolver: goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult());
+    }
 
     public IReadOnlyList<string> ListActionableGoalIds() =>
         _store.ListActionableGoalIdsAsync().GetAwaiter().GetResult();
@@ -68,7 +79,8 @@ internal sealed class OperatorIntentCoordinator
 
             var marker = BuildApplicationMarker(intent);
             var typedApplied = !string.IsNullOrEmpty(intent.Id) &&
-                goal.Timeline.Any(item => item.OperatorIntentApplied?.IntentId == intent.Id);
+                goal.Timeline.Any(item => item.OperatorIntentApplied is { } applied &&
+                    applied.IntentId == intent.Id && applied.Outcome != "rejected");
             var legacyApplied = !typedApplied && goal.Timeline.Any(item =>
                 item.OperatorIntentApplied is null &&
                 item.Message.Contains(marker, StringComparison.Ordinal));
@@ -113,7 +125,9 @@ internal sealed class OperatorIntentCoordinator
                     intent.Actor,
                     intent.Channel,
                     intent.AuthenticationAssurance,
-                    $"{marker} verb={intent.Verb} task={intent.TaskId ?? "none"} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance}");
+                    $"{marker} verb={intent.Verb} task={intent.TaskId ?? "none"} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance}",
+                    intent.ActorKind,
+                    outcome: "applied");
                 var outcome = (retryClarification == RetryClarificationHandling.Resumed
                     ? "Applied retry continuation to goal "
                     : $"Applied {intent.Verb} to goal ") + goal.Id.Value[..8] +
@@ -133,6 +147,11 @@ internal sealed class OperatorIntentCoordinator
                     outcome,
                     _utcNow()).GetAwaiter().GetResult();
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=rejected reason={Sanitize(ex.Message)}");
+                if (ex is OperatorIntentAdjudicationRejectedException)
+                {
+                    mutated = true;
+                    break;
+                }
             }
         }
 
@@ -305,6 +324,12 @@ internal sealed class OperatorIntentCoordinator
             case OperatorIntentVerbs.VerifyManual:
                 var manual = Deserialize<ManualVerificationOperatorIntentPayload>(intent);
                 kernel.RecordTaskVerification(goal.Id, taskId, manual.ResolveVerification(intent.CreatedAt));
+                break;
+
+            case OperatorIntentVerbs.Adjudicate:
+                var adjudication = Deserialize<AdjudicateOperatorIntentPayload>(intent);
+                (_adjudication ?? throw new InvalidOperationException("Operator adjudication is not configured."))
+                    .Apply(kernel, goal, task, intent, adjudication, _utcNow());
                 break;
 
             default:

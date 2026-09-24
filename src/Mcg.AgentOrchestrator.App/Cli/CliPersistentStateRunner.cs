@@ -49,7 +49,8 @@ internal static partial class CliPersistentStateRunner
     internal readonly record struct OperatorIntentAttribution(
         string Actor,
         string Channel,
-        string AuthenticationAssurance);
+        string AuthenticationAssurance,
+        OperatorActorKind ActorKind = OperatorActorKind.Human);
 
     // The conduct-loop fast path queries goal metadata every tick. Every fourth tick, hydrate
     // currently Parked goals as a safety-net sweep so non-metadata unpark side effects cannot strand
@@ -622,6 +623,7 @@ internal static partial class CliPersistentStateRunner
         {
             "progress" or
             "verify-manual" or
+            "adjudicate" or
             "retry" or
             "verification-plan" or
             "note" => true,
@@ -634,7 +636,8 @@ internal static partial class CliPersistentStateRunner
         args[0].ToLowerInvariant() is
             OperatorIntentVerbs.Progress or
             OperatorIntentVerbs.Retry or
-            OperatorIntentVerbs.VerifyManual;
+            OperatorIntentVerbs.VerifyManual or
+            OperatorIntentVerbs.Adjudicate;
 
     internal static bool IsCriterionEvidenceMutationCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].ToLowerInvariant() is
@@ -1864,6 +1867,7 @@ internal static partial class CliPersistentStateRunner
                     manual.ExitCode == 0 ? manual.AuthoritativeStandardOutput : manual.AuthoritativeStandardError,
                     manual.WorkingDirectory))
                 : throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence."),
+            OperatorIntentVerbs.Adjudicate => CliCommandHandlers.BuildAdjudicationPayload(preparedCommand, workspace, goal.Id),
             _ => throw new InvalidOperationException(
                 $"Goal-scoped mutation '{preparedCommand.Command}' is not backed by the operator intent inbox.")
         };
@@ -1885,7 +1889,8 @@ internal static partial class CliPersistentStateRunner
             Actor: attribution.Actor,
             Channel: attribution.Channel,
             AuthenticationAssurance: attribution.AuthenticationAssurance,
-            CreatedAt: DateTimeOffset.UtcNow);
+            CreatedAt: DateTimeOffset.UtcNow,
+            ActorKind: attribution.ActorKind);
         var persisted = SqliteOperatorIntentStore
             .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .EnqueueAsync(intent)
@@ -1928,17 +1933,20 @@ internal static partial class CliPersistentStateRunner
         OperatorIntentSubmissionSource submissionSource)
     {
         var actor = ResolveFlagValue(args, "--operator-actor");
+        var actorKind = CliCommandHandlers.ParseOperatorActorKind(ResolveFlagValue(args, "--actor-kind"));
         return submissionSource switch
         {
             OperatorIntentSubmissionSource.Cli => new OperatorIntentAttribution(
                 actor ?? "operator",
                 "cli",
-                "local-process"),
+                "local-process",
+                actorKind),
             OperatorIntentSubmissionSource.Discord => new OperatorIntentAttribution(
                 actor ?? throw new ArgumentException(
                     "Discord operator intent submissions require an authenticated --operator-actor."),
                 "discord",
-                "discord-operator-allowlist"),
+                "discord-operator-allowlist",
+                actorKind),
             _ => throw new ArgumentOutOfRangeException(
                 nameof(submissionSource),
                 submissionSource,

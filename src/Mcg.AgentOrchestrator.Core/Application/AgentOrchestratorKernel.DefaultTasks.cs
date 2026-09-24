@@ -81,7 +81,10 @@ public sealed partial class AgentOrchestratorKernel
         string actor,
         string channel,
         string? authenticationAssurance,
-        string message)
+        string message,
+        OperatorActorKind actorKind = OperatorActorKind.Human,
+        string? decisionId = null,
+        string? outcome = null)
     {
         var goal = GetGoal(goalId);
         var payload = new OperatorIntentAppliedPayload(
@@ -90,7 +93,10 @@ public sealed partial class AgentOrchestratorKernel
             taskId,
             actor,
             channel,
-            authenticationAssurance);
+            authenticationAssurance,
+            actorKind,
+            decisionId,
+            outcome);
         if (!string.IsNullOrEmpty(intentId) &&
             goal.Timeline.Any(evt => evt.OperatorIntentApplied?.IntentId == intentId))
         {
