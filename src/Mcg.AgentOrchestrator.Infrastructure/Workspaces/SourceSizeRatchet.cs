@@ -47,7 +47,8 @@ internal static class SourceSizeRatchet
             // gate-wide attribution batching behavior; 9688 is the measured combined post-rebase size.
             // Raised for goal 6f9ddf54: the verifier must carry the job-owned command-child identity rather
             // than the Windows shell wrapper identity into acceptance evidence used for root correlation.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9649),
+            // Goal 3ca963ea extracted candidate rerun execution to the verifier's partial collaborator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9640),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -83,7 +84,8 @@ internal static class SourceSizeRatchet
             // journal parsing remain extracted. Ceiling re-measured at the integrated head.
             // Raised deliberately by six for goal e46c3d92: the only addition is the candidate-currency
             // guard that defers to VerifyingFindingCurrency.IsCurrent, whose logic lives in the model.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6448),
+            // Goal 3ca963ea moved attribution exclusion types and formatting to the apparatus-red partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6434),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds

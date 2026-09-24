@@ -6188,11 +6188,6 @@ internal sealed partial class ConductorDriver
         return new AcceptanceRetryDisposition(actionable, excluded);
     }
 
-    private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
-        failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced
-            ? $"{failure.Identity} (candidate rerun passed; unconfirmed introduction)"
-            : $"{failure.Identity} (pre-existing/main-red)";
-
     private static string BuildUnattributableAcceptanceIdentity(
         string? branchHeadSha,
         string? mainHeadSha,
@@ -6207,20 +6202,6 @@ internal sealed partial class ConductorDriver
         var fingerprint = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource))).ToLowerInvariant()[..16];
         return $"acceptance-unattributable:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:{fingerprint}";
-    }
-
-    private sealed record AcceptanceRetryDisposition(
-        IReadOnlyList<AcceptanceCheckResult> ActionableCriteria,
-        IReadOnlyList<ExcludedAcceptanceFailure> ExcludedFailures);
-
-    private sealed record ExcludedAcceptanceFailure(
-        string Identity,
-        AcceptanceRetryExclusionKind Kind);
-
-    private enum AcceptanceRetryExclusionKind
-    {
-        Inherited,
-        UnconfirmedIntroduced
     }
 
     private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)

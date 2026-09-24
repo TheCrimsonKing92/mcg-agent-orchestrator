@@ -7,6 +7,25 @@ internal sealed partial class ConductorDriver
 {
     private readonly ApparatusRedGate? _apparatusRedGate;
 
+    private sealed record AcceptanceRetryDisposition(
+        IReadOnlyList<AcceptanceCheckResult> ActionableCriteria,
+        IReadOnlyList<ExcludedAcceptanceFailure> ExcludedFailures);
+
+    private sealed record ExcludedAcceptanceFailure(
+        string Identity,
+        AcceptanceRetryExclusionKind Kind);
+
+    private enum AcceptanceRetryExclusionKind
+    {
+        Inherited,
+        UnconfirmedIntroduced
+    }
+
+    private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
+        failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced
+            ? $"{failure.Identity} (candidate rerun passed; unconfirmed introduction)"
+            : $"{failure.Identity} (pre-existing/main-red)";
+
     /// <summary>
     /// Returns a disposition for an apparatus RED, or null when the RED is genuine and must take
     /// today's Developer-reopen path unchanged. A driver without a configured gate always returns
