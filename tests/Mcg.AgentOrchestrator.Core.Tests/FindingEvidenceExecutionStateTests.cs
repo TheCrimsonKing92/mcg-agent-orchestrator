@@ -234,6 +234,39 @@ public sealed class FindingEvidenceExecutionStateTests
         Assert.Equal("candidate-unknown", FindingEvidenceExecutionClassifier.ToWireValue(FindingEvidenceExecutionState.CandidateUnknown));
     }
 
+    [Xunit.Fact]
+    public void EvidenceDeliveryRetryCountIsScopedToTaskCandidateAndFinding()
+    {
+        var goalId = GoalId.New();
+        var taskId = TaskId.New();
+        var otherTaskId = TaskId.New();
+        var timeline = new[]
+        {
+            RetryEvent(goalId, taskId, CandidateSha, "T-FINDING"),
+            RetryEvent(goalId, taskId, CandidateSha, "T-FINDING"),
+            RetryEvent(goalId, taskId, OldCandidateSha, "T-FINDING"),
+            RetryEvent(goalId, taskId, CandidateSha, "OTHER"),
+            RetryEvent(goalId, otherTaskId, CandidateSha, "T-FINDING")
+        };
+
+        Assert.Equal(
+            2,
+            FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
+                timeline, taskId, CandidateSha, "T-FINDING"));
+    }
+
+    private static ProgressEvent RetryEvent(
+        GoalId goalId,
+        TaskId taskId,
+        string candidateSha,
+        string findingId) =>
+        new(
+            goalId,
+            taskId,
+            ProgressKind.TaskRetried,
+            $"finding evidence-on-demand: candidate_sha={candidateSha}; finding_ids={findingId}; receipt_ids=receipt; retry",
+            DateTimeOffset.UtcNow);
+
     private static ReviewFinding Finding(
         string id = "T-FINDING",
         FindingEvidenceOutcome? outcome = null) =>
