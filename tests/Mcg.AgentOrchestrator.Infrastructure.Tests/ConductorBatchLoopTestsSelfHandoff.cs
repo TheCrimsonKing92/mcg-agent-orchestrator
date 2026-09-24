@@ -24,6 +24,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     private const int ParentExitFailsafeMilliseconds = 300_000;
 
     public static bool IsWindows => OperatingSystem.IsWindows();
+    public static bool IsWindowsBreakawayPermitted =>
+        OperatingSystem.IsWindows() && BreakawayJobProbe.CanCreateBreakawayChild().IsPermitted;
 
     [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
     public void BatchLoopDefaultSelfRelaunchActivationDoesNotScheduleOrExecute()
@@ -822,8 +824,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
 
     [Xunit.Fact(
         DisplayName = "ConductorLoopHandoff_windows_launcher_inherits_redirected_stdout_handle",
-        Skip = "Requires Windows process-job semantics.",
-        SkipUnless = nameof(IsWindows))]
+        Skip = "requires a breakaway-permitted job; the acceptance gate runs this test",
+        SkipUnless = nameof(IsWindowsBreakawayPermitted))]
     public void ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-stdout-handoff");
@@ -893,8 +895,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     }
 
     [Xunit.Fact(
-        Skip = "Requires Windows process-job semantics.",
-        SkipUnless = nameof(IsWindows))]
+        Skip = "requires a breakaway-permitted job; the acceptance gate runs this test",
+        SkipUnless = nameof(IsWindowsBreakawayPermitted))]
     public void ConductorLoopHandoffSuppressionFailureStillStartsSuccessor()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-suppression-failure");
