@@ -1204,6 +1204,23 @@ public sealed partial class AgentOrchestratorKernel
             {
                 if (isCurrentRound)
                 {
+                    if (role is AgentRole.Tester or AgentRole.Reviewer)
+                    {
+                        var missingRequest = round.Findings.FirstOrDefault(finding =>
+                            finding.State == ReviewFindingState.Open &&
+                            finding.Severity == FindingSeverity.Blocking &&
+                            finding.Category == FindingCategory.TestEvidence &&
+                            finding.EvidenceRequest is null);
+                        if (missingRequest is not null)
+                        {
+                            var code = $"ERR_{role.ToString().ToUpperInvariant()}_TEST_EVIDENCE_REQUEST_MISSING";
+                            var message = $"stable_id={missingRequest.StableId} requires evidence_request:{{selections:[{{test_project,test_class}}]}} on an open blocking test-evidence finding.";
+                            throw new ReviewFindingConvergenceException(code, state.Count, state.Count, message,
+                                new ReviewFindingContractViolation(code, message,
+                                    SubmittedStableId: missingRequest.StableId,
+                                    SubmittedLocation: missingRequest.Location));
+                        }
+                    }
                     var nextState = ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations);
                     if (role == AgentRole.Reviewer &&
                         WorkerResultBlockers.TryFindPassVerdict(currentVerification))

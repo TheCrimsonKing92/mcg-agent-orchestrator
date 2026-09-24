@@ -34,9 +34,7 @@ public static partial class WorkerCommandTemplate
             }
             lines.Add(string.Empty);
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var projection = WorkerVerificationEvidence.ProjectStandardOutputForContextWithValidation(
-                priorTask,
-                priorTask.LastVerification);
+            var projection = WorkerVerificationEvidence.ProjectPriorTaskOutputForContextWithValidation(priorTask);
             var projectedBytes = Encoding.UTF8.GetBytes(projection.Content);
             var materializationPath = $".orchestrator-context/legacy-handoff/{priorTask.Id.Value}/verification-output.bin";
             var absoluteMaterializationPath = Path.Combine(

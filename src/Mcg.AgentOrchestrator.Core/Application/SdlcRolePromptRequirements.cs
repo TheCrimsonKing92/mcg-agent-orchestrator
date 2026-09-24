@@ -3,6 +3,8 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class SdlcRolePromptRequirements
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
+    private const string TesterFindingRequestRule =
+        "- Put failures in structured findings JSON with stable IDs and locations; carry distinct prior findings until resolved. Open blocking test-evidence MUST carry evidence_request:{selections:[{test_project,test_class}]}.";
     private const string ResearcherStdoutOnlyContract =
         "- Stdout is the only channel the orchestrator reads: print the complete research artifact as your final message. Never write a plan file or any other file, and never reply with only a summary or a file path.";
     private const string TesterReceiptFirstContract =
@@ -90,7 +92,7 @@ internal static class SdlcRolePromptRequirements
                 "- Tie each pass/fail conclusion to concrete evidence: command output, changed file behavior, manual smoke steps, or exact reproduction data.",
                 "- Try to falsify the implementation with at least one negative or edge case when practical, and state what failure would have looked like.",
                 "- If a command cannot run, include the exact failure text and the environment condition.",
-                "- When reporting actionable failures, emit each one in structured `findings` JSON with a stable_id, state, severity, category, location, and description; a finding may include `evidence_request:{selections:[{test_project,test_class}]}` when a focused Conductor-side run would settle it. Emit `touched_anchors` and carry distinct prior findings until resolved.",
+                TesterFindingRequestRule,
                 "- Reuse a carried finding's stable_id. Keep its original location unless the code moved: when the system-derived round diff touched the prior anchor, keep the stable_id and report the defect's current location. Otherwise a different location is rejected. If a new stable_id describes the same open anchor, reuse the canonical stable_id instead.",
                 "- A verification command that is killed, times out, or produces no results file is an environment/plumbing outcome, NOT a test failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and never restate a prior round's conclusion as this round's evidence.",
                 "- Keep each verification command bounded in wall time: build once as its own step, then run tests with a narrow filter and no rebuild; do not bundle a build and a broad or full-suite test run into a single command.",
@@ -111,7 +113,7 @@ internal static class SdlcRolePromptRequirements
                 "- For independent scope checks use git diff main...HEAD; do not use two-dot, HEAD-only, status, or working-tree-only comparisons. Branch-behind-main alone is NOT a blocker; require concrete merge conflict, semantic overlap, or non-applying diff evidence, otherwise record staleness as advisory.",
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
-                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use a test project from `config/acceptance-manifest.json` by label, file name, or path; never infer or encode a request in prose.",
+                "- Open blocking test-evidence MUST carry `evidence_request:{selections:[{test_project,test_class}]}`; other findings may include it. Use a test project from `config/acceptance-manifest.json` by label, file name, or path; never infer a request from prose.",
                 "- Classify findings with `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, `operator-owned`, or `acceptance-owned`; mixed source/test findings are correctness work for Developer.",
                 "- Review Convergence Scope is authoritative. Emit exactly one `findings` entry per OPEN_ACTIVE_RECHECK stable_id: `resolved` with concrete closure evidence if fixed, otherwise `open`. Narrative does not update the ledger; omission leaves it open. Re-check new diff code; carry RESOLVED findings unless the exact anchor was touched.",
                 "- Each finding requires stable_id, state, severity, category, location, and description. Move a carried ID only if the diff touched its prior anchor. Emit exact `touched_anchors`; new-code defects get new IDs.",
@@ -232,7 +234,7 @@ internal static class SdlcRolePromptRequirements
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
-                "- Put actionable failures in structured `findings` JSON with stable IDs and locations; carry distinct prior findings until resolved. A finding may include `evidence_request:{selections:[{test_project,test_class}]}` when a focused Conductor-side run would settle it.",
+                TesterFindingRequestRule,
                 "- Reuse a carried finding's stable_id. Keep its original location unless the code moved: when the system-derived round diff touched the prior anchor, keep the stable_id and report the defect's current location. Otherwise a different location is rejected. If a new stable_id describes the same open anchor, reuse the canonical stable_id instead.",
                 "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and do not reuse a prior round's conclusion as evidence.",
                 "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
@@ -248,7 +250,7 @@ internal static class SdlcRolePromptRequirements
                 "### 2. Code quality (only after section 1)",
                 "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",
                 "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",
-                "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use a test project from `config/acceptance-manifest.json` by label, file name, or path; never infer or encode a request in prose.",
+                "- Open blocking test-evidence MUST carry `evidence_request:{selections:[{test_project,test_class}]}`; other findings may include it. Use a test project from `config/acceptance-manifest.json` by label, file name, or path; never infer a request from prose.",
                 "- Categories: `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, `operator-owned`, or `acceptance-owned`.",
                 "- Emit exactly one `findings` entry per OPEN_ACTIVE_RECHECK stable_id: `resolved` with closure evidence if fixed, otherwise `open`. Narrative does not update the ledger; omission leaves it open.",
                 "- Move a carried ID only when its prior anchor was touched; emit `touched_anchors`; new-code defects get new IDs.",

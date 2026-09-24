@@ -1,0 +1,78 @@
+I’ll check the existing candidate and audit the runner constructions, then report the per-file results and the focused evidence request. I’ll keep the verified code unless the audit finds a gap. I’m using the repository’s verification-before-completion guidance.
+The prior candidate already has both probe-controlled branches, and the worktree is clean. The focused receipt for that earlier candidate reports 25 passed, but the current HEAD is a later merge commit, so I’ll request evidence for the current candidate. I’m narrowing the audit to fabricated process records that can reach the runner’s detach path.
+The detach audit has one fabricated-PID file that needs the probe: `ConductorBatchLoopTestsReapingDetach.cs`, and its relevant constructors already have it. The other detach tests use spawned process IDs. The remaining runner call sites exercise refresh, cancel, sweep, or dispatch behavior rather than this detach liveness branch. I’ll finish the per-file audit and attach the class-level evidence request.
+The recorded failure was `BatchLoop_max_duration_detaches_live_dispatch_without_reaping`: “Assert.Equal() Failure: Expected: Running, Actual: Cancelled.” No edit is needed in this round. The existing test diff only adds probes and assertions, and the 26 runner constructions in the changed class have 26 explicit `isStillRunning` arguments.
+The existing candidate needs no code edit this round. Commit `c173606f7aa6` changed only [ConductorBatchLoopTestsReapingDetach.cs](/C:/Users/miles/vcs/mcg-agent-orchestrator/.orchestrator-worktrees/8257cb24/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsReapingDetach.cs): it injects the existing `isStillRunning` probe, pins both detach outcomes, and adds probe-invocation assertions without removing existing assertions.
+
+The recorded failure was `BatchLoop_max_duration_detaches_live_dispatch_without_reaping`: “Assert.Equal() Failure: Expected: Running, Actual: Cancelled.” A focused receipt for the earlier candidate (`finding-evidence-819c7e410a56e5aed2f30888`) reports **25 executed, 25 passed, 0 failed** for the entire `ConductorBatchLoopTestsReapingDetach` class. The current merged candidate needs its own receipt; the request is below.
+
+Audit key: `fabricated` means the file creates a fake worker PID directly or through a fixture; `detach-dependent` means a detach assertion depends on the liveness answer. `no` in that column means the runner call exercises another path. The two `real PID` entries intentionally use spawned processes. Every listed file was unchanged this round.
+
+WORKER_RESULT:
+files: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsReapingDetach.cs
+commands: git rev-parse HEAD; git show c173606f7aa6bc5bab24f9306aa4865c4629e6f7 -- tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsReapingDetach.cs; rg -l 'new BackgroundDispatchRunner\(' tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g '!**/bin/**' -g '!**/obj/**'; rg -n 'DetachRunningProcessesForGoal|detachGoalRunningDispatches' tests/Mcg.AgentOrchestrator.Infrastructure.Tests; rg -n 'new BackgroundDispatchRunner\(|isStillRunning:' tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsReapingDetach.cs --count-matches
+tests: deferred - request current-candidate focused execution of the entire ConductorBatchLoopTestsReapingDetach class; earlier candidate receipt finding-evidence-819c7e410a56e5aed2f30888: 25 executed, 25 passed, 0 failed
+commit: c173606f7aa6bc5bab24f9306aa4865c4629e6f7
+blockers: none
+assigned_scope_complete: true
+findings: [{"stable_id":"detach-class-execution","state":"open","severity":"blocking","category":"test-evidence","location":{"file":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsReapingDetach.cs","region":"ConductorBatchLoopTestsReapingDetach class"},"description":"Run the entire class against current candidate a6457cd74ead55d75ceb191672c2cc68764b15a4 and attach executed/passed/failed counts. The earlier candidate had 25/25 passed; no current-candidate counts are claimed.","evidence_request":{"selections":[{"test_project":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj","test_class":"ConductorBatchLoopTestsReapingDetach"}]}}]
+audit_01: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AdvanceLoopTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_02: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/BackgroundDispatchRunnerExitSweepTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_03: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateAssignedScopeIncompleteTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_04: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateCommittedWorkerResultFileTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_05: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateBlockersNoneLeniencyTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_06: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateDispatchDirtyWorktreeTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_07: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateDeferredVerificationBlockerTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_08: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateDispatchTestsNotRunTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_09: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateDispatchNoiseOnlyTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_10: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateFabricatedCommitLeniencyTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_11: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateDispatchNoChangeTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_12: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateFieldScanTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_13: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateHeadAdvancedLeniencyTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_14: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateMarkdownBlockersNoneTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_15: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateMarkdownHeadingTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_16: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateMarkdownMissingSkillsTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_17: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateMarkdownCommittedFileTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_18: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateMarkdownOpenerTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_19: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateMissingEndMarkerTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_20: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateMarkdownReportedBlockersTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_21: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateModelFitLeniencyTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_22: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateNoWorkerResultTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_23: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateRealDirtySourceTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_24: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateReportedBlockersLeniencyTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_25: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateUntrackedWorkerResultFileTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_26: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateWorkerResultFallbackTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_27: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateWorkerResultMissingTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_28: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateWorkerResultMalformedTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_29: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.SubscriptionDispatchCommands.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_30: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsFallbackAcceptance.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_31: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsReapingDetach.cs | fabricated=yes | detach-dependent=yes, explicit probe | changed=yes in retained candidate
+audit_32: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsWatchProgress.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_33: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAgentReassignmentRouting.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_34: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorUnappliedExitWatchTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_35: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductWatchSweepScopingTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_36: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DispatchHostLifetimeHandoffTests.cs | fabricated=no, real PID | detach-dependent=yes | changed=no
+audit_37: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DispatchRecoveryPolicyTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_38: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalWorktreeTestsCreationResolution.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_39: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InterruptedDispatchRequeueTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_40: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/InterruptedWorkCheckpointContinuationTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_41: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PlannerEvidenceDispatchTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_42: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PlannerSamplingDispatchTests.cs | fabricated=yes, explicit probes | detach-dependent=no | changed=no
+audit_43: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PlannerOutputContractTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_44: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PreDispatchIntegrationNoChangeTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_45: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/StaleDispatchProcessReconcilerTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_46: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/VerificationAndProcessLogTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_47: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsDispatchPreparation.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_48: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsModelSelectionEnvMutation.cs | fabricated=no | detach-dependent=no | changed=no
+audit_49: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_50: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsSandboxLowIntegrity.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+audit_51: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerProcessJobsTests.cs | fabricated=yes in other cases; detach case uses real spawned PID | detach-dependent=yes for real PID | changed=no
+audit_52: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchJobAccountingTests.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_53: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs | fabricated=yes | detach-dependent=no | changed=no
+audit_54: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchBuildEvidenceClassificationTests.cs | fabricated=yes, fixture | detach-dependent=no | changed=no
+model_fit: OpenAI/gpt-6-sol - adequate - retained-candidate source audit and evidence request - traced the detach seam and enumerated all 54 runner-construction files
+skills: verification-before-completion, dotnet-windows-build-hygiene
+confidence: high
+END_WORKER_RESULT
+
+Model fit: OpenAI/gpt-6-sol - adequate - focused source audit and receipt handoff - no implementation change was required.

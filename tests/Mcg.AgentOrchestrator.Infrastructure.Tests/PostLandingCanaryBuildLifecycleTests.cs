@@ -4,6 +4,7 @@ using System.Text;
 using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
+[Xunit.Collection(TestCollections.PostLandingCanary)]
 public sealed class PostLandingCanaryBuildLifecycleTests
 {
     [Xunit.Theory]

@@ -8,6 +8,7 @@ internal static class WorkerVerificationEvidence
     private const string LegacySnapshotUnavailableReason = "legacy-snapshot-authoritative-output-unavailable";
     private const int MalformedOutputExcerptMaxChars = 4000;
     private const int StructuredFieldMaxChars = 4000;
+    private const int LocatedWorkerResultMaxChars = 20000;
 
     internal sealed record ContextOutput(
         string Content,
@@ -97,6 +98,34 @@ internal static class WorkerVerificationEvidence
         LogicalArtifactIdentity? identity = null)
         => ProjectStandardOutputForContextWithValidation(task, verification, identity).Content;
 
+    public static string ProjectPriorTaskOutputForContext(TaskSpec task) =>
+        ProjectPriorTaskOutputForContextWithValidation(task).Content;
+
+    public static ContextProjection ProjectPriorTaskOutputForContextWithValidation(TaskSpec task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var latest = task.LastVerification ?? throw new ArgumentException(
+            "Prior task has no verification output.", nameof(task));
+        var latestProjection = ProjectStandardOutputForContextWithValidation(task, latest);
+        if (!latest.Command.StartsWith("manual-verification ", StringComparison.Ordinal))
+            return latestProjection;
+
+        var operatorContent = latest.Command == "manual-verification failed"
+            ? BoundHeadAndTail(latest.AuthoritativeStandardError ?? latest.StandardError,
+                MalformedOutputExcerptMaxChars)
+            : latestProjection.Content;
+        var worker = task.VerificationHistory.LastOrDefault(record => record.WorkerResultPresent);
+        if (worker is null)
+            return new ContextProjection(operatorContent, latestProjection.Validation);
+
+        var workerProjection = ProjectStandardOutputForContextWithValidation(task, worker);
+        return new ContextProjection(string.Join(Environment.NewLine,
+            "Worker-produced verification (last worker round):",
+            workerProjection.Content,
+            "Operator adjudication (latest verification):",
+            operatorContent), workerProjection.Validation);
+    }
+
     public static ContextProjection ProjectStandardOutputForContextWithValidation(
         TaskSpec task,
         TaskVerificationRecord verification,
@@ -119,7 +148,7 @@ internal static class WorkerVerificationEvidence
         {
             return new ContextProjection(
                 $"{receiptPrefix}; validation=non-authoritative; problem_excerpt={contextOutput.UnavailableReason ?? "authoritative output unavailable"}" +
-                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                    Environment.NewLine + BoundOutsideWorkerResult(output),
                 ContextProjectionValidation.NonAuthoritative);
         }
 
@@ -127,7 +156,7 @@ internal static class WorkerVerificationEvidence
         {
             return new ContextProjection(
                 $"{receiptPrefix}; validation=malformed; problem_excerpt={diagnostic}" +
-                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                    Environment.NewLine + BoundOutsideWorkerResult(output),
                 ContextProjectionValidation.Malformed);
         }
 
@@ -188,6 +217,66 @@ internal static class WorkerVerificationEvidence
             $"...[{trimmed.Length - maxChars} chars omitted from malformed output; complete source remains at source_handle]..." +
             Environment.NewLine +
             trimmed[^tailChars..];
+    }
+
+    private static string BoundOutsideWorkerResult(string output)
+    {
+        var lines = output.Split('\n');
+        var lineStart = 0;
+        var openers = new List<(int Line, int Start)>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (WorkerResultParser.IsOpener(lines[i].Trim()))
+                openers.Add((i, lineStart));
+            lineStart += lines[i].Length + 1;
+        }
+        if (openers.Count == 0)
+            return BoundHeadAndTail(output, MalformedOutputExcerptMaxChars);
+
+        var selected = openers.Count - 1;
+        for (var i = selected; i >= 0; i--)
+        {
+            if (Array.FindIndex(lines, openers[i].Line + 1,
+                    line => WorkerResultParser.IsEndMarker(line.Trim())) < 0)
+                continue;
+            selected = i;
+            break;
+        }
+        var blockStart = openers[selected].Start;
+
+        lineStart = 0;
+        var blockEnd = output.Length;
+        var fallbackEnd = output.Length;
+        var insideBlock = false;
+        var foundEndMarker = false;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lineStart == blockStart)
+                insideBlock = true;
+            else if (insideBlock && WorkerResultParser.IsEndMarker(lines[i].Trim()))
+            {
+                blockEnd = lineStart + lines[i].Length;
+                foundEndMarker = true;
+                break;
+            }
+            else if (insideBlock && fallbackEnd == output.Length &&
+                     (string.IsNullOrWhiteSpace(lines[i]) || lines[i].TrimStart().StartsWith('#')))
+                fallbackEnd = lineStart;
+            lineStart += lines[i].Length + 1;
+        }
+        if (!foundEndMarker)
+            blockEnd = fallbackEnd;
+
+        var block = output[blockStart..blockEnd];
+        if (block.Length > LocatedWorkerResultMaxChars)
+        {
+            var bytes = Encoding.UTF8.GetBytes(block);
+            block = $"[oversized WORKER_RESULT block omitted; chars={block.Length}; bytes={bytes.Length}; " +
+                $"sha256={WorkerContextArtifact.Hash(bytes)}; complete source remains at source_handle]";
+        }
+        var before = BoundHeadAndTail(output[..blockStart], MalformedOutputExcerptMaxChars / 2);
+        var after = BoundHeadAndTail(output[blockEnd..], MalformedOutputExcerptMaxChars / 2);
+        return string.Join(Environment.NewLine, new[] { before, block, after }.Where(part => part.Length > 0));
     }
 
     public static bool TryRecoverLegacySnapshotStandardOutput(
