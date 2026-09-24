@@ -6,7 +6,24 @@ using static ConductorDriverTests;
 public sealed class MergeTrainOperatorCriterionAdmissionTests
 {
     [Fact]
-    public void MissingRefinementOrCurrentObligationsExcludesOnlyThoseTrainMembers()
+    public void OperatorCriterionWithoutRecordedObligationExcludesTrainMember()
+    {
+        var (kernel, goal) = SimpleGoal("Operator criterion missing its acceptance index");
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+            goal.Objective, ["Worker checks output"], VerificationClass.TestVerifiable, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["Operator observes output"]
+        });
+
+        Assert.Empty(goal.CriterionEvidenceObligations);
+        Assert.Contains(goal.Id.Value,
+            ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds([goal]));
+        Assert.Contains("operator-owned criterion has no acceptance index",
+            AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal));
+    }
+
+    [Fact]
+    public void GoalsWithoutOperatorOwnedCriteriaRemainTrainEligible()
     {
         var (_, noSpec) = SimpleGoal("No authoritative refined spec");
         var (workerKernel, noObligations) = SimpleGoal("Refined with worker criterion only");
@@ -23,11 +40,11 @@ public sealed class MergeTrainOperatorCriterionAdmissionTests
         var excluded = ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds(
             [noSpec, noObligations, eligible]);
 
-        Assert.Contains(noSpec.Id.Value, excluded);
-        Assert.Contains(noObligations.Id.Value, excluded);
+        Assert.DoesNotContain(noSpec.Id.Value, excluded);
+        Assert.DoesNotContain(noObligations.Id.Value, excluded);
         Assert.DoesNotContain(eligible.Id.Value, excluded);
-        Assert.Contains("required criterion evidence remains outstanding",
-            AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(noSpec));
+        Assert.Null(AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(noSpec));
+        Assert.Null(AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(noObligations));
     }
 
     [Fact]

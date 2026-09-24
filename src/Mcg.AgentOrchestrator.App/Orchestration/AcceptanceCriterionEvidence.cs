@@ -24,20 +24,17 @@ internal static class AcceptanceCriterionEvidence
             System.Text.Encoding.UTF8.GetBytes(payload)));
     }
 
-    // A train may only consider goals whose authoritative criterion ownership has been materialized.
-    // Ordinary solo and cohort evidence checks continue to use their existing obligation set.
+    // Only operator-owned criteria require train admission evidence. Ordinary solo and
+    // cohort evidence checks continue to use their existing obligation set.
     internal static string? DescribeTrainOperatorEvidenceGap(Goal goal)
     {
         var version = goal.AuthoritativeRefinedSpecVersion;
-        if (version is null)
-            return "Acceptance completed but required criterion evidence remains outstanding: authoritative refined spec not recorded.";
+        if (version is null || version.Spec.OperatorOwnedAcceptanceCriteria.Count == 0)
+            return null;
 
         var obligations = goal.CriterionEvidenceObligations
             .Where(item => item.CriterionVersion == version.Version && item.State != CriterionEvidenceState.Repaired)
             .ToArray();
-        if (obligations.Length == 0)
-            return "Acceptance completed but required criterion evidence remains outstanding: current criterion obligations not recorded.";
-
         var missing = new List<string>();
         foreach (var criterion in version.Spec.OperatorOwnedAcceptanceCriteria)
         {
