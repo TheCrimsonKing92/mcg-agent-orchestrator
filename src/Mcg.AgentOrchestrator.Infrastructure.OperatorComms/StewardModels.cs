@@ -131,7 +131,8 @@ public sealed record StewardEscalationItem(
     int SeverityRank,
     DateTimeOffset RaisedAt,
     string Title,
-    string EvidenceSummary);
+    string EvidenceSummary,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? TaskId = null);
 
 public sealed record StewardGoalTaskRecord(
     string GoalId,
@@ -212,7 +213,8 @@ public sealed record StewardDailyBrief(
     int LandedGoals,
     int HumanBlockedItems,
     string Next,
-    decimal Spend);
+    decimal Spend,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<StewardShadowClassAgreementRate>? ShadowAgreement = null);
 
 public sealed record StewardAutonomousAction(
     string ActionId,
@@ -243,7 +245,8 @@ public sealed record StewardHeartbeat(
     int Acted,
     int Raised,
     double ActedRatio,
-    double RaisedRatio);
+    double RaisedRatio,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<StewardShadowClassAgreementRate>? ShadowAgreement = null);
 
 public sealed record StewardCardLoadMeasurement(
     int LandedGoals,
@@ -391,7 +394,9 @@ public sealed class StewardBypassPolicy
 
 public static class StewardHeartbeatCalculator
 {
-    public static StewardHeartbeat FromReceipts(IReadOnlyList<StewardTriageReceipt> receipts)
+    public static StewardHeartbeat FromReceipts(
+        IReadOnlyList<StewardTriageReceipt> receipts,
+        IReadOnlyList<StewardShadowClassAgreementRate>? shadowAgreement = null)
     {
         var triaged = receipts.Sum(receipt => receipt.InputIds.Count);
         var raised = receipts.Sum(receipt => receipt.Dispositions.Count(disposition =>
@@ -403,7 +408,8 @@ public static class StewardHeartbeatCalculator
             acted,
             raised,
             triaged == 0 ? 0 : (double)acted / triaged,
-            triaged == 0 ? 0 : (double)raised / triaged);
+            triaged == 0 ? 0 : (double)raised / triaged,
+            shadowAgreement);
     }
 }
 

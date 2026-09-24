@@ -138,14 +138,16 @@ public sealed class StewardComposer : IStewardTriageEngine
         StewardBriefingBundle bundle,
         string next,
         decimal spend,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        IReadOnlyList<StewardShadowClassAgreementRate>? shadowAgreement = null)
     {
         var brief = new StewardDailyBrief(
             now,
             bundle.GoalTasks.Count(item => item.State.Equals("Landed", StringComparison.OrdinalIgnoreCase)),
             bundle.Escalations.Count(item => item.SeverityRank >= 3),
             next,
-            spend);
+            spend,
+            shadowAgreement);
         var receipt = Receipt(
             StewardOutputKind.DailyBrief,
             new { bundle, next, spend },
