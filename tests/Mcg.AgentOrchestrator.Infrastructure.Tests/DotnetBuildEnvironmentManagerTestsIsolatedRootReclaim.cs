@@ -102,12 +102,16 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedRootReclaim
             File.WriteAllText(orphan, "orphan");
             File.WriteAllText(held, "held");
             File.WriteAllText(unrelated, "unrelated");
+            var heldBytes = File.ReadAllBytes(held);
 
             using (var heldHandle = new FileStream(held, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
             using (var fixture = new IsolatedDotnetRootFixture(basePath, null))
             {
                 Xunit.Assert.False(File.Exists(orphan));
-                Xunit.Assert.Equal("held", File.ReadAllText(held));
+                heldHandle.Position = 0;
+                var heldBytesAfter = new byte[heldBytes.Length];
+                heldHandle.ReadExactly(heldBytesAfter);
+                Xunit.Assert.Equal(heldBytes, heldBytesAfter);
                 Xunit.Assert.Equal("unrelated", File.ReadAllText(unrelated));
             }
         }
