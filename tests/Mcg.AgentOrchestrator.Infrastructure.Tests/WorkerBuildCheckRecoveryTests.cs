@@ -23,7 +23,9 @@ public sealed class WorkerBuildCheckRecoveryTests
         File.WriteAllText(Path.Combine(worktree, "seed.txt"), "changed");
         FailBuildCheck(kernel, goal, task, worktree);
         var dispatches = 0;
-        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, () => dispatches++);
+        var automaticRetryMessages = new List<string>();
+        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, () => dispatches++,
+            onAutomaticRetry: automaticRetryMessages.Add);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
@@ -37,6 +39,7 @@ public sealed class WorkerBuildCheckRecoveryTests
         Assert.Equal(0, task.CriterionRetryCount);
         Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
         Assert.Equal(1, dispatches);
+        Assert.Empty(automaticRetryMessages);
         Assert.Contains(FirstError, task.AcceptedRetryFeedback!.Message, StringComparison.Ordinal);
         Assert.Contains(SecondError, task.AcceptedRetryFeedback.Message, StringComparison.Ordinal);
         Assert.Contains(checkpoint, task.AcceptedRetryFeedback.Message, StringComparison.Ordinal);
@@ -52,7 +55,8 @@ public sealed class WorkerBuildCheckRecoveryTests
         var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
         var artifacts = Path.Combine(repository.WorkingDirectory, "build-artifacts");
         var retries = 0;
-        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, () => { },
+        var automaticRetryMessages = new List<string>();
+        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, () => { }, automaticRetryMessages.Add,
             (goalId, taskId, message) =>
             {
                 retries++;
@@ -78,6 +82,7 @@ public sealed class WorkerBuildCheckRecoveryTests
             }
         }
         Assert.Equal(2, retries);
+        Assert.Empty(automaticRetryMessages);
         Assert.Equal(2, task.WorkerBuildCheckRecoveryCount);
         Assert.Equal(string.Empty, ReadGit(worktree, "status", "--porcelain"));
     }
@@ -106,7 +111,9 @@ public sealed class WorkerBuildCheckRecoveryTests
         File.WriteAllText(Path.Combine(worktree, "seed.txt"), "uncommitted");
         FailBuildCheck(kernel, goal, task, worktree);
         var retries = 0;
-        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, () => retries++);
+        var automaticRetryMessages = new List<string>();
+        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, () => retries++,
+            onAutomaticRetry: automaticRetryMessages.Add);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
@@ -115,16 +122,23 @@ public sealed class WorkerBuildCheckRecoveryTests
         Assert.Equal(head, ReadGit(worktree, "rev-parse", "HEAD"));
         Assert.NotEqual(string.Empty, ReadGit(worktree, "status", "--porcelain"));
         Assert.Equal(0, retries);
+        Assert.Empty(automaticRetryMessages);
         Assert.Equal(0, task.WorkerBuildCheckRecoveryCount);
     }
 
     private static ConductorDriver RecoveryDriver(
         AgentOrchestratorKernel kernel, string executionDirectory, string artifacts,
-        Action dispatch, Func<GoalId, TaskId, string, TaskSpec>? retry = null) =>
+        Action dispatch, Action<string> onAutomaticRetry,
+        Func<GoalId, TaskId, string, TaskSpec>? retry = null) =>
         MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             executionDirectory: executionDirectory,
             dispatchAndStart: _ => { dispatch(); return DispatchStartOutcome.Started(); },
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                onAutomaticRetry(message);
+                return kernel.RetryTaskAutomatically(goalId, taskId, message, cause, retryRoundKind: roundKind);
+            },
             workerBuildRecoveryRetry: retry ?? kernel.RetryTaskAfterWorkerBuildCheckRecovery,
             workerBuildArtifactsPath: _ => artifacts);
 
@@ -132,7 +146,7 @@ public sealed class WorkerBuildCheckRecoveryTests
     {
         DispatchTask(kernel, goal, task, workingDirectory: worktree);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-            new TaskVerificationRecord("test.exe", worktree, 1, string.Empty,
+            new TaskVerificationRecord("test.exe", worktree, 1, "Worker build check failed; diagnostics are in the build log.",
                 DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed),
                 DateTimeOffset.UtcNow));
     }
