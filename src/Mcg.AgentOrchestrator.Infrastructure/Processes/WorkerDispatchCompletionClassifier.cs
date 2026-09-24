@@ -9,17 +9,21 @@ internal sealed class WorkerDispatchCompletionClassifier
     private readonly IClock _clock;
     private readonly Func<string, bool> _fileExists;
     private readonly Func<string, string> _readArtifactText;
+    private readonly Func<GoalId, string> _resolveWorkerBuildReceiptPath;
 
     internal WorkerDispatchCompletionClassifier(
         Func<TaskDispatchRecord, IWorkerProvider> resolveWorkerProvider,
         IClock clock,
         Func<string, bool> fileExists,
-        Func<string, string> readArtifactText)
+        Func<string, string> readArtifactText,
+        Func<GoalId, string>? resolveWorkerBuildReceiptPath = null)
     {
         _resolveWorkerProvider = resolveWorkerProvider;
         _clock = clock;
         _fileExists = fileExists;
         _readArtifactText = readArtifactText;
+        _resolveWorkerBuildReceiptPath = resolveWorkerBuildReceiptPath ??
+            (goalId => Path.Combine(DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId), WorkerBuildReceipt.FileName));
     }
 
     internal bool RequiresPostDispatchCommitEvidence(
@@ -283,6 +287,9 @@ internal sealed class WorkerDispatchCompletionClassifier
         diagnostic = $"WORKER_RESULT reported failed worker build check: {tests}";
         return true;
     }
+
+    internal WorkerBuildReceiptVerdict EvaluateWorkerBuildReceipt(string workingDirectory, GoalId goalId) =>
+        WorkerBuildReceipt.Evaluate(_resolveWorkerBuildReceiptPath(goalId), workingDirectory);
 
     internal bool HasWorkerBuildEvidence(
         string workingDirectory,

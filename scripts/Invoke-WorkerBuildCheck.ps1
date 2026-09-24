@@ -163,6 +163,38 @@ function Get-GoalPrefix {
     return "manual"
 }
 
+function Get-WorktreeTreeDigest {
+    param([string]$Root, [string]$TemporaryRoot)
+
+    $savedIndex = $env:GIT_INDEX_FILE
+    $savedObjects = $env:GIT_OBJECT_DIRECTORY
+    $savedAlternates = $env:GIT_ALTERNATE_OBJECT_DIRECTORIES
+    $savedOptionalLocks = $env:GIT_OPTIONAL_LOCKS
+    try {
+        $objects = Join-Path $TemporaryRoot "git-objects"
+        New-Item -ItemType Directory -Force -Path $objects | Out-Null
+        $commonObjects = & git -c core.fsmonitor=false -c gc.auto=0 rev-parse --path-format=absolute --git-path objects 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commonObjects)) { return $null }
+        $env:GIT_INDEX_FILE = Join-Path $TemporaryRoot "git-index"
+        $env:GIT_OBJECT_DIRECTORY = $objects
+        $env:GIT_ALTERNATE_OBJECT_DIRECTORIES = $commonObjects.Trim()
+        $env:GIT_OPTIONAL_LOCKS = "0"
+        $null = & git -c core.fsmonitor=false -c gc.auto=0 read-tree HEAD 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $null = & git -c core.fsmonitor=false -c gc.auto=0 add -A 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $tree = & git -c core.fsmonitor=false -c gc.auto=0 write-tree 2>$null
+        if ($LASTEXITCODE -ne 0 -or $tree -notmatch '^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$') { return $null }
+        return "wbc1:git-tree:$($tree.ToLowerInvariant())"
+    }
+    finally {
+        $env:GIT_INDEX_FILE = $savedIndex
+        $env:GIT_OBJECT_DIRECTORY = $savedObjects
+        $env:GIT_ALTERNATE_OBJECT_DIRECTORIES = $savedAlternates
+        $env:GIT_OPTIONAL_LOCKS = $savedOptionalLocks
+    }
+}
+
 function Clear-ArtifactsDirectory {
     param([string]$Path)
     if (Test-Path -LiteralPath $Path) {
@@ -398,6 +430,8 @@ $warningCount = 0
 $capturedCharacterCount = 0
 $runStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $runLogRoot = $null
+$receiptPath = Join-Path $artifactsPath "worker-build-receipt.json"
+$treeDigest = $null
 try {
     $lockDirectory = Split-Path -Parent $executionLockPath
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
@@ -408,6 +442,7 @@ try {
             $lockStream.Lock(0, 1)
             $lockHeld = $true
             Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $leaseId -ForceClean $false
+            Remove-Item -LiteralPath $receiptPath -Force -ErrorAction SilentlyContinue
         }
         catch [System.IO.IOException] {
             $lockStream.Dispose()
@@ -428,6 +463,9 @@ try {
         "-clp:ErrorsOnly",
         "-tl:off"
     )
+
+    try { $treeDigest = Get-WorktreeTreeDigest -Root $repositoryRoot -TemporaryRoot $processTempPath }
+    catch { $treeDigest = $null }
 
     $runId = "{0}-{1}-{2}" -f (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"), $PID, ([Guid]::NewGuid().ToString("N").Substring(0, 8))
     $runLogRoot = Join-Path $artifactsPath "worker-build-logs\$runId"
@@ -491,6 +529,31 @@ finally {
 }
 
 $runStopwatch.Stop()
+$receiptWarning = $null
+if ([string]::IsNullOrWhiteSpace($treeDigest)) {
+    $receiptWarning = "warning: worker build receipt unavailable: tree digest could not be computed"
+}
+else {
+    try {
+        $receipt = [ordered]@{
+            schemaVersion = 1
+            treeDigest = $treeDigest
+            digestAlgorithm = "wbc1:git-tree"
+            buildOutcome = if ($exitCode -eq 0) { "success" } else { "failure" }
+            generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+            worktreeRoot = $repositoryRoot
+            configuration = $Configuration
+            projects = @($projectPaths | ForEach-Object { Get-DisplayPath -Root $repositoryRoot -Path $_ })
+        }
+        $temporaryReceipt = Join-Path $artifactsPath ("worker-build-receipt-$PID.tmp")
+        [System.IO.File]::WriteAllText($temporaryReceipt, ($receipt | ConvertTo-Json -Depth 4), [System.Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporaryReceipt -Destination $receiptPath -Force
+    }
+    catch {
+        $receiptWarning = "warning: worker build receipt unavailable: could not write receipt"
+    }
+}
+if ($null -ne $receiptWarning) { Write-Output $receiptWarning }
 $logSummary = if ([string]::IsNullOrWhiteSpace($runLogRoot)) { "unavailable" } else { $runLogRoot }
 if ($exitCode -eq 0) {
     Write-Output "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=$($projectPaths.Count) warnings=$warningCount captured_chars=$capturedCharacterCount elapsed_ms=$($runStopwatch.ElapsedMilliseconds) logs=$logSummary"

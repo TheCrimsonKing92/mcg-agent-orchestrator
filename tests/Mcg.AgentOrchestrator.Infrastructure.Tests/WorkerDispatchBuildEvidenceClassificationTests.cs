@@ -163,7 +163,7 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
             ["src/Feature/Feature.cs"],
             [],
             failedWorkerBuildCheck: false,
-            hasWorkerBuildEvidence: () => false,
+            workerBuildReceipt: () => new(false, "receipt-missing"),
             _ => new(true, 1, new string('x', VerificationTextBounds.MaxRetainedChars * 2) + "\n" + compilerError));
 
         Xunit.Assert.True(result.Diagnostic.Length < VerificationTextBounds.MaxRetainedChars + 500);
@@ -189,11 +189,14 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
     [Xunit.Fact]
     public void CompiledChangeWithBuildEvidenceCompletesAndCommits()
     {
+        var buildChecks = 0;
         var (task, worktree) = RefreshDeveloper(
             "deferred - Invoke-WorkerBuildCheck passed with 0 errors; acceptance gate owns tests",
-            AddCompiledFeature);
+            AddCompiledFeature,
+            _ => { buildChecks++; return new(true, 0, "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=1"); });
 
         AssertCompleted(task);
+        Xunit.Assert.Equal(1, buildChecks);
         Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
         Xunit.Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
     }
