@@ -9,6 +9,26 @@ internal sealed record ReviewerFindingEvidenceSuppressionRoute(
 
 internal static class ReviewerFindingEvidenceSuppressionRouting
 {
+    internal static ReviewFinding[] SelectAndSuppress(
+        IReadOnlyList<string> writableBlockerIds,
+        ReviewFinding[] requestingFindings,
+        TaskSpec requestingTask,
+        string? candidateSha,
+        Func<FindingEvidenceRequest, string> requestIdentity,
+        Action<string> recordSuppression)
+    {
+        var selfExempt = SelectSelfExemptRequestingFindings(
+            writableBlockerIds, requestingFindings, requestingTask, candidateSha);
+        foreach (var identity in requestingFindings.Except(selfExempt)
+                     .Select(finding => requestIdentity(finding.EvidenceRequest!))
+                     .Distinct(StringComparer.Ordinal))
+        {
+            recordSuppression(identity);
+        }
+
+        return selfExempt;
+    }
+
     internal static ReviewFinding[] SelectSelfExemptRequestingFindings(
         IReadOnlyList<string> writableBlockerIds,
         IReadOnlyList<ReviewFinding> requestingFindings,

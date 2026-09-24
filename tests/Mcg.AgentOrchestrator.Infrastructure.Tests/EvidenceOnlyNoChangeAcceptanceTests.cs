@@ -121,6 +121,20 @@ public sealed class EvidenceOnlyNoChangeAcceptanceTests
     }
 
     [Xunit.Fact]
+    public void DirtyWorktreeStaysRejected()
+    {
+        var (kernel, goal, developer, _) = SeedRetry(
+            EvidenceFindingWithRequest("Run the focused class.", "focused-class",
+                FindingCategory.SpecCompliance, project: "Core.Tests",
+                classes: ["DispatchOutcomeClassifyTests"]));
+
+        kernel.RecordDispatchExecutionResult(goal.Id, developer.Id,
+            RejectedRound(developer, "deferred", "none", true, worktree: "dirty"));
+
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, developer.Status);
+    }
+
+    [Xunit.Fact]
     public void ReviewerOwnPendingRequestRunsAtReviewedCandidate()
     {
         var (kernel, goal) = SoftwareGoal();
@@ -217,7 +231,7 @@ public sealed class EvidenceOnlyNoChangeAcceptanceTests
     private static TaskVerificationRecord RejectedRound(
         TaskSpec developer, string tests, string blockers, bool recognized,
         ReviewFinding? ownFinding = null, int commits = 0,
-        string changedPaths = "none", string head = Candidate)
+        string changedPaths = "none", string head = Candidate, string worktree = "clean")
     {
         var stdout = string.Join(Environment.NewLine,
             "WORKER_RESULT:", "files: none", "commands: none",
@@ -226,7 +240,7 @@ public sealed class EvidenceOnlyNoChangeAcceptanceTests
             "touched_anchors: []", "commit: none", "END_WORKER_RESULT");
         var stderr = string.Join(Environment.NewLine,
             DispatchRejectionDiagnosticMarker.Format(recognized, commits, changedPaths),
-            $"Developer/Tester dispatch did not produce required relevant file-change evidence. branch=goal/test; head={head}; worktree=clean; commits_after_dispatch={commits}; changed_paths={changedPaths}.",
+            $"Developer/Tester dispatch did not produce required relevant file-change evidence. branch=goal/test; head={head}; worktree={worktree}; commits_after_dispatch={commits}; changed_paths={changedPaths}.",
             DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing));
         return new TaskVerificationRecord(developer.LastDispatch!.Command,
             developer.LastDispatch.WorkingDirectory, 1, stdout, stderr,

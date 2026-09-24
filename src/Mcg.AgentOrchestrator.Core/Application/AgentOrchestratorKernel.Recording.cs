@@ -443,6 +443,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         candidate = dispatch.BaseCommit;
+        var candidateSha = candidate;
         var targets = goal.Tasks
             .Where(owner => owner.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
                             owner.LastVerification is { } record &&
@@ -476,7 +477,7 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             var coveringRequest = roundFindings.FirstOrDefault(own =>
-                FindingEvidenceExecutionClassifier.Classify(task, own, candidate) ==
+                FindingEvidenceExecutionClassifier.Classify(task, own, candidateSha) ==
                     FindingEvidenceExecutionState.PendingExecution &&
                 (string.Equals(own.StableId, finding.StableId, StringComparison.Ordinal) ||
                  finding.EvidenceRequest is { Selections.Count: > 0 } targetRequest &&
@@ -490,7 +491,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         ownRequests = roundFindings
-            .Where(finding => FindingEvidenceExecutionClassifier.Classify(task, finding, candidate) ==
+            .Where(finding => FindingEvidenceExecutionClassifier.Classify(task, finding, candidateSha) ==
                 FindingEvidenceExecutionState.PendingExecution)
             .DistinctBy(finding => FindingEvidenceExecutionClassifier.BuildRequestIdentity(finding.EvidenceRequest!))
             .ToArray();
@@ -530,7 +531,8 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
         head = line[start..end].Trim();
-        return head.Length > 0 && head.All(Uri.IsHexDigit);
+        return head.Length > 0 && head.All(Uri.IsHexDigit) &&
+            line.Contains("; worktree=clean;", StringComparison.Ordinal);
     }
 
     private static string BuildDispatchFailureMessage(
