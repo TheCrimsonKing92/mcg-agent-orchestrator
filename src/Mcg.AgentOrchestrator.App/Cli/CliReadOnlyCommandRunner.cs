@@ -10,7 +10,9 @@ internal static class CliReadOnlyCommandRunner
         TrialCompareCliCommand.RequiresHistoricalState(args) ||
         CliTaskQueryCommand.IsTaskQueryCommand(args) ||
         CliStatusQueryCommand.IsStatusQueryCommand(args) ||
-        CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args);
+        CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args) ||
+        CliAttentionQueryCommand.IsAttentionQueryCommand(args) ||
+        CliNextFullQueryCommand.IsNextFullQueryCommand(args);
 
     internal static bool TryExecute(
         IReadOnlyList<string> args,
@@ -21,7 +23,8 @@ internal static class CliReadOnlyCommandRunner
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        out bool changed)
+        out bool changed,
+        IClock? diagnosticsClock = null)
     {
         if (GoalBoardCommand.IsBoardCommand(args))
         {
@@ -69,6 +72,22 @@ internal static class CliReadOnlyCommandRunner
         if (CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args))
         {
             CliGoalEventsQueryCommand.Execute(args, stateRepository, workspace);
+            changed = false;
+            return true;
+        }
+
+        if (CliAttentionQueryCommand.IsAttentionQueryCommand(args) &&
+            CliAttentionQueryCommand.TryExecute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal))
+        {
+            changed = false;
+            return true;
+        }
+
+        if (CliNextFullQueryCommand.IsNextFullQueryCommand(args) &&
+            CliNextFullQueryCommand.TryExecute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock))
+        {
             changed = false;
             return true;
         }

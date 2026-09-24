@@ -41,6 +41,10 @@ internal sealed class CliExecutionContext(
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
+public bool IsReadOnlyQuery { get; init; }
+
+public IClock? DiagnosticsClock { get; init; }
+
 public TransientSqliteLoadHold? InitialConductLoopLoadHold { get; } = initialConductLoopLoadHold;
 
 public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kernel;

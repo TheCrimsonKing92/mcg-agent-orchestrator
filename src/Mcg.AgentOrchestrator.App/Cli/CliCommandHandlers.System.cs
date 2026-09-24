@@ -329,7 +329,9 @@ internal static partial class CliCommandHandlers
 
             case "attention":
             {
-                var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+                var store = context.IsReadOnlyQuery
+                    ? CollaborationItemStore.OpenExisting(context.Workspace.OrchestratorDirectory)
+                    : CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
 
                 // `attention dismiss --item <item-id>` resolves one item, including cross-goal items.
                 // The legacy goal-prefix selector remains available for bulk cleanup.
@@ -390,8 +392,8 @@ internal static partial class CliCommandHandlers
                 // rows keep short ids so `attention answer` still works. `--all` remains history.
                 if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
                 {
-                    var showMigratedHumanWaits = context.Kernel.SweepParkedGoalHumanWaits();
-                    var showMigratedCollaborationItems = ResolveParkedAttentionItems(context.Kernel, store);
+                    var showMigratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
+                    var showMigratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
                     var (includeHistory, goalPrefix) = ParseAttentionShowArgs(parts);
                     var changed = showMigratedHumanWaits > 0 || showMigratedCollaborationItems > 0;
 
@@ -596,8 +598,8 @@ internal static partial class CliCommandHandlers
                     return false;
                 }
 
-                var migratedHumanWaits = context.Kernel.SweepParkedGoalHumanWaits();
-                var migratedCollaborationItems = ResolveParkedAttentionItems(context.Kernel, store);
+                var migratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
+                var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
                 if (waits.Count > 0)
                 {

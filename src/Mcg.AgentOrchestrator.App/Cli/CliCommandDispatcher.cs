@@ -44,7 +44,8 @@ public static bool ExecuteCommand(
     Action? reportGoalCreationProgress = null,
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalGoalKernel = null,
     Action<GoalSnapshot>? recordDurableGoalBaseline = null,
-    WorktreeCleanupContext? cleanupContext = null)
+    WorktreeCleanupContext? cleanupContext = null,
+    IClock? diagnosticsClock = null)
 {
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -91,7 +92,8 @@ public static bool ExecuteCommand(
         GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds,
         StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,
         StableSlotSelector = stableSlotSelector,
-        CleanupContext = operationCleanupContext
+        CleanupContext = operationCleanupContext,
+        DiagnosticsClock = diagnosticsClock
     };
     bool changed;
     try
