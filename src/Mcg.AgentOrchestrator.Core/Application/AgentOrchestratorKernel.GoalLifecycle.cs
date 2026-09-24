@@ -510,9 +510,10 @@ public sealed partial class AgentOrchestratorKernel
         string message,
         RetryCause retryCause,
         bool invalidateDownstream = true,
-        RetryRoundKind? retryRoundKind = null) =>
+        RetryRoundKind? retryRoundKind = null,
+        bool authoritativeRetryFeedback = false) =>
         RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind,
-            authoritativeRetryFeedback: false, preserveEquivalentPendingRetry: true);
+            authoritativeRetryFeedback: authoritativeRetryFeedback, preserveEquivalentPendingRetry: true);
 
     private TaskSpec RetryTaskCore(
         GoalId goalId,

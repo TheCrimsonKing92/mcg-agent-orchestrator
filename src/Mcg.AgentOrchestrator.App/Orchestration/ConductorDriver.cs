@@ -808,6 +808,7 @@ internal sealed partial class ConductorDriver
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
             kernel.RetryTaskAutomatically(goalId, taskId, message, retryRoundKind: retryRoundKind, retryCause: cause);
+        ConfigureDeveloperCompletionStructuralPreflightRetry(kernel);
         _recordTaskNote = (goalId, taskId, message) =>
         {
             kernel.RecordTaskNote(goalId, taskId, message);
