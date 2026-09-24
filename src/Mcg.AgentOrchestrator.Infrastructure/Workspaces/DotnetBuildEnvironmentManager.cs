@@ -708,11 +708,12 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default,
         TimeProvider? timeProvider = null,
         Action<TimeSpan>? sleep = null,
-        AcceptanceAttemptArtifactCustodyContext? artifactCustody = null)
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody = null,
+        TimeSpan? timeout = null)
     {
         return TryAcquireLeaseExecutionLockCore(
             environment,
-            timeout: null,
+            timeout,
             cancellationToken,
             timeProvider,
             sleep,
@@ -1498,10 +1499,14 @@ public static class DotnetBuildEnvironmentManager
         ProcessCommandLineSnapshot? processSnapshot = null)
     {
         processSnapshot ??= CreateSlotCandidateProcessSnapshot();
-        var waits = new DotnetBuildStableSlotWait[slotCount];
+        var waits = new List<DotnetBuildStableSlotWait>(slotCount);
         for (var slot = 0; slot < slotCount; slot++)
         {
-            waits[slot] = TryReadStableSlotExecutionWait(slot, environmentForSlot(slot), processSnapshot);
+            var wait = TryReadStableSlotExecutionWait(slot, environmentForSlot(slot), processSnapshot, out var held);
+            if (held || wait.OwnerProcessId.HasValue || wait.UnavailableProcessId.HasValue || wait.UnavailableStatus.HasValue)
+            {
+                waits.Add(wait);
+            }
         }
 
         return waits;
@@ -1511,8 +1516,16 @@ public static class DotnetBuildEnvironmentManager
         int slotIndex,
         DotnetBuildEnvironment environment,
         ProcessCommandLineSnapshot? processSnapshot = null)
+        => TryReadStableSlotExecutionWait(slotIndex, environment, processSnapshot, out _);
+
+    private static DotnetBuildStableSlotWait TryReadStableSlotExecutionWait(
+        int slotIndex,
+        DotnetBuildEnvironment environment,
+        ProcessCommandLineSnapshot? processSnapshot,
+        out bool held)
     {
-        var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+        held = IsExecutionLockHeld(environment.ExecutionLockPath);
+        var metadata = held ? TryReadExecutionLeaseMetadata(environment.ExecutionLockPath) : null;
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         var ownerProcessId = TryFindActiveSlotArtifactConsumer(environment, snapshot)?.ProcessId ??
             metadata?.OwnerProcessId;
@@ -1527,8 +1540,24 @@ public static class DotnetBuildEnvironmentManager
             snapshot.Failure?.Operation);
     }
 
+    private static bool IsExecutionLockHeld(string path)
+    {
+        if (!File.Exists(path)) return false;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            stream.Lock(0, 1);
+            stream.Unlock(0, 1);
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
     private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
-        string.Join(
+        busySlots.Count == 0 ? "none" : string.Join(
             "|",
             busySlots.Select(FormatBusySlot));
 
