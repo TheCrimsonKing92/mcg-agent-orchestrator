@@ -38,7 +38,8 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                 ProjectTrainSelection(restartedDriver, goals), goals,
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Equal(3, landed.MemberResults.Count);
-            Assert.All(goals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
+            Assert.All(goals, goal => Assert.True(goal.Status == GoalStatus.Completed,
+                $"Expected persisted train receipt to land {goal.Id.Value}; status={goal.Status}; detail={landed.Detail}"));
             Assert.Equal(0, restartedVerifier.RunCount);
         }
         finally
@@ -62,7 +63,8 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                     Checks: [new AcceptanceCheckResult("train stale main", true, 0, null)],
                     TestResultPaths: [WritePassingTrx(repo, "train-stale-main-green.trx")]));
             var driver = new ConductorDriver(kernel, workspace, verifier,
-                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: cleanup.Hooks);
             var firstSelection = ProjectTrainSelection(driver, goals);
             var firstMain = firstSelection.Members[0].MainRevision;
             _ = driver.RunMergeTrain(firstSelection, goals,
@@ -139,7 +141,8 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                     TestResultPaths: [WritePassingTrx(repo, "background-train-green.trx")]));
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(kernel, workspace, verifier,
-                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks);
             var stopPath = Path.Combine(repo, "stop-does-not-exist");
             tick = Task.Run(() => new ConductorBatchLoop().Run(kernel, driver,
                 ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1));
@@ -165,13 +168,19 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                 store.ReadPassedReceiptsForGoal(first.Id).Count == 1 &&
                 driver.GetActiveCohortGateMemberGoalIds().Count == 0,
                 TimeSpan.FromSeconds(15)), "The background train receipt was not persisted.");
+            BatchTickSummary? observedTick = null;
             _ = new ConductorBatchLoop().Run(kernel, driver,
-                ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1);
+                ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1,
+                onTick: summary => observedTick = summary);
 
             Assert.Equal(1, verifier.RunCount);
-            Assert.Equal(GoalStatus.Completed, first.Status);
-            Assert.Equal(GoalStatus.Completed, second.Status);
-            Assert.Equal(GoalStatus.Completed, third.Status);
+            var progress = string.Join(" | ", observedTick?.ProgressLines ?? []);
+            Assert.True(first.Status == GoalStatus.Completed,
+                $"Expected first train member to land; status={first.Status}; progress={progress}");
+            Assert.True(second.Status == GoalStatus.Completed,
+                $"Expected second train member to land; status={second.Status}; progress={progress}");
+            Assert.True(third.Status == GoalStatus.Completed,
+                $"Expected third train member to land; status={third.Status}; progress={progress}");
         }
         finally
         {

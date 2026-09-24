@@ -41,7 +41,8 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                     TestResultPaths: [trx]));
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var driver = new ConductorDriver(kernel, workspace, verifier,
-                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks);
             var started = driver.RunAcceptanceCohort(ProjectSelection(driver, first, second),
                 [first, second], ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Contains("outcome=inflight", started.Detail, StringComparison.Ordinal);
@@ -68,12 +69,17 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
             var logPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "preland.jsonl");
+            BatchTickSummary? observedTick = null;
             _ = new ConductorBatchLoop(conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
                 kernel, driver, ConductorAutonomyPolicy.Permissive,
-                Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1);
+                Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1,
+                onTick: summary => observedTick = summary);
 
-            Assert.Equal(GoalStatus.Completed, first.Status);
-            Assert.Equal(GoalStatus.Completed, second.Status);
+            var progress = string.Join(" | ", observedTick?.ProgressLines ?? []);
+            Assert.True(first.Status == GoalStatus.Completed,
+                $"Expected first cohort member to land; status={first.Status}; progress={progress}");
+            Assert.True(second.Status == GoalStatus.Completed,
+                $"Expected second cohort member to land; status={second.Status}; progress={progress}");
             Assert.Contains(landings, landing => landing.GoalId == first.Id.Value);
             Assert.Contains(landings, landing => landing.GoalId == second.Id.Value);
             Assert.DoesNotContain(File.ReadAllLines(logPath), line =>
