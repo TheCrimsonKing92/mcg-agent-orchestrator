@@ -21,9 +21,28 @@ public static partial class AcceptanceCriterionOwnershipMarker
 
     public static AcceptanceCriterionOwnershipMarkerResult Classify(string? criterion)
     {
-        var trailingRegion = ExtractTrailingRegion(criterion);
+        var trailingSentences = ExtractTrailingSentences(criterion);
+        var trailingRegion = string.Join(" ", trailingSentences);
         if (trailingRegion.Length == 0)
             return new(AcceptanceCriterionOwnershipClassification.Unclassified, trailingRegion);
+
+        var explicitOwners = trailingSentences
+            .SelectMany(sentence => ExplicitOwnerSentenceRegex().Matches(sentence).Cast<Match>())
+            .ToArray();
+        if (explicitOwners.Length > 0)
+        {
+            var explicitNonOperatorOwner = explicitOwners.FirstOrDefault(match =>
+                    !match.Groups["owner"].Value.Equals("operator", StringComparison.OrdinalIgnoreCase) &&
+                    match.Groups["verb"].Value.Equals("owns", StringComparison.OrdinalIgnoreCase))
+                ?? explicitOwners.FirstOrDefault(match =>
+                    !match.Groups["owner"].Value.Equals("operator", StringComparison.OrdinalIgnoreCase));
+            return new(
+                explicitOwners.Any(match => match.Groups["owner"].Value.Equals("operator", StringComparison.OrdinalIgnoreCase))
+                    ? AcceptanceCriterionOwnershipClassification.OperatorOwned
+                    : AcceptanceCriterionOwnershipClassification.NotOperatorOwned,
+                trailingRegion,
+                explicitNonOperatorOwner?.Groups["owner"].Value);
+        }
 
         var operatorOwned = OperatorOwnershipRegex().IsMatch(trailingRegion);
         var nonOperatorOwner = NonOperatorOwnershipRegex().Match(trailingRegion);
@@ -54,10 +73,13 @@ public static partial class AcceptanceCriterionOwnershipMarker
     public static bool HasAcceptanceGateOwnershipMarker(string? text) =>
         !string.IsNullOrWhiteSpace(text) && AcceptanceGateOwnershipRegex().IsMatch(text);
 
-    public static string ExtractTrailingRegion(string? criterion)
+    public static string ExtractTrailingRegion(string? criterion) =>
+        string.Join(" ", ExtractTrailingSentences(criterion));
+
+    private static string[] ExtractTrailingSentences(string? criterion)
     {
         if (string.IsNullOrWhiteSpace(criterion))
-            return string.Empty;
+            return [];
 
         var sentences = SentenceBoundaryRegex()
             .Split(criterion.Trim())
@@ -75,9 +97,14 @@ public static partial class AcceptanceCriterionOwnershipMarker
         }
 
         return firstIncluded == sentences.Length
-            ? string.Empty
-            : string.Join(" ", sentences[firstIncluded..]);
+            ? []
+            : sentences[firstIncluded..];
     }
+
+    [GeneratedRegex(
+        @"(?:^|;)\s*(?:the\s+)?(?<owner>operator|developer|researcher|reviewer|tester|planner|acceptance(?:[\s-]+gate)?|gate)\s+(?<verb>owns|executes)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ExplicitOwnerSentenceRegex();
 
     [GeneratedRegex(@"(?<=[.!?])(?:\s+|$)|[\r\n]+", RegexOptions.CultureInvariant)]
     private static partial Regex SentenceBoundaryRegex();
