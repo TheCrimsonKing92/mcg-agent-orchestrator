@@ -7,6 +7,52 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTests
 {
     [Fact]
+    public void FaultedBackgroundTrain_DoesNotEnterCohortFaultDrain()
+    {
+        var (repo, kernel, goals) = CreateReadyTrain();
+        var cleanup = CreateIsolatedCleanupContext(repo);
+        using var gateStarted = new ManualResetEventSlim();
+        using var gateRelease = new ManualResetEventSlim();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
+                new AcceptanceVerificationResult(true, false, 0, null,
+                    Checks: [new AcceptanceCheckResult("train fault", true, 0, null)],
+                    TestResultPaths: [WritePassingTrx(repo, "train-fault-green.trx")]));
+            var driver = new ConductorDriver(kernel, workspace, verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+            var train = ProjectTrainSelection(driver, goals);
+            _ = driver.RunMergeTrain(train, goals, ConductorAutonomyPolicy.Permissive,
+                cancellation.Token, runGateInBackground: true);
+            Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The train gate did not start.");
+            cancellation.Cancel();
+            gateRelease.Set();
+            Assert.True(SpinWait.SpinUntil(() =>
+                driver.GetActiveCohortGateMemberGoalIds().Count == 0,
+                TimeSpan.FromSeconds(15)), "The faulted train gate did not finish.");
+
+            var pair = ConductorAcceptanceCohortSelector.Select(goals.Take(2).Select(goal =>
+                new ConductorSpeculativeAcceptanceCandidate(goal.Id,
+                    driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive))).ToArray()).Selection;
+            Assert.NotNull(pair);
+            var cohort = driver.RunAcceptanceCohortForTick(pair, goals.Take(2).ToArray(),
+                ConductorAutonomyPolicy.Permissive);
+            Assert.Null(cohort.Fault);
+            Assert.DoesNotContain("gate infrastructure failure", cohort.Run.Detail, StringComparison.Ordinal);
+            var trainFault = driver.RunMergeTrain(train, goals,
+                ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
+            Assert.Contains("OperationCanceledException", trainFault.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            gateRelease.Set();
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void BackgroundTrainGate_RestartedDriverLandsFromPersistedReceipt()
     {
         var (repo, kernel, goals) = CreateReadyTrain();

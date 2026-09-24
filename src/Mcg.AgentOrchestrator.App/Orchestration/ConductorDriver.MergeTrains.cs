@@ -7,6 +7,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ConductorAcceptanceCohortGateFault>
+        _trainGateFaults = new(StringComparer.Ordinal);
+
     internal bool MergeTrainsEnabled =>
         !string.Equals(Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED"), "1", StringComparison.Ordinal) &&
         (_runMergeTrainOverride is not null ||
@@ -58,7 +61,7 @@ internal sealed partial class ConductorDriver
                 return InFlight(activeRun!);
             }
             SweepCompletedCohortGateRuns();
-            if (_cohortGateFaults.TryRemove(trainKey, out var fault))
+            if (_trainGateFaults.TryRemove(trainKey, out var fault))
             {
                 return new ConductorMergeTrainRunResult(
                     null,
@@ -123,18 +126,6 @@ internal sealed partial class ConductorDriver
                 workspace.TreeRevision,
                 manifest);
             var receipt = _mergeTrainAcceptanceStore.TryReadReceipt(identity.Value);
-            if (receipt is null)
-            {
-                // Rebase creates new commit objects on each materialization. Their IDs are part of
-                // MergeTrainIdentity, but the tested tree and original candidate bindings can still
-                // be identical. A completed passing gate is reusable for that exact tested state.
-                receipt = _mergeTrainAcceptanceStore.ReadPassedReceiptsForGoal(members[0].GoalId)
-                    .FirstOrDefault(saved => HasSameTestedTrainState(saved.Identity, identity));
-                if (receipt is not null)
-                {
-                    identity = receipt.Identity;
-                }
-            }
             receipt ??= RunMergeTrainSourceSizePreflight(workspace.Path, identity, _mergeTrainAcceptanceStore);
             if (receipt is null)
             {
@@ -154,13 +145,8 @@ internal sealed partial class ConductorDriver
                         {
                             // The gate-only replay owns its workspace and writes receipts, including the
                             // bounded RED bisection. A later tick replays those receipts and lands.
-                            var gateResult = RunMergeTrain(selection, orderedGoals, policy, cancellationToken,
+                            _ = RunMergeTrain(selection, orderedGoals, policy, cancellationToken,
                                 onGateAdmitted, gateOnly: true);
-                            if (gateResult.Receipt is null &&
-                                gateResult.Detail.StartsWith("gate infrastructure failure:", StringComparison.Ordinal))
-                            {
-                                throw new InvalidOperationException(gateResult.Detail);
-                            }
                             run.Completion.SetResult();
                         }
                         catch (Exception ex)
@@ -221,6 +207,10 @@ internal sealed partial class ConductorDriver
                     IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or
                     NotSupportedException)
                 {
+                    if (gateOnly)
+                    {
+                        throw;
+                    }
                     return Fallback($"gate infrastructure failure: {ex.GetType().Name}: {BoundCohortDetail(ex.Message)}");
                 }
                 finally
@@ -350,22 +340,6 @@ internal sealed partial class ConductorDriver
                 allEjections, detail);
         }
     }
-
-    private static bool HasSameTestedTrainState(MergeTrainIdentity saved, MergeTrainIdentity current) =>
-        string.Equals(saved.ObservedMainRevision, current.ObservedMainRevision, StringComparison.Ordinal) &&
-        string.Equals(saved.TrainTreeRevision, current.TrainTreeRevision, StringComparison.Ordinal) &&
-        string.Equals(saved.ManifestIdentity, current.ManifestIdentity, StringComparison.Ordinal) &&
-        saved.Members.Count == current.Members.Count &&
-        saved.Members.Zip(current.Members).All(pair =>
-            pair.First.GoalId == pair.Second.GoalId &&
-            string.Equals(pair.First.BranchRevision, pair.Second.BranchRevision, StringComparison.Ordinal) &&
-            string.Equals(pair.First.CandidateRevision, pair.Second.CandidateRevision, StringComparison.Ordinal) &&
-            pair.First.LandingPaths.SequenceEqual(pair.Second.LandingPaths, StringComparer.Ordinal) &&
-            pair.First.ResourceKeys.SequenceEqual(pair.Second.ResourceKeys, StringComparer.Ordinal) &&
-            pair.First.ChangeRiskTier == pair.Second.ChangeRiskTier &&
-            pair.First.AutoPromotionDisposition == pair.Second.AutoPromotionDisposition &&
-            string.Equals(pair.First.MergeStatus, pair.Second.MergeStatus, StringComparison.Ordinal) &&
-            string.Equals(pair.First.MergeReason, pair.Second.MergeReason, StringComparison.Ordinal));
 
     private void RecoverMergeTrainLandingEffects(
         AgentOrchestratorKernel kernel,

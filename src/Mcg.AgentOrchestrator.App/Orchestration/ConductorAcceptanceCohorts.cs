@@ -940,7 +940,10 @@ internal sealed partial class ConductorDriver
     {
         if (run.Completion.Task.Exception is { } aggregate)
         {
-            _cohortGateFaults[memberPairKey] = new ConductorAcceptanceCohortGateFault(
+            var faults = memberPairKey.StartsWith("train:", StringComparison.Ordinal)
+                ? _trainGateFaults
+                : _cohortGateFaults;
+            faults[memberPairKey] = new ConductorAcceptanceCohortGateFault(
                 memberPairKey,
                 run.MemberGoalIds,
                 run.PairFingerprint,
