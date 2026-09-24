@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class IsolatedDotnetRootFixtureReclaimTests
+public sealed class DotnetBuildEnvironmentManagerTestsIsolatedRootReclaim
 {
     [Xunit.Fact]
     public void ConstructionReclaimsUnheldRootsAndPreservesHeldRoot()
@@ -82,6 +82,33 @@ public sealed class IsolatedDotnetRootFixtureReclaimTests
                 Xunit.Assert.False(Directory.Exists(stale));
                 Xunit.Assert.True(Directory.Exists(fresh));
                 Xunit.Assert.Equal(freshFiles, SnapshotFiles(fresh));
+            }
+        }
+        finally
+        {
+            Directory.Delete(basePath, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ConstructionRemovesOnlyUnheldOrphanedOwnerLocks()
+    {
+        var basePath = CreateBasePath();
+        try
+        {
+            var orphan = Path.Combine(basePath, "mdi-orphan" + IsolatedDotnetRootFixture.OwnerLockSuffix);
+            var held = Path.Combine(basePath, "mdi-held" + IsolatedDotnetRootFixture.OwnerLockSuffix);
+            var unrelated = Path.Combine(basePath, "other-root" + IsolatedDotnetRootFixture.OwnerLockSuffix);
+            File.WriteAllText(orphan, "orphan");
+            File.WriteAllText(held, "held");
+            File.WriteAllText(unrelated, "unrelated");
+
+            using (var heldHandle = new FileStream(held, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+            using (var fixture = new IsolatedDotnetRootFixture(basePath, null))
+            {
+                Xunit.Assert.False(File.Exists(orphan));
+                Xunit.Assert.Equal("held", File.ReadAllText(held));
+                Xunit.Assert.Equal("unrelated", File.ReadAllText(unrelated));
             }
         }
         finally

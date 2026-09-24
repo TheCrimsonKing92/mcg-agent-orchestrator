@@ -133,6 +133,8 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
         {
             if ((File.GetAttributes(basePath) & FileAttributes.ReparsePoint) != 0)
             {
+                WriteDiagnostic("reclaim", basePath,
+                    new IOException("Refusing to reclaim through a reparse-point base folder."));
                 return;
             }
 
@@ -190,15 +192,69 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
                 {
                     // Another fixture finished reclaiming this candidate first.
                 }
+                catch (FileNotFoundException)
+                {
+                    // Another fixture finished reclaiming this candidate first.
+                }
                 catch (Exception ex)
                 {
                     WriteDiagnostic("reclaim", candidate, ex);
                 }
             }
+
+            ReclaimOrphanedOwnerLocks(basePath);
         }
         catch (Exception ex)
         {
             WriteDiagnostic("reclaim", basePath, ex);
+        }
+    }
+
+    private void ReclaimOrphanedOwnerLocks(string basePath)
+    {
+        foreach (var lockPath in Directory.EnumerateFiles(
+                     basePath, "mdi-*" + OwnerLockSuffix,
+                     new EnumerationOptions { RecurseSubdirectories = false, AttributesToSkip = 0 }))
+        {
+            var root = lockPath[..^OwnerLockSuffix.Length];
+            if (!Path.GetFileName(root).StartsWith("mdi-", StringComparison.Ordinal) ||
+                !string.Equals(Path.GetDirectoryName(Path.GetFullPath(root)), basePath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (Directory.Exists(root) ||
+                    (File.GetAttributes(lockPath) & FileAttributes.ReparsePoint) != 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using var probe = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                }
+                catch (IOException ex) when (IsSharingViolation(ex))
+                {
+                    // A fixture may have claimed this name before making its root visible.
+                    continue;
+                }
+
+                if (!Directory.Exists(root))
+                {
+                    File.Delete(lockPath);
+                }
+            }
+            catch (FileNotFoundException)
+            {
+                // Another fixture removed this orphan first.
+            }
+            catch (Exception ex)
+            {
+                WriteDiagnostic("reclaim", root, ex);
+            }
         }
     }
 
@@ -279,13 +335,20 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
         try
         {
             Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _originalValue);
-            _ownerLock?.Dispose();
             if (Directory.Exists(_root))
             {
                 DeleteTreeWithoutFollowingLinks(_root);
             }
+        }
+        catch (Exception ex)
+        {
+            WriteDiagnostic("dispose", _root, ex);
+        }
 
-            if (_ownerLockPath is not null)
+        try
+        {
+            _ownerLock?.Dispose();
+            if (_ownerLockPath is not null && !Directory.Exists(_root))
             {
                 File.Delete(_ownerLockPath);
             }
