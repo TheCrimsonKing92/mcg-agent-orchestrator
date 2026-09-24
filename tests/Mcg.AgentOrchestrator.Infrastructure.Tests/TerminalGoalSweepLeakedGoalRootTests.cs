@@ -21,7 +21,7 @@ public sealed class TerminalGoalSweepLeakedGoalRootTests
             var absentRoot = DotnetBuildEnvironmentManager.CreateAttempt(absent, "acceptance", storageRoot: storage).RootPath;
             var heldRoot = DotnetBuildEnvironmentManager.CreateAttempt(held, "acceptance", storageRoot: storage).RootPath;
             var noLeaseRoot = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(withoutLease, storage).RootPath;
-            using (var connection = new SqliteConnection($"Data Source={db}"))
+            using (var connection = new SqliteConnection($"Data Source={db};Pooling=False"))
             {
                 connection.Open();
                 using var command = connection.CreateCommand();
