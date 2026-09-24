@@ -89,6 +89,23 @@ public sealed class AcceptanceFailureAttributionPlannerCandidateRerunTests
     }
 
     [Fact]
+    public async Task DuplicateIdentityWithoutGreenEvidenceInEveryCheckIsNotRerun()
+    {
+        var green = Assert.Single(Classify(Identity, GreenBaseline(Identity)));
+        var omitted = new AcceptanceTestFailureAttribution(
+            Identity,
+            AcceptanceTestFailureOrigin.Unattributed,
+            "focused identity omitted by deterministic cap");
+        var original = new[] { green, omitted };
+        var rerunner = new FakeRerunner(new CandidateFailureRerunResult(true, "unexpected.trx"));
+
+        var result = await Apply(original, rerunner);
+
+        Assert.Equal(original, result);
+        Assert.Empty(rerunner.Calls);
+    }
+
+    [Fact]
     public async Task RerunErrorFailsClosedAndKeepsItsReason()
     {
         var original = Classify(Identity, GreenBaseline(Identity));

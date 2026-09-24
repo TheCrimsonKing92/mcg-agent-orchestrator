@@ -349,15 +349,16 @@ internal static class AcceptanceFailureAttributionPlanner
 
         var changed = changedFiles.Select(NormalizePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var eligible = attributions
-            .Where(attribution => attribution.Origin == AcceptanceTestFailureOrigin.Introduced &&
-                attribution.Evidence.Equals(greenEvidence, StringComparison.Ordinal))
+            .GroupBy(attribution => attribution.TestIdentity, StringComparer.Ordinal)
+            .Where(group => group.All(attribution =>
+                attribution.Origin == AcceptanceTestFailureOrigin.Introduced &&
+                attribution.Evidence.Equals(greenEvidence, StringComparison.Ordinal)))
             .Where(attribution =>
             {
-                var paths = resolveSourcePaths(attribution.TestIdentity);
+                var paths = resolveSourcePaths(attribution.Key);
                 return paths.Count > 0 && paths.All(path => !changed.Contains(NormalizePath(path)));
             })
-            .Select(attribution => attribution.TestIdentity)
-            .Distinct(StringComparer.Ordinal)
+            .Select(group => group.Key)
             .Order(StringComparer.Ordinal)
             .ToArray();
         if (eligible.Length == 0 || eligible.Length > MaxCandidateRerunIdentities)
