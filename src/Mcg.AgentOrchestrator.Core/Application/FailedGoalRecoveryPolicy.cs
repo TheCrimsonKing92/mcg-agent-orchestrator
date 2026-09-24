@@ -33,6 +33,7 @@ public enum FailedGoalFindingObservationKind
     FindingOperatorEvidenceRequired,
     FindingRouteUnavailable,
     FindingRetryCapReached,
+    FindingRepeatedFailingTestSet,
     FindingConvergenceViolation,
     FindingEvidencePending,
     FindingEvidenceReceiptPersistenceFailed,
@@ -142,6 +143,7 @@ public enum FailedGoalVerifyingFindingRouteKind
     TargetUnavailable,
     RetryCapReached,
     MissingFindingResult,
+    RepeatedFailingTestSet,
     Routed
 }
 
@@ -158,7 +160,8 @@ public sealed record FailedGoalVerifyingFindingRouteFacts(
     int WarningRound,
     bool MissingFindingResult,
     RetryCause? ObservedCause,
-    ImmutableArray<FailedGoalFindingRouteTask> PriorTasks);
+    ImmutableArray<FailedGoalFindingRouteTask> PriorTasks,
+    PreReviewRepeatedFailureSummary? RepeatedFailure = null);
 
 public sealed record FailedGoalVerifyingFindingRouteSelection(
     FailedGoalVerifyingFindingRouteKind Kind,
@@ -409,6 +412,9 @@ public static class FailedGoalRecoveryPolicy
                 RetryRoundKind.Mechanical,
                 EmitWarning: false);
         }
+
+        if (targetRole == AgentRole.Developer && facts.RepeatedFailure?.HoldRequired == true)
+            return Selection(FailedGoalVerifyingFindingRouteKind.RepeatedFailingTestSet, targetTaskId, targetRole);
 
         return new FailedGoalVerifyingFindingRouteSelection(
             FailedGoalVerifyingFindingRouteKind.Routed,
@@ -725,6 +731,7 @@ public static class FailedGoalRecoveryPolicy
             FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired or
             FailedGoalFindingObservationKind.FindingRouteUnavailable or
             FailedGoalFindingObservationKind.FindingRetryCapReached or
+            FailedGoalFindingObservationKind.FindingRepeatedFailingTestSet or
             FailedGoalFindingObservationKind.FindingConvergenceViolation or
             FailedGoalFindingObservationKind.FindingEvidenceReceiptPersistenceFailed or
             FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable =>

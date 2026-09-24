@@ -1778,7 +1778,8 @@ internal sealed partial class ConductorDriver
                 goal.Tasks
                     .TakeWhile(task => task.Id != triggeringTask.Id)
                     .Select(task => new FailedGoalFindingRouteTask(task.Id, task.RequiredRole))
-                    .ToImmutableArray()));
+                    .ToImmutableArray(),
+                SummarizeRepeatedFailingSet(goal)));
 
         if (route.Kind == FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired)
         {
@@ -1796,6 +1797,16 @@ internal sealed partial class ConductorDriver
                 FailedGoalFindingObservationKind.FindingRouteUnavailable,
                 $"{triggeringTask.RequiredRole} blocker could not be routed to an upstream {route.TargetRole} task; operator action required. " +
                 $"Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+            observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
+            return true;
+        }
+
+        if (route.Kind == FailedGoalVerifyingFindingRouteKind.RepeatedFailingTestSet)
+        {
+            var repeated = SummarizeRepeatedFailingSet(goal);
+            var hold = new PreReviewRepeatedFailureHold(repeated.RepeatedTests, repeated.ConsecutiveRounds);
+            observation = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingRepeatedFailingTestSet, hold.Reason);
             observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
             return true;
         }
@@ -4878,9 +4889,16 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
+        var repeatedStatement = string.Empty;
+        if (failingTests.Count > 0 && TryHoldRepeatedPreReviewFailure(
+                goal, reviewerTask, goalPrefix, policy, fromState,
+                out repeatedStatement, out result))
+            return true;
+
         var retryMessage = buildDiagnostic is null
             ? $"pre-review focused-test repair: candidate {context.CandidateSha}; exact failing tests: " +
-                $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}"
+                $"{string.Join(", ", failingTests)}; evidence pointer: {evidencePointer ?? "none"}" +
+                (string.IsNullOrEmpty(repeatedStatement) ? string.Empty : Environment.NewLine + repeatedStatement)
             : $"pre-review build repair: candidate {context.CandidateSha}; diagnostic: {buildDiagnostic}; " +
                 $"evidence pointer: {evidencePointer ?? "none"}";
         _retryTask(goal.Id, developerTask.Id, retryMessage, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
