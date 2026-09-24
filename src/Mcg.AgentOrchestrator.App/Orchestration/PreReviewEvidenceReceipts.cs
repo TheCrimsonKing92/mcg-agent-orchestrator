@@ -150,8 +150,7 @@ internal static class PreReviewEvidenceReceipts
 
         var itemClasses = context.SelectedFocusedTests.Select(ExtractClassTokens).ToArray();
         var checkClasses = evidence.Checks.Select(check => ExtractClassTokens(check.Name)).ToArray();
-        if (itemClasses.All(classes => classes.Count > 0) &&
-            (evidence.Checks.Count == 0 || checkClasses.Any(classes => classes.Count > 0)))
+        if (itemClasses.All(classes => classes.Count > 0))
         {
             var missing = context.SelectedFocusedTests.Select((item, index) =>
             {

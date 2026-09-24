@@ -61,6 +61,18 @@ public sealed class PreReviewEvidenceCoverageTests
     }
 
     [Xunit.Fact]
+    public void TokenlessCheckDoesNotCoverSelectedClass()
+    {
+        const string selection = "Infrastructure.Tests: FullyQualifiedName~SelectedTests";
+        var context = Context(selection);
+        var evidence = Evidence(context, Check("reviewer focused evidence: Infrastructure.Tests"));
+
+        Assert.False(PreReviewEvidenceReceipts.ValidateCoverage(context, evidence, out var failure));
+        Assert.Contains(selection, failure, StringComparison.Ordinal);
+        Assert.Contains("SelectedTests", failure, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void FailedChecksContributeCoverageAndExtraneousChecksAreAdvisory()
     {
         const string selection = "Infrastructure.Tests: FullyQualifiedName~SelectedTests";
