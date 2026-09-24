@@ -35,6 +35,7 @@ public sealed class TaskSpec
     public int SubscriptionLimitReviewedFailureCount { get; private set; }
 
     public int CriterionRetryCount { get; private set; }
+    public int WorkerBuildCheckRecoveryCount { get; private set; }
 
     public IReadOnlyList<string> CriterionRetryFeedback { get; private set; } = [];
 
@@ -258,7 +259,8 @@ public sealed class TaskSpec
             PendingInterruptedWorkCheckpoint,
             ConductorRoutingRevision,
             PendingPreDispatchIntegrationReceipt,
-            LatestProviderBudgetRecoveryAt);
+            LatestProviderBudgetRecoveryAt,
+            WorkerBuildCheckRecoveryCount);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -474,6 +476,7 @@ public sealed class TaskSpec
             snapshot.SubscriptionLimitReviewedAt,
             snapshot.SubscriptionLimitReviewedFailureCount);
         task.RestoreCriterionRetryState(snapshot.CriterionRetryCount, snapshot.CriterionRetryFeedback);
+        task.WorkerBuildCheckRecoveryCount = Math.Max(0, snapshot.WorkerBuildCheckRecoveryCount);
         task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
@@ -831,6 +834,7 @@ public sealed class TaskSpec
         AcceptedRetryFeedback = new AcceptedRetryFeedback(RequireText(message, nameof(message)), acceptedAt);
 
     internal void IncrementCriterionRetryCount() => CriterionRetryCount++;
+    internal void IncrementWorkerBuildCheckRecoveryCount() => WorkerBuildCheckRecoveryCount++;
 
     internal void ClearCriterionRetryFeedback()
     {
