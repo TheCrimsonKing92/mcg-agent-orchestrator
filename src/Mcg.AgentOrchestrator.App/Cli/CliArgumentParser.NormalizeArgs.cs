@@ -25,6 +25,12 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return NormalizeRetryTaskTargetArgs(args);
     }
 
+    if (command.Equals("adjudicate", StringComparison.OrdinalIgnoreCase))
+    {
+        var (commandArgs, metadata) = ExtractOperatorIntentMetadataArgs(args);
+        return [.. commandArgs, .. metadata];
+    }
+
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("answer", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))
@@ -530,7 +536,8 @@ private static (IReadOnlyList<string> CommandArgs, IReadOnlyList<string> Metadat
 {
     if (!args[0].Equals("progress", StringComparison.OrdinalIgnoreCase) &&
         !args[0].Equals("retry", StringComparison.OrdinalIgnoreCase) &&
-        !args[0].Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
+        !args[0].Equals("verify-manual", StringComparison.OrdinalIgnoreCase) &&
+        !args[0].Equals("adjudicate", StringComparison.OrdinalIgnoreCase))
         return (args, []);
 
     var commandArgs = new List<string> { args[0] };
@@ -542,7 +549,8 @@ private static (IReadOnlyList<string> CommandArgs, IReadOnlyList<string> Metadat
         var separator = token.IndexOf('=');
         var option = separator > 0 ? token[..separator] : token;
         if (!option.Equals("--idempotency-key", StringComparison.OrdinalIgnoreCase) &&
-            !option.Equals("--operator-actor", StringComparison.OrdinalIgnoreCase))
+            !option.Equals("--operator-actor", StringComparison.OrdinalIgnoreCase) &&
+            !option.Equals("--actor-kind", StringComparison.OrdinalIgnoreCase))
         {
             commandArgs.Add(token);
             continue;

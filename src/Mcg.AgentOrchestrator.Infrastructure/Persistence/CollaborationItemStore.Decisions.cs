@@ -282,6 +282,25 @@ public sealed partial class CollaborationItemStore
         long? currentGoalStateVersion,
         string result,
         DateTimeOffset appliedAt,
+        CancellationToken cancellationToken = default) =>
+        await TryApplyDecisionEffectAsync(
+            requestId,
+            decisionReceiptId,
+            actionRef,
+            currentGoalStateVersion,
+            result,
+            appliedAt,
+            rejectionReason: null,
+            cancellationToken);
+
+    public async Task<DecisionEffectApplyResult> TryApplyDecisionEffectAsync(
+        string requestId,
+        string decisionReceiptId,
+        DecisionActionRef actionRef,
+        long? currentGoalStateVersion,
+        string result,
+        DateTimeOffset appliedAt,
+        string? rejectionReason,
         CancellationToken cancellationToken = default)
     {
         return await WithBusyRetryAsync(async () =>
@@ -308,7 +327,7 @@ public sealed partial class CollaborationItemStore
                     ?? throw new InvalidOperationException($"Decision receipt '{decisionReceiptId}' was not found.");
                 var action = FindAllowedAction(request, actionRef);
                 var expectedGoalStateVersion = receipt.ExpectedGoalStateVersion ?? action?.ExpectedGoalStateVersion;
-                var rejection = ValidateDecisionEffectApply(
+                var rejection = rejectionReason ?? ValidateDecisionEffectApply(
                     requestId,
                     receipt,
                     action,

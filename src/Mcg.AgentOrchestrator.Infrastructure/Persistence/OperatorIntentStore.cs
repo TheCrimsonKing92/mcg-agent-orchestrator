@@ -38,7 +38,8 @@ public sealed record OperatorIntentRecord(
     string? ClaimOwner = null,
     DateTimeOffset? ClaimedAt = null,
     DateTimeOffset? CompletedAt = null,
-    string? Outcome = null);
+    string? Outcome = null,
+    OperatorActorKind ActorKind = OperatorActorKind.Human);
 
 public sealed record ActionableOperatorIntentSummary(
     string GoalId,
@@ -129,12 +130,12 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
                 INSERT OR IGNORE INTO operator_intents (
                     id, idempotency_key, verb, goal_id, task_id, payload_json,
                     payload_file_references_json, actor, channel, authentication_assurance,
-                    created_at, status, claim_owner, claimed_at, completed_at, outcome
+                    created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind
                 )
                 VALUES (
                     $id, $idempotency_key, $verb, $goal_id, $task_id, $payload_json,
                     $payload_file_references_json, $actor, $channel, $authentication_assurance,
-                    $created_at, $status, $claim_owner, $claimed_at, $completed_at, $outcome
+                    $created_at, $status, $claim_owner, $claimed_at, $completed_at, $outcome, $actor_kind
                 )
                 """;
             BindIntent(cmd, intent);
@@ -382,6 +383,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
                 outcome                       TEXT
             )
             """);
+        AddColumnIfMissing(conn, "operator_intents", "actor_kind", "TEXT");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_operator_intents_actionable ON operator_intents(goal_id, status, created_at, id)");
     }
 
@@ -442,6 +444,8 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.Actor);
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.Channel);
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.AuthenticationAssurance);
+        if (!Enum.IsDefined(intent.ActorKind))
+            throw new ArgumentOutOfRangeException(nameof(intent), intent.ActorKind, "Unknown operator actor kind.");
         if (intent.Status != OperatorIntentStatus.Pending)
         {
             throw new ArgumentException("A newly enqueued operator intent must be Pending.", nameof(intent));
@@ -456,6 +460,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
             !string.Equals(requested.PayloadJson, persisted.PayloadJson, StringComparison.Ordinal) ||
             !requested.PayloadFileReferences.SequenceEqual(persisted.PayloadFileReferences, StringComparer.Ordinal) ||
             !string.Equals(requested.Actor, persisted.Actor, StringComparison.Ordinal) ||
+            requested.ActorKind != persisted.ActorKind ||
             !string.Equals(requested.Channel, persisted.Channel, StringComparison.Ordinal) ||
             !string.Equals(requested.AuthenticationAssurance, persisted.AuthenticationAssurance, StringComparison.Ordinal))
         {
@@ -482,6 +487,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         cmd.Parameters.AddWithValue("$claimed_at", intent.ClaimedAt is null ? DBNull.Value : intent.ClaimedAt.Value.ToString("O"));
         cmd.Parameters.AddWithValue("$completed_at", intent.CompletedAt is null ? DBNull.Value : intent.CompletedAt.Value.ToString("O"));
         cmd.Parameters.AddWithValue("$outcome", intent.Outcome is null ? DBNull.Value : intent.Outcome);
+        cmd.Parameters.AddWithValue("$actor_kind", intent.ActorKind.ToString());
     }
 
     private static OperatorIntentRecord ReadIntent(SqliteDataReader reader) =>
@@ -501,12 +507,15 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
             reader.IsDBNull(12) ? null : reader.GetString(12),
             reader.IsDBNull(13) ? null : DateTimeOffset.Parse(reader.GetString(13)),
             reader.IsDBNull(14) ? null : DateTimeOffset.Parse(reader.GetString(14)),
-            reader.IsDBNull(15) ? null : reader.GetString(15));
+            reader.IsDBNull(15) ? null : reader.GetString(15),
+            ActorKind: reader.IsDBNull(16)
+                ? OperatorActorKind.Human
+                : Enum.Parse<OperatorActorKind>(reader.GetString(16), ignoreCase: true));
 
     private const string SelectColumns = """
         SELECT id, idempotency_key, verb, goal_id, task_id, payload_json,
                payload_file_references_json, actor, channel, authentication_assurance,
-               created_at, status, claim_owner, claimed_at, completed_at, outcome
+               created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind
         FROM operator_intents
         """;
 
@@ -515,5 +524,19 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private static void AddColumnIfMissing(SqliteConnection conn, string table, string column, string definition)
+    {
+        var exists = false;
+        using (var inspect = conn.CreateCommand())
+        {
+            inspect.CommandText = $"PRAGMA table_info({table})";
+            using var reader = inspect.ExecuteReader();
+            while (reader.Read())
+                exists |= reader.GetString(1).Equals(column, StringComparison.OrdinalIgnoreCase);
+        }
+        if (!exists)
+            RunNonQuery(conn, $"ALTER TABLE {table} ADD COLUMN {column} {definition}");
     }
 }

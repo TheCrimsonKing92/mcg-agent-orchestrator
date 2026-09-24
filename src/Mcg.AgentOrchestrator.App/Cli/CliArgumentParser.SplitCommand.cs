@@ -25,6 +25,11 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return NormalizeRetryTaskTargetArgs(commandArgs);
     }
 
+    if (command.Equals("adjudicate", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeArgs([command, .. TokenizeQuotedArguments(remainder)]);
+    }
+
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
         var (noteRemainder, gateFlags) = ExtractRepeatedValueFlag(remainder, "--gate-deliverable");

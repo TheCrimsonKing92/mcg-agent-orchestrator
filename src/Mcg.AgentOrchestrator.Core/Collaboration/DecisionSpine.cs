@@ -138,6 +138,31 @@ public sealed record DecisionReceipt(
     DateTimeOffset RecordedAt,
     EffectReceipt? EffectResult);
 
+public static class OperatorActorIdentity
+{
+    public static string Format(string actor, OperatorActorKind kind)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actor);
+        if (!Enum.IsDefined(kind))
+            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown operator actor kind.");
+        return $"{kind.ToString().ToLowerInvariant()}:{actor.Trim()}";
+    }
+
+    public static bool TryParse(string actorId, out string actor, out OperatorActorKind kind)
+    {
+        actor = string.Empty;
+        kind = OperatorActorKind.Human;
+        if (string.IsNullOrWhiteSpace(actorId))
+            return false;
+        var separator = actorId.IndexOf(':');
+        if (separator <= 0 || separator == actorId.Length - 1 ||
+            !Enum.TryParse(actorId[..separator], ignoreCase: true, out kind) || !Enum.IsDefined(kind))
+            return false;
+        actor = actorId[(separator + 1)..];
+        return !string.IsNullOrWhiteSpace(actor);
+    }
+}
+
 public sealed record NotificationDelivery(
     string Id,
     string RequestId,
