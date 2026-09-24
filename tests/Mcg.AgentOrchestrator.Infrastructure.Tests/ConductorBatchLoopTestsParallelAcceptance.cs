@@ -599,9 +599,9 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
     public void ProductionTrainLeavesCompatiblePairForCohortInSameTick()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(1, 5)
-            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Train and cohort member {index}"))
-            .ToArray();
+        var goals = Enumerable.Range(1, 5).Select(index =>
+            CreateVerifiedSimpleGoal(kernel, $"Train and cohort member {index}")).ToArray();
+        foreach (var goal in goals) kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective, ["Worker checks output"], VerificationClass.TestVerifiable, [], []));
         var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
@@ -683,9 +683,9 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
     public void ProductionSelections_UnchangedApparatusHold_IsNotAdmitted()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(1, 6)
-            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Apparatus hold selection member {index}"))
-            .ToArray();
+        var goals = Enumerable.Range(1, 6).Select(index =>
+            CreateVerifiedSimpleGoal(kernel, $"Apparatus hold selection member {index}")).ToArray();
+        foreach (var goal in goals) kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective, ["Worker checks output"], VerificationClass.TestVerifiable, [], []));
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var branchRevisions = goals.ToDictionary(
             goal => goal.Id,
