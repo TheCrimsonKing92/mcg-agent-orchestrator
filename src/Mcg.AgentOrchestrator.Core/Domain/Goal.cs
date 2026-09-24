@@ -2,6 +2,13 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public enum SourceBacklogCoverage { Full, Slice }
 
+public sealed record RefinementOwnershipDiagnostic(
+    int CriterionVersion,
+    int CriterionIndex,
+    int PriorCriterionVersion,
+    CriterionEvidenceOwner PriorOwner,
+    string Message);
+
 public sealed class Goal
 {
     public const int OperatorAcceptanceRegateCap = 3;
@@ -11,6 +18,7 @@ public sealed class Goal
     private readonly List<GoalBriefVersion> _briefVersions = [];
     private readonly List<RefinedSpecVersion> _refinedSpecVersions = [];
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
+    private readonly List<RefinementOwnershipDiagnostic> _refinementOwnershipDiagnostics = [];
     private readonly List<CriterionEvidenceObligation> _criterionEvidenceObligations = [];
     private readonly HashSet<GoalId> _dependsOn = [];
 
@@ -112,6 +120,8 @@ public sealed class Goal
 
     public IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> EffectiveAcceptanceCriteriaCorrections => _effectiveAcceptanceCriteriaCorrections;
 
+    public IReadOnlyList<RefinementOwnershipDiagnostic> RefinementOwnershipDiagnostics => _refinementOwnershipDiagnostics;
+
     // The invariant is a goal-level outstanding proof obligation, not a task
     // result. Only refinement or an attributed operator action may set Owner.
     public IReadOnlyList<CriterionEvidenceObligation> CriterionEvidenceObligations => _criterionEvidenceObligations;
@@ -127,8 +137,16 @@ public sealed class Goal
             IsCurrentCriterionEvidenceObligation(obligation) && !obligation.HasSatisfiedEvidenceFor(candidateSha)).ToArray();
 
     private bool IsCurrentCriterionEvidenceObligation(CriterionEvidenceObligation obligation) =>
-        obligation.Owner == CriterionEvidenceOwner.Unknown ||
-        !_refinedSpecVersions.Any(version => version.Version == obligation.CriterionVersion && version.IsSuperseded);
+        obligation.Owner == CriterionEvidenceOwner.Unknown
+            ? !obligation.Provenance.Contains("unresolved during refinement v", StringComparison.Ordinal) ||
+              !_criterionEvidenceObligations.Any(item =>
+                  item.CriterionIndex == obligation.CriterionIndex &&
+                  item.CriterionVersion > obligation.CriterionVersion &&
+                  item.Provenance.StartsWith(
+                      $"ownership carried from criterion-v{obligation.CriterionVersion}-{obligation.CriterionIndex} ",
+                      StringComparison.Ordinal))
+            : !_refinedSpecVersions.Any(version =>
+                version.Version == obligation.CriterionVersion && version.IsSuperseded);
 
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
 
@@ -607,9 +625,46 @@ public sealed class Goal
             recordedAt,
             AuthoritativeBrief.Version);
         _refinedSpecVersions.Add(replacement);
+        var priorNonWorkerObligations = _criterionEvidenceObligations
+            .Where(item => item.CriterionVersion == current.Version &&
+                           item.Owner is CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator &&
+                           item.State != CriterionEvidenceState.Repaired)
+            .ToArray();
         PreserveExplicitMappingsAcrossEquivalentRefinement(current, replacement, recordedAt);
         EnsureCriterionEvidenceObligations(spec, replacement.Version, recordedAt);
+        CarryNonWorkerOwnershipAcrossRewrittenCriteria(current, replacement, priorNonWorkerObligations, recordedAt);
         return replacement;
+    }
+
+    private void CarryNonWorkerOwnershipAcrossRewrittenCriteria(
+        RefinedSpecVersion superseded,
+        RefinedSpecVersion replacement,
+        IReadOnlyList<CriterionEvidenceObligation> priorNonWorkerObligations,
+        DateTimeOffset recordedAt)
+    {
+        var priorOwnersByIndex = priorNonWorkerObligations.GroupBy(item => item.CriterionIndex);
+
+        foreach (var priorOwners in priorOwnersByIndex)
+        {
+            if (priorOwners.Count() != 1 || priorOwners.Key >= replacement.Spec.AcceptanceCriteria.Count)
+                continue;
+
+            var index = priorOwners.Key;
+            var id = CriterionEvidenceObligation.BuildId(replacement.Version, index);
+            if (_criterionEvidenceObligations.Any(item => item.Id == id))
+                continue;
+
+            var priorOwner = priorOwners.Single();
+            var criterion = RequireText(replacement.Spec.AcceptanceCriteria[index], nameof(replacement));
+            _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
+                id, index, replacement.Version, criterion, CriterionEvidenceOwner.Unknown,
+                CriterionEvidenceState.Pending, "ownership mapping required",
+                $"ownership carried from criterion-v{superseded.Version}-{index} (prior owner {priorOwner.Owner}); unresolved during refinement v{replacement.Version}; ownership mapping required",
+                recordedAt));
+            _refinementOwnershipDiagnostics.Add(new RefinementOwnershipDiagnostic(
+                replacement.Version, index, superseded.Version, priorOwner.Owner,
+                $"Criterion {index} previously had owner {priorOwner.Owner}; ownership mapping required."));
+        }
     }
 
     private void PreserveExplicitMappingsAcrossEquivalentRefinement(
