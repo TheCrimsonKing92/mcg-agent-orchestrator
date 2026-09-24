@@ -2864,7 +2864,7 @@ internal sealed partial class ConductorBatchLoop
             .Where(goal =>
                 IsParallelAcceptanceLifecycleEligible(goal, driver) &&
                 goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
-                HasCompletedPassedVerificationForAllTasks(goal) &&
+                AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 VerifiedAcceptanceEscalationDecision.TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
@@ -3852,13 +3852,6 @@ internal sealed partial class ConductorBatchLoop
             return true;
         }
     }
-
-    private static bool HasCompletedPassedVerificationForAllTasks(Goal goal) =>
-        goal.Tasks.Count > 0 &&
-        goal.Tasks.All(task =>
-            task.Status == WorkTaskStatus.Cancelled ||
-            (task.Status == WorkTaskStatus.Completed &&
-             task.LastVerification is { Succeeded: true }));
 
     private static string BoundSingleLine(string value)
     {

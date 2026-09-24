@@ -39,7 +39,7 @@ internal sealed partial class ConductorDriver
         if (evidenceMutationLease is null)
             return ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
 
-        if (!HasCompletedPassedVerificationForAllTasks(goal))
+        if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(
