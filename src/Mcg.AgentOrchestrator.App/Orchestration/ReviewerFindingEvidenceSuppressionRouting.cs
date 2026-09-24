@@ -9,6 +9,22 @@ internal sealed record ReviewerFindingEvidenceSuppressionRoute(
 
 internal static class ReviewerFindingEvidenceSuppressionRouting
 {
+    internal static ReviewFinding[] SelectSelfExemptRequestingFindings(
+        IReadOnlyList<string> writableBlockerIds,
+        IReadOnlyList<ReviewFinding> requestingFindings,
+        TaskSpec requestingTask,
+        string? candidateSha) =>
+        requestingFindings.Where(finding =>
+            finding.State == ReviewFindingState.Open &&
+            finding.EvidenceRequest is { Selections.Count: > 0 } &&
+            !string.IsNullOrWhiteSpace(candidateSha) &&
+            string.Equals(requestingTask.LastVerification?.ReviewedCommit, candidateSha,
+                StringComparison.OrdinalIgnoreCase) &&
+            FindingEvidenceExecutionClassifier.Classify(requestingTask, finding, candidateSha) ==
+                FindingEvidenceExecutionState.PendingExecution &&
+            writableBlockerIds.All(id => string.Equals(id, finding.StableId, StringComparison.Ordinal)))
+            .ToArray();
+
     internal static ReviewerFindingEvidenceSuppressionRoute Resolve(
         TaskVerificationRecord? verification,
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,

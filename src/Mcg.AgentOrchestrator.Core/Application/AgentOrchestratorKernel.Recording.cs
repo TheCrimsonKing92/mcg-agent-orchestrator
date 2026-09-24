@@ -198,6 +198,27 @@ public sealed partial class AgentOrchestratorKernel
                 OutcomeClass = TaskOutcomeClass.Success
             };
         }
+        if (TryAcceptEvidenceOnlyRetryRound(goal, task, verification, outcome,
+                out var evidenceOnlyFindingIds, out var evidenceOnlyCandidate, out var ownRequests))
+        {
+            outcome = outcome with
+            {
+                Kind = DispatchOutcomeKind.VerifiedSuccess,
+                EvidenceSummary = "Only focused finding evidence remains to be executed.",
+                ClassifierReceipt = "CLASSIFIER rule=evidence-only-retry-accepted; outcome_class=success; evidence=typed requests pending at unchanged candidate.",
+                OutcomeClass = TaskOutcomeClass.Success
+            };
+            task.SetDispatchResultCommit(evidenceOnlyCandidate);
+            Append(goal, null, ProgressKind.TaskNote,
+                $"EVIDENCE_ONLY_ROUND_ACCEPTED task={task.Id.Value} round={completedRound} " +
+                $"finding_ids={string.Join(',', evidenceOnlyFindingIds)} candidate={evidenceOnlyCandidate}");
+            foreach (var finding in ownRequests)
+            {
+                Append(goal, task.Id, ProgressKind.FindingEvidenceRequestRecorded,
+                    $"finding-evidence disposition=evidence-only-round-accepted; role=Developer; task_id={task.Id.Value}; " +
+                    $"finding_id={finding.StableId}; candidate_sha={evidenceOnlyCandidate}");
+            }
+        }
         if (verification.WorkerResultPresent &&
             task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
             WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var premiseEvidence))
@@ -378,6 +399,138 @@ public sealed partial class AgentOrchestratorKernel
                       task,
                       verification)
                 : BuildDispatchFailureMessage(outcome, task, verification));
+    }
+
+    private static bool TryAcceptEvidenceOnlyRetryRound(
+        Goal goal,
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        DispatchOutcome outcome,
+        out string[] findingIds,
+        out string candidate,
+        out ReviewFinding[] ownRequests)
+    {
+        findingIds = [];
+        candidate = string.Empty;
+        ownRequests = [];
+        var dispatch = task.LastDispatch;
+        var stderr = verification.AuthoritativeStandardError;
+        if (task.RequiredRole != AgentRole.Developer ||
+            !verification.WorkerResultPresent ||
+            verification.HasCommittedChanges ||
+            !string.Equals(TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt),
+                TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token, StringComparison.Ordinal) ||
+            dispatch is null ||
+            string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
+            (!string.IsNullOrWhiteSpace(dispatch.ResultCommit) &&
+             !string.Equals(dispatch.ResultCommit, dispatch.BaseCommit, StringComparison.OrdinalIgnoreCase)) ||
+            stderr is null ||
+            !DispatchRejectionDiagnosticMarker.TryParse(stderr, out _, out var reason,
+                out var postDispatchCommits, out var changedPaths) ||
+            reason is not (DispatchRejectionDiagnosticMarker.NoChangeEvidence or
+                DispatchRejectionDiagnosticMarker.VerificationPatternUnmatched) ||
+            postDispatchCommits != 0 ||
+            !string.IsNullOrWhiteSpace(changedPaths) &&
+            !string.Equals(changedPaths.Trim(), "none", StringComparison.OrdinalIgnoreCase) ||
+            !TryReadRejectedDispatchHead(stderr, out var head) ||
+            !string.Equals(head, dispatch.BaseCommit, StringComparison.OrdinalIgnoreCase) ||
+            !WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockers) ||
+            blockers != WorkerResultBlockers.BlockersStatus.None ||
+            !WorkerResultBlockers.TryGetTestsStatus(verification, out var tests) ||
+            tests != WorkerResultBlockers.TestsStatus.Deferred)
+        {
+            return false;
+        }
+
+        candidate = dispatch.BaseCommit;
+        var targets = goal.Tasks
+            .Where(owner => owner.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
+                            owner.LastVerification is { } record &&
+                            record.CompletedAt <= dispatch.DispatchedAt)
+            .SelectMany(owner =>
+            {
+                var open = ReviewFindings.GetOpenBlockingFindings(
+                    owner.LastVerification!.MergedReviewFindings ?? [],
+                    goal.EffectiveAcceptanceCriteriaCorrections);
+                return ReviewFindingRouting.Project(open)
+                    .Where(projection => projection.TargetRole == AgentRole.Developer)
+                    .Select(projection => (Owner: owner, Finding: projection.Finding));
+            })
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            return false;
+        }
+
+        ReviewFinding[] roundFindings = WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _)
+            ? round.Findings.Where(finding => finding.State == ReviewFindingState.Open &&
+                                               HasTypedEvidenceRequest(finding)).ToArray()
+            : [];
+        foreach (var (owner, finding) in targets)
+        {
+            if (HasTypedEvidenceRequest(finding) &&
+                FindingEvidenceExecutionClassifier.Classify(owner, finding, candidate) ==
+                FindingEvidenceExecutionState.PendingExecution)
+            {
+                continue;
+            }
+
+            var coveringRequest = roundFindings.FirstOrDefault(own =>
+                FindingEvidenceExecutionClassifier.Classify(task, own, candidate) ==
+                    FindingEvidenceExecutionState.PendingExecution &&
+                (string.Equals(own.StableId, finding.StableId, StringComparison.Ordinal) ||
+                 finding.EvidenceRequest is { Selections.Count: > 0 } targetRequest &&
+                 targetRequest.Selections.All(selection => own.EvidenceRequest!.Selections.Any(ownSelection =>
+                     string.Equals(ownSelection.TestProject, selection.TestProject, StringComparison.Ordinal) &&
+                     string.Equals(ownSelection.TestClass, selection.TestClass, StringComparison.Ordinal)))));
+            if (coveringRequest is null)
+            {
+                return false;
+            }
+        }
+
+        ownRequests = roundFindings
+            .Where(finding => FindingEvidenceExecutionClassifier.Classify(task, finding, candidate) ==
+                FindingEvidenceExecutionState.PendingExecution)
+            .DistinctBy(finding => FindingEvidenceExecutionClassifier.BuildRequestIdentity(finding.EvidenceRequest!))
+            .ToArray();
+        findingIds = targets.Select(item => item.Finding.StableId)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        return true;
+    }
+
+    private static bool HasTypedEvidenceRequest(ReviewFinding finding) =>
+        finding.EvidenceRequest is { Selections.Count: > 0 } request &&
+        request.Selections.All(selection =>
+            !string.IsNullOrWhiteSpace(selection.TestProject) &&
+            !string.IsNullOrWhiteSpace(selection.TestClass));
+
+    private static bool TryReadRejectedDispatchHead(string stderr, out string head)
+    {
+        head = string.Empty;
+        const string prefix = "Developer/Tester dispatch did not produce required relevant file-change evidence. ";
+        var line = stderr.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault(value => value.StartsWith(prefix, StringComparison.Ordinal));
+        if (line is null)
+        {
+            return false;
+        }
+        const string headMarker = "; head=";
+        var start = line.IndexOf(headMarker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return false;
+        }
+        start += headMarker.Length;
+        var end = line.IndexOf(';', start);
+        if (end <= start)
+        {
+            return false;
+        }
+        head = line[start..end].Trim();
+        return head.Length > 0 && head.All(Uri.IsHexDigit);
     }
 
     private static string BuildDispatchFailureMessage(
