@@ -28,6 +28,67 @@ internal sealed partial class ConductorDriver
             ? $"{failure.Identity} (candidate rerun passed; unconfirmed introduction; receipt: {failure.ReceiptPointer})"
             : $"{failure.Identity} (pre-existing/main-red)";
 
+    private ConductorAdvanceResult? TryDisposeExcludedAcceptanceFailures(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        AcceptanceVerificationSummary acceptance,
+        ApparatusRedGateReading? apparatusRedReading,
+        ref AcceptanceRetryDisposition retryDisposition,
+        out bool attemptedAllFlakyDisposition)
+    {
+        var allUnconfirmed = retryDisposition.ExcludedFailures.Count > 0 &&
+            retryDisposition.ExcludedFailures.All(failure =>
+                failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced);
+        attemptedAllFlakyDisposition = allUnconfirmed;
+        if (allUnconfirmed &&
+            TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading)
+                is { } candidateRerunRegate)
+        {
+            return candidateRerunRegate;
+        }
+
+        if (allUnconfirmed)
+        {
+            // Without an apparatus disposition, fail closed through today's retry path.
+            retryDisposition = new AcceptanceRetryDisposition(
+                acceptance.RequiredUnmetCriteria, []);
+            return null;
+        }
+
+        var observedHeads = _resolveAcceptanceHeads(goal);
+        var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
+        var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
+        var failedChecks = acceptance.FailedChecks is { Count: > 0 }
+            ? acceptance.FailedChecks
+            : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+        _recordAcceptanceFailure(
+            goal,
+            failedChecks,
+            branchHeadSha,
+            mainHeadSha,
+            acceptance.CheckAttributions,
+            acceptance.BaselineAttestation);
+        var excludedSummary = string.Join(
+            ", ",
+            retryDisposition.ExcludedFailures.Select(FormatExcludedAcceptanceFailure));
+        var reason =
+            $"Acceptance gate failures are all outside this goal's attributable scope: {excludedSummary}. " +
+            "The candidate remains held at Verified for operator/main-red routing; no worker was reopened.";
+        RecordEscalation(goal, GoalLifecycleState.Verified, reason);
+        return MakeResult(
+            goal.Id.Value,
+            goalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Held(
+                GoalLifecycleState.Verified,
+                reason,
+                StableIdentity: BuildUnattributableAcceptanceIdentity(
+                    branchHeadSha,
+                    mainHeadSha,
+                    retryDisposition.ExcludedFailures)));
+    }
+
     /// <summary>
     /// Returns a disposition for an apparatus RED, or null when the RED is genuine and must take
     /// today's Developer-reopen path unchanged. A driver without a configured gate always returns
