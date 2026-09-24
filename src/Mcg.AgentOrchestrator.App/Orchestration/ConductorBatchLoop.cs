@@ -3100,13 +3100,19 @@ internal sealed partial class ConductorBatchLoop
         var productionCandidates = ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
             speculativeCandidates, cohortEligible, liveAttemptGoalIds, activeCohortMemberGoalIds);
         var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
-        if (!suppressNewAcceptanceAdmission &&
+        var groupedAdmissionOpen = !suppressNewAcceptanceAdmission &&
             trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
-                goal.Status,
-                _acceptanceEngineCircuit?.Read())) &&
+                goal.Status, _acceptanceEngineCircuit?.Read()));
+        if (groupedAdmissionOpen && driver.AcceptanceCohortsEnabled)
+        {
+            (cohortEligible, productionCandidates) = LandPassedAcceptanceCohortsBeforeTrainSelection(
+                driver, policy, cohortEligible, productionCandidates, results, tick, changedGoalLines);
+        }
+        if (groupedAdmissionOpen &&
+            cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             ConductorMergeTrainSelector.Select(
                 productionCandidates,
                 driver.ReadSuppressedCohortPairs(),
@@ -3116,7 +3122,8 @@ internal sealed partial class ConductorBatchLoop
                 trainSelection,
                 cohortEligible,
                 policy,
-                onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection));
+                onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection),
+                runGateInBackground: true);
             foreach (var member in trainRun.MemberResults)
             {
                 results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);

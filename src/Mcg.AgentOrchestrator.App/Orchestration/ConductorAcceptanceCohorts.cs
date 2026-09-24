@@ -439,6 +439,43 @@ internal static class ConductorAcceptanceCohortAttribution
 
 internal sealed partial class ConductorBatchLoop
 {
+    private (Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates)
+        LandPassedAcceptanceCohortsBeforeTrainSelection(
+            ConductorDriver driver,
+            ConductorAutonomyPolicy policy,
+            Goal[] eligible,
+            ConductorSpeculativeAcceptanceCandidate[] candidates,
+            Dictionary<string, ParallelLandingOutcome> results,
+            int tick,
+            List<string> changedGoalLines)
+    {
+        foreach (var selection in driver.FindLandablePassedCohortSelections(candidates))
+        {
+            if (selection.Members.Any(member => results.ContainsKey(member.GoalId.Value)))
+            {
+                continue;
+            }
+
+            var run = driver.RunAcceptanceCohort(selection, eligible, policy, runGateInBackground: true);
+            foreach (var member in run.MemberResults)
+            {
+                results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
+            }
+            RecordParallelAcceptanceProgress(
+                $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', selection.Members.Select(member => member.GoalId.Value[..8]))} prelanded=true {run.Detail}",
+                changedGoalLines);
+            // A successful landing advances main, so other receipts probed against the old main
+            // must be reconsidered on a later tick.
+            if (run.Detail.StartsWith("outcome=passed", StringComparison.Ordinal))
+            {
+                break;
+            }
+        }
+
+        return (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
+            candidates.Where(candidate => !results.ContainsKey(candidate.GoalId.Value)).ToArray());
+    }
+
     private ConductorAcceptanceCohortSelectionResult SelectAndReportAcceptanceCohort(
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
         IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts,
@@ -568,6 +605,98 @@ internal sealed partial class ConductorBatchLoop
 
 internal sealed partial class ConductorDriver
 {
+    internal IReadOnlyList<ConductorAcceptanceCohortSelection> FindLandablePassedCohortSelections(
+        IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates)
+    {
+        if (_cohortAcceptanceStore is null)
+        {
+            return [];
+        }
+
+        var ready = candidates
+            .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready)
+            .ToDictionary(candidate => candidate.GoalId,
+                candidate => ((GateReadyCandidateProjectionResult.Ready)candidate.ProjectionResult).Projection);
+        var claimed = new HashSet<GoalId>();
+        var selections = new List<ConductorAcceptanceCohortSelection>();
+        foreach (var candidate in candidates)
+        {
+            if (!ready.TryGetValue(candidate.GoalId, out var first) || claimed.Contains(candidate.GoalId))
+            {
+                continue;
+            }
+
+            foreach (var receipt in _cohortAcceptanceStore.ReadPassedReceiptsForGoal(candidate.GoalId))
+            {
+                if (receipt.Identity.Members.Count != ConductorAcceptanceCohortSelector.CohortSize ||
+                    !string.Equals(receipt.Identity.ObservedMainRevision, first.MainRevision, StringComparison.Ordinal) ||
+                    receipt.Identity.Members.Any(member =>
+                        claimed.Contains(member.GoalId) ||
+                        !ready.TryGetValue(member.GoalId, out var live) ||
+                        !string.Equals(member.CandidateRevision, live.CandidateRevision, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                var pair = receipt.Identity.Members
+                    .Select(member => candidates.Single(candidate => candidate.GoalId == member.GoalId))
+                    .ToArray();
+                var selection = ConductorAcceptanceCohortSelector.Select(
+                    pair, suppressedPairFingerprints: ReadSuppressedCohortPairs()).Selection;
+                if (selection is null)
+                {
+                    continue;
+                }
+                if (!HasCurrentPassedCohortIdentity(selection, receipt))
+                {
+                    continue;
+                }
+
+                selections.Add(selection);
+                foreach (var member in selection.Members)
+                {
+                    claimed.Add(member.GoalId);
+                }
+                break;
+            }
+        }
+        return selections;
+    }
+
+    private bool HasCurrentPassedCohortIdentity(
+        ConductorAcceptanceCohortSelection selection,
+        AcceptanceCohortReceipt receipt)
+    {
+        if (_cohortWorkspace is null || _cohortAcceptanceVerifier is null)
+        {
+            return false;
+        }
+
+        var bindings = selection.BindMembers();
+        try
+        {
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                _cohortWorkspace.ExecutionDirectory,
+                selection.Members[0].MainRevision,
+                bindings,
+                _cohortCleanupHooks);
+            var manifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(
+                integration.Path,
+                bindings.SelectMany(member => member.LandingPaths)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+            return string.Equals(
+                AcceptanceCohortIdentity.Create(bindings, selection.Members[0].MainRevision,
+                    integration.TreeRevision, manifest).Value,
+                receipt.Identity.Value,
+                StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is AcceptanceCohortMaterializationException or
+            IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     internal ConductorAcceptanceCohortFairnessPriority? SelectForcedCohortCandidate(
         IReadOnlyList<Goal> orderedGoals)
     {
