@@ -8,6 +8,84 @@ using static ConductorDriverTests;
 
 public sealed class ConductorDriverTestsBaselineArmAbsentOnce
 {
+    [Theory]
+    [InlineData("build-slot", false)]
+    [InlineData("build-lock", false)]
+    [InlineData("cancelled", false)]
+    [InlineData("runner-fault", true)]
+    public void BaselineAttemptOutcomeRequiresPositiveFaultEvidence(string failure, bool isFault)
+    {
+        const string candidateSha = "abc1234";
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SoftwareGoal();
+            var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            {
+                PassVerification(kernel, goal, task, hasCommittedChanges: task == developer);
+            }
+            FailReviewerNeedsWork(kernel, goal, reviewer, "candidate RED requires a baseline",
+                findings: [EvidenceFindingWithRequest("Find the failing test", id: "baseline-fault",
+                    classes: ["ConductorDriverTests"])]);
+
+            var focusedRuns = 0;
+            var outcomes = 0;
+            var retries = 0;
+            var driver = MakeDriver(
+                getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+                focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                    root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                executionDirectory: root,
+                getLandingFileScopes: _ => [],
+                runFocusedEvidence: (_, request) =>
+                {
+                    if (++focusedRuns == 1)
+                    {
+                        var red = CandidateRedFindingEvidence(
+                            request, candidateSha, "OutsideTests.FailingMethod(passed: True)");
+                        return red with { Arms = red.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray() };
+                    }
+                    throw failure switch
+                    {
+                        "build-slot" => new DotnetBuildSlotsBusyException(
+                            new DotnetBuildLeaseAcquisition.SlotsBusy("focused", [])),
+                        "build-lock" => new BuildLockBlockedException(
+                            new BuildLockAttribution("locked.dll", [], "test")),
+                        "cancelled" => new OperationCanceledException("cancelled"),
+                        _ => new InvalidOperationException("runner fault")
+                    };
+                },
+                retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                {
+                    retries++;
+                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+                },
+                recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                    kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+                recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                {
+                    outcomes++;
+                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
+                });
+
+            for (var tick = 0; tick < 3; tick++)
+            {
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            }
+
+            Assert.Equal(isFault ? 1 : 0, outcomes);
+            Assert.Equal(isFault ? 1 : 0, retries);
+            Assert.Equal(isFault ? 1 : 0, goal.Timeline.Count(evt =>
+                evt.Message.Contains("disposition=baseline-arm-absent", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void CandidateOnlyBaselineAttemptRecordsOnceAndRoutesDeveloper()
     {

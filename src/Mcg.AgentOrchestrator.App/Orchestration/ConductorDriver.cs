@@ -2225,7 +2225,7 @@ internal sealed partial class ConductorDriver
                 requestContext,
                 out var evidence,
                 out var evidenceAttempt,
-                out decision))
+                out decision, out _))
         {
             if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
             {
@@ -2870,11 +2870,12 @@ internal sealed partial class ConductorDriver
         ConductorFocusedEvidenceRequestContext? requestContext,
         out FocusedEvidenceRunResult evidence,
         out ConductorParallelAcceptanceAttempt? evidenceAttempt,
-        out FailedGoalFindingObservation decision)
+        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind)
     {
         evidence = null!;
         evidenceAttempt = null;
         decision = FailedGoalFindingObservation.None;
+        attemptKind = null;
         var candidate = ConductorParallelAcceptanceCandidate.Create(
             goal,
             slotIndex: 0,
@@ -2899,6 +2900,7 @@ internal sealed partial class ConductorDriver
             return false;
         }
         evidenceAttempt = attemptDecision.Attempt;
+        attemptKind = attemptDecision.Kind;
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
@@ -2908,7 +2910,6 @@ internal sealed partial class ConductorDriver
                 $"Background {source} focused evidence is running in attempt {attemptDecision.Attempt.AttemptId}.");
             return false;
         }
-
         if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||
             attemptDecision.Run?.Exception is
                 DotnetBuildSlotsBusyException or
@@ -2923,7 +2924,6 @@ internal sealed partial class ConductorDriver
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"));
             return false;
         }
-
         _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
         if (attemptDecision.Run?.Exception is { } backgroundFailure)
         {

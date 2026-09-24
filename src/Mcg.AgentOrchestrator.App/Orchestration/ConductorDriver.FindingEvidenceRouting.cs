@@ -44,9 +44,11 @@ internal sealed partial class ConductorDriver
                 evt.Message.Contains("disposition=baseline-arm-absent;", StringComparison.Ordinal) &&
                 evt.Message.Contains(guard, StringComparison.Ordinal)))
         {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingEvidencePending,
-                $"Baseline-arm request already resolved; {guard}.");
+            var attribution = new ActionableCandidateRedAttribution(
+                batch.Findings, candidateOnlyRed.FailingTestIdentities ?? []);
+            decision = BuildActionableCandidateRedDecision(
+                goal, requestingTask, candidateSha, candidateReceiptId, attribution,
+                "Baseline arm was previously absent; the finding-bound outcome is already recorded.");
             return false;
         }
 
@@ -57,9 +59,16 @@ internal sealed partial class ConductorDriver
         };
         if (!TryReconcileFocusedEvidenceAttempt(
                 goal, policy, batch.Request, candidateSha, "finding-baseline-arm", baselineContext,
-                out var baselineEvidence, out var baselineAttempt, out decision))
+                out var baselineEvidence, out var baselineAttempt, out decision, out var attemptKind))
         {
-            if (baselineAttempt is null || baselineAttempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
+            if (attemptKind is null or ConductorParallelAcceptanceAttemptDecisionKind.Started or
+                    ConductorParallelAcceptanceAttemptDecisionKind.Running || baselineAttempt is null ||
+                baselineAttempt.Outcome is not (
+                    ConductorParallelAcceptanceAttemptOutcome.ProcessDied or
+                    ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts or
+                    ConductorParallelAcceptanceAttemptOutcome.LaunchFailed or
+                    ConductorParallelAcceptanceAttemptOutcome.Faulted or
+                    ConductorParallelAcceptanceAttemptOutcome.GateEngineFault))
             {
                 return false;
             }
@@ -162,9 +171,10 @@ internal sealed partial class ConductorDriver
                 "finding-baseline-arm-absent:" + goal.Id.Value + ":" + receiptId,
                 CancellationToken.None).GetAwaiter().GetResult();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // The finding outcome and event are durable before this optional operator notice.
+            Console.Error.WriteLine(
+                $"Baseline-arm notice failed after finding outcome was recorded: {guard}; receipt_id={receiptId}; {ex}");
         }
     }
 
