@@ -9,6 +9,29 @@ public sealed class StewardShadowAgreementTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-09-24T18:00:00Z");
 
     [Fact]
+    public void DailyBriefReceiptHashIncludesReportedShadowRates()
+    {
+        var composer = new StewardComposer();
+        var bundle = Bundle("escalation-1");
+        var empty = new StewardShadowAgreementWindowRate(0, 0, 0, 0, null);
+        var oneMatch = new StewardShadowAgreementWindowRate(1, 0, 0, 1, 1);
+        var oneMismatch = new StewardShadowAgreementWindowRate(0, 1, 0, 1, 0);
+        var matching = new[] { new StewardShadowClassAgreementRate(
+            StewardShadowEscalationClass.PlannerOutputContractRejected, oneMatch, oneMatch, 0) };
+        var differing = new[] { new StewardShadowClassAgreementRate(
+            StewardShadowEscalationClass.PlannerOutputContractRejected, oneMismatch, empty, 0) };
+
+        var baseline = composer.ComposeDailyBrief(bundle, "next", 0, Now);
+        var withMatchingRate = composer.ComposeDailyBrief(bundle, "next", 0, Now, matching);
+        var withDifferingRate = composer.ComposeDailyBrief(bundle, "next", 0, Now, differing);
+
+        Assert.Equal(StewardInputHasher.Hash(new { bundle, next = "next", spend = 0m }),
+            baseline.Receipt.InputsHash);
+        Assert.NotEqual(baseline.Receipt.InputsHash, withMatchingRate.Receipt.InputsHash);
+        Assert.NotEqual(withMatchingRate.Receipt.InputsHash, withDifferingRate.Receipt.InputsHash);
+    }
+
+    [Fact]
     public async Task OperatorIntentMatchesOrMismatchesAndHeartbeatReportsClassRates()
     {
         var store = new InMemoryStewardShadowRecommendationStore();

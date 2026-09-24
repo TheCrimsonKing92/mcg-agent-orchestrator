@@ -150,7 +150,9 @@ public sealed class StewardComposer : IStewardTriageEngine
             shadowAgreement);
         var receipt = Receipt(
             StewardOutputKind.DailyBrief,
-            new { bundle, next, spend },
+            shadowAgreement is null
+                ? new { bundle, next, spend } // Preserve hashes for briefs without shadow data.
+                : (object)new { bundle, next, spend, shadowAgreement },
             now,
             bundle.Escalations.Select(item => item.Id).ToList(),
             [],
