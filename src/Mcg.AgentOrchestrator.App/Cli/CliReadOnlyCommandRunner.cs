@@ -5,6 +5,13 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliReadOnlyCommandRunner
 {
+    internal static bool IsReadOnlyCommand(IReadOnlyList<string> args) =>
+        GoalBoardCommand.IsBoardCommand(args) ||
+        TrialCompareCliCommand.RequiresHistoricalState(args) ||
+        CliTaskQueryCommand.IsTaskQueryCommand(args) ||
+        CliStatusQueryCommand.IsStatusQueryCommand(args) ||
+        CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args);
+
     internal static bool TryExecute(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -47,6 +54,21 @@ internal static class CliReadOnlyCommandRunner
                 ref agents,
                 ref workerProfiles,
                 ref currentGoal);
+            changed = false;
+            return true;
+        }
+
+        if (CliStatusQueryCommand.IsStatusQueryCommand(args))
+        {
+            CliStatusQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
+            changed = false;
+            return true;
+        }
+
+        if (CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args))
+        {
+            CliGoalEventsQueryCommand.Execute(args, stateRepository, workspace);
             changed = false;
             return true;
         }

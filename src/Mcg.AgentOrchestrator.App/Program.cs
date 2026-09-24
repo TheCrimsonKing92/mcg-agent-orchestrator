@@ -365,8 +365,8 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
 }
 
 ITransactionalOrchestratorStateRepository stateRepository;
-AgentOrchestratorKernel kernel;
 Goal? currentGoal;
+bool stateHydrated;
 try
 {
     var isConductLoop = CliPersistentStateRunner.IsConductLoop(startupArgs);
@@ -391,8 +391,7 @@ try
             cleanupContext);
     }
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-    kernel = await stateRepository.LoadAsync();
-    currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
+    (currentGoal, stateHydrated) = await CliReadOnlyStartupHydration.PrepareStartupAsync(startupArgs, stateRepository);
 }
 catch (Exception ex)
 {
@@ -404,7 +403,9 @@ if (startupArgs.Count > 0)
 {
     try
     {
-        CliPersistentStateRunner.ExecuteCommand(startupArgs, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, operatorChannel, acceptanceCleanupContext: cleanupContext);
+        CliReadOnlyStartupHydration.ExecuteStartupCommand(startupArgs, stateRepository, workspace,
+            ref agents, providers, ref workerProfiles, ref currentGoal, stateHydrated,
+            operatorChannel, acceptanceCleanupContext: cleanupContext);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)

@@ -1131,6 +1131,9 @@ public sealed partial class AgentOrchestratorKernel
 
     public Goal CancelGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Cancelled, reason);
 
+    public Goal CancelGoal(GoalId goalId, string reason, bool allowLiveDispatches) =>
+        StopGoal(goalId, GoalStatus.Cancelled, reason, allowLiveDispatches);
+
     public Goal SupersedeGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Superseded, reason);
 
     public Goal ParkGoal(GoalId goalId, string reason)
@@ -1356,7 +1359,7 @@ public sealed partial class AgentOrchestratorKernel
             mainSha);
     }
 
-    private Goal StopGoal(GoalId goalId, GoalStatus terminalStatus, string reason)
+    private Goal StopGoal(GoalId goalId, GoalStatus terminalStatus, string reason, bool allowLiveDispatches = false)
     {
         var goal = GetGoal(goalId);
         var stopReason = reason?.Trim() ?? string.Empty;
@@ -1378,7 +1381,7 @@ public sealed partial class AgentOrchestratorKernel
         var runningTasks = goal.Tasks
             .Where(task => task.LastProcess is { IsRunning: true })
             .ToList();
-        if (runningTasks.Count > 0)
+        if (runningTasks.Count > 0 && !allowLiveDispatches)
         {
             var taskList = string.Join(", ", runningTasks.Select(task => $"{task.Id.Value[..8]} pid={task.LastProcess!.ProcessId}"));
             throw new InvalidOperationException($"Goal '{goalId}' has running dispatch process(es): {taskList}. Cancel or refresh them before stopping the goal.");

@@ -787,9 +787,7 @@ internal static partial class CliPersistentStateRunner
             return false;
         }
 
-        return args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("unpark-goal", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("abandon-goal", StringComparison.OrdinalIgnoreCase);
+        return GoalScopedLifecycleVerbs.Contains(args[0]);
     }
 
     private static bool ExecuteGoalMarkLandedWithPromptBudget(

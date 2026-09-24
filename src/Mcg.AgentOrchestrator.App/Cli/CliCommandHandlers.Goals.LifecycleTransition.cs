@@ -104,17 +104,7 @@ internal static partial class CliCommandHandlers
 
                 Console.WriteLine($"Goal unparked {outcome.GoalId.Value[..8]}.");
                 Console.WriteLine("Status change: Parked -> Active");
-                try
-                {
-                    new Mcg.AgentOrchestrator.Infrastructure.GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory)
-                        .AppendTimelineEvent(outcome.CommittedTimelineEvent);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    throw new GoalLifecycleProjectionException(
-                        $"Goal '{outcome.GoalId.Value[..8]}' is committed Active, but lifecycle event projection failed: {ex.Message}",
-                        ex);
-                }
+                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Active);
 
                 return;
 
@@ -129,14 +119,38 @@ internal static partial class CliCommandHandlers
                 throw new InvalidOperationException(outcome.RejectionReason ?? "The goal unpark transition was rejected.");
 
             case GoalLifecycleTransitionDisposition.ConflictExhausted:
-                throw new InvalidOperationException(
-                    $"unpark-goal could not commit goal '{outcome.GoalId.Value[..8]}' because concurrent updates exhausted the retry budget. " +
-                    "No unpark success was reported. Inspect status and retry the command.");
+                throw CreateConflictExhaustedException("unpark-goal", outcome.GoalId);
 
             default:
                 throw new InvalidOperationException($"Unsupported lifecycle transition outcome: {outcome.Disposition}.");
         }
     }
+
+    internal static void AppendCommittedLifecycleEvent(
+        GoalLifecycleTransitionOutcome outcome,
+        OrchestratorWorkspace workspace,
+        GoalStatus committedStatus)
+    {
+        if (outcome.CommittedTimelineEvent is null)
+        {
+            throw new InvalidOperationException("Committed lifecycle outcome is missing its timeline event.");
+        }
+
+        try
+        {
+            new Mcg.AgentOrchestrator.Infrastructure.GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory)
+                .AppendTimelineEvent(outcome.CommittedTimelineEvent);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new GoalLifecycleProjectionException(
+                $"Goal '{outcome.GoalId.Value[..8]}' is committed {committedStatus}, but lifecycle event projection failed: {ex.Message}", ex);
+        }
+    }
+
+    internal static InvalidOperationException CreateConflictExhaustedException(string command, GoalId goalId) =>
+        new($"{command} could not commit goal '{goalId.Value[..8]}' because concurrent updates exhausted the retry budget. " +
+            $"No {command[..^5]} success was reported. Inspect status and retry the command.");
 
     internal sealed class GoalLifecycleProjectionException(string message, Exception innerException)
         : IOException(message, innerException);
