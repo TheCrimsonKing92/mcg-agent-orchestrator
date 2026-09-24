@@ -62,6 +62,12 @@ internal sealed partial class ConductorDriver
         var failedChecks = acceptance.FailedChecks is { Count: > 0 }
             ? acceptance.FailedChecks
             : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+        if (goal.Status == GoalStatus.AcceptanceFailed)
+        {
+            RestoreVerifiedAfterAcceptanceClassification(
+                goal,
+                "All acceptance failures classified as Inherited; restored Verified for existing hold routing.");
+        }
         _recordAcceptanceFailure(
             goal,
             failedChecks,
@@ -152,7 +158,9 @@ internal sealed partial class ConductorDriver
         ApparatusRedGateReading reading,
         ApparatusRedDisposition.Regate regate)
     {
-        _clearAcceptanceFailure(goal);
+        RestoreVerifiedAfterAcceptanceClassification(
+            goal,
+            $"Acceptance RED classified as apparatus ({regate.EvidenceKind}); restored Verified for re-gate {regate.RegateOrdinal}/{regate.RegateCap}.");
         _apparatusRedGate!.RecordRegate(goal, regate);
         var observedHeads = _resolveAcceptanceHeads(goal);
         var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
@@ -173,6 +181,18 @@ internal sealed partial class ConductorDriver
                 StableIdentity:
                     $"acceptance-apparatus-red:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:" +
                     regate.EvidenceKind));
+    }
+
+    private void RestoreVerifiedAfterAcceptanceClassification(Goal goal, string reason)
+    {
+        var kernel = _cohortKernel ?? _conductorTickKernel;
+        if (kernel is not null && goal.Status == GoalStatus.AcceptanceFailed)
+        {
+            kernel.RestoreVerifiedForClassifiedAcceptanceFailure(goal.Id, reason);
+            return;
+        }
+
+        _clearAcceptanceFailure(goal);
     }
 
     /// <summary>

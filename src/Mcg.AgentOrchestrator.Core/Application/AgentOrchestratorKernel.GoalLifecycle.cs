@@ -879,6 +879,20 @@ public sealed partial class AgentOrchestratorKernel
         goal.ClearAcceptanceFailure();
     }
 
+    public bool RestoreVerifiedForClassifiedAcceptanceFailure(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        goal.ClearAcceptanceFailure();
+        if (goal.Status != GoalStatus.AcceptanceFailed)
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Verified);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
     public bool RestoreVerifiedForSupersededAcceptanceFailure(
         GoalId goalId,
         string? currentBranchHeadSha,
