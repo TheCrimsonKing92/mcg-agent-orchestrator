@@ -271,8 +271,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 8b6de491: the slice-batch preview test needs an available Developer agent in
             // its roster now that creating a batch requires one, and the roster is declared inline.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs", 2780),
-            // Reconciled after integrating main e1f6f11c at its measured post-merge CLI test-owner size.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs", 983),
+            // Raised for goal a2289b27: the strict-checkpoint fixture explicitly names its initial
+            // branch main before provisioning a goal worktree, so it works with non-main Git defaults.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs", 984),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsStartupAndMetadata.cs", 275),
             // Raised for goals fd252fe4 and b8dde431: worker-result fixtures supply the required typed provider-
             // interruption cause and PID-identity evidence; owning-suite assertions preserve coverage.
