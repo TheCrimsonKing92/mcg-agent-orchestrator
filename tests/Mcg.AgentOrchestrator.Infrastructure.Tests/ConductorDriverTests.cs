@@ -12,7 +12,6 @@ using System.Xml.Linq;
 public sealed class ConductorDriverTests
 {
     // ── Helpers ──────────────────────────────────────────────────────────────
-
     internal static IReadOnlyList<AgentDefinition> DefaultAgents() => AgentCatalog.Default().Agents;
 
     internal static ConductorParallelAcceptanceAttemptCoordinator SeedLiveAcceptanceAttempt(
@@ -45,7 +44,6 @@ public sealed class ConductorDriverTests
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), objective);
         return (kernel, goal);
     }
-
     internal static (AgentOrchestratorKernel Kernel, Goal Goal) SoftwareGoal(string objective = "Review retry goal")
     {
         var kernel = new AgentOrchestratorKernel();
@@ -472,7 +470,8 @@ public sealed class ConductorDriverTests
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         string? executionDirectory = null,
         Func<Goal, TaskId, bool>? reconcileExitedDispatch = null,
-        ApparatusRedGate? apparatusRedGate = null, Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null)
+        ApparatusRedGate? apparatusRedGate = null, Action<Goal, FailedGoalRecoveryDecision>? beforeFailedGoalRecoveryEffect = null,
+        Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null, Func<GoalId, string>? workerBuildArtifactsPath = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -532,7 +531,8 @@ public sealed class ConductorDriverTests
             getLandingFileScopes: getLandingFileScopes,
             executionDirectory: executionDirectory,
             reconcileExitedDispatch: reconcileExitedDispatch,
-            apparatusRedGate: apparatusRedGate, beforeFailedGoalRecoveryEffect: beforeFailedGoalRecoveryEffect);
+            apparatusRedGate: apparatusRedGate, beforeFailedGoalRecoveryEffect: beforeFailedGoalRecoveryEffect,
+            workerBuildRecoveryRetry: workerBuildRecoveryRetry, workerBuildArtifactsPath: workerBuildArtifactsPath);
     }
 
     internal static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>

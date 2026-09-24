@@ -96,10 +96,10 @@ internal sealed partial class ConductorDriver
 
         if (decision.Action == FailedGoalRecoveryAction.Escalate)
         {
+            if (TryRecoverFailedWorkerBuildCheck(goal, goalPrefix, policy, state, decision, pendingNotes) is { } recovered) return recovered;
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return Escalate(goal, goalPrefix, policy, state, decision.Reason);
         }
-
         if (decision.Backoff > TimeSpan.Zero)
             _emptyOutputBackoffDelay(decision.Backoff);
 
