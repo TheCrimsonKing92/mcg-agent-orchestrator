@@ -98,6 +98,30 @@ internal static class WorkerVerificationEvidence
         LogicalArtifactIdentity? identity = null)
         => ProjectStandardOutputForContextWithValidation(task, verification, identity).Content;
 
+    public static string ProjectPriorTaskOutputForContext(TaskSpec task) =>
+        ProjectPriorTaskOutputForContextWithValidation(task).Content;
+
+    public static ContextProjection ProjectPriorTaskOutputForContextWithValidation(TaskSpec task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var latest = task.LastVerification ?? throw new ArgumentException(
+            "Prior task has no verification output.", nameof(task));
+        var latestProjection = ProjectStandardOutputForContextWithValidation(task, latest);
+        if (!latest.Command.StartsWith("manual-verification ", StringComparison.Ordinal))
+            return latestProjection;
+
+        var worker = task.VerificationHistory.LastOrDefault(record => record.WorkerResultPresent);
+        if (worker is null)
+            return latestProjection;
+
+        var workerProjection = ProjectStandardOutputForContextWithValidation(task, worker);
+        return new ContextProjection(string.Join(Environment.NewLine,
+            "Worker-produced verification (last worker round):",
+            workerProjection.Content,
+            "Operator adjudication (latest verification):",
+            latestProjection.Content), workerProjection.Validation);
+    }
+
     public static ContextProjection ProjectStandardOutputForContextWithValidation(
         TaskSpec task,
         TaskVerificationRecord verification,

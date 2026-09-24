@@ -21,6 +21,55 @@ public sealed class PriorWorkerResultProjectionTests
     }
 
     [Fact]
+    public void OperatorAdjudicationPreservesHistoricalWorkerResultInDownstreamContext()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"prior-worker-result-{Guid.NewGuid():N}");
+        var contextDirectory = Path.Combine(root, "context");
+        Directory.CreateDirectory(contextDirectory);
+        File.WriteAllText(Path.Combine(contextDirectory, "artifact-registry.json"), "{\"artifacts\":[]}");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var developer = new TaskSpec(TaskId.New(), "Developer audit", AgentRole.Developer);
+            var tester = new TaskSpec(TaskId.New(), "Inspect Developer audit", AgentRole.Tester);
+            var goal = kernel.CreateGoal("Preserve prior worker output", [developer, tester]);
+            var workerOutput = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+                "Fixtures", "WorkerOutput", FixtureName));
+            kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+                "codex worker", root, 0, workerOutput, string.Empty,
+                DateTimeOffset.Parse("2026-09-24T00:46:30Z"), WorkerResultPresent: true,
+                FullStandardOutput: workerOutput));
+            const string operatorText = "OPERATOR adjudication: audit reviewed; continue to Tester.";
+            kernel.RecordTaskVerification(goal.Id, developer.Id, ManualVerificationRecorder.Create(
+                true, operatorText, root, DateTimeOffset.Parse("2026-09-24T00:49:19Z")));
+
+            var prior = goal.Tasks.Single(task => task.Id == developer.Id);
+            Assert.Equal(2, prior.VerificationHistory.Count);
+            Assert.Equal("manual-verification passed", prior.LastVerification!.Command);
+            var brief = new TaskBrief(goal.Id, tester.Id, tester.RequiredRole, tester.Description,
+                "# Agent Task Brief\nInspect the prior Developer result.");
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal, tester, root, contextDirectory, brief);
+            var artifact = Assert.Single(package.Artifacts, candidate =>
+                candidate.Identity.Value == $"prior/{developer.Id.Value}/verification-output");
+            var projected = artifact.DeliveryMode == ContextDeliveryMode.InlineFull
+                ? System.Text.Encoding.UTF8.GetString(artifact.AuthoritativeBytes!)
+                : File.ReadAllText(Path.Combine(root,
+                    artifact.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
+
+            Assert.Contains("Worker-produced verification", projected, StringComparison.Ordinal);
+            for (var index = 1; index <= 54; index++)
+                Assert.Contains($"audit_{index:00}:", projected, StringComparison.Ordinal);
+            Assert.Contains("Operator adjudication", projected, StringComparison.Ordinal);
+            Assert.Contains(operatorText, projected, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void MalformedHistoricalAuditRetainsTheCompleteLocatedBlock()
     {
         var output = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,

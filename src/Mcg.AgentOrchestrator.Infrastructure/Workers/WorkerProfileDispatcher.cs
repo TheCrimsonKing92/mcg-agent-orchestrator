@@ -2114,7 +2114,7 @@ public static class WorkerProfileDispatcher
             .Where(candidate => candidate.LastVerification is not null))
         {
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var output = WorkerVerificationEvidence.ProjectStandardOutputForContext(priorTask, priorTask.LastVerification!);
+            var output = WorkerVerificationEvidence.ProjectPriorTaskOutputForContext(priorTask);
             AddSource(WorkerContextSemanticSource.PriorTaskVerificationOutput, identity.Value, ContextArtifactKind.PriorTaskEvidence, Encoding.UTF8.GetBytes(output));
         }
 
@@ -2168,7 +2168,7 @@ public static class WorkerProfileDispatcher
                     candidate => $"prior/{candidate.Id.Value}/verification-output",
                     candidate =>
                     {
-                        var output = WorkerVerificationEvidence.ProjectStandardOutputForContext(candidate, candidate.LastVerification!);
+                        var output = WorkerVerificationEvidence.ProjectPriorTaskOutputForContext(candidate);
                         return Encoding.UTF8.GetBytes(output);
                     },
                     StringComparer.Ordinal);
