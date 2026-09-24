@@ -13,6 +13,91 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
     }
 
     [Xunit.Fact]
+    public void NonAcceptanceObligationSkipsTrainAndPairCohortButUsesSoloPath()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(1, 3)
+            .Select(index => CreateVerifiedSimpleGoal(kernel, $"Criterion evidence admission member {index}"))
+            .ToArray();
+        const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var branchRevisions = goals.ToDictionary(
+            goal => goal.Id,
+            goal => goal.Id.Value.PadRight(40, 'b')[..40]);
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/BlockedMember.cs"],
+            [goals[1].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortMember.razor"],
+            [goals[2].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortMember.cs"]
+        };
+        kernel.RecordGoalRefinement(goals[0].Id, new RefinedSpec(
+            goals[0].Objective,
+            ["Operator confirms the landed behavior"],
+            VerificationClass.RealWorldDependent,
+            [],
+            []));
+        kernel.MapCriterionEvidenceOwner(
+            goals[0].Id,
+            0,
+            1,
+            CriterionEvidenceOwner.Operator,
+            "operator",
+            "operator:real-world",
+            expectedCandidateSha: branchRevisions[goals[0].Id]);
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(branchRevisions[goalId], mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        IReadOnlyList<GoalId>? cohortMembers = null;
+        var trainCalls = 0;
+        var ordinaryGoals = new List<GoalId>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (goal, _) =>
+            {
+                ordinaryGoals.Add(goal.Id);
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: goal => paths[goal.Id],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            resolveAcceptanceHeads: goal => (branchRevisions[goal.Id], mainRevision),
+            runMergeTrain: (_, _, _) =>
+            {
+                trainCalls++;
+                return new ConductorMergeTrainRunResult(null, new Dictionary<string, ConductorAdvanceResult>(), [], "unexpected train");
+            },
+            runAcceptanceCohort: (selection, _, policy) =>
+            {
+                cohortMembers = selection.Members.Select(member => member.GoalId).ToArray();
+                return new ConductorAcceptanceCohortRunResult(
+                    null,
+                    selection.Members.ToDictionary(
+                        member => member.GoalId.Value,
+                        member => new ConductorAdvanceResult(
+                            member.GoalId.Value,
+                            member.GoalId.Value[..8],
+                            policy.Name,
+                            new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, "admitted by cohort")),
+                        StringComparer.Ordinal),
+                    "outcome=passed");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Permissive,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(0, trainCalls);
+        Assert.Equal(goals[1..].Select(goal => goal.Id), cohortMembers);
+        Assert.Equal([goals[0].Id], ordinaryGoals);
+        Assert.Equal(2, summary.Advanced);
+        Assert.Equal(1, summary.Held);
+    }
+
+    [Xunit.Fact]
     public void LiveCensusFailureAfterAttemptBlocksFurtherAdmissionAndRecordsReason()
     {
         using var isolatedRoot = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();

@@ -3,6 +3,26 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class AcceptanceCriterionOwnershipMarkerTests
 {
     [Xunit.Theory]
+    [Xunit.InlineData("Acceptance executes")]
+    [Xunit.InlineData("acceptance\texecutes")]
+    [Xunit.InlineData("ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("Executed by the acceptance gate")]
+    public void ExplicitAcceptanceGateOwnershipMarkersAreAccepted(string marker)
+    {
+        Xunit.Assert.True(AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(
+            $"The focused behavior works. {marker}."));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("PreAcceptance executes the check.")]
+    [Xunit.InlineData("The check is ACCEPTANCE-GATE-OWNEDX.")]
+    [Xunit.InlineData("The check is TEST-VERIFIABLE. Developer owns.")]
+    public void NonMarkersAndLongerWordsDoNotConferAcceptanceGateOwnership(string criterion)
+    {
+        Xunit.Assert.False(AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion));
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("REAL-WORLD-DEPENDENT, operator-owned.")]
     [Xunit.InlineData("REAL-WORLD-DEPENDENT, operator owned.")]
     [Xunit.InlineData("The operator owns this observation. REAL-WORLD-DEPENDENT.")]

@@ -127,6 +127,40 @@ public sealed class AcceptancePolicyShardPlannerTests
     }
 
     [Fact]
+    public void AddPolicyShardReceiptResults_RecordsStructuredCovererWithoutChangingSummary()
+    {
+        var plan = PolicyShardPlan.Scoped(
+            AppEvidence,
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                AcceptancePolicyShardPlanner.CoreTestsProject
+            });
+        var full = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "core tests",
+            Type = "dotnet-test",
+            Project = AcceptancePolicyShardPlanner.CoreTestsProject
+        };
+        var focused = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "focused core tests",
+            Type = "dotnet-test",
+            Project = AcceptancePolicyShardPlanner.CoreTestsProject,
+            Arguments = ["--filter", "FullyQualifiedName~Example"]
+        };
+        var results = new List<AcceptanceCheckResult>
+        {
+            new(focused.Name, false, 1, "failed")
+        };
+
+        AcceptancePolicyShardPlanner.AddPolicyShardReceiptResults(results, [full], [focused], plan);
+
+        var receipt = Assert.Single(results, result => result.Name == full.Name);
+        Assert.Equal($"covered by: {focused.Name}; changed file in dependency closure; {AppEvidence}", receipt.ResultSummary);
+        Assert.Equal([focused.Name], receipt.CoveredBy);
+    }
+
+    [Fact]
     public void EnvironmentFlags_PreserveTruthTables()
     {
         var previousFullShards = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");

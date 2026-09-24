@@ -18,7 +18,7 @@ internal static class CliCommandCapabilities
     {
         "tasks", "task", "status", "next", "goals", "monitor-goal",
         "architecture", "config", "agent-list", "worker-profile-list", "model-outcomes",
-        "backlog-list", "backlog-show", "backlog-depends", "goal-events", "timeline",
+        "backlog-list", "backlog-show", "backlog-depends", "backlog-similar", "goal-events", "timeline",
         "dashboard", "transcript"
     };
 

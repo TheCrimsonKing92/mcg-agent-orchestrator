@@ -43,7 +43,8 @@ public sealed record AcceptanceCheckResult(
     string? TestProjectPath = null,
     IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null,
     int? ChildProcessId = null,
-    DateTimeOffset? ChildProcessStartedAt = null);
+    DateTimeOffset? ChildProcessStartedAt = null,
+    IReadOnlyList<string>? CoveredBy = null);
 
 public enum AcceptanceTestFailureOrigin
 {
@@ -488,7 +489,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const int DefaultTransientNoHolderBuildLockMaxRetryCycles = 2;
     private static readonly TimeSpan CaptureDrainTimeout = TimeSpan.FromSeconds(12);
     private const int CappedOutputPreviewBytes = 64 * 1024;
-    // A failed partition reruns once in the same attempt; a pass remains visible through Retried=true.
+    // A failed partition reruns once as a probe; Retried=true records the probe without changing its verdict.
     // Tests that assert exact partition run counts disable this within-attempt companion to the verdict cache.
     private static readonly string[] CacheableProjects =
     [
@@ -857,7 +858,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         slnRun.Result.LeaseId,
                         slnRun.Result.DurationMilliseconds,
                         slnRun.Retried,
-                        $"covered by: {solutionCheck!.Name}"));
+                        $"covered by: {solutionCheck!.Name}",
+                        CoveredBy: [solutionCheck.Name]));
                 }
 
                 if (slnRun.Result.Passed)
@@ -2268,11 +2270,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             FailureClassification = fresh.Result.FailureClassification ?? completionDecision.FailedPredicate
         }, fresh.Retried);
 
-        // Within-attempt flake tolerance: a failed infrastructure PARTITION can be an intermittent flake
-        // (a concurrent test process grabbing a build-slot lease -> SlotsBusy, a live-repo-HEAD race, a
-        // testhost handle still settling). Re-run the failed partition ONCE with the same slot lease and
-        // build phase; if the re-run passes, the failure was a flake and the partition is treated as
-        // passed. A genuine red fails both runs. Bounded to a single retry, only for true partitions.
+        // A failed infrastructure partition may run once more as a classification probe. The first run
+        // remains the verdict; the probe only records whether the failure was confirmed as intermittent.
         fresh = (cacheContext?.ObserveSharedApparatusEvidence(check, fresh.Result) ?? fresh.Result, fresh.Retried);
         if (cacheContext?.ShouldRerunWithinAttempt(check, fresh.Result.CompletionDecision) == true)
         {
@@ -2328,9 +2327,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 CompletionDecision = rerunDecision,
                 FailureClassification = rerun.Result.FailureClassification ?? rerunDecision.FailedPredicate
             };
-            fresh = (
-                cacheContext.ObserveSharedApparatusEvidence(check, rerunResult),
-                true);
+            fresh = (cacheContext.SelectPartitionVerdict(check, original, rerunResult), true);
         }
 
         cacheContext?.RecordExecution(check, fresh.Result);
@@ -3712,7 +3709,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     failedShard.LeaseId,
                     failedShard.DurationMilliseconds,
                     failedShard.LockRemediationApplied,
-                    $"covered by failed partition: {failedShard.Name}"));
+                    $"covered by failed partition: {failedShard.Name}",
+                    CoveredBy: [failedShard.Name]));
                 continue;
             }
 
@@ -3730,7 +3728,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 lastShard.LeaseId,
                 shardResults.Sum(result => result.DurationMilliseconds ?? 0),
                 shardResults.Any(result => result.LockRemediationApplied),
-                $"covered by {shardResults.Length} partitioned checks"));
+                $"covered by {shardResults.Length} partitioned checks",
+                CoveredBy: shardResults.Select(result => result.Name).ToArray()));
         }
     }
 
@@ -3769,7 +3768,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 coveringResult.LeaseId,
                 coveringResult.DurationMilliseconds,
                 coveringResult.LockRemediationApplied,
-                $"covered by: {coveringCheck.Name}"));
+                $"covered by: {coveringCheck.Name}",
+                CoveredBy: [coveringCheck.Name]));
         }
     }
 

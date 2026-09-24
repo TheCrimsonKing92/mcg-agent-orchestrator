@@ -196,6 +196,135 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Fact]
+    public void DirectLandingRecordsAcceptanceOwnedCriterionEvidenceBeforeMainMutation()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/direct-evidence.txt");
+            var candidateSha = ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective,
+                ["The deterministic full acceptance gate passes."],
+                VerificationClass.TestVerifiable,
+                [],
+                []));
+            kernel.MapCriterionEvidenceOwner(
+                goal.Id,
+                0,
+                1,
+                CriterionEvidenceOwner.Acceptance,
+                "test",
+                CriterionEvidenceScopes.FullAcceptanceGate,
+                expectedCandidateSha: new string('a', 40));
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(result.MainAdvanced, result.Message);
+            var obligation = Assert.Single(goal.CriterionEvidenceObligations);
+            Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
+            Assert.Equal(candidateSha, obligation.CandidateSha);
+            Assert.Equal($"full-acceptance:{candidateSha}", obligation.ReceiptId);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void DirectLandingWithOperatorOwnedCriterionHoldsBeforeMainMutation()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/direct-held.txt");
+            var candidateSha = ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective,
+                ["The deterministic full acceptance gate passes.", "The operator observes the native result."],
+                VerificationClass.TestVerifiable,
+                [],
+                []));
+            kernel.MapCriterionEvidenceOwner(
+                goal.Id,
+                0,
+                1,
+                CriterionEvidenceOwner.Acceptance,
+                "test",
+                CriterionEvidenceScopes.FullAcceptanceGate,
+                expectedCandidateSha: new string('a', 40));
+            kernel.MapCriterionEvidenceOwner(
+                goal.Id,
+                1,
+                1,
+                CriterionEvidenceOwner.Operator,
+                "test",
+                "operator:native-observation",
+                expectedCandidateSha: candidateSha);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.Contains("required criterion evidence remains outstanding", escalation.Reason, StringComparison.Ordinal);
+            Assert.Contains(nameof(CriterionEvidenceOwner.Operator), escalation.Reason, StringComparison.Ordinal);
+            var obligations = goal.CriterionEvidenceObligations.OrderBy(item => item.CriterionIndex).ToArray();
+            Assert.Equal(CriterionEvidenceState.Satisfied, obligations[0].State);
+            Assert.Equal(CriterionEvidenceState.Pending, obligations[1].State);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public void DirectLandingCannotRecordAcceptanceOwnedCriterionWithoutMatchingPassedGate()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            AddGoalBranchCommit(repo, goalBranch, "src/no-gate-evidence.txt", "goal work");
+            var candidateSha = ReadGit(repo, "rev-parse", goalBranch);
+            var mainBefore = ReadGit(repo, "rev-parse", "main");
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective,
+                ["The deterministic full acceptance gate passes."],
+                VerificationClass.TestVerifiable,
+                [],
+                []));
+            kernel.MapCriterionEvidenceOwner(
+                goal.Id,
+                0,
+                1,
+                CriterionEvidenceOwner.Acceptance,
+                "test",
+                CriterionEvidenceScopes.FullAcceptanceGate,
+                expectedCandidateSha: candidateSha);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            Assert.Equal(mainBefore, ReadGit(repo, "rev-parse", "main"));
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.Contains("no deterministic passed acceptance outcome matches candidate", escalation.Reason, StringComparison.Ordinal);
+            Assert.Equal(
+                CriterionEvidenceState.Pending,
+                Assert.Single(goal.CriterionEvidenceObligations).State);
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "LandingExecutor accepted sibling cannot carry an unaccepted candidate onto main")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]

@@ -43,7 +43,7 @@ internal static class CliCommandHelp
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
-    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--depends-on <id-prefix>] | backlog-add <title> --text-file <path> [--depends-on <id-prefix>] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>]";
+    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
@@ -54,6 +54,7 @@ internal static class CliCommandHelp
     public const string BacklogDependsUsage = "Usage: backlog-depends <item-prefix> --on <prerequisite-prefix> | backlog-depends <item-prefix> --remove <prerequisite-prefix> | backlog-depends <item-prefix> --clear";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
+    public const string BacklogSimilarUsage = "Usage: backlog-similar <query text> [--limit <n>] [--status <value>] [--excerpt] | backlog-similar --id <backlog-id> [--limit <n>] [--status <value>] [--excerpt]";
     public const string EpicAddUsage = "Usage: epic-add <title> | epic-add --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
     public const string EpicListUsage = "Usage: epic-list";
@@ -70,6 +71,7 @@ internal static class CliCommandHelp
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
     public const string StateDatabaseMaintenanceUsage = "Usage: state-db-maintenance plan | state-db-maintenance execute --confirm-offline | state-db-maintenance convert-copy --output <path> --confirm-offline | state-db-maintenance convert-live --confirm-offline --confirm-live-replacement";
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
+    public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -348,8 +350,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
-        "Add a backlog item.",
-        ["--title", "--text-file", "--body-file", "--depends-on", "--help", "-h"]);
+        "Add a backlog item. Prints advisory similarity pointers unless suppressed.",
+        ["--title", "--text-file", "--body-file", "--depends-on", "--no-similar", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
@@ -360,6 +362,11 @@ internal static class CliCommandHelp
         BacklogShowUsage,
         "Show a backlog item by id prefix.",
         ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogSimilar = new(
+        BacklogSimilarUsage,
+        "Rank related backlog items and completed goals using an invocation-local FTS5 index.",
+        ["--id", "--limit", "--status", "--excerpt", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogAnnotate = new(
         BacklogAnnotateUsage,
@@ -487,6 +494,11 @@ internal static class CliCommandHelp
         RunEventUsage,
         "Show one stored run event by sequence, including goal-less event receipt text.",
         ["--format", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry FlakeCensus = new(
+        FlakeCensusUsage,
+        "Summarize recurring test failures from the retained acceptance failing-test index.",
+        ["--min-goals", "--since", "--help", "-h"]);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
@@ -652,6 +664,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  attention         List or answer operator attention items.");
         Console.WriteLine("  backlog-list      List backlog items.");
         Console.WriteLine("  backlog-add       Add a backlog item.");
+        Console.WriteLine("  backlog-similar   Rank related backlog items and completed goals.");
         Console.WriteLine("  retry             Retry a task with operator feedback.");
         Console.WriteLine("  recover           Recover a goal with an operator note.");
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
@@ -900,6 +913,12 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("flake-census", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = FlakeCensus;
+            return true;
+        }
+
         if (args[0].Equals("abandon-goal", StringComparison.OrdinalIgnoreCase))
         {
             entry = AbandonGoal;
@@ -1047,6 +1066,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-view", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogView;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-similar", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogSimilar;
             return true;
         }
 

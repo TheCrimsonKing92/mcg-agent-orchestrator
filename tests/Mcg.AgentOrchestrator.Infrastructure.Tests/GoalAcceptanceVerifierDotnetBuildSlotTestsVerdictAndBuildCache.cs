@@ -120,8 +120,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_rerun_tolerates_flaky_partition")]
-    public async Task GoalAcceptanceVerifierWithinAttemptRerunToleratesFlakyPartition()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_probe_keeps_first_run_timeout_red")]
+    public async Task GoalAcceptanceVerifierWithinAttemptProbeKeepsFirstRunTimeoutRed()
     {
         var root = CreateCheckedInManifestShapeWorkspace();
         var cliLaneFilter = ResolveLaneFilter(root, "Cli");
@@ -140,7 +140,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     args.Contains(cliLaneFilter))
                 {
                     cliRuns++;
-                    // Intermittent flake: fail the first run, pass the within-attempt re-run.
+                    // Classification probe: time out first, then pass without changing the verdict.
                     if (cliRuns == 2)
                     {
                         WriteVstestTrx(args, "CliPartition.Passes");
@@ -152,7 +152,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                             root,
                             "infrastructure tests: Cli",
                             "retry-driving stderr from the original Cli partition",
-                            attemptPrefix)
+                            attemptPrefix,
+                            timedOut: true)
                         : new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
@@ -163,11 +164,21 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
             var result = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-flaky");
 
-            Assert.True(
-                result.Passed,
-                DescribeFailedChecks(result));
+            Assert.False(result.Passed);
             Assert.True(result.Retried);
             Assert.Equal(2, cliRuns);
+            var failedPartition = Assert.Single(
+                result.Checks!,
+                check => check.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.TimedOut);
+            Assert.False(failedPartition.Passed);
+            Assert.Equal(AcceptanceShardCompletionPredicates.TimedOut, failedPartition.CompletionDecision?.FailedPredicate);
+            var verdictReceipt = Assert.Single(
+                result.Checks!,
+                check => check.Name.Equals("infrastructure partition verdict cache", StringComparison.Ordinal));
+            Assert.Contains("{partition_id=cli,verdict=RED}", verdictReceipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("verdict_source=first_run", verdictReceipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("probe_ran=true", verdictReceipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("flake_confirmed=true", verdictReceipt.ResultSummary, StringComparison.Ordinal);
             var unrelatedPartitionCommands = calls
                 .Where(IsInfrastructurePartitionTestCall)
                 .Where(arguments => !arguments.Contains(cliLaneFilter))
@@ -185,8 +196,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_rerun_tolerates_flaky_mtp_partition")]
-    public async Task GoalAcceptanceVerifierWithinAttemptRerunToleratesFlakyMtpPartition()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_within_attempt_probe_keeps_first_run_nonzero_exit_red")]
+    public async Task GoalAcceptanceVerifierWithinAttemptProbeKeepsFirstRunNonzeroExitRed()
     {
         var root = CreateManifestWorkspace("""
             {
@@ -230,15 +241,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
 
             var result = await RunOwnedAttemptAsync(verifier, root, goalId, "attempt-mtp");
 
-            Assert.True(
-                result.Passed,
-                DescribeFailedChecks(result));
+            Assert.False(result.Passed);
             Assert.True(result.Retried);
             Assert.Equal(2, mtpRuns);
             var partition = Assert.Single(
                 result.Checks!,
                 check => check.Name.Equals("infrastructure tests: Cli", StringComparison.Ordinal));
-            Assert.Equal(1, partition.TestResultRunOrdinal);
+            Assert.Equal(0, partition.TestResultRunOrdinal);
             Assert.False(string.IsNullOrWhiteSpace(partition.TestResultAttemptId));
             Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
@@ -940,7 +949,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         string worktreePath,
         string checkName,
         string stderr,
-        string attemptResultsPrefix)
+        string attemptResultsPrefix,
+        bool timedOut = false)
     {
         var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
             checkName,
@@ -970,6 +980,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         return new GoalAcceptanceVerifier.CommandResult(
             1,
             "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1.",
+            TimedOut: timedOut,
             Stderr: stderr);
     }
 

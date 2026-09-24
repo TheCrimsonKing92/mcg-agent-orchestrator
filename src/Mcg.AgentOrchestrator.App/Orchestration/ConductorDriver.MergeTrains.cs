@@ -312,6 +312,16 @@ internal sealed partial class ConductorDriver
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Order(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
+                var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+                    resolvedGoals,
+                    goalId => recovery.Receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
+                    kernel,
+                    $"merge-train-receipt:{recovery.Receipt.ReceiptId}");
+                if (evidenceDiagnostic is not null)
+                {
+                    Console.WriteLine($"MERGE_TRAIN_RECOVERY_HELD train={recovery.Receipt.Identity.Value} detail={evidenceDiagnostic}");
+                    continue;
+                }
                 foreach (var goal in resolvedGoals)
                 {
                     GoalOperationJournal.Completed(

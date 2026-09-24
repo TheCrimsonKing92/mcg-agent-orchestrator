@@ -43,6 +43,55 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             return false;
         }
 
+        case "backlog-similar":
+        {
+            var idFlagPresent = parts.Any(part =>
+                part.Equals("--id", StringComparison.OrdinalIgnoreCase) ||
+                part.StartsWith("--id=", StringComparison.OrdinalIgnoreCase));
+            var idPrefix = GetFlagValue(parts, "--id");
+            var freeText = GetBacklogSimilarFreeText(parts);
+            if (idFlagPresent && (string.IsNullOrWhiteSpace(idPrefix) || idPrefix.StartsWith("--", StringComparison.Ordinal)))
+                throw new ArgumentException("--id requires a backlog id prefix.");
+            if (idFlagPresent && freeText.Length > 0)
+                throw new ArgumentException("Provide either free text or --id, not both.");
+            if (!idFlagPresent && freeText.Length == 0)
+                throw new ArgumentException(CliCommandHelp.BacklogSimilarUsage);
+
+            var corpus = LoadBacklogSimilarityCorpus(context);
+            string queryText;
+            string? excludeId = null;
+            if (idFlagPresent)
+            {
+                var matchingItems = corpus
+                    .Where(document => document.Kind.Equals("backlog", StringComparison.OrdinalIgnoreCase) &&
+                        document.Id.StartsWith(idPrefix!, StringComparison.OrdinalIgnoreCase))
+                    .Take(2)
+                    .ToArray();
+                if (matchingItems.Length == 0)
+                    throw new InvalidOperationException($"No backlog item found with id prefix '{idPrefix}'.");
+                if (matchingItems.Length > 1)
+                    throw new InvalidOperationException($"Ambiguous id prefix '{idPrefix}' matches multiple items.");
+                queryText = matchingItems[0].Text;
+                excludeId = matchingItems[0].Id;
+            }
+            else
+            {
+                queryText = freeText;
+            }
+
+            var hits = BacklogSimilaritySearch.Search(
+                corpus,
+                queryText,
+                ParseOptionalLimit(parts) ?? 10,
+                parts.Any(part => part.Equals("--excerpt", StringComparison.OrdinalIgnoreCase)),
+                GetFlagValue(parts, "--status"),
+                excludeId);
+            foreach (var hit in hits)
+                Console.WriteLine(RenderSimilarityHit(hit));
+            Console.WriteLine($"Backlog similar: {hits.Count} result(s)");
+            return false;
+        }
+
         case "backlog-triage":
         {
             var limit = ParseOptionalLimit(parts) ?? 5;
@@ -98,6 +147,29 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                     .GetAwaiter()
                     .GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
+            if (!parts.Any(part => part.Equals("--no-similar", StringComparison.OrdinalIgnoreCase)))
+            {
+                try
+                {
+                    var hits = SearchBacklogSimilarity(
+                        context,
+                        item.Title + "\n" + item.Body,
+                        limit: 3,
+                        includeExcerpt: false,
+                        statusFilter: null,
+                        excludeId: item.Id);
+                    if (hits.Count > 0)
+                    {
+                        Console.WriteLine("Similar:");
+                        foreach (var hit in hits)
+                            Console.WriteLine(RenderSimilarityHit(hit));
+                    }
+                }
+                catch (Exception)
+                {
+                    Console.WriteLine("Warning: similarity search unavailable; item was added.");
+                }
+            }
             return false;
         }
 
@@ -607,6 +679,76 @@ private static int? ParseOptionalLimit(IReadOnlyList<string> parts)
 {
     return ParseOptionalNonNegativeInt(parts, "--limit");
 }
+
+private static string GetBacklogSimilarFreeText(IReadOnlyList<string> parts)
+{
+    var words = new List<string>();
+    for (var index = 1; index < parts.Count; index++)
+    {
+        var part = parts[index];
+        if (part.Equals("--excerpt", StringComparison.OrdinalIgnoreCase))
+            continue;
+        if (part.StartsWith("--id=", StringComparison.OrdinalIgnoreCase) ||
+            part.StartsWith("--limit=", StringComparison.OrdinalIgnoreCase) ||
+            part.StartsWith("--status=", StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+        if (part.Equals("--id", StringComparison.OrdinalIgnoreCase) ||
+            part.Equals("--limit", StringComparison.OrdinalIgnoreCase) ||
+            part.Equals("--status", StringComparison.OrdinalIgnoreCase))
+        {
+            index++;
+            continue;
+        }
+        words.Add(part);
+    }
+    return string.Join(' ', words);
+}
+
+private static IReadOnlyList<SimilarityHit> SearchBacklogSimilarity(
+    CliExecutionContext context,
+    string queryText,
+    int limit,
+    bool includeExcerpt,
+    string? statusFilter,
+    string? excludeId)
+{
+    var corpus = LoadBacklogSimilarityCorpus(context);
+    return BacklogSimilaritySearch.Search(corpus, queryText, limit, includeExcerpt, statusFilter, excludeId);
+}
+
+private static List<SimilarityDocument> LoadBacklogSimilarityCorpus(CliExecutionContext context)
+{
+    var corpus = BacklogSimilaritySearch.LoadBacklogDocumentsAsync(context.Workspace.BacklogStorePath)
+        .GetAwaiter().GetResult().ToList();
+    corpus.AddRange(context.Kernel.Goals
+        .Where(goal => goal.Status == GoalStatus.Completed)
+        .Select(goal => new SimilarityDocument(
+            "goal",
+            goal.Id.Value,
+            goal.Status.ToString(),
+            FirstNonEmptyLine(goal.Objective),
+            goal.MetadataTerminatedAt ?? goal.MetadataCreatedAt ??
+                goal.Timeline.OrderBy(item => item.OccurredAt).LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue,
+            goal.Objective)));
+    return corpus;
+}
+
+private static string RenderSimilarityHit(SimilarityHit hit)
+{
+    var idPrefix = hit.Id[..Math.Min(8, hit.Id.Length)];
+    var title = string.Join(' ', hit.Title
+        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    if (title.Length == 0)
+        title = "-";
+    var excerpt = hit.Excerpt is null ? "" : $" excerpt={hit.Excerpt}";
+    return $"- kind={hit.Kind} id={idPrefix} status={hit.Status} title={title} updated={hit.UpdatedAt:yyyy-MM-dd} rank={hit.Rank.ToString("G6", System.Globalization.CultureInfo.InvariantCulture)}{excerpt}";
+}
+
+private static string FirstNonEmptyLine(string text) =>
+    text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .FirstOrDefault() ?? "-";
 
 private static int? ParseOptionalNonNegativeInt(IReadOnlyList<string> parts, string flag)
 {

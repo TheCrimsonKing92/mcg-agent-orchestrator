@@ -49,7 +49,8 @@ internal sealed record PartitionWithinAttemptRetryReceipt(
     string? PolicySignal,
     string DiagnosticPath,
     string DiagnosticSha256,
-    int? NotExecutedTestCount = null);
+    int? NotExecutedTestCount = null,
+    bool? FlakeConfirmed = null);
 
 internal sealed record PartitionVerdictRecord(
     string GoalId,
@@ -63,7 +64,10 @@ internal sealed record PartitionVerdictRecord(
     string Verdict,
     IReadOnlyList<string> TestResultPaths,
     DateTimeOffset RecordedAt,
-    string? ClosureHash = null);
+    string? ClosureHash = null,
+    string? VerdictSource = null,
+    bool ProbeRan = false,
+    bool? ProbeConfirmedFlake = null);
 
 internal sealed record PartitionVerdictReuseReceipt(
     string PartitionId,
@@ -488,6 +492,83 @@ internal sealed class AcceptancePartitionVerdictCache
         Console.Out.Flush();
     }
 
+    internal AcceptanceCheckResult SelectPartitionVerdict(
+        AcceptanceManifestCheck check,
+        AcceptanceCheckResult firstRun,
+        AcceptanceCheckResult probe)
+    {
+        if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey) ||
+            firstRun.CompletionDecision is not { Passed: false, FailedPredicate: { Length: > 0 } } decision)
+        {
+            throw new InvalidOperationException(
+                $"Within-attempt probe for '{check.Name}' lacks a typed failed first-run decision.");
+        }
+
+        PartitionWithinAttemptRetryReceipt completedReceipt;
+        AcceptanceCheckResult verdict;
+        lock (_gate)
+        {
+            var retryIndex = _retries.FindLastIndex(receipt =>
+                receipt.PartitionId.Equals(partitionId, StringComparison.OrdinalIgnoreCase));
+            if (retryIndex < 0)
+            {
+                throw new InvalidOperationException(
+                    $"Within-attempt probe for '{check.Name}' has no recorded retry receipt.");
+            }
+
+            completedReceipt = _retries[retryIndex] with { FlakeConfirmed = probe.Passed };
+            _retries[retryIndex] = completedReceipt;
+            verdict = firstRun;
+            if (IsApparatusInvalidatingPredicate(decision.FailedPredicate))
+            {
+                _sharedApparatusInvalidation ??= new AcceptanceSharedApparatusInvalidation(
+                    new TempRootApparatusLossReceiptV1(
+                        1,
+                        AttemptId,
+                        $"apparatus-predicate:{decision.FailedPredicate}",
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow),
+                    []);
+                verdict = DecorateSharedApparatusFailure(
+                    firstRun with
+                    {
+                        FailureClassification = AcceptanceFailureClassifications.SharedGateApparatusInvalidated
+                    },
+                    _sharedApparatusInvalidation,
+                    partitionId);
+            }
+        }
+
+        var detail =
+            $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source=first_run " +
+            $"probe_ran=true flake_confirmed={probe.Passed.ToString().ToLowerInvariant()}";
+        AppendPartitionVerdictJournalEntries(
+            JournalPath,
+            [new PartitionVerdictJournalEntry(
+                $"{AttemptId}:probe:{partitionId}:{completedReceipt.RetryInvocationId}",
+                new GoalId(GoalId),
+                "acceptance:partition-within-attempt-probe",
+                "recorded",
+                DateTimeOffset.UtcNow,
+                Detail: detail,
+                BranchHeadSha: CandidateTreeSha,
+                MainHeadSha: MainSha,
+                PartitionVerdictCacheKey: cacheKey,
+                PartitionPairKey: PairKey,
+                PartitionId: partitionId,
+                PartitionFilterHash: filterHash,
+                PartitionVerdict: firstRun.Passed ? "GREEN" : "RED",
+                PartitionAttemptId: AttemptId,
+                PartitionRetryReceipt: completedReceipt)]);
+        return verdict;
+    }
+
+    private static bool IsApparatusInvalidatingPredicate(string failedPredicate) =>
+        failedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.MalformedTrx ||
+        AcceptanceFailureClassifications.IsEnvironmentalApparatus(failedPredicate);
+
     internal void RecordExecution(AcceptanceManifestCheck check, AcceptanceCheckResult result)
     {
         if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey))
@@ -498,6 +579,8 @@ internal sealed class AcceptancePartitionVerdictCache
         var closureHash = result.Passed ? ResolveClosureHash(check) : null;
         lock (_gate)
         {
+            var probeReceipt = _retries.LastOrDefault(receipt =>
+                receipt.PartitionId.Equals(partitionId, StringComparison.OrdinalIgnoreCase));
             _executed.Add(new PartitionVerdictExecutionReceipt(
                 partitionId,
                 result.Passed ? "GREEN" : "RED"));
@@ -513,7 +596,10 @@ internal sealed class AcceptancePartitionVerdictCache
                 result.Passed ? "GREEN" : "RED",
                 result.TestResultPaths ?? [],
                 DateTimeOffset.UtcNow,
-                closureHash));
+                closureHash,
+                "first_run",
+                probeReceipt is not null,
+                probeReceipt?.FlakeConfirmed));
         }
     }
 
@@ -580,7 +666,13 @@ internal sealed class AcceptancePartitionVerdictCache
         AppendPartitionVerdictJournalEntries(
             JournalPath,
             BuildPartitionVerdictJournalEntries(this, receipt, aggregateVerdict, attemptCount, summaryRecordedAt));
-        foreach (var record in _freshRecords.Where(record => record.Passed && !string.IsNullOrWhiteSpace(record.ClosureHash)))
+        var retriedPartitionIds = _retries
+            .Select(receipt => receipt.PartitionId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in _freshRecords.Where(record =>
+                     record.Passed &&
+                     !string.IsNullOrWhiteSpace(record.ClosureHash) &&
+                     !retriedPartitionIds.Contains(record.PartitionId)))
             _closureIndex.AppendGreen(ManifestIdentity, record.PartitionFilterHash, record.ClosureHash!, record.AttemptId, record.TestResultPaths);
         Console.WriteLine($"PARTITION_VERDICT_CACHE {receipt}");
         Console.Out.Flush();
@@ -684,10 +776,12 @@ internal sealed class AcceptancePartitionVerdictCache
     private static string FormatPartitionRetryReceipt(IReadOnlyList<PartitionWithinAttemptRetryReceipt> retries) =>
         retries.Count == 0
             ? "[]"
-            : "[" + string.Join("|", retries.Select(receipt =>
-                $"{{partition_id={receipt.PartitionId},predicate={receipt.FailedPredicate}," +
-                $"original_invocation_id={receipt.OriginalInvocationId},retry_invocation_id={receipt.RetryInvocationId}," +
-                $"diagnostic_path={receipt.DiagnosticPath},diagnostic_sha256={receipt.DiagnosticSha256}}}")) + "]";
+             : "[" + string.Join("|", retries.Select(receipt =>
+                 $"{{partition_id={receipt.PartitionId},predicate={receipt.FailedPredicate}," +
+                 $"original_invocation_id={receipt.OriginalInvocationId},retry_invocation_id={receipt.RetryInvocationId}," +
+                 $"diagnostic_path={receipt.DiagnosticPath},diagnostic_sha256={receipt.DiagnosticSha256}," +
+                 $"verdict_source=first_run,probe_ran=true," +
+                 $"flake_confirmed={receipt.FlakeConfirmed?.ToString().ToLowerInvariant() ?? "unknown"}}}")) + "]";
 
     private static string PartitionVerdictJournalPath(string worktreePath, string goalId) =>
         Path.Combine(
@@ -809,7 +903,10 @@ internal sealed class AcceptancePartitionVerdictCache
                 PartitionVerdictJournalOperation,
                 record.Passed ? "Completed" : "Failed",
                 record.RecordedAt,
-                $"partition {record.PartitionId} verdict {record.Verdict}",
+                $"partition {record.PartitionId} verdict {record.Verdict} " +
+                $"verdict_source={record.VerdictSource ?? "unknown-legacy"} " +
+                $"probe_ran={record.ProbeRan.ToString().ToLowerInvariant()} " +
+                $"flake_confirmed={record.ProbeConfirmedFlake?.ToString().ToLowerInvariant() ?? "not-applicable"}",
                 record.CandidateTreeSha,
                 record.MainSha,
                 PartitionVerdictCacheKey: record.CacheKey,

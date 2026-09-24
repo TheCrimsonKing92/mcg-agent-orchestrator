@@ -67,15 +67,72 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
     public void WithinAttemptRerun_GreenRerunAfterRedFirstRun_DoesNotPoisonNextAttemptVerdict()
     {
         var first = CreateCache("attempt-one", withinAttemptRerunEnabled: true);
-        Assert.True(first.ShouldRerunWithinAttempt(_partition, passed: false));
-        first.RecordExecution(_partition, Result(passed: true));
+        var firstRun = FailedResult(AcceptanceShardCompletionPredicates.NonzeroExit);
+        Assert.True(first.ShouldRerunWithinAttempt(_partition, firstRun.CompletionDecision));
+        first.RecordWithinAttemptRetry(
+            _partition,
+            firstRun,
+            "attempt-one:cache:0",
+            "attempt-one:cache:1",
+            new AcceptanceRetainedDiagnostic("first-run.err", "first-run-sha"));
+        var verdict = first.SelectPartitionVerdict(_partition, firstRun, Result(passed: true));
+        first.RecordExecution(_partition, verdict);
         Assert.NotNull(first.CompleteAttempt());
 
         var second = CreateCache("attempt-two");
-        var reused = Assert.IsType<AcceptanceCheckResult>(second.TryReuse(_partition));
+        Assert.Null(second.TryReuse(_partition));
+    }
 
-        Assert.True(reused.Passed);
-        Assert.Equal("attempt-one", reused.TestResultAttemptId);
+    [Theory]
+    [InlineData(AcceptanceShardCompletionPredicates.TimedOut)]
+    [InlineData(AcceptanceShardCompletionPredicates.ZeroTests)]
+    [InlineData(AcceptanceShardCompletionPredicates.IncompleteExecution)]
+    [InlineData(AcceptanceShardCompletionPredicates.NonzeroExit)]
+    public void SelectPartitionVerdict_HardRedFirstRun_PassingProbeNeverChangesVerdict(string predicate)
+    {
+        var cache = CreateCache($"hard-red-{predicate}", withinAttemptRerunEnabled: true);
+        var firstRun = FailedResult(predicate);
+        cache.RecordWithinAttemptRetry(
+            _partition,
+            firstRun,
+            $"hard-red-{predicate}:cache:0",
+            $"hard-red-{predicate}:cache:1",
+            new AcceptanceRetainedDiagnostic("first-run.err", "first-run-sha"));
+
+        var verdict = cache.SelectPartitionVerdict(_partition, firstRun, Result(passed: true));
+        cache.RecordExecution(_partition, verdict);
+        var completion = Assert.IsType<AcceptanceCheckResult>(cache.CompleteAttempt());
+
+        Assert.False(verdict.Passed);
+        Assert.Equal(predicate, verdict.CompletionDecision?.FailedPredicate);
+        Assert.Contains("{partition_id=cache,verdict=RED}", completion.ResultSummary, StringComparison.Ordinal);
+        Assert.Contains("verdict_source=first_run", completion.ResultSummary, StringComparison.Ordinal);
+        Assert.Contains("probe_ran=true", completion.ResultSummary, StringComparison.Ordinal);
+        Assert.Contains("flake_confirmed=true", completion.ResultSummary, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(AcceptanceShardCompletionPredicates.MissingTrx)]
+    [InlineData(AcceptanceShardCompletionPredicates.MalformedTrx)]
+    [InlineData(AcceptanceFailureClassifications.FocusedSelectionApparatusFailure)]
+    public void SelectPartitionVerdict_ApparatusFirstRun_InvalidatesAttemptAfterProbe(string predicate)
+    {
+        var cache = CreateCache($"apparatus-{predicate}", withinAttemptRerunEnabled: true);
+        var firstRun = FailedResult(predicate);
+        cache.RecordWithinAttemptRetry(
+            _partition,
+            firstRun,
+            $"apparatus-{predicate}:cache:0",
+            $"apparatus-{predicate}:cache:1",
+            new AcceptanceRetainedDiagnostic("first-run.err", "first-run-sha"));
+
+        var verdict = cache.SelectPartitionVerdict(_partition, firstRun, Result(passed: true));
+
+        Assert.False(verdict.Passed);
+        Assert.Equal(AcceptanceFailureClassifications.SharedGateApparatusInvalidated, verdict.FailureClassification);
+        Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, verdict.FailureCauseEvidence?.Cause);
+        Assert.Equal($"apparatus-predicate:{predicate}", cache.SharedApparatusInvalidation?.FirstReceipt.ReceiptId);
+        Assert.Empty(cache.SharedApparatusInvalidation?.AffectedOwners ?? []);
     }
 
     [Fact]
@@ -631,6 +688,23 @@ public sealed class AcceptancePartitionVerdictCacheTests : IDisposable
             passed ? 0 : 1,
             passed ? null : "failed",
             TestResultPaths: testResultPaths ?? []);
+
+    private AcceptanceCheckResult FailedResult(string predicate) =>
+        new(
+            _partition.Name,
+            false,
+            predicate == AcceptanceShardCompletionPredicates.NonzeroExit ? 1 : 0,
+            "first run failed",
+            FailureClassification: predicate,
+            CompletionDecision: new AcceptanceShardCompletionDecision(
+                false,
+                predicate,
+                predicate == AcceptanceShardCompletionPredicates.TimedOut,
+                predicate == AcceptanceShardCompletionPredicates.NonzeroExit ? 1 : 0,
+                predicate == AcceptanceShardCompletionPredicates.ZeroTests ? 0 : 1,
+                predicate == AcceptanceShardCompletionPredicates.IncompleteExecution ? 0 : 1,
+                predicate is AcceptanceShardCompletionPredicates.MissingTrx ? "missing" :
+                    predicate is AcceptanceShardCompletionPredicates.MalformedTrx ? "malformed" : "passed"));
 
     private static GoalAcceptanceVerifier.AcceptanceManifestCheck Partition(string id) => new()
     {

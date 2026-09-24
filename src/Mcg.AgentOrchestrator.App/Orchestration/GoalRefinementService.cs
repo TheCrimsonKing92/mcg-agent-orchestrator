@@ -186,6 +186,10 @@ internal sealed class GoalRefinementService
                 output.AcceptanceGateOwnedAcceptanceCriteria,
                 operatorOwnedCriteria);
         }
+        AddMarkerDerivedGateOwnedCriteria(
+            acceptanceCriteria,
+            operatorOwnedCriteria,
+            acceptanceGateOwnedCriteria);
         var scenarioBackedCriteria = ApplyFeasibilityResolutions(
             acceptanceCriteria,
             operatorOwnedCriteria,
@@ -1508,6 +1512,25 @@ internal sealed class GoalRefinementService
         {
             if (!target.Contains(criterion, StringComparer.OrdinalIgnoreCase))
                 target.Add(criterion);
+        }
+    }
+
+    private static void AddMarkerDerivedGateOwnedCriteria(
+        IReadOnlyList<string> acceptanceCriteria,
+        IReadOnlyList<string> operatorOwnedCriteria,
+        List<string> acceptanceGateOwnedCriteria)
+    {
+        foreach (var criterion in acceptanceCriteria)
+        {
+            if (!AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion) ||
+                AcceptanceCriterionOwnershipMarker.HasOperatorOwnershipPhrase(criterion) ||
+                operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase) ||
+                acceptanceGateOwnedCriteria.Contains(criterion, StringComparer.Ordinal))
+            {
+                continue;
+            }
+
+            acceptanceGateOwnedCriteria.Add(criterion);
         }
     }
 

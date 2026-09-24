@@ -27,6 +27,14 @@ internal sealed record AcceptanceFailingTestIndexRecord(
     bool InsideChangedPaths = false,
     string? EvidenceKind = null);
 
+internal sealed record AcceptanceFailingTestCensusRow(
+    string TestIdentity,
+    int DistinctGoals,
+    int OutsideChangedPathsFailures,
+    int TotalFailures,
+    DateTimeOffset FirstSeen,
+    DateTimeOffset LastSeen);
+
 /// <summary>
 /// The durable failing-test census. It lives at the root of the acceptance-gate-attempts family,
 /// beside the per-goal attempt directories rather than inside one: both retention walkers enumerate
@@ -144,6 +152,37 @@ internal sealed class AcceptanceFailingTestIndex
         records.Count(record =>
             record.Kind.Equals(AcceptanceFailingTestIndexKinds.ApparatusRegate, StringComparison.Ordinal) &&
             record.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase));
+
+    internal static IReadOnlyList<AcceptanceFailingTestCensusRow> BuildCensus(
+        IReadOnlyList<AcceptanceFailingTestIndexRecord> records,
+        int minimumGoals = 2,
+        DateTimeOffset? since = null)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        if (minimumGoals < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(minimumGoals));
+        }
+
+        return records
+            .Where(record =>
+                record.Kind.Equals(AcceptanceFailingTestIndexKinds.GateFailure, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(record.TestIdentity) &&
+                (since is null || record.RecordedAt >= since.Value))
+            .GroupBy(record => record.TestIdentity!, StringComparer.Ordinal)
+            .Select(group => new AcceptanceFailingTestCensusRow(
+                group.Key,
+                group.Select(record => record.GoalId).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                group.Count(record => !record.InsideChangedPaths),
+                group.Count(),
+                group.Min(record => record.RecordedAt),
+                group.Max(record => record.RecordedAt)))
+            .Where(row => row.DistinctGoals >= minimumGoals)
+            .OrderByDescending(row => row.DistinctGoals)
+            .ThenByDescending(row => row.TotalFailures)
+            .ThenBy(row => row.TestIdentity, StringComparer.Ordinal)
+            .ToArray();
+    }
 
     private void Prune(DateTimeOffset now)
     {
