@@ -71,7 +71,9 @@ internal sealed partial class ConductorDriver
                 facts = facts.WithVerifyingFindingObservation(verifyingFindingObservation);
             decision = FailedGoalRecoveryPolicy.Evaluate(facts);
         }
-
+        if (decision.Action is (FailedGoalRecoveryAction.CriterionRetry or FailedGoalRecoveryAction.Escalate) &&
+            TryRecoverFailedWorkerBuildCheck(goal, goalPrefix, policy, state, decision, pendingNotes) is { } buildRecovery)
+            return buildRecovery;
         if (decision.Action is FailedGoalRecoveryAction.ReconcileExitedDispatch or
             FailedGoalRecoveryAction.RetryTransient or
             FailedGoalRecoveryAction.RetryStale or
@@ -80,7 +82,6 @@ internal sealed partial class ConductorDriver
         {
             _beforeFailedGoalRecoveryEffect?.Invoke(goal, decision);
         }
-
         if (decision.Action == FailedGoalRecoveryAction.ReconcileExitedDispatch)
             return ReconcileFailedGoalExitedDispatches(goal, goalPrefix, policy, state, facts, decision);
 
@@ -99,7 +100,6 @@ internal sealed partial class ConductorDriver
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return Escalate(goal, goalPrefix, policy, state, decision.Reason);
         }
-
         if (decision.Backoff > TimeSpan.Zero)
             _emptyOutputBackoffDelay(decision.Backoff);
 
