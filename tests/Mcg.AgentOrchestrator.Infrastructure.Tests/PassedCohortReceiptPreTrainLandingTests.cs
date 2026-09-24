@@ -23,6 +23,17 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 "src/Mcg.AgentOrchestrator.Core/PrelandFirst.cs", "first");
             _ = CreateWorktreeCandidate(repo, second.Id,
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PrelandSecond.cs", "second");
+            foreach (var goal in new[] { first, second })
+            {
+                kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+                    ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
+                {
+                    AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
+                });
+                kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1,
+                    CriterionEvidenceOwner.Acceptance, "test",
+                    CriterionEvidenceScopes.FullAcceptanceGate);
+            }
             var trx = WritePassingTrx(repo, "preland-green.trx");
             var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
                 new AcceptanceVerificationResult(true, false, 0, null,
@@ -46,6 +57,14 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
             var third = CreateCompletedGoal(kernel, "Third ready goal", repo);
             _ = CreateWorktreeCandidate(repo, third.Id,
                 "tests/Mcg.AgentOrchestrator.Dashboard.Tests/PrelandThird.cs", "third");
+            kernel.RecordGoalRefinement(third.Id, new RefinedSpec(third.Objective,
+                ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
+            {
+                AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
+            });
+            kernel.MapCriterionEvidenceOwner(third.Id, 0, 1,
+                CriterionEvidenceOwner.Acceptance, "test",
+                CriterionEvidenceScopes.FullAcceptanceGate);
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
             var logPath = Path.Combine(workspace.OrchestratorDirectory, "logs", "preland.jsonl");

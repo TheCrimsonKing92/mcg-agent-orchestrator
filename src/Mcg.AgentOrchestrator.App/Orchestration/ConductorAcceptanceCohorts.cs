@@ -449,6 +449,7 @@ internal sealed partial class ConductorBatchLoop
             int tick,
             List<string> changedGoalLines)
     {
+        var landed = false;
         foreach (var selection in driver.FindLandablePassedCohortSelections(candidates))
         {
             if (selection.Members.Any(member => results.ContainsKey(member.GoalId.Value)))
@@ -468,10 +469,21 @@ internal sealed partial class ConductorBatchLoop
             // must be reconsidered on a later tick.
             if (run.Detail.StartsWith("outcome=passed", StringComparison.Ordinal))
             {
+                landed = true;
                 break;
             }
         }
 
+        if (landed)
+        {
+            candidates = candidates
+                .Where(candidate => !results.ContainsKey(candidate.GoalId.Value))
+                .Select(candidate => new ConductorSpeculativeAcceptanceCandidate(
+                    candidate.GoalId,
+                    driver.ProjectGateReadyCandidate(
+                        eligible.Single(goal => goal.Id == candidate.GoalId), policy)))
+                .ToArray();
+        }
         return (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
             candidates.Where(candidate => !results.ContainsKey(candidate.GoalId.Value)).ToArray());
     }

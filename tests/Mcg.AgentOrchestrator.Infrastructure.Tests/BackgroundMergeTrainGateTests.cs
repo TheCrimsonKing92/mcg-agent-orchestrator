@@ -120,6 +120,9 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                 {
                     AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
                 });
+                kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1,
+                    CriterionEvidenceOwner.Acceptance, "test",
+                    CriterionEvidenceScopes.FullAcceptanceGate);
             }
             _ = CreateWorktreeCandidate(repo, first.Id,
                 "tests/Mcg.AgentOrchestrator.Core.Tests/BackgroundFirst.cs", "first");
@@ -193,6 +196,9 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
             {
                 AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
             });
+            kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1,
+                CriterionEvidenceOwner.Acceptance, "test",
+                CriterionEvidenceScopes.FullAcceptanceGate);
         }
         _ = CreateWorktreeCandidate(repo, goals[0].Id,
             "tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs", "first");

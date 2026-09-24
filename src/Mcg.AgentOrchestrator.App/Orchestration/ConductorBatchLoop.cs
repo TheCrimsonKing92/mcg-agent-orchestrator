@@ -3100,17 +3100,21 @@ internal sealed partial class ConductorBatchLoop
         var productionCandidates = ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
             speculativeCandidates, cohortEligible, liveAttemptGoalIds, activeCohortMemberGoalIds);
         var trainAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
+        if (!suppressNewAcceptanceAdmission &&
+            driver.AcceptanceCohortsEnabled &&
+            cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
+            !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
+                goal.Status, _acceptanceEngineCircuit?.Read())))
+        {
+            (cohortEligible, productionCandidates) = LandPassedAcceptanceCohortsBeforeTrainSelection(
+                driver, policy, cohortEligible, productionCandidates, results, tick, changedGoalLines);
+        }
         var groupedAdmissionOpen = !suppressNewAcceptanceAdmission &&
             trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
                 goal.Status, _acceptanceEngineCircuit?.Read()));
-        if (groupedAdmissionOpen && driver.AcceptanceCohortsEnabled)
-        {
-            (cohortEligible, productionCandidates) = LandPassedAcceptanceCohortsBeforeTrainSelection(
-                driver, policy, cohortEligible, productionCandidates, results, tick, changedGoalLines);
-        }
         if (groupedAdmissionOpen &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             ConductorMergeTrainSelector.Select(
