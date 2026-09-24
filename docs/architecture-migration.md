@@ -6,22 +6,25 @@ This is the implementation record, not a completion claim. Goal state, dispatche
 
 ## Required outcomes
 
-| Stage | Delivered architectural boundary | Implementation / validation state |
+Status verified against source at `f4b5af424` on 2026-09-24. Every stage's first goal has landed; four stages have
+only their first slice. Details, evidence and open backlog are under [Status — 2026-09-24](#status--2026-09-24).
+
+| Stage | Delivered architectural boundary | Status (2026-09-24) |
 |---|---|---|
-| Queries | Inspection uses a read capability, no writer/outbox draining, bounded goal reads and compatible CLI behavior | First vertical slice `task`/`tasks` landed at `6497eb1c` after independent review, 14 focused tests, 30 operator runtime checks, a real write-positive control and full acceptance. Remaining inspection routes and startup hydration require migration. |
-| Transitions | Typed lifecycle commands, goal-version conflict handling, atomic state/outbox writes, truthful committed outcomes | Unpark slice `06b62ff8` landed at `ac09af58` with goal-scoped CAS, preserved human waits, truthful projection-failure reporting, stopped/live CLI observations and full acceptance. Recovery utility `1426d14b` landed at `0bd22b45`, closing its separately reproduced lost updates. Effectful park still requires atomic state/delivery intent and truthful effect outcomes. Preserve direct offline recovery. |
-| Application | UI-free dispatch/advancement/task operations; dashboard and CLI adapt shared typed results | Goal `f5db9754` depends on reconciliation `e9fb9f63` and transition `06b62ff8`; implementation must remove old ownership, not forward back to it. |
-| Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | Goal `6032a3d4` follows gate-floor `a1088fcb` and orphan ownership `99f7b1f1`. Tests need real isolation and preserved discovery. |
-| Workflow decisions | Conductor policy produces typed, attributed decisions; effect execution and completion are separately owned | Goal `42115646` follows application extraction and orphan ownership. First complete policy slice is the Failed lifecycle, preserving characterized precedence and existing retry/admission invariants. |
-| Hosts | Independently publishable headless runtime and optional dashboard; explicit composition and compatible entry points | Goal `ac61f820` follows application, acceptance and policy extraction. Measure dependency/publish/startup changes. |
+| Queries | Inspection uses a read capability, no writer/outbox draining, bounded goal reads and compatible CLI behavior | **Partial.** First slice `task`/`tasks` landed at `6497eb1c`. Only `board`, historical `trial-compare` and `task`/`tasks` use the read-only runner; every other inspection verb still takes the writer path, drains the outbox and fully hydrates state. |
+| Transitions | Typed lifecycle commands, goal-version conflict handling, atomic state/outbox writes, truthful committed outcomes | **Partial.** Unpark (`06b62ff8`, landed `ac09af58`) and the recovery utility (`1426d14b`, landed `0bd22b45`) are migrated. Park, abandon, cancel and supersede still use the untransacted path; effectful park still lacks an atomic state/delivery intent and truthful effect outcome. |
+| Application | UI-free dispatch/advancement/task operations; dashboard and CLI adapt shared typed results | **Done.** `f5db9754` landed as `adb57a8f0` (2026-09-15): application-owned dispatch, advancement and task operations; old `GoalManagementCommandService.Dispatches.cs` deleted; `ApplicationBoundaryConventionTests` forbid forwarding back. |
+| Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | **Partial.** Attempt ownership done: `6032a3d4` landed `209400a8b` (2026-09-18), plus follow-ons `03aaf13e`, `36b98d7a`, `d3d87e67`. Verifier decomposition not started: `GoalAcceptanceVerifier.cs` is still ~9630 lines and composes build, invocation, scheduling and adjudication itself. |
+| Workflow decisions | Conductor policy produces typed, attributed decisions; effect execution and completion are separately owned | **Partial.** Failed lifecycle is policy-owned (`42115646`, landed `615030e56`, 2026-09-17). Typed decisions since: Verified-stage escalation (`e20dfc1b`), operator-intent timeline payloads (`e389f7df`), atomic `adjudicate` intent on DecisionSpine (`798f1c58`). Created, dispatch, Verifying and Verified/landing are still decided inline with effects mixed in. |
+| Hosts | Independently publishable headless runtime and optional dashboard; explicit composition and compatible entry points | **Done.** `ac61f820` landed `cc9167aec` (2026-09-19). |
+| Persistent operation | Queryable runtime generation/readiness/ownership, safe update/child adoption and offline recovery | **Not started** beyond the pre-existing supervisor, loop handoff, lease and staging. No generation/readiness query surface, no child adoption (restarting with workers in flight is still unsafe), no fenced offline applier. |
+| Evidence/economics | Reconciled transition → execution → acceptance → integration → activation receipts, measured coverage and matched provider trials | **Ongoing.** Hermes identity slice `bbf6fe7c` (landed `a24b9c41`); ACP fit unproven. Source inventory `76443477` (landed `cd90a071`) cut estimated prompt tokens 29.6%. Since then: typed worker context (`29423867`, `f234d1db`), focused-evidence and receipt reuse (`29e8cbeb`, `a04f6e6e`), per-tick scan reductions (`1711c156`, `96211ff6`). No newer matched token-efficiency measurement was found. |
 
 The host boundary is implemented as a plain-SDK `Mcg.AgentOrchestrator.App` headless runtime and a
 one-way Web-SDK `Mcg.AgentOrchestrator.Dashboard` adapter. Use `scripts/publish-headless.ps1` and
 `scripts/publish-dashboard.ps1`; dashboard commands locate only a sibling dashboard executable or
 assembly and return exit code 78 with publish guidance when it is absent. The runtime conduct loop
 remains the sole periodic worktree-cleanup owner.
-| Persistent operation | Queryable runtime generation/readiness/ownership, safe update/child adoption and offline recovery | Build on current supervisor/lease/staging. Service lifecycle is independent of sole-writer migration. |
-| Evidence/economics | Reconciled transition → execution → acceptance → integration → activation receipts, measured coverage and matched provider trials | Hermes identity slice `bbf6fe7c` landed at `a24b9c41`; ACP fit remains unproven. Source inventory `76443477` landed at `cd90a071`, preserving the matched legitimate file set and cutting estimated prompt tokens 29.6%. Complete-log decision ownership moved to `ProcessLogReader` at `fee18b42`; bounded previews no longer determine whether a complete worker result exists. |
 
 ## Migration constraints
 
@@ -32,7 +35,68 @@ remains the sole periodic worktree-cleanup owner.
 - No concurrent ownership of the same migration seam. Sequence against live fixes, integrate current main through the conductor, then perform independent cross-family review and fresh execution validation.
 - For every claimed benefit, retain baseline/candidate identity, exact inputs, observed output, meaningful negative controls and the correct evidence owner. Missing telemetry is not zero usage or proof of absence of a write.
 
-## Current validation — 2026-09-06 12:47 UTC
+## Status — 2026-09-24
+
+Read-only verification at `f4b5af424`. Backlog premises were not re-verified individually; the backlog ids name
+the work, not a confirmed current defect.
+
+**Queries — remaining.** Move the remaining inspection verbs onto the read route and stop full hydration and outbox
+draining for reads.
+- `CliReadOnlyCommandRunner` handles only `board`, historical `trial-compare` and `task`/`tasks`. Every other verb,
+  including the QueryOnly set in `CliCommandCapabilities` (`status`, `next`, `goals`, `goal-events`, `timeline`,
+  `backlog-*`, `monitor-goal`, `config`), enters `CliPersistentStateRunner.ExecuteCommand`, which drains the
+  acceptance-retry audit outbox. `attention`, `readiness` and goal show are not classified QueryOnly.
+- Every CLI invocation still runs a full `stateRepository.LoadAsync()` in `Program.cs`; QueryOnly skips only worker
+  process tracking.
+- Open backlog: `3cdca621` (tick holds the write lock for the whole tick), `74802406` (journal/hydration overhaul),
+  `b9babf50` (verification output stored four times, ~45% of `state.db`), `eddcd123` (parallel read-only wrappers
+  invalidate each other's staged runtime), `37bfecf6` (gate-safe read-only receipt inspection).
+
+**Transitions — remaining.** Migrate park, abandon, cancel and supersede to the unpark pattern, with an atomic effect
+intent for park.
+- `ExecuteGoalLifecycleDispositionCommand` routes every lifecycle verb except `unpark-goal` to
+  `ExecuteCommandWithoutTransaction`. The operator-intent inbox carries retry, verify-manual, progress,
+  criterion-evidence map/record and adjudicate, but no lifecycle transitions.
+- Open backlog: `1f320d91` (park loses to the tick's cached goal; the unpark half is fixed), `96eae3fb` (park reports
+  cancelled while the worker tree is live), `f15cfda8` (typed transition receipts), `2861b909` (recover decisions
+  discarded), `8b067013` (stop-alias parsing). Parked goals `7131a80c` and `f57758c8` are related.
+
+**Application — residual only.** `GoalManagementCommandService` remains as a 393-line adapter across three files.
+Extracting Runtime/Conductor from App (`90309cf6`) is a separate follow-on.
+
+**Acceptance — remaining.** Extract the build, invocation, scheduling and adjudication owners from
+`GoalAcceptanceVerifier.cs` (still ~9630 lines, 47 types, essentially the same size as on 2026-09-06). Open
+backlog: `8aae1018` (six-seam decomposition), `201b9b3c`, `1d58c41b`.
+
+**Workflow decisions — remaining.** Policy slices for dispatch, Verifying and Verified/landing, following the Failed
+lifecycle pattern. `Core/Application/LandingDecision.cs` exists; its adoption was not measured. Open backlog:
+`0699a50d` and `1c32adf8` (decisions gated by prose), `98685651` (typed decision spine, now partly served by
+DecisionSpine), `877c430d`, `90309cf6`.
+
+**Hosts — residual only.** Dashboard sources still live physically under `src/Mcg.AgentOrchestrator.App/Dashboard`
+and are excluded from the App compile. The publish scripts are distribution-only; the repository launcher stages the
+App or Dashboard build itself. Backlog `834495f5` (published runtime loses dependencies, 2026-09-09) is open and
+was not re-verified.
+
+**Persistent operation — not started.** Needs a queryable runtime generation/readiness/ownership surface, safe update
+with child adoption, and a fenced offline applier. `ConductorContinuitySupervisor` and `ConductorLoopHandoff`
+predate this migration. `5a8a1fc8` (landed 2026-09-23) defers the max-duration stop while acceptance runs, which
+probably resolves backlog `9349d2f8` (still open, unverified). Open backlog: `850ce84b`, `feb30cb9`, `cd649d71`,
+`eab19492`, `df8311e1`, `b9b521f3` (tick runs IO inline).
+
+**Evidence/economics — ongoing.** Open backlog: `a32001ff` (cost telemetry), `57f6eebe` and `7a015307` (round
+ledger), `396fd25d` (receipt reuse across acceptance and landing), `140e2c3c`. Hermes remains TrialOnly.
+
+**Other open goals from this period.** Parked: `b5271c78`, `2f8d0ef4`, `48677446`, `7131a80c`, `f57758c8`.
+`09740603` has held at Verified since 2026-09-15. Cancelled: `a1088fcb` (gate floor), `93582504` (merge-train
+verification off the tick), `28292ab8`, `9182589a`.
+
+**Relation to the operating-model redesign (ratified 2026-09-23).** The redesign's first slice, the atomic
+`adjudicate` intent (`798f1c58`), builds on the Workflow decisions stage. Moving the remaining lifecycle
+transitions into the operator-intent inbox (Transitions) and typed policy decisions (Workflow decisions) is the
+substrate an event-dispatched Steward needs.
+
+## Validation — 2026-09-06 12:47 UTC (historical)
 
 - Main remains `6e1b66b5`; conductor `17752` is driving the curated board in bounded daemon mode from staged directory `1B478E1D2A2C86480A703F9A09C95216221476806FC62DEC4079DF0792930B75`. The migration stages above remain incomplete.
 - Hook correction `936ffd2e` explicitly declares PowerShell for both configured hooks. Seven managed tests passed. Actual Claude Code 2.1.261 / Opus 5 executed the benign echo and blocked the compound echo; actual Grok 1.0.5 / grok-4.6 executed a benign echo with both hooks discovered. Correct spaced roots and owned teardown were checked; both final fixture roots and the temporary provider home were removed. Candidate `972f68d5` includes these tracked receipts and passed fresh Opus review (`de5a430c-c3167d74-20260906123249.out.log`). Full acceptance remains required. The intermediate `29f78a96` failed the real Claude benign command because the default Git Bash shell parsed the PowerShell suffix; the abandoned inner-only wrapper also failed its PowerShell control. Neither is credited as successful evidence.
