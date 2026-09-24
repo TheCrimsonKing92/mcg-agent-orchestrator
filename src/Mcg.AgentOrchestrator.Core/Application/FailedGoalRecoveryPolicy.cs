@@ -376,16 +376,15 @@ public static class FailedGoalRecoveryPolicy
     {
         ArgumentNullException.ThrowIfNull(facts);
         var priorTasks = facts.PriorTasks;
-        var targetRole = facts.TriggeringRole == AgentRole.Tester
-            ? AgentRole.Developer
-            : facts.ReviewerTargetRole ?? AgentRole.Developer;
+        var targetRole = facts.ReviewerTargetRole ?? AgentRole.Developer;
 
         if (facts.ReviewerEscalatesToOperator)
         {
             return Selection(FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired, null, targetRole);
         }
 
-        var targetTaskId = facts.ExplicitTargetTaskId;
+        var targetTaskId = facts.TriggeringRole == AgentRole.Tester && targetRole == AgentRole.Tester
+            ? facts.TriggeringTaskId : facts.ExplicitTargetTaskId;
         if (targetTaskId is null && !facts.RequiresCommittedTarget)
             targetTaskId = priorTasks.LastOrDefault(task => task.RequiredRole == targetRole)?.TaskId;
         if (targetTaskId is null && facts.TriggeringRole == AgentRole.Reviewer && targetRole != AgentRole.Developer)

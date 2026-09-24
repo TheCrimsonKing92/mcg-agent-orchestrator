@@ -1737,9 +1737,9 @@ internal sealed partial class ConductorDriver
         }
 
         ReviewRetryRoute? reviewerRoute = null;
-        if (triggeringTask.RequiredRole == AgentRole.Reviewer)
+        if (triggeringTask.RequiredRole is AgentRole.Reviewer or AgentRole.Tester)
         {
-            if (goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 } &&
+            if (triggeringTask.RequiredRole == AgentRole.Reviewer && goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 } &&
                 !WorkerResultBlockers.TryFindCriteriaVerdicts(
                     triggeringTask.LastVerification,
                     out _,
@@ -1777,8 +1777,8 @@ internal sealed partial class ConductorDriver
         {
             observation = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
-                $"Reviewer needs-work blocker requires operator-owned evidence; auto-review-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
-                $"Route: {reviewerRoute?.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full reviewer output: {outputArtifact}");
+                $"{triggeringTask.RequiredRole} blocker requires operator-owned evidence; auto-retry skipped for task {triggeringTask.Id.Value[..8]}. " +
+                $"Route: {reviewerRoute?.Reason}. Findings: {TrimForConductorMessage(trigger.Finding)}. Full {triggeringTask.RequiredRole} output: {outputArtifact}");
             observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
             return true;
         }

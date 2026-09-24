@@ -101,7 +101,7 @@ public static class AgentOutputDirectives
         }
         else if (role is AgentRole.Reviewer or AgentRole.Tester)
         {
-            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned|acceptance-owned,location:{file,region,hunk?},description,evidence_request?:{selections:[{test_project,test_class}]}}; severity is required; evidence_request is optional on any category; [] when none>");
+            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned|acceptance-owned,location:{file,region,hunk?},description,evidence_request?:{selections:[{test_project,test_class}]}}; severity is required; open blocking test-evidence requires evidence_request for Tester and Reviewer; [] when none>");
             lines.Add("touched_anchors: <one-line JSON array of {file,region,hunk?} for prior finding anchors touched by this round's diff; [] when none>");
             if (role == AgentRole.Reviewer)
             {

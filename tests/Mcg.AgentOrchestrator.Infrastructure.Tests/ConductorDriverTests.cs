@@ -562,7 +562,7 @@ public sealed class ConductorDriverTests
             new ReviewFindingLocation("tests/receipts", id),
             description,
             FindingSeverity.Blocking,
-            FindingCategory.TestEvidence);
+            FindingCategory.Unspecified);
 
     internal static ReviewFinding EvidenceFindingWithRequest(
         string description,

@@ -2374,7 +2374,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         }
 
         const string blocker =
-            "Infrastructure.Tests FirstReceiptTests SecondReceiptTests ThirdReceiptTests " +
+            "The test receipt for Infrastructure.Tests FirstReceiptTests SecondReceiptTests ThirdReceiptTests " +
             "FourthReceiptTests FifthReceiptTests receipts are missing.";
         FailReviewerNeedsWork(kernel, goal, reviewer, blocker, findings: [EvidenceFinding(blocker)]);
         var focusedRuns = 0;
@@ -2413,7 +2413,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             PassVerification(kernel, goal, task);
         }
 
-        const string blocker = "Infrastructure.Tests ConductorDriverTests receipt is missing.";
+        const string blocker = "The test receipt for Infrastructure.Tests ConductorDriverTests is missing.";
         FailReviewerNeedsWork(kernel, goal, reviewer, blocker, findings: [EvidenceFinding(blocker)]);
         var focusedRuns = 0;
         TaskId? retriedTaskId = null;
@@ -2453,7 +2453,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         var goal = kernel.GetGoal(originalGoal.Id);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        const string blocker = "Infrastructure.Tests GoalAcceptanceVerifierTests receipt is missing.";
+        const string blocker = "The test receipt for Infrastructure.Tests GoalAcceptanceVerifierTests is missing.";
         FailReviewerNeedsWork(kernel, goal, reviewer, blocker, findings: [EvidenceFinding(blocker)]);
         TaskId? retriedTaskId = null;
         var driver = MakeDriver(
@@ -2534,7 +2534,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             PassVerification(kernel, goal, task);
         }
 
-        var blocker = "Required receipts: Infrastructure.Tests ConductorDriverTests and GoalAcceptanceVerifierTests.";
+        var blocker = "Required test receipt: Infrastructure.Tests ConductorDriverTests and GoalAcceptanceVerifierTests.";
         FailReviewerNeedsWork(
             kernel,
             goal,
@@ -2548,7 +2548,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
                     new ReviewFindingLocation("tests/receipts", "focused"),
                     blocker,
                     FindingSeverity.Blocking,
-                    FindingCategory.TestEvidence),
+                    FindingCategory.Unspecified),
                 new ReviewFinding(
                     "resolved-correctness",
                     ReviewFindingState.Resolved,

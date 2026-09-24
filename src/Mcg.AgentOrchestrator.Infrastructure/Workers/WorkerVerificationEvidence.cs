@@ -8,6 +8,7 @@ internal static class WorkerVerificationEvidence
     private const string LegacySnapshotUnavailableReason = "legacy-snapshot-authoritative-output-unavailable";
     private const int MalformedOutputExcerptMaxChars = 4000;
     private const int StructuredFieldMaxChars = 4000;
+    private const int LocatedWorkerResultMaxChars = 20000;
 
     internal sealed record ContextOutput(
         string Content,
@@ -119,7 +120,7 @@ internal static class WorkerVerificationEvidence
         {
             return new ContextProjection(
                 $"{receiptPrefix}; validation=non-authoritative; problem_excerpt={contextOutput.UnavailableReason ?? "authoritative output unavailable"}" +
-                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                    Environment.NewLine + BoundOutsideWorkerResult(output),
                 ContextProjectionValidation.NonAuthoritative);
         }
 
@@ -127,7 +128,7 @@ internal static class WorkerVerificationEvidence
         {
             return new ContextProjection(
                 $"{receiptPrefix}; validation=malformed; problem_excerpt={diagnostic}" +
-                    Environment.NewLine + BoundHeadAndTail(output, MalformedOutputExcerptMaxChars),
+                    Environment.NewLine + BoundOutsideWorkerResult(output),
                 ContextProjectionValidation.Malformed);
         }
 
@@ -188,6 +189,66 @@ internal static class WorkerVerificationEvidence
             $"...[{trimmed.Length - maxChars} chars omitted from malformed output; complete source remains at source_handle]..." +
             Environment.NewLine +
             trimmed[^tailChars..];
+    }
+
+    private static string BoundOutsideWorkerResult(string output)
+    {
+        var lines = output.Split('\n');
+        var lineStart = 0;
+        var openers = new List<(int Line, int Start)>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (WorkerResultParser.IsOpener(lines[i].Trim()))
+                openers.Add((i, lineStart));
+            lineStart += lines[i].Length + 1;
+        }
+        if (openers.Count == 0)
+            return BoundHeadAndTail(output, MalformedOutputExcerptMaxChars);
+
+        var selected = openers.Count - 1;
+        for (var i = selected; i >= 0; i--)
+        {
+            if (Array.FindIndex(lines, openers[i].Line + 1,
+                    line => WorkerResultParser.IsEndMarker(line.Trim())) < 0)
+                continue;
+            selected = i;
+            break;
+        }
+        var blockStart = openers[selected].Start;
+
+        lineStart = 0;
+        var blockEnd = output.Length;
+        var fallbackEnd = output.Length;
+        var insideBlock = false;
+        var foundEndMarker = false;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lineStart == blockStart)
+                insideBlock = true;
+            else if (insideBlock && WorkerResultParser.IsEndMarker(lines[i].Trim()))
+            {
+                blockEnd = lineStart + lines[i].Length;
+                foundEndMarker = true;
+                break;
+            }
+            else if (insideBlock && fallbackEnd == output.Length &&
+                     (string.IsNullOrWhiteSpace(lines[i]) || lines[i].TrimStart().StartsWith('#')))
+                fallbackEnd = lineStart;
+            lineStart += lines[i].Length + 1;
+        }
+        if (!foundEndMarker)
+            blockEnd = fallbackEnd;
+
+        var block = output[blockStart..blockEnd];
+        if (block.Length > LocatedWorkerResultMaxChars)
+        {
+            var bytes = Encoding.UTF8.GetBytes(block);
+            block = $"[oversized WORKER_RESULT block omitted; chars={block.Length}; bytes={bytes.Length}; " +
+                $"sha256={WorkerContextArtifact.Hash(bytes)}; complete source remains at source_handle]";
+        }
+        var before = BoundHeadAndTail(output[..blockStart], MalformedOutputExcerptMaxChars / 2);
+        var after = BoundHeadAndTail(output[blockEnd..], MalformedOutputExcerptMaxChars / 2);
+        return string.Join(Environment.NewLine, new[] { before, block, after }.Where(part => part.Length > 0));
     }
 
     public static bool TryRecoverLegacySnapshotStandardOutput(
