@@ -131,7 +131,8 @@ public sealed record TaskSnapshot(
     InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint = null,
     int ConductorRoutingRevision = 0,
     PreDispatchIntegrationReceipt? PendingPreDispatchIntegrationReceipt = null,
-    DateTimeOffset? LatestProviderBudgetRecoveryAt = null);
+    DateTimeOffset? LatestProviderBudgetRecoveryAt = null,
+    int WorkerBuildCheckRecoveryCount = 0);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

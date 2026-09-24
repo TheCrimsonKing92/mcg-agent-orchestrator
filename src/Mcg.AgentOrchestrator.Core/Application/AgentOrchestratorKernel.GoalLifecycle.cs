@@ -504,6 +504,17 @@ public sealed partial class AgentOrchestratorKernel
         RetryRoundKind? retryRoundKind = null) =>
         RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: true);
 
+    public TaskSpec RetryTaskAfterWorkerBuildCheckRecovery(GoalId goalId, TaskId taskId, string message)
+    {
+        var task = GetGoal(goalId).FindTask(taskId);
+        if (task.RequiredRole != AgentRole.Developer || task.WorkerBuildCheckRecoveryCount >= 2)
+            throw new InvalidOperationException("Worker build check recovery is unavailable for this task.");
+        var retried = RetryTaskCore(goalId, taskId, message, RetryCause.NewSourceFinding,
+            invalidateDownstream: true, RetryRoundKind.Mechanical, authoritativeRetryFeedback: true);
+        retried.IncrementWorkerBuildCheckRecoveryCount();
+        return retried;
+    }
+
     public TaskSpec RetryTaskAutomatically(
         GoalId goalId,
         TaskId taskId,
