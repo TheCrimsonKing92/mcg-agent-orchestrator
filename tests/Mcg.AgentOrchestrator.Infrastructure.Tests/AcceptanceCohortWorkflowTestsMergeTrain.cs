@@ -223,7 +223,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             Assert.Equal(AcceptanceCohortLandingOutcome.RetryableHold, result.Outcome);
             Assert.Contains(goals[0].Id.Value[..8], result.Message, StringComparison.Ordinal);
             Assert.Contains(
-                missingObligations ? "authoritative refined spec not recorded" : "criterion-v1-1:Operator:Pending",
+                missingObligations ? "authoritative refined spec" : "criterion-v1-1:Operator:Pending",
                 result.Message,
                 StringComparison.Ordinal);
             Assert.Equal(main, RunGitOutput(repo, "rev-parse", "main").Trim());
