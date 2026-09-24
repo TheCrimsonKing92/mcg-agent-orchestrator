@@ -30,8 +30,30 @@ internal sealed partial class ConductorDriver
                 HoldApparatusRedRegate(goal, goalPrefix, policy, acceptance, reading, regate),
             ApparatusRedDisposition.BoundExhausted bound =>
                 EscalateApparatusRedBound(goal, goalPrefix, policy, bound),
-            _ => null
+            ApparatusRedDisposition.Genuine genuine =>
+                RecordApparatusRedGenuine(goal, acceptance, genuine)
         };
+    }
+
+    private ConductorAdvanceResult? RecordApparatusRedGenuine(
+        Goal goal,
+        AcceptanceVerificationSummary acceptance,
+        ApparatusRedDisposition.Genuine genuine)
+    {
+        if (string.IsNullOrWhiteSpace(_executionDirectory))
+        {
+            return null;
+        }
+
+        var observedHeads = _resolveAcceptanceHeads(goal);
+        GoalOperationJournal.AcceptanceApparatusGenuine(
+            _executionDirectory,
+            goal,
+            acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha,
+            acceptance.MainHeadSha ?? observedHeads.MainHeadSha,
+            genuine.Reason);
+
+        return null;
     }
 
     /// <summary>

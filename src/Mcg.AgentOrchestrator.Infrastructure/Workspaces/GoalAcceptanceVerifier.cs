@@ -43,7 +43,8 @@ public sealed record AcceptanceCheckResult(
     string? TestProjectPath = null,
     IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null,
     int? ChildProcessId = null,
-    DateTimeOffset? ChildProcessStartedAt = null);
+    DateTimeOffset? ChildProcessStartedAt = null,
+    IReadOnlyList<string>? CoveredBy = null);
 
 public enum AcceptanceTestFailureOrigin
 {
@@ -857,7 +858,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         slnRun.Result.LeaseId,
                         slnRun.Result.DurationMilliseconds,
                         slnRun.Retried,
-                        $"covered by: {solutionCheck!.Name}"));
+                        $"covered by: {solutionCheck!.Name}",
+                        CoveredBy: [solutionCheck.Name]));
                 }
 
                 if (slnRun.Result.Passed)
@@ -3707,7 +3709,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     failedShard.LeaseId,
                     failedShard.DurationMilliseconds,
                     failedShard.LockRemediationApplied,
-                    $"covered by failed partition: {failedShard.Name}"));
+                    $"covered by failed partition: {failedShard.Name}",
+                    CoveredBy: [failedShard.Name]));
                 continue;
             }
 
@@ -3725,7 +3728,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 lastShard.LeaseId,
                 shardResults.Sum(result => result.DurationMilliseconds ?? 0),
                 shardResults.Any(result => result.LockRemediationApplied),
-                $"covered by {shardResults.Length} partitioned checks"));
+                $"covered by {shardResults.Length} partitioned checks",
+                CoveredBy: shardResults.Select(result => result.Name).ToArray()));
         }
     }
 
@@ -3764,7 +3768,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 coveringResult.LeaseId,
                 coveringResult.DurationMilliseconds,
                 coveringResult.LockRemediationApplied,
-                $"covered by: {coveringCheck.Name}"));
+                $"covered by: {coveringCheck.Name}",
+                CoveredBy: [coveringCheck.Name]));
         }
     }
 

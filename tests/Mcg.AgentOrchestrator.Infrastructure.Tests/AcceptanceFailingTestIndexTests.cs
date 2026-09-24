@@ -140,6 +140,34 @@ public sealed class AcceptanceFailingTestIndexTests
         Assert.Equal(0, AcceptanceFailingTestIndex.CountRegates(records, "goal-c"));
     }
 
+    [Fact(DisplayName = "AcceptanceFailingTestIndex_census_counts_orders_and_filters_occurrences")]
+    public void CensusCountsOrdersAndFiltersOccurrences()
+    {
+        var now = DateTimeOffset.Parse("2026-09-23T12:00:00Z", null);
+        const string secondIdentity = "Example.Tests.OtherTests.RacesOnClock";
+        var records = new[]
+        {
+            Census("goal-a", now.AddDays(-3), Identity),
+            Census("goal-b", now.AddDays(-2), Identity) with { InsideChangedPaths = true },
+            Census("goal-b", now.AddDays(-1), Identity),
+            Census("goal-a", now.AddDays(-1), secondIdentity),
+            Census("goal-b", now, secondIdentity),
+            Regate("goal-c", now)
+        };
+
+        var rows = AcceptanceFailingTestIndex.BuildCensus(records);
+
+        Assert.Equal([Identity, secondIdentity], rows.Select(row => row.TestIdentity));
+        Assert.Equal(2, rows[0].DistinctGoals);
+        Assert.Equal(2, rows[0].OutsideChangedPathsFailures);
+        Assert.Equal(3, rows[0].TotalFailures);
+        Assert.Equal(now.AddDays(-3), rows[0].FirstSeen);
+        Assert.Equal(now.AddDays(-1), rows[0].LastSeen);
+        var filtered = Assert.Single(AcceptanceFailingTestIndex.BuildCensus(records, minimumGoals: 2, since: now.AddDays(-1)));
+        Assert.Equal(secondIdentity, filtered.TestIdentity);
+        Assert.Equal(now.AddDays(-1), filtered.FirstSeen);
+    }
+
     [Fact(DisplayName = "AcceptanceFailingTestIndex_survives_concurrent_appends")]
     public void SurvivesConcurrentAppends()
     {

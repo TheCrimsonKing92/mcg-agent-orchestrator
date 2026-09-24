@@ -40,6 +40,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
     [Xunit.InlineData(new[] { "status", "--help" }, "status", "-h")]
     [Xunit.InlineData(new[] { "status", "--help" }, "status", "--tasks-only")]
+    [Xunit.InlineData(new[] { "flake-census", "--help" }, "flake-census", "--min-goals")]
     public void CliHelpPrintsUsageWithoutExecutingCommand(string[] args, string synopsisToken, string optionToken)
     {
         var root = CreateTempDirectory();

@@ -35,6 +35,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
 
     var handled =
         TryExecuteFundamentalsAlias(command, parts, context) ??
+        TryExecuteFlakeCensusCommand(command, parts, context) ??
         TryExecuteSystemCommand(command, parts, context) ??
         TryExecuteGoalCommand(command, parts, context) ??
         TryExecuteTaskCommand(command, parts, context) ??
