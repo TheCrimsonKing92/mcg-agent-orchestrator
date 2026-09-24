@@ -25,7 +25,7 @@ public sealed record MergeTrainMemberBinding(
 
 public sealed class MergeTrainIdentity
 {
-    public const string Version = "merge-train-v1";
+    public const string Version = "merge-train-v2";
 
     private MergeTrainIdentity(
         IReadOnlyList<MergeTrainMemberBinding> members,
@@ -67,13 +67,14 @@ public sealed class MergeTrainIdentity
         var tree = MergeTrainMemberBinding.NormalizeRevision(trainTreeRevision, nameof(trainTreeRevision));
         ArgumentException.ThrowIfNullOrWhiteSpace(manifestIdentity);
         using var stream = new MemoryStream();
+        // Rebase commit metadata can change across materializations; the tested tree and
+        // original candidate revisions bind the content that the receipt covers.
         foreach (var field in new[] { Version, main, tree, manifestIdentity.Trim() }
                      .Concat(members.SelectMany(member => new[]
                      {
                          member.GoalId.Value,
                          member.BranchRevision,
-                         member.CandidateRevision,
-                         member.RebasedTrainHeadRevision!
+                         member.CandidateRevision
                      })))
         {
             var bytes = Encoding.UTF8.GetBytes(field);

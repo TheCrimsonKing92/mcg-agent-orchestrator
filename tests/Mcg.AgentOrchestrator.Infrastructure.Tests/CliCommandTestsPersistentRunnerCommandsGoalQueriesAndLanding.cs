@@ -427,6 +427,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         EnsureGitRepository(root);
+        RunGit(root, "branch", "-M", "main");
         RunGit(root, "add", ".agents/skills");
         RunGit(root, "commit", "-m", "add test skills");
         var kernel = new AgentOrchestratorKernel();
