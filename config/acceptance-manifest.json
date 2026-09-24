@@ -96,7 +96,7 @@
       },
       {
         "name": "Dotnet build slots",
-        "filter": "FullyQualifiedName~GoalWorktreeAcceptanceContentionTests|FullyQualifiedName~WorkerDispatchAcceptanceAdmissionTests|FullyQualifiedName~ConductorCrossTickTests|FullyQualifiedName~DependencyOrderingRegressionTests|FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~OperatorIntentAdjudicationTests|FullyQualifiedName~DotnetBuildEnvironmentManagerTests|FullyQualifiedName~LocalProcessVerifierDotnetBuildSlotTests|FullyQualifiedName~LocalProcessVerifierStaticHookTests",
+        "filter": "FullyQualifiedName~GoalWorktreeAcceptanceContentionTests|FullyQualifiedName~WorkerDispatchAcceptanceAdmissionTests|FullyQualifiedName~ConductorCrossTickTests|FullyQualifiedName~DependencyOrderingRegressionTests|FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~OperatorIntentAdjudicationTests|FullyQualifiedName~DotnetBuildEnvironmentManagerTests|FullyQualifiedName~LocalProcessVerifierDotnetBuildSlotTests|FullyQualifiedName~LocalProcessVerifierStaticHookTests|FullyQualifiedName~StructuralCoveragePermitWaitTests",
         "estimatedSerialSeconds": 225.1,
         "exclusiveResourceKeys": [ "xunit:DotnetBuildSlots" ]
       },
@@ -111,7 +111,7 @@
       },
       {
         "name": "Goal acceptance build slots",
-        "filter": "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests",
+        "filter": "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~StructuralCoverageVerifierPermitWaitTests",
         "estimatedSerialSeconds": 335.4,
         "exclusiveResourceKeys": [ "xunit:JobAccounting" ]
       },

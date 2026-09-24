@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoveragePermitWait : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVerifierTestBase
 {
     [Fact]
     public async Task StructuralCoverageIoRetryWaitsWhenAnotherHolderTakesReleasedPermit()
