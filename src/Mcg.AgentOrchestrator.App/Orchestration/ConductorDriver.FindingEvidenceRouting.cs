@@ -8,6 +8,54 @@ internal sealed partial class ConductorDriver
 {
     private readonly HashSet<string> _resolvedMissingBaselineRequests = new(StringComparer.Ordinal);
 
+    private void MarkFocusedEvidenceAttemptIfReady(
+        ConductorFocusedEvidenceRequestContext? requestContext,
+        ConductorParallelAcceptanceAttemptDecision attemptDecision)
+    {
+        if (requestContext?.RunBaselineArm == true &&
+            attemptDecision.Run?.Exception is not (
+                DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException) &&
+            attemptDecision.Attempt.Outcome is not (
+                ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot or
+                ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
+                ConductorParallelAcceptanceAttemptOutcome.Cancelled or
+                ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred or
+                ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable or
+                ConductorParallelAcceptanceAttemptOutcome.StaleCandidate))
+        {
+            return;
+        }
+
+        _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+    }
+
+    private bool TryRestorePendingBaselineCandidate(
+        Goal goal,
+        string request,
+        string candidateSha,
+        ConductorFocusedEvidenceRequestContext requestContext,
+        out FocusedEvidenceRunResult evidence,
+        out ConductorParallelAcceptanceAttempt? evidenceAttempt)
+    {
+        evidence = null!;
+        evidenceAttempt = _focusedEvidenceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value])
+            .LastOrDefault(attempt =>
+                attempt.FocusedEvidenceRunsBaselineArm &&
+                string.Equals(attempt.BranchHeadSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(attempt.FindingRoundFingerprint, requestContext.FindingRoundFingerprint, StringComparison.Ordinal) &&
+                string.Equals(attempt.FocusedEvidenceBatchId, requestContext.BatchId + "-baseline-arm", StringComparison.Ordinal) &&
+                string.Equals(attempt.FocusedEvidenceRequest, request, StringComparison.Ordinal));
+        if (evidenceAttempt is null)
+        {
+            return false;
+        }
+
+        evidence = evidenceAttempt.CandidateEvidenceBeforeBaseline ??
+            throw new InvalidDataException(
+                $"Baseline attempt {evidenceAttempt.AttemptId} has no saved candidate evidence.");
+        return true;
+    }
+
     private bool TryResolveMissingBaseline(
         Goal goal,
         TaskSpec requestingTask,
@@ -55,7 +103,8 @@ internal sealed partial class ConductorDriver
         var baselineContext = requestContext with
         {
             BatchId = requestContext.BatchId + "-baseline-arm",
-            RunBaselineArm = true
+            RunBaselineArm = true,
+            CandidateEvidenceBeforeBaseline = initialEvidence
         };
         if (!TryReconcileFocusedEvidenceAttempt(
                 goal, policy, batch.Request, candidateSha, "finding-baseline-arm", baselineContext,
@@ -74,7 +123,7 @@ internal sealed partial class ConductorDriver
             }
             return RecordMissingBaselineAndRoute(
                 goal, requestingTask, batch, candidateSha, findingRoundFingerprint, requestIdentity,
-                candidateReceiptId, initialEvidence, initialArms, baselineAttempt.ResultPath,
+                candidateReceiptId, initialEvidence, initialArms, baselineAttempt, baselineAttempt.ResultPath,
                 $"{baselineAttempt.Outcome}: {baselineAttempt.Detail ?? decision.Evidence}", out decision);
         }
 
@@ -91,12 +140,13 @@ internal sealed partial class ConductorDriver
                 : $"baseline arm {baseline.Disposition}: {baseline.Summary}";
             return RecordMissingBaselineAndRoute(
                 goal, requestingTask, batch, candidateSha, findingRoundFingerprint, requestIdentity,
-                candidateReceiptId, initialEvidence, initialArms, baselineAttempt?.ResultPath,
+                candidateReceiptId, initialEvidence, initialArms, baselineAttempt!, baselineAttempt?.ResultPath,
                 reason, out decision);
         }
 
         evidence = baselineEvidence;
         arms = baselineArms;
+        _focusedEvidenceAttemptCoordinator.MarkReconciled(baselineAttempt!);
         return true;
     }
 
@@ -110,6 +160,7 @@ internal sealed partial class ConductorDriver
         string receiptId,
         FocusedEvidenceRunResult candidateEvidence,
         IReadOnlyList<FindingEvidenceArmReceipt> candidateArms,
+        ConductorParallelAcceptanceAttempt baselineAttempt,
         string? resultPath,
         string reason,
         out FailedGoalFindingObservation decision)
@@ -138,6 +189,7 @@ internal sealed partial class ConductorDriver
             $"result_path={resultPath ?? "none"}; reason={TrimForConductorMessage(reason)}");
         TryRaiseMissingBaselineNotice(goal, guard, receiptId, resultPath, reason);
         _resolvedMissingBaselineRequests.Add(guard);
+        _focusedEvidenceAttemptCoordinator.MarkReconciled(baselineAttempt);
         var candidate = candidateArms.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
         var attribution = new ActionableCandidateRedAttribution(
             batch.Findings, candidate.FailingTestIdentities ?? []);

@@ -146,7 +146,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     // renewal. Null means an attempt written before generation identity was recorded: unknown, not mine.
     int? ConductorGenerationId = null,
     int? AdoptedByGenerationId = null,
-    bool FocusedEvidenceRunsBaselineArm = false)
+    bool FocusedEvidenceRunsBaselineArm = false,
+    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -155,7 +156,8 @@ internal sealed record ConductorFocusedEvidenceRequestContext(
     string FindingRoundFingerprint,
     string BatchId,
     IReadOnlyList<FindingEvidenceRequestDisposition> RequestDispositions,
-    bool RunBaselineArm = false);
+    bool RunBaselineArm = false,
+    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null);
 
 internal sealed record ConductorParallelAcceptanceAttemptDecision(
     ConductorParallelAcceptanceAttemptDecisionKind Kind,
@@ -2003,6 +2005,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             ConductEventLogPath: _conductEventLogWriter?.CurrentPath,
             FocusedEvidenceBatchId: focusedBatchId,
             FocusedEvidenceRunsBaselineArm: requestContext?.RunBaselineArm ?? false,
+            CandidateEvidenceBeforeBaseline: requestContext?.CandidateEvidenceBeforeBaseline,
             FocusedEvidenceMemberRequests: focusedMembers,
             FocusedEvidenceRequestDisposition: requestContext?.RequestDispositions
                 .Select(disposition => disposition.Disposition)

@@ -174,4 +174,103 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DetachedBaselineAttemptIsReconciledAsBaselineAcrossTicks(bool processDies)
+    {
+        const string candidateSha = "abc1234";
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, ".orchestrator"));
+            var (kernel, goal) = SoftwareGoal();
+            var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            {
+                PassVerification(kernel, goal, task, hasCommittedChanges: task == developer);
+            }
+            FailReviewerNeedsWork(kernel, goal, reviewer, "candidate RED requires a baseline",
+                findings: [EvidenceFindingWithRequest("Find the failing test", id: "detached-baseline",
+                    classes: ["ConductorDriverTests"])]);
+
+            var launches = 0;
+            var outcomes = 0;
+            var retries = 0;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7100 + ++launches),
+                acquireStableSlotLease: (_, _) => null,
+                recentHeartbeatGrace: TimeSpan.Zero);
+            var driver = MakeDriver(
+                getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
+                focusedEvidenceAttemptCoordinator: coordinator,
+                executionDirectory: root,
+                getLandingFileScopes: _ => [],
+                runFocusedEvidence: (_, request) => CandidateRedFindingEvidence(
+                    request, candidateSha, "OutsideTests.FailingMethod(passed: True)"),
+                retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                {
+                    Assert.Equal(developer.Id, taskId);
+                    retries++;
+                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+                },
+                recordFindingEvidenceRequest: (goalId, taskId, message) =>
+                    kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+                recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                {
+                    outcomes++;
+                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
+                });
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            var candidateAttempt = Assert.Single(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
+            Assert.False(candidateAttempt.FocusedEvidenceRunsBaselineArm);
+            CompleteCandidateOnly(candidateAttempt);
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            var baselineAttempt = Assert.Single(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
+            Assert.True(baselineAttempt.FocusedEvidenceRunsBaselineArm);
+            Assert.NotNull(baselineAttempt.CandidateEvidenceBeforeBaseline);
+            if (!processDies) CompleteCandidateOnly(baselineAttempt);
+
+            for (var tick = 0; tick < 4; tick++)
+            {
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+            }
+
+            Assert.Equal(2, launches);
+            Assert.Equal(1, outcomes);
+            Assert.Equal(1, retries);
+            Assert.Single(goal.Timeline.Where(evt =>
+                evt.Message.Contains("disposition=baseline-arm-absent", StringComparison.Ordinal)));
+            Assert.Single(CollaborationItemStore.OpenExisting(Path.Combine(root, ".orchestrator"))
+                .ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+            Assert.False(string.IsNullOrWhiteSpace(reviewer.VerificationHistory.Last()
+                .MergedReviewFindings!.Single(finding => finding.StableId == "detached-baseline")
+                .EvidenceOutcome?.ReceiptId));
+
+            void CompleteCandidateOnly(ConductorParallelAcceptanceAttempt attempt)
+            {
+                var candidate = ConductorParallelAcceptanceCandidate.Create(
+                    goal, 0, [], candidateSha, mainHeadSha: null);
+                ConductorParallelAcceptanceAttemptCoordinator.RunPreReviewEvidenceAttempt(
+                    coordinator, attempt, candidate, ConductorAutonomyPolicy.Permissive,
+                    (attemptCandidate, request, _, _, _) =>
+                    {
+                        var red = CandidateRedFindingEvidence(
+                            request, candidateSha, "OutsideTests.FailingMethod(passed: True)");
+                        return ConductorParallelAcceptanceRunResult.Focused(attemptCandidate,
+                            red with { Arms = red.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray() });
+                    });
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

@@ -2207,7 +2207,6 @@ internal sealed partial class ConductorDriver
                 "Evidence requests could not run because the executor was unavailable.");
             return true;
         }
-
         var initialRequestDispositions = BuildInitialRequestDispositions(batches, runnable);
         var executedRequestDispositions = initialRequestDispositions
             .Where(disposition => disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal))
@@ -2216,15 +2215,16 @@ internal sealed partial class ConductorDriver
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
             initialRequestDispositions);
-        if (!TryReconcileFocusedEvidenceAttempt(
+        if (!TryRestorePendingBaselineCandidate(goal, runnable.Request, candidateSha!, requestContext,
+                out var evidence, out var evidenceAttempt) && !TryReconcileFocusedEvidenceAttempt(
                 goal,
                 policy,
                 runnable.Request,
                 candidateSha!,
                 "finding-requested",
                 requestContext,
-                out var evidence,
-                out var evidenceAttempt,
+                out evidence,
+                out evidenceAttempt,
                 out decision, out _))
         {
             if (decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
@@ -2916,7 +2916,7 @@ internal sealed partial class ConductorDriver
                 BuildLockBlockedException or
                 OperationCanceledException)
         {
-            _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+            MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
                 $"Background {source} focused evidence did not run ({attemptDecision.Attempt.Outcome}); " +
@@ -2924,7 +2924,7 @@ internal sealed partial class ConductorDriver
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"));
             return false;
         }
-        _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+        MarkFocusedEvidenceAttemptIfReady(requestContext, attemptDecision);
         if (attemptDecision.Run?.Exception is { } backgroundFailure)
         {
             decision = FailedGoalFindingObservation.Observed(
