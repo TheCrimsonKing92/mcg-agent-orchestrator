@@ -1972,28 +1972,28 @@ internal sealed partial class ConductorDriver
             .ToArray();
     }
 
-    private static ReviewRetryRoute ResolveReviewerRetryRoute(
+    private static ReviewRetryRoute? ResolveReviewerRetryRoute(
         Goal goal,
         TaskSpec reviewerTask,
         string blockerProse)
     {
         try
         {
-            var openBlockingFindings = AutoReviewRetryConvergenceBriefBuilder
+            var findings = AutoReviewRetryConvergenceBriefBuilder
                 .ReadStructuredReviewFindingState(goal, reviewerTask)
-                .Where(finding =>
-                    finding.State == ReviewFindingState.Open &&
-                    finding.Severity == FindingSeverity.Blocking)
+                .Where(finding => finding.State == ReviewFindingState.Open &&
+                    finding.Severity == FindingSeverity.Blocking &&
+                    (reviewerTask.RequiredRole != AgentRole.Tester || finding.Category != FindingCategory.Unspecified))
                 .ToArray();
-            return ReviewFindingRouting.Resolve(openBlockingFindings, blockerProse);
+            return reviewerTask.RequiredRole == AgentRole.Tester && findings.Length == 0
+                ? null : ReviewFindingRouting.Resolve(findings, blockerProse);
         }
         catch (Exception ex) when (
             ex is ReviewFindingConvergenceException or InvalidOperationException or ArgumentException)
         {
-            return ReviewFindingRouting.Resolve([], blockerProse);
+            return reviewerTask.RequiredRole == AgentRole.Tester ? null : ReviewFindingRouting.Resolve([], blockerProse);
         }
     }
-
     private static bool HasCommittedOutput(TaskSpec task) =>
         VerifyingFindingCurrency.HasCommittedOutput(task);
 
