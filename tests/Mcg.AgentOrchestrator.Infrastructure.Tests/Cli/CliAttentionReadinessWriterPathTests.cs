@@ -11,6 +11,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("attention", "answer", "abc10000", "id", "answer")]
     [Xunit.InlineData("attention", "dismiss", "abc10000")]
     [Xunit.InlineData("attention", "dismiss", "--item", "item-id")]
+    [Xunit.InlineData("readiness")]
     [Xunit.InlineData("readiness", "abc10000")]
     public async Task MutatingFormsStayOnWriterPath(params string[] args)
     {
@@ -27,6 +28,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("attention", "answer", "abc10000", "missing", "answer")]
     [Xunit.InlineData("attention", "dismiss", "abc10000")]
     [Xunit.InlineData("attention", "dismiss", "--item", "missing")]
+    [Xunit.InlineData("readiness")]
     [Xunit.InlineData("readiness", "abc10000")]
     public async Task MutatingFormsExecuteWriterPathAndDrainOutbox(params string[] args)
     {
