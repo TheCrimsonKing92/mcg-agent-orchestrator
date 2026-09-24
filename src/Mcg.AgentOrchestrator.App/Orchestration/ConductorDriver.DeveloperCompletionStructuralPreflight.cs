@@ -11,8 +11,16 @@ internal sealed partial class ConductorDriver
 
     private Func<string, DeveloperCompletionStructuralFindings> _runDeveloperCompletionStructuralPreflight =
         DeveloperCompletionStructuralPreflight.Evaluate;
+    private Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? _retryDeveloperAfterStructuralPreflight;
     private TimeSpan _developerCompletionStructuralPreflightBound =
         DefaultDeveloperCompletionStructuralPreflightBound;
+
+    internal void ConfigureDeveloperCompletionStructuralPreflightRetry(AgentOrchestratorKernel kernel)
+    {
+        _retryDeveloperAfterStructuralPreflight = (goalId, taskId, message, retryRoundKind, cause) =>
+            kernel.RetryTaskAutomatically(goalId, taskId, message, cause,
+                retryRoundKind: retryRoundKind, authoritativeRetryFeedback: true);
+    }
 
     internal void OverrideDeveloperCompletionStructuralPreflightForTests(
         Func<string, DeveloperCompletionStructuralFindings> run,
@@ -100,7 +108,7 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        _retryTask(
+        (_retryDeveloperAfterStructuralPreflight ?? _retryTask)(
             goal.Id,
             developerTask.Id,
             note,

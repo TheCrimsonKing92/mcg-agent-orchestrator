@@ -58,7 +58,7 @@ public static class OrchestratorBuildEvidenceCheck
         IEnumerable<string> changedPaths,
         IEnumerable<string> dirtyPaths,
         bool failedWorkerBuildCheck,
-        Func<bool> hasWorkerBuildEvidence,
+        Func<WorkerBuildReceiptVerdict> workerBuildReceipt,
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> runBuildCheck)
     {
         if (failedWorkerBuildCheck)
@@ -71,7 +71,12 @@ public static class OrchestratorBuildEvidenceCheck
             role,
             changedPaths,
             dirtyPaths);
-        if (projects.Count == 0 || hasWorkerBuildEvidence())
+        if (projects.Count == 0)
+        {
+            return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
+        }
+        var receipt = workerBuildReceipt();
+        if (receipt.Matches)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
@@ -93,13 +98,13 @@ public static class OrchestratorBuildEvidenceCheck
             return new(
                 MissingEvidence: true,
                 BuildFailed: false,
-                Diagnostic: $"build_evidence_attempt=orchestrator; {projectsDiagnostic}; no compile verdict produced. {boundedOutput}".Trim());
+                Diagnostic: $"worker_build_receipt={receipt.Reason}; build_evidence_attempt=orchestrator; {projectsDiagnostic}; no compile verdict produced. {boundedOutput}".Trim());
         }
 
         return new(
             MissingEvidence: false,
             BuildFailed: result.ExitCode != 0,
-            Diagnostic: $"build_evidence_producer=orchestrator; {projectsDiagnostic}; {boundedOutput}".Trim());
+            Diagnostic: $"worker_build_receipt={receipt.Reason}; build_evidence_producer=orchestrator; {projectsDiagnostic}; {boundedOutput}".Trim());
     }
 
     public static string BuildCommand(IReadOnlyList<string> projects)

@@ -102,6 +102,9 @@ public abstract class CliGoalUnparkTestSupport : CliTaskQueryTestSupport
         public int WholeKernelLoadCount { get; private set; }
         public int WholeKernelSaveCount { get; private set; }
         public int ApplicationCount { get; private set; }
+        public int StateApplicationCount { get; private set; }
+        public string? StateOperationName { get; private set; }
+        public Func<int, GoalStateSnapshot, CancellationToken, Task>? StateAfterApplication { get; init; }
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -221,6 +224,33 @@ public abstract class CliGoalUnparkTestSupport : CliTaskQueryTestSupport
             GoalId goalId,
             Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
             CancellationToken cancellationToken = default) =>
-            inner.TransactGoalStateAsync(goalId, transaction, cancellationToken);
+            TransactGoalStateAsync("test:goal-state", goalId, transaction, cancellationToken);
+
+        public Task<T> TransactGoalStateAsync<T>(
+            string operationName,
+            GoalId goalId,
+            Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            StateOperationName = operationName;
+            return inner.TransactGoalStateAsync(
+                operationName,
+                goalId,
+                async (state, token) =>
+                {
+                    var application = await transaction(state, token);
+                    if (application.ShouldSave && state is not null)
+                    {
+                        StateApplicationCount++;
+                        if (StateAfterApplication is not null)
+                        {
+                            await StateAfterApplication(StateApplicationCount, state, token);
+                        }
+                    }
+
+                    return application;
+                },
+                cancellationToken);
+        }
     }
 }

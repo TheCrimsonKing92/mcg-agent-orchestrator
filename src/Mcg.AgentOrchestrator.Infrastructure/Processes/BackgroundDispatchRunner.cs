@@ -84,7 +84,8 @@ public sealed class BackgroundDispatchRunner
         Func<ProcessStartInfo, Process?>? startProcess = null,
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null,
         Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null,
-        Func<ProcessCommandLineSnapshot>? processCommandLineSnapshotFactory = null)
+        Func<ProcessCommandLineSnapshot>? processCommandLineSnapshotFactory = null,
+        Func<GoalId, string>? resolveWorkerBuildReceiptPath = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -103,7 +104,8 @@ public sealed class BackgroundDispatchRunner
             ResolveWorkerProvider,
             _clock,
             File.Exists,
-            ProcessLogReader.ReadDecisionBestEffort);
+            ProcessLogReader.ReadDecisionBestEffort,
+            resolveWorkerBuildReceiptPath);
         _recoveryService = new DispatchProcessRecoveryService(
             _clock,
             _postOutputIdleTimeout,
@@ -1532,10 +1534,7 @@ public sealed class BackgroundDispatchRunner
                 worktreeEvidence.ChangedPaths,
                 worktreeEvidence.DirtyPaths,
                 failedWorkerBuildCheck,
-                () => _completionClassifier.HasWorkerBuildEvidence(
-                    processRecord.WorkingDirectory,
-                    decisionStandardOutput,
-                    decisionStandardError),
+                () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
                 _runOrchestratorBuildCheck);
             var missingWorkerBuildEvidence = buildEvidence.MissingEvidence;
             standardErrorDiagnostic = buildEvidence.AppendDiagnostic(standardErrorDiagnostic);

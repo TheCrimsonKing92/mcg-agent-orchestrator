@@ -143,29 +143,6 @@ public sealed class CliGoalUnparkEntryTests : CliGoalUnparkTestSupport
     }
 
     [Xunit.Fact]
-    public async Task ParkGoal_RemainsOnWholeKernelPath()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var seed = await CreateParkedSeed(root);
-            var probe = new GoalTransactionProbeRepository(seed.Repository);
-
-            var result = RunCommand(
-                ["park-goal", seed.GoalId.Value[..8], "Stay parked", "--confirm-goal-park"],
-                probe,
-                seed.Workspace);
-
-            Xunit.Assert.Equal("whole-kernel load sentinel", result.Error?.Message);
-            Xunit.Assert.Equal(1, probe.WholeKernelLoadCount);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Xunit.Fact]
     public void NonParkedGoal_ReturnsTypedRejectedOutcome()
     {
         var kernel = new AgentOrchestratorKernel();
