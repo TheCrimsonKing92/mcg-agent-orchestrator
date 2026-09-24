@@ -123,6 +123,18 @@ internal sealed partial class ConductorDriver
                 workspace.TreeRevision,
                 manifest);
             var receipt = _mergeTrainAcceptanceStore.TryReadReceipt(identity.Value);
+            if (receipt is null)
+            {
+                // Rebase creates new commit objects on each materialization. Their IDs are part of
+                // MergeTrainIdentity, but the tested tree and original candidate bindings can still
+                // be identical. A completed passing gate is reusable for that exact tested state.
+                receipt = _mergeTrainAcceptanceStore.ReadPassedReceiptsForGoal(members[0].GoalId)
+                    .FirstOrDefault(saved => HasSameTestedTrainState(saved.Identity, identity));
+                if (receipt is not null)
+                {
+                    identity = receipt.Identity;
+                }
+            }
             receipt ??= RunMergeTrainSourceSizePreflight(workspace.Path, identity, _mergeTrainAcceptanceStore);
             if (receipt is null)
             {
@@ -338,6 +350,22 @@ internal sealed partial class ConductorDriver
                 allEjections, detail);
         }
     }
+
+    private static bool HasSameTestedTrainState(MergeTrainIdentity saved, MergeTrainIdentity current) =>
+        string.Equals(saved.ObservedMainRevision, current.ObservedMainRevision, StringComparison.Ordinal) &&
+        string.Equals(saved.TrainTreeRevision, current.TrainTreeRevision, StringComparison.Ordinal) &&
+        string.Equals(saved.ManifestIdentity, current.ManifestIdentity, StringComparison.Ordinal) &&
+        saved.Members.Count == current.Members.Count &&
+        saved.Members.Zip(current.Members).All(pair =>
+            pair.First.GoalId == pair.Second.GoalId &&
+            string.Equals(pair.First.BranchRevision, pair.Second.BranchRevision, StringComparison.Ordinal) &&
+            string.Equals(pair.First.CandidateRevision, pair.Second.CandidateRevision, StringComparison.Ordinal) &&
+            pair.First.LandingPaths.SequenceEqual(pair.Second.LandingPaths, StringComparer.Ordinal) &&
+            pair.First.ResourceKeys.SequenceEqual(pair.Second.ResourceKeys, StringComparer.Ordinal) &&
+            pair.First.ChangeRiskTier == pair.Second.ChangeRiskTier &&
+            pair.First.AutoPromotionDisposition == pair.Second.AutoPromotionDisposition &&
+            string.Equals(pair.First.MergeStatus, pair.Second.MergeStatus, StringComparison.Ordinal) &&
+            string.Equals(pair.First.MergeReason, pair.Second.MergeReason, StringComparison.Ordinal));
 
     private void RecoverMergeTrainLandingEffects(
         AgentOrchestratorKernel kernel,
