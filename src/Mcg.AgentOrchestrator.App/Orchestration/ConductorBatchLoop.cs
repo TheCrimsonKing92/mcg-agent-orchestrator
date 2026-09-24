@@ -4389,6 +4389,9 @@ internal sealed partial class ConductorBatchLoop
                 DotnetBuildSlotsBusyException => "slots-busy",
                 OperationCanceledException => "cancelled",
                 BuildLockBlockedException => "build-lock-blocked",
+                AcceptanceInfrastructureDeferredException deferred when
+                    deferred.ReasonCode == "structural-coverage-permit-unavailable" =>
+                    "structural-coverage-permit-unavailable",
                 AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
                 AcceptanceGateEngineException => "gate-engine-fault",
                 _ => "fault"
@@ -4416,6 +4419,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => "blocked-build-slot",
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => "blocked-build-lock",
             ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred => "infrastructure-deferred",
+            ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable => "structural-coverage-permit-unavailable",
             ConductorParallelAcceptanceAttemptOutcome.GateEngineFault => "gate-engine-fault",
             ConductorParallelAcceptanceAttemptOutcome.LaunchFailed => "launch-failed",
             ConductorParallelAcceptanceAttemptOutcome.Faulted => "faulted",
