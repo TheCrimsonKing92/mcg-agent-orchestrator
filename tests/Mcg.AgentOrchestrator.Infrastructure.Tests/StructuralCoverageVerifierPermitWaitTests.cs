@@ -10,7 +10,11 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
     {
         var (root, mainRoot) = CreateTrustedBaselineWorkspace();
         var goalId = GoalId.New();
+        var storage = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
+        var leakProbe = new PerUserGoalRootLeakProbe(goalId);
+        TestOverrides.BuildStorageRootForTests = storage;
         DotnetBuildEnvironmentLease? holder = null;
+        DotnetBuildEnvironment? observedEnvironment = null;
         var baselineBuilds = 0;
         var waitHeartbeats = 0;
         TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
@@ -18,7 +22,7 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
         TestOverrides.StructuralCoveragePermitWaitBound = TimeSpan.FromSeconds(1);
         TestOverrides.OnBuildArtifactIoRetryLeaseReleasedForTests = () =>
             holder = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-                DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId));
+                observedEnvironment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId, storage));
         TestOverrides.OnStructuralCoveragePermitWaitForTests = _ =>
         {
             waitHeartbeats++;
@@ -52,12 +56,13 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
             Assert.Equal(2, baselineBuilds);
             Assert.True(Assert.Single(result.Checks!.Where(check => check.Name == "structural test coverage")).Passed);
             Assert.True(waitHeartbeats > 0);
+            leakProbe.AssertScopedTo(Assert.IsType<DotnetBuildEnvironment>(observedEnvironment).RootPath, root);
         }
         finally
         {
             holder?.Dispose();
             LockAttribution.AttributeForTests = null;
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storage);
             DeleteDirectoryWithRetry(root);
             DeleteDirectoryWithRetry(mainRoot);
         }
@@ -68,7 +73,11 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
     {
         var (root, mainRoot) = CreateTrustedBaselineWorkspace();
         var goalId = GoalId.New();
+        var storage = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
+        var leakProbe = new PerUserGoalRootLeakProbe(goalId);
+        TestOverrides.BuildStorageRootForTests = storage;
         DotnetBuildEnvironmentLease? holder = null;
+        DotnetBuildEnvironment? observedEnvironment = null;
         var waitProgress = new List<AcceptanceGateProgress>();
         var baselineBuilds = 0;
         TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
@@ -76,7 +85,7 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
         TestOverrides.StructuralCoveragePermitWaitBound = TimeSpan.FromSeconds(1);
         TestOverrides.OnStructuralCoverageStartedForTests = () =>
             holder = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-                DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId));
+                observedEnvironment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId, storage));
         TestOverrides.OnStructuralCoveragePermitWaitForTests = progress =>
         {
             waitProgress.Add(progress);
@@ -107,11 +116,12 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
             Assert.Equal(1, baselineBuilds);
             Assert.Contains(waitProgress, progress =>
                 progress.Phase == StructuralCoveragePermitWait.PhaseName && progress.SlotIndex.HasValue);
+            leakProbe.AssertScopedTo(Assert.IsType<DotnetBuildEnvironment>(observedEnvironment).RootPath, root);
         }
         finally
         {
             holder?.Dispose();
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storage);
             DeleteDirectoryWithRetry(root);
             DeleteDirectoryWithRetry(mainRoot);
         }

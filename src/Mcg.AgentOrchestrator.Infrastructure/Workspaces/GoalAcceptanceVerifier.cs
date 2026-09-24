@@ -579,7 +579,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildStorageRoot? storageRoot = null)
     {
         _runner = runner;
-        _storageRoot = storageRoot is null ? DotnetBuildEnvironmentManager.CaptureStorageRoot() : storageRoot;
+        _storageRoot = storageRoot ?? testOverrides?.BuildStorageRootForTests ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
         _structuralCoverageEvaluator = new AcceptanceStructuralCoverageEvaluator(discoveryRunner, IsBuildArtifactIoException);
         _timeProvider = timeProvider;
         _leaseSleep = leaseSleep ?? Thread.Sleep;

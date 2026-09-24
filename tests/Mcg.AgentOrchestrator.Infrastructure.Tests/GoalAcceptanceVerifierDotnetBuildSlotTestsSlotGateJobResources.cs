@@ -672,6 +672,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var buildAttempts = 0;
         var sleeper = StartSleepProcess();
         var goalId = new GoalId("99998888777766665555444433332222");
+        var storage = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
+        var leakProbe = new PerUserGoalRootLeakProbe(goalId);
+        string? observedRoot = null;
+        TestOverrides.BuildStorageRootForTests = storage;
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -694,7 +698,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                     {
                         var artifactsPath = GetArtifactsPath(args);
                         var heartbeatEnvironment =
-                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId, storage);
+                        observedRoot = heartbeatEnvironment.RootPath;
                         var heartbeatPath =
                             GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
                                 "core tests",
@@ -744,6 +749,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             Assert.Contains($"holderPid={sleeper.Id}", output, StringComparison.Ordinal);
             Assert.Contains("source=handle64-timeout+gate-context", output, StringComparison.Ordinal);
             Assert.Contains(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test" && call.Contains("--no-build"));
+            leakProbe.AssertScopedTo(Assert.IsType<string>(observedRoot), root);
         }
         finally
         {
@@ -773,6 +779,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             """);
         var buildAttempts = 0;
         var goalId = new GoalId("aaaabbbbccccddddeeeeffff00001111");
+        var storage = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
+        var leakProbe = new PerUserGoalRootLeakProbe(goalId);
+        string? observedRoot = null;
+        TestOverrides.BuildStorageRootForTests = storage;
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-test-{Guid.NewGuid():N}.err");
         File.WriteAllText(stdoutPath, "fast child stdout");
@@ -799,7 +809,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                         var artifactsPath = GetArtifactsPath(args);
                         var lockedPath = Path.Combine(artifactsPath, "bin", "Core.dll");
                         var heartbeatEnvironment =
-                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                            DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId, storage);
+                        observedRoot = heartbeatEnvironment.RootPath;
                         var heartbeatPath =
                             GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
                                 "core tests",
@@ -861,6 +872,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             Assert.Contains("heartbeat_state=completed", output, StringComparison.Ordinal);
             Assert.Contains("heartbeat_child_alive=false", output, StringComparison.Ordinal);
             Assert.Contains("heartbeat_output_bytes=34", output, StringComparison.Ordinal);
+            leakProbe.AssertScopedTo(Assert.IsType<string>(observedRoot), root);
         }
         finally
         {
