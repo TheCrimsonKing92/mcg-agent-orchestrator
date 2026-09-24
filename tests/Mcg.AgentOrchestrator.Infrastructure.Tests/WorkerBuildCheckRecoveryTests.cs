@@ -132,7 +132,7 @@ public sealed class WorkerBuildCheckRecoveryTests
     {
         DispatchTask(kernel, goal, task, workingDirectory: worktree);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-            new TaskVerificationRecord("worker", worktree, 1, string.Empty,
+            new TaskVerificationRecord("test.exe", worktree, 1, string.Empty,
                 DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed),
                 DateTimeOffset.UtcNow));
     }
