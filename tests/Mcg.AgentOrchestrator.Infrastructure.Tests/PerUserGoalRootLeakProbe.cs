@@ -1,24 +1,26 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class PerUserGoalRootLeakProbe(GoalId goalId)
+internal sealed class PerUserGoalRootLeakProbe
 {
-    private readonly string _perUserGoalRoot = Path.Combine(
-        DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(
+    private readonly string _perUserGoalsRoot;
+    private readonly string _goalPrefix;
+    private readonly string[] _beforeEntries;
+    private readonly string[] _beforeGoalRoot;
+
+    internal PerUserGoalRootLeakProbe(GoalId goalId)
+    {
+        _perUserGoalsRoot = Path.Combine(DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(
             null,
             Environment.GetEnvironmentVariable("LOCALAPPDATA"),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             Path.GetTempPath(),
             OperatingSystem.IsWindows()),
-        "goals", goalId.Value[..8].ToLowerInvariant());
-    private readonly string[] _before = Snapshot(Path.Combine(
-        DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(
-            null,
-            Environment.GetEnvironmentVariable("LOCALAPPDATA"),
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            Path.GetTempPath(),
-            OperatingSystem.IsWindows()),
-        "goals", goalId.Value[..8].ToLowerInvariant()));
+            "goals");
+        _goalPrefix = goalId.Value[..8].ToLowerInvariant();
+        _beforeEntries = SnapshotEntries(_perUserGoalsRoot);
+        _beforeGoalRoot = Snapshot(Path.Combine(_perUserGoalsRoot, _goalPrefix));
+    }
 
     internal void AssertScopedTo(string actualGoalRoot, string temporaryDirectory)
     {
@@ -26,8 +28,14 @@ internal sealed class PerUserGoalRootLeakProbe(GoalId goalId)
         var relative = Path.GetRelativePath(temporaryDirectory, actualGoalRoot);
         Assert.False(relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal),
             $"Goal root escaped test temporary directory: {actualGoalRoot}");
-        Assert.Equal(_before, Snapshot(_perUserGoalRoot));
+        Assert.Empty(SnapshotEntries(_perUserGoalsRoot).Except(_beforeEntries, StringComparer.Ordinal));
+        Assert.Equal(_beforeGoalRoot, Snapshot(Path.Combine(_perUserGoalsRoot, _goalPrefix)));
     }
+
+    private static string[] SnapshotEntries(string root) => Directory.Exists(root)
+        ? Directory.GetFileSystemEntries(root).Select(path => Path.GetFileName(path)!)
+            .OrderBy(name => name, StringComparer.Ordinal).ToArray()
+        : [];
 
     private static string[] Snapshot(string root)
     {
