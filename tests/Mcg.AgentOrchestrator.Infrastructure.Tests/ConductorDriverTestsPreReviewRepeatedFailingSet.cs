@@ -59,6 +59,48 @@ public sealed class ConductorDriverTestsPreReviewRepeatedFailingSet
         Assert.DoesNotContain("consecutive focused pre-review evidence rounds", brief, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void OperatorDeveloperRetryClearsStaleHoldForLaterTesterFinding()
+    {
+        var (kernel, goal) = ConductorDriverTests.SoftwareGoal();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        ConductorDriverTests.PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        ConductorDriverTests.PassVerification(kernel, goal, tester);
+        var recordedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        foreach (var sha in new[] { "sha-1", "sha-2", "sha-3" })
+            kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id,
+                Receipt(sha, RepeatedTests) with { GoalId = goal.Id.Value, RecordedAt = recordedAt });
+
+        kernel.RetryTask(goal.Id, tester.Id, "Check the current finding.");
+        ConductorDriverTests.FailTesterBlocker(kernel, goal, tester, "Developer repair needed.");
+        var retried = new List<TaskId>();
+        var escalations = new List<string>();
+        var driver = ConductorDriverTests.MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retried.Add(taskId);
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            writeEscalation: (_, _, message) => escalations.Add(message));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Empty(retried);
+        Assert.Contains(escalations, message => message.Contains("PRE_REVIEW_REPEATED_FAILING_SET", StringComparison.Ordinal));
+
+        kernel.RetryTask(goal.Id, developer.Id, "Operator guidance for another attempt", invalidateDownstream: false);
+        ConductorDriverTests.PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+        kernel.RetryTask(goal.Id, tester.Id, "Check the new Developer result.");
+        ConductorDriverTests.FailTesterBlocker(kernel, goal, tester, "Developer repair still needed.");
+        escalations.Clear();
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal([developer.Id], retried);
+        Assert.DoesNotContain(escalations, message => message.Contains("PRE_REVIEW_REPEATED_FAILING_SET", StringComparison.Ordinal));
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Developer,
         List<TaskId> RetriedTasks, string? Escalation) Run(
         IReadOnlyList<PreReviewEvidenceReceipt> prior,
