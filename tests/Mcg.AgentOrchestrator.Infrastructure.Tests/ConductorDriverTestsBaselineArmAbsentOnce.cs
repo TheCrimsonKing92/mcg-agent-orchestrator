@@ -31,6 +31,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 root, runInline: true, acquireStableSlotLease: (_, _) => null);
             var retries = 0;
+            var outcomes = 0;
             string? retryMessage = null;
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
@@ -53,7 +54,10 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
                     kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+                {
+                    outcomes++;
+                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
+                });
 
             for (var tick = 0; tick < 5; tick++)
             {
@@ -82,6 +86,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             var finding = reviewer.VerificationHistory.Last().MergedReviewFindings!
                 .Single(item => item.StableId == "baseline-missing");
             Assert.False(string.IsNullOrWhiteSpace(finding.EvidenceOutcome?.ReceiptId));
+            Assert.Equal(1, outcomes);
             Assert.Equal(1, retries);
             Assert.Contains("ACTIONABLE_CANDIDATE_RED", retryMessage, StringComparison.Ordinal);
             Assert.Contains("OutsideTests.FailingMethod(passed: True)", retryMessage, StringComparison.Ordinal);
