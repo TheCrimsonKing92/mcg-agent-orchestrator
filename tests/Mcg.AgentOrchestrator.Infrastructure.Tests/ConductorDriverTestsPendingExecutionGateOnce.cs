@@ -12,7 +12,7 @@ public sealed class ConductorDriverTestsPendingExecutionGateOnce
     public void RunningAttemptRecordsOnePendingRequestAcrossTicks()
     {
         const string candidateSha = "abc1234";
-        var root = CreateTempDirectory();
+        var root = ConductorDriverTests.CreateTempDirectory();
         try
         {
             var (kernel, goal) = SoftwareGoal();

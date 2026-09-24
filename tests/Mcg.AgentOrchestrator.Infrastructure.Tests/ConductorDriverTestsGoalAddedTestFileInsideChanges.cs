@@ -15,7 +15,7 @@ public sealed class ConductorDriverTestsGoalAddedTestFileInsideChanges
     {
         const string candidateSha = "abc1234";
         const string addedPath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SomeNewTests.cs";
-        var root = CreateTempDirectory();
+        var root = ConductorDriverTests.CreateTempDirectory();
         try
         {
             var (kernel, goal) = SoftwareGoal();

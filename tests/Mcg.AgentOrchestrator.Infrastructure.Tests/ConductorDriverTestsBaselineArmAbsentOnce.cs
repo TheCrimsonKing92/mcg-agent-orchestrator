@@ -12,7 +12,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
     public void CandidateOnlyBaselineAttemptRecordsOnceAndRoutesDeveloper()
     {
         const string candidateSha = "abc1234";
-        var root = CreateTempDirectory();
+        var root = ConductorDriverTests.CreateTempDirectory();
         try
         {
             var storeDirectory = Path.Combine(root, ".orchestrator");
