@@ -6,7 +6,7 @@ internal static partial class CliPersistentStateRunner
 {
     private static void ValidateGoalRefinementArguments(IReadOnlyList<string> args)
     {
-        if (args.Count is < 2 or > 3 || string.IsNullOrWhiteSpace(args[1]))
+        if (args.Count is < 2 or > 3 || args[1].Length == 0)
             throw new InvalidOperationException($"Usage: {GoalRefinementWorkCoordinator.CommandName} <goal-id> [executor-stamp]");
         if (args[1].Any(char.IsWhiteSpace))
             throw new InvalidOperationException(

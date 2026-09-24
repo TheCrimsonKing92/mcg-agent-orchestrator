@@ -10,6 +10,8 @@ public sealed class GoalRefinementRunArgumentValidationTests
     [Xunit.InlineData("1234567890abcdef 1234567890abcdef")]
     [Xunit.InlineData(" 1234567890abcdef1234567890abcdef")]
     [Xunit.InlineData("1234567890abcdef1234567890abcdef\t")]
+    [Xunit.InlineData("   ")]
+    [Xunit.InlineData("\t")]
     public void WhitespaceInGoalIdIsUsageErrorBeforeClaim(string invalidGoalId)
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-refinement-usage-{Guid.NewGuid():N}");
