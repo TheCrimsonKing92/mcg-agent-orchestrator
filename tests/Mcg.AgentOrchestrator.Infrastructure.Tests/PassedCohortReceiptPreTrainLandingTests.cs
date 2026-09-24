@@ -59,6 +59,7 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 cohortStore.ReadPassedReceiptsForGoal(first.Id).Count == 1 &&
                 driver.GetActiveCohortGateMemberGoalIds().Count == 0,
                 TimeSpan.FromSeconds(15)), "The pair's passed receipt was not ready for landing.");
+            var passedReceipt = Assert.Single(cohortStore.ReadPassedReceiptsForGoal(first.Id));
 
             var third = CreateCompletedGoal(kernel, "Third ready goal", repo);
             var thirdCandidate = CreateWorktreeCandidate(repo, third.Id,
@@ -88,10 +89,7 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 onTick: summary => observedTick = summary);
 
             var progress = string.Join(" | ", observedTick?.ProgressLines ?? []);
-            Assert.True(first.Status == GoalStatus.Completed,
-                $"Expected first cohort member to land; status={first.Status}; progress={progress}");
-            Assert.True(second.Status == GoalStatus.Completed,
-                $"Expected second cohort member to land; status={second.Status}; progress={progress}");
+            Assert.Contains($"prelanded=true outcome=passed receipt={passedReceipt.ReceiptId}", progress);
             Assert.Contains(landings, landing => landing.GoalId == first.Id.Value);
             Assert.Contains(landings, landing => landing.GoalId == second.Id.Value);
             Assert.DoesNotContain(File.ReadAllLines(logPath), line =>
