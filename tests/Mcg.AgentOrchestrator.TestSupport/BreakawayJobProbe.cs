@@ -1,20 +1,5 @@
 using System.Runtime.InteropServices;
 
-public enum BreakawayVerdict
-{
-    NotApplicable,
-    Permitted,
-    Forbidden
-}
-
-public sealed record BreakawayProbeResult(
-    BreakawayVerdict Verdict,
-    string Reason,
-    int Win32ErrorCode)
-{
-    public bool IsPermitted => Verdict == BreakawayVerdict.Permitted;
-}
-
 public static class BreakawayJobProbe
 {
     private const int JobObjectExtendedLimitInformation = 9;
