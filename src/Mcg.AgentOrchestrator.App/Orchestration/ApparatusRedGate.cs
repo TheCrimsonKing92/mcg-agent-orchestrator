@@ -194,6 +194,15 @@ internal sealed class ApparatusRedGate
                     sourceRoot,
                     check.TestProjectPath,
                     identity);
+                var rerunPassed = check.FailingTestAttributions?.Any(attribution =>
+                    attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
+                    attribution.Origin == AcceptanceTestFailureOrigin.UnconfirmedIntroduced &&
+                    attribution.CandidateRerun?.Outcome == "Passed" &&
+                    !string.IsNullOrWhiteSpace(attribution.CandidateRerun.ReceiptPointer)) == true;
+                var rerunFailed = check.FailingTestAttributions?.Any(attribution =>
+                    attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
+                    attribution.Origin == AcceptanceTestFailureOrigin.Introduced &&
+                    attribution.CandidateRerun?.Outcome == "Failed") == true;
                 failingTests.Add(new ApparatusRedFailingTest(
                     check.Name,
                     identity,
@@ -202,7 +211,9 @@ internal sealed class ApparatusRedGate
                     sourcePaths.Any(path => normalizedChangedPaths.Contains(
                         NormalizePath(path),
                         StringComparer.OrdinalIgnoreCase)),
-                    HasCrossGoalOccurrence: false));
+                    HasCrossGoalOccurrence: false,
+                    CandidateRerunPassed: rerunPassed,
+                    CandidateRerunFailed: rerunFailed));
             }
         }
 
@@ -219,7 +230,10 @@ internal sealed class ApparatusRedGate
                     TestIdentity: failingTest.TestIdentity,
                     ExceptionSignature: failingTest.ExceptionSignature,
                     ResolvedSourcePath: failingTest.ResolvedSourcePaths.FirstOrDefault(),
-                    InsideChangedPaths: failingTest.InsideChangedPaths))
+                    InsideChangedPaths: failingTest.InsideChangedPaths,
+                    EvidenceKind: failingTest.CandidateRerunPassed
+                        ? ApparatusRedClassifier.CandidateRerunEvidenceKind
+                        : null))
                 .ToArray(),
             recordedAt);
 

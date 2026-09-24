@@ -5836,6 +5836,14 @@ internal sealed partial class ConductorDriver
             var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
             if (retryDisposition.ActionableCriteria.Count == 0)
             {
+                if (retryDisposition.ExcludedFailures.Any(failure =>
+                        failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced) &&
+                    TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading)
+                        is { } candidateRerunRegate)
+                {
+                    return candidateRerunRegate;
+                }
+
                 var observedHeads = _resolveAcceptanceHeads(goal);
                 var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
                 var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
@@ -6147,11 +6155,16 @@ internal sealed partial class ConductorDriver
                 foreach (var identity in failingIdentities)
                 {
                     if (byIdentity.TryGetValue(identity, out var attribution) &&
-                        attribution.Origin == AcceptanceTestFailureOrigin.Inherited)
+                        (attribution.Origin == AcceptanceTestFailureOrigin.Inherited ||
+                         (attribution.Origin == AcceptanceTestFailureOrigin.UnconfirmedIntroduced &&
+                          attribution.CandidateRerun?.Outcome == "Passed" &&
+                          !string.IsNullOrWhiteSpace(attribution.CandidateRerun.ReceiptPointer))))
                     {
                         excluded.Add(new ExcludedAcceptanceFailure(
                             identity,
-                            AcceptanceRetryExclusionKind.Inherited));
+                            attribution.Origin == AcceptanceTestFailureOrigin.Inherited
+                                ? AcceptanceRetryExclusionKind.Inherited
+                                : AcceptanceRetryExclusionKind.UnconfirmedIntroduced));
                     }
                     else
                     {
@@ -6176,7 +6189,9 @@ internal sealed partial class ConductorDriver
     }
 
     private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
-        $"{failure.Identity} (pre-existing/main-red)";
+        failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced
+            ? $"{failure.Identity} (candidate rerun passed; unconfirmed introduction)"
+            : $"{failure.Identity} (pre-existing/main-red)";
 
     private static string BuildUnattributableAcceptanceIdentity(
         string? branchHeadSha,
@@ -6204,7 +6219,8 @@ internal sealed partial class ConductorDriver
 
     private enum AcceptanceRetryExclusionKind
     {
-        Inherited
+        Inherited,
+        UnconfirmedIntroduced
     }
 
     private static string[] FormatCriterionRetryFeedback(IReadOnlyList<AcceptanceCheckResult> criteria)
