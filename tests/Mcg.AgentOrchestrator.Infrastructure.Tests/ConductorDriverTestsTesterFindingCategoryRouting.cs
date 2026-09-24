@@ -9,7 +9,7 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsTesterFindingCategoryRouting
 {
     [Xunit.Fact]
-    public void CurrentReceiptOnTestEvidenceFindingDoesNotRetryDeveloper()
+    public void IncompleteReceiptOnTestEvidenceFindingRunsFocusedEvidenceWithoutDeveloperRetry()
     {
         const string candidateSha = "abc1234";
         var (kernel, goal) = SoftwareGoal();
@@ -64,8 +64,7 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Xunit.Assert.Equal(0, focusedRuns);
-        Xunit.Assert.Equal(tester.Id, retriedTaskId);
+        Xunit.Assert.Equal(1, focusedRuns);
         Xunit.Assert.NotEqual(developer.Id, retriedTaskId);
     }
 }

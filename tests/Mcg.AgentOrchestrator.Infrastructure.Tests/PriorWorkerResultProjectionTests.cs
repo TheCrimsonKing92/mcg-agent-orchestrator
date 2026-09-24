@@ -50,7 +50,7 @@ public sealed class PriorWorkerResultProjectionTests
             Assert.Equal(passed ? "manual-verification passed" : "manual-verification failed",
                 prior.LastVerification!.Command);
             var brief = new TaskBrief(goal.Id, tester.Id, tester.RequiredRole, tester.Description,
-                "# Agent Task Brief\nInspect the prior Developer result.");
+                "# Agent Task Brief\n## Instructions\nInspect the prior Developer result.");
             var package = WorkerProfileDispatcher.BuildContextPackage(
                 goal, tester, root, contextDirectory, brief);
             var artifact = Assert.Single(package.Artifacts, candidate =>
