@@ -83,8 +83,11 @@ public sealed class EvidenceOnlyNoChangeAcceptanceTests
         Xunit.Assert.Equal(WorkTaskStatus.Failed, developer.Status);
         Xunit.Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Message.StartsWith("EVIDENCE_ONLY_ROUND_ACCEPTED ", StringComparison.Ordinal));
+        var expectedFailure = blockers == "none"
+            ? "reason=no-change-evidence"
+            : "WORKER_RESULT reported blocker:";
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskFailed &&
-            evt.Message.Contains("reason=no-change-evidence", StringComparison.Ordinal));
+            evt.Message.Contains(expectedFailure, StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
