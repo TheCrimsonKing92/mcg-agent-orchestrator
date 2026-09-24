@@ -44,6 +44,35 @@ public sealed class RefinedSpecOwnershipCarryForwardTests
         Xunit.Assert.Empty(goal.RefinementOwnershipDiagnostics);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(CriterionEvidenceOwner.Acceptance)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Operator)]
+    public void RewrittenExplicitMappingRequiresCurrentVersionOwnership(CriterionEvidenceOwner priorOwner)
+    {
+        var goal = new AgentOrchestratorKernel().CreateGoal("Keep explicit ownership through a rewrite");
+        var recordedAt = new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.Zero);
+        goal.RecordRefinedSpec(Spec(["Original criterion."], []), recordedAt);
+        goal.MapCriterionEvidenceOwner(0, 1, priorOwner, "operator", recordedAt,
+            priorOwner == CriterionEvidenceOwner.Acceptance
+                ? CriterionEvidenceScopes.FullAcceptanceGate
+                : "operator observation", "mapping", "candidate-a");
+
+        goal.RecordRefinedSpec(Spec(["Rewritten criterion."], []), recordedAt.AddMinutes(1));
+
+        var historical = Xunit.Assert.Single(goal.CriterionEvidenceObligations,
+            item => item.CriterionVersion == 1 && item.CriterionIndex == 0);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Unknown, historical.Owner);
+        Xunit.Assert.Contains("unresolved during refinement", historical.Provenance);
+        var current = Xunit.Assert.Single(goal.CriterionEvidenceObligations,
+            item => item.CriterionVersion == 2 && item.CriterionIndex == 0);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Unknown, current.Owner);
+        Xunit.Assert.Equal("ownership mapping required", current.RequiredScope);
+        Xunit.Assert.Equal(current, Xunit.Assert.Single(goal.OutstandingCriterionEvidenceObligations));
+        var diagnostic = Xunit.Assert.Single(goal.RefinementOwnershipDiagnostics);
+        Xunit.Assert.Equal(0, diagnostic.CriterionIndex);
+        Xunit.Assert.Equal(priorOwner, diagnostic.PriorOwner);
+    }
+
     private static RefinedSpec Spec(
         IReadOnlyList<string> criteria,
         IReadOnlyList<string> acceptanceOwned,
