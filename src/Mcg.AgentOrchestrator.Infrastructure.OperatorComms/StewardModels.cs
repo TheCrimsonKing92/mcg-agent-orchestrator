@@ -360,9 +360,6 @@ public sealed record StewardTriageReceipt
 
     public StewardCardLoadMeasurement? CardLoadMeasurement { get; }
 
-    public StewardHeartbeat ToHeartbeat() =>
-        StewardHeartbeatCalculator.FromReceipts([this]);
-
     private static string Required(string value, string name) =>
         string.IsNullOrWhiteSpace(value)
             ? throw new ArgumentException("Value is required.", name)

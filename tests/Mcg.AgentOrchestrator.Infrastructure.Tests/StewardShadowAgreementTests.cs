@@ -14,30 +14,36 @@ public sealed class StewardShadowAgreementTests
         var store = new InMemoryStewardShadowRecommendationStore();
         var reader = new InMemoryStewardOperatorIntentReader();
         var shadow = new StewardShadowAdjudicator(store, reader);
-        await shadow.RecordAsync(Bundle("escalation-1"), Now);
+        var dispatcher = new StewardDispatcher(new StewardComposer(),
+            new InMemoryStewardTriageReceiptStore(), new RecordingControlPlaneMessageTransport(),
+            shadowAdjudicator: shadow);
+        await dispatcher.DispatchAsync(Bundle("escalation-1"), Now);
         reader.AddObserved(new StewardObservedOperatorIntent("intent-1", "retry", "goal-123", "task-1",
             "{\"retryCause\":\"ContractClarification\"}", Now.AddMinutes(1), OperatorActorKind.Human));
-        Assert.False((await shadow.ReconcileAsync()).Faulted);
+        await dispatcher.DispatchAsync(Bundle("unused") with { Escalations = [] }, Now.AddMinutes(1));
         Assert.Equal(StewardShadowAgreementOutcome.Match, Assert.Single(store.Agreements).Outcome);
 
-        await shadow.RecordAsync(Bundle("escalation-2"), Now.AddMinutes(2));
+        await dispatcher.DispatchAsync(Bundle("escalation-2"), Now.AddMinutes(2));
         reader.AddObserved(new StewardObservedOperatorIntent("intent-2", "progress", "goal-123", "task-1",
             "{}", Now.AddMinutes(3), OperatorActorKind.Human));
-        Assert.False((await shadow.ReconcileAsync()).Faulted);
+        await dispatcher.DispatchAsync(Bundle("unused") with { Escalations = [] }, Now.AddMinutes(3));
         var mismatch = Assert.Single(store.Agreements.Where(x => x.OperatorIntentId == "intent-2"));
         Assert.Equal(StewardShadowAgreementOutcome.Mismatch, mismatch.Outcome);
         Assert.Equal(StewardShadowDifferingField.Verb, mismatch.PrimaryDifferingField);
 
-        var rates = await shadow.RatesAsync(Now.AddMinutes(4));
-        var heartbeat = StewardHeartbeatCalculator.FromReceipts([], rates);
+        var heartbeat = await dispatcher.GetHeartbeatAsync(Now.AddMinutes(4));
         var classRate = Assert.Single(heartbeat.ShadowAgreement!.Where(x =>
             x.Class == StewardShadowEscalationClass.PlannerOutputContractRejected));
         Assert.Equal(2, classRate.AllTime.N);
         Assert.Equal(0.5, classRate.AllTime.Rate);
         Assert.Equal(2, classRate.Trailing14Days.N);
         Assert.Equal(0, classRate.Pending);
-        var brief = new StewardComposer().ComposeDailyBrief(Bundle("escalation-2"), "next", 0, Now, rates).Value;
-        Assert.Equal(rates, brief.ShadowAgreement);
+        var brief = (await dispatcher.ComposeDailyBriefAsync(
+            Bundle("escalation-2"), "next", 0, Now.AddMinutes(4))).Value;
+        var briefRate = Assert.Single(brief.ShadowAgreement!.Where(x =>
+            x.Class == StewardShadowEscalationClass.PlannerOutputContractRejected));
+        Assert.Equal(2, briefRate.AllTime.N);
+        Assert.Equal(0.5, briefRate.AllTime.Rate);
     }
 
     [Fact]

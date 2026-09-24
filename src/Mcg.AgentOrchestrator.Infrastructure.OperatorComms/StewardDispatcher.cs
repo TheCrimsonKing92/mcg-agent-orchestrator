@@ -87,6 +87,33 @@ public sealed class StewardDispatcher
         }
     }
 
+    public async Task<StewardHeartbeat> GetHeartbeatAsync(
+        DateTimeOffset now, CancellationToken cancellationToken = default)
+    {
+        var receipts = await _receiptStore.ListAsync(cancellationToken);
+        return StewardHeartbeatCalculator.FromReceipts(
+            receipts, await GetShadowRatesFailOpenAsync(now, cancellationToken));
+    }
+
+    public async Task<StewardOutput<StewardDailyBrief>> ComposeDailyBriefAsync(
+        StewardBriefingBundle bundle, string next, decimal spend, DateTimeOffset now,
+        CancellationToken cancellationToken = default) =>
+        new StewardComposer().ComposeDailyBrief(
+            bundle, next, spend, now, await GetShadowRatesFailOpenAsync(now, cancellationToken));
+
+    private async Task<IReadOnlyList<StewardShadowClassAgreementRate>?> GetShadowRatesFailOpenAsync(
+        DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (_shadowAdjudicator is null) return null;
+        try { return await _shadowAdjudicator.RatesAsync(now, cancellationToken); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError(ex.ToString());
+            return null;
+        }
+    }
+
     private async Task RunShadowFailOpenAsync(
         StewardBriefingBundle bundle, DateTimeOffset now, CancellationToken cancellationToken)
     {
