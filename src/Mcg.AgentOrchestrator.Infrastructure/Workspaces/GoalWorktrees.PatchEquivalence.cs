@@ -46,6 +46,11 @@ public static partial class GoalWorktrees
             refusalReason = "no-merge-base";
             return false;
         }
+        if (!TryVerifyIntegrationMergesClean(executionDirectory, oldBase, oldHead, out refusalReason) ||
+            !TryVerifyIntegrationMergesClean(executionDirectory, newBase, newHead, out refusalReason))
+        {
+            return false;
+        }
         if (!TryReadCommitCount(executionDirectory, oldBase, oldHead, out var oldCount) ||
             !TryReadCommitCount(executionDirectory, newBase, newHead, out var newCount))
         {
@@ -105,9 +110,75 @@ public static partial class GoalWorktrees
         out int count)
     {
         count = 0;
-        return TryReadGit(executionDirectory, ["rev-list", "--count", $"{baseSha}..{headSha}"], out var output) &&
+        return TryReadGit(executionDirectory, ["rev-list", "--no-merges", "--count", $"{baseSha}..{headSha}"], out var output) &&
             int.TryParse(output, NumberStyles.None, CultureInfo.InvariantCulture, out count) &&
             count is > 0 and <= PatchEquivalenceCommitLimit;
+    }
+
+    private static bool TryVerifyIntegrationMergesClean(
+        string executionDirectory,
+        string baseSha,
+        string headSha,
+        out string refusalReason)
+    {
+        refusalReason = string.Empty;
+        var listed = GitCli.Run(executionDirectory, "rev-list", "--merges", $"{baseSha}..{headSha}");
+        if (!listed.Succeeded || listed.DrainTimedOut)
+        {
+            refusalReason = "integration-merge-unverifiable";
+            return false;
+        }
+
+        var merges = listed.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (merges.Length > PatchEquivalenceCommitLimit || merges.Any(merge => !CommitShaPattern.IsMatch(merge)))
+        {
+            refusalReason = "integration-merge-unverifiable";
+            return false;
+        }
+
+        foreach (var merge in merges)
+        {
+            var unverifiable = $"integration-merge-unverifiable; merge={merge}";
+            if (!TryReadGit(executionDirectory, ["rev-list", "--parents", "-n", "1", merge], out var parentLine))
+            {
+                refusalReason = unverifiable;
+                return false;
+            }
+
+            var parents = parentLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parents.Length != 3 ||
+                !string.Equals(parents[0], merge, StringComparison.OrdinalIgnoreCase) ||
+                parents.Any(parent => !CommitShaPattern.IsMatch(parent)) ||
+                !TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{merge}^{{tree}}"], out var recordedTree) ||
+                !CommitShaPattern.IsMatch(recordedTree))
+            {
+                refusalReason = unverifiable;
+                return false;
+            }
+
+            var automatic = GitCli.Run(executionDirectory, "merge-tree", "--write-tree", parents[1], parents[2]);
+            if (automatic.DrainTimedOut || !automatic.ProcessStarted || automatic.ExitCode is not (0 or 1))
+            {
+                refusalReason = unverifiable;
+                return false;
+            }
+
+            var automaticTree = automatic.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (automatic.ExitCode == 1 ||
+                (CommitShaPattern.IsMatch(automaticTree ?? string.Empty) &&
+                 !string.Equals(recordedTree, automaticTree, StringComparison.OrdinalIgnoreCase)))
+            {
+                refusalReason = $"integration-merge-not-clean; merge={merge}";
+                return false;
+            }
+            if (!CommitShaPattern.IsMatch(automaticTree ?? string.Empty))
+            {
+                refusalReason = unverifiable;
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool TryReadGit(string executionDirectory, string[] arguments, out string output)
