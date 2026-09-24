@@ -102,9 +102,48 @@ public sealed class AcceptanceFailureAttributionPlannerCandidateRerunTests
         Assert.Equal("rerun-log.txt", attribution.CandidateRerun?.ReceiptPointer);
     }
 
+    [Fact]
+    public async Task MissingRerunnerAndMissingIdentityFailClosed()
+    {
+        var original = Classify(Identity, GreenBaseline(Identity));
+        var withoutRerunner = await Apply(original, null);
+        Assert.Equal(AcceptanceTestFailureOrigin.Introduced, Assert.Single(withoutRerunner).Origin);
+        Assert.Equal("candidate rerunner unavailable", withoutRerunner[0].CandidateRerun?.Error);
+
+        var withoutIdentity = await Apply(original, new EmptyRerunner());
+        Assert.Equal(AcceptanceTestFailureOrigin.Introduced, Assert.Single(withoutIdentity).Origin);
+        Assert.Equal("identity absent from candidate rerun result", withoutIdentity[0].CandidateRerun?.Error);
+    }
+
+    [Fact]
+    public void HarnessFailureDoesNotProveRepeatedTestFailure()
+    {
+        var arm = new FocusedEvidenceArmRunResult(
+            FindingEvidenceArm.Candidate, "candidate", FindingEvidenceArmDisposition.Red,
+            Accepted: true, Passed: false, "harness failed", []);
+        var check = new AcceptanceCheckResult("focused", false, 1, "harness failed",
+            FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+            FailingTestIdentities: []);
+
+        var result = GoalAcceptanceVerifier.ClassifyCandidateRerunCheck(Identity, arm, check, "harness.trx");
+
+        Assert.Null(result.Passed);
+        Assert.Equal(AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, result.Error);
+        Assert.Equal("harness.trx", result.ReceiptPointer);
+        Assert.Null(GoalAcceptanceVerifier.ClassifyCandidateRerunCheck(
+            Identity, arm, check with { FailureClassification = null }, "harness.trx").Passed);
+        Assert.False(GoalAcceptanceVerifier.ClassifyCandidateRerunCheck(
+            Identity, arm, check with { FailureClassification = null, FailingTestIdentities = [Identity] },
+            "failure.trx").Passed);
+        var apparatusArm = arm with { Disposition = FindingEvidenceArmDisposition.ApparatusFailure };
+        Assert.Null(GoalAcceptanceVerifier.ClassifyCandidateRerunCheck(
+            Identity, apparatusArm, check with { FailureClassification = null, FailingTestIdentities = [Identity] },
+            "apparatus.trx").Passed);
+    }
+
     private static Task<IReadOnlyList<AcceptanceTestFailureAttribution>> Apply(
         IReadOnlyList<AcceptanceTestFailureAttribution> original,
-        ICandidateFailureRerunner rerunner) =>
+        ICandidateFailureRerunner? rerunner) =>
         AcceptanceFailureAttributionPlanner.ApplyCandidateRerunAsync(
             original, BaselineSha, _ => [SourcePath], ["src/Changed.cs"],
             new AcceptanceFailureAttributionPlanner.FocusedInvocationBudget(4), rerunner, default);
@@ -136,5 +175,14 @@ public sealed class AcceptanceFailureAttributionPlannerCandidateRerunTests
             return Task.FromResult<IReadOnlyDictionary<string, CandidateFailureRerunResult>>(
                 identities.ToDictionary(identity => identity, _ => outcome, StringComparer.Ordinal));
         }
+    }
+
+    private sealed class EmptyRerunner : ICandidateFailureRerunner
+    {
+        public Task<IReadOnlyDictionary<string, CandidateFailureRerunResult>> RerunAsync(
+            IReadOnlyList<string> identities,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyDictionary<string, CandidateFailureRerunResult>>(
+                new Dictionary<string, CandidateFailureRerunResult>());
     }
 }

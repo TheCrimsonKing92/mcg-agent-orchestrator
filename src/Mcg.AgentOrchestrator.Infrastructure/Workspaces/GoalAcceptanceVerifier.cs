@@ -58,6 +58,7 @@ public sealed record AcceptanceTestFailureAttribution(
     string TestIdentity,
     AcceptanceTestFailureOrigin Origin,
     string Evidence,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     CandidateFailureRerunEvidence? CandidateRerun = null);
 
 public sealed record CandidateFailureRerunEvidence(

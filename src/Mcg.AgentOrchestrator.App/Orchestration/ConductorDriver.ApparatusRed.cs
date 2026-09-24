@@ -14,7 +14,8 @@ internal sealed partial class ConductorDriver
 
     private sealed record ExcludedAcceptanceFailure(
         string Identity,
-        AcceptanceRetryExclusionKind Kind);
+        AcceptanceRetryExclusionKind Kind,
+        string? ReceiptPointer = null);
 
     private enum AcceptanceRetryExclusionKind
     {
@@ -24,7 +25,7 @@ internal sealed partial class ConductorDriver
 
     private static string FormatExcludedAcceptanceFailure(ExcludedAcceptanceFailure failure) =>
         failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced
-            ? $"{failure.Identity} (candidate rerun passed; unconfirmed introduction)"
+            ? $"{failure.Identity} (candidate rerun passed; unconfirmed introduction; receipt: {failure.ReceiptPointer})"
             : $"{failure.Identity} (pre-existing/main-red)";
 
     /// <summary>

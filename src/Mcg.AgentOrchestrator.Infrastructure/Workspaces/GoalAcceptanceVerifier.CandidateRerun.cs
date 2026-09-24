@@ -73,9 +73,7 @@ public sealed partial class GoalAcceptanceVerifier
                 }
 
                 var receipt = check.TestResultPaths?.FirstOrDefault() ?? check.ArtifactsPath;
-                return string.IsNullOrWhiteSpace(receipt)
-                    ? new CandidateFailureRerunResult(null, null, "candidate rerun receipt was missing")
-                    : new CandidateFailureRerunResult(check.Passed, receipt);
+                return ClassifyCandidateRerunCheck(item.Identity, arm, check, receipt);
             }, StringComparer.Ordinal);
         });
         var rerunAttributions = await AcceptanceFailureAttributionPlanner.ApplyCandidateRerunAsync(
@@ -102,5 +100,36 @@ public sealed partial class GoalAcceptanceVerifier
             };
             attributionOffset += attributionCount;
         }
+    }
+
+    internal static CandidateFailureRerunResult ClassifyCandidateRerunCheck(
+        string identity,
+        FocusedEvidenceArmRunResult arm,
+        AcceptanceCheckResult check,
+        string? receipt)
+    {
+        if (!arm.Accepted ||
+            arm.Disposition is FindingEvidenceArmDisposition.ApparatusFailure or
+                FindingEvidenceArmDisposition.Inconclusive ||
+            !string.IsNullOrWhiteSpace(check.FailureClassification))
+        {
+            return new CandidateFailureRerunResult(null, receipt,
+                check.FailureClassification ?? $"candidate rerun arm was not usable: {arm.Disposition}");
+        }
+
+        if (string.IsNullOrWhiteSpace(receipt))
+        {
+            return new CandidateFailureRerunResult(null, null, "candidate rerun receipt was missing");
+        }
+
+        if (check.Passed)
+        {
+            return new CandidateFailureRerunResult(true, receipt);
+        }
+
+        return check.FailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true
+            ? new CandidateFailureRerunResult(false, receipt)
+            : new CandidateFailureRerunResult(null, receipt,
+                "candidate rerun did not report this identity as failing");
     }
 }

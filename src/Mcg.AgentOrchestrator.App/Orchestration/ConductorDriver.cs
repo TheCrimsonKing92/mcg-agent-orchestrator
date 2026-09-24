@@ -5834,50 +5834,64 @@ internal sealed partial class ConductorDriver
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
             var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
+            var attemptedAllFlakyDisposition = false;
             if (retryDisposition.ActionableCriteria.Count == 0)
             {
-                if (retryDisposition.ExcludedFailures.Any(failure =>
-                        failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced) &&
+                var allUnconfirmed = retryDisposition.ExcludedFailures.Count > 0 &&
+                    retryDisposition.ExcludedFailures.All(failure =>
+                        failure.Kind == AcceptanceRetryExclusionKind.UnconfirmedIntroduced);
+                attemptedAllFlakyDisposition = allUnconfirmed;
+                if (allUnconfirmed &&
                     TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading)
                         is { } candidateRerunRegate)
                 {
                     return candidateRerunRegate;
                 }
 
-                var observedHeads = _resolveAcceptanceHeads(goal);
-                var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
-                var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
-                var failedChecks = acceptance.FailedChecks is { Count: > 0 }
-                    ? acceptance.FailedChecks
-                    : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
-                _recordAcceptanceFailure(
-                    goal,
-                    failedChecks,
-                    branchHeadSha,
-                    mainHeadSha,
-                    acceptance.CheckAttributions,
-                    acceptance.BaselineAttestation);
-                var excludedSummary = string.Join(
-                    ", ",
-                    retryDisposition.ExcludedFailures.Select(FormatExcludedAcceptanceFailure));
-                var reason =
-                    $"Acceptance gate failures are all outside this goal's attributable scope: {excludedSummary}. " +
-                    "The candidate remains held at Verified for operator/main-red routing; no worker was reopened.";
-                RecordEscalation(goal, GoalLifecycleState.Verified, reason);
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        GoalLifecycleState.Verified,
-                        reason,
-                        StableIdentity: BuildUnattributableAcceptanceIdentity(
-                            branchHeadSha,
-                            mainHeadSha,
-                            retryDisposition.ExcludedFailures)));
+                if (allUnconfirmed)
+                {
+                    // Without an apparatus disposition, fail closed through today's retry path.
+                    retryDisposition = new AcceptanceRetryDisposition(
+                        acceptance.RequiredUnmetCriteria, []);
+                }
+                else
+                {
+                    var observedHeads = _resolveAcceptanceHeads(goal);
+                    var branchHeadSha = acceptance.BranchHeadSha ?? observedHeads.BranchHeadSha;
+                    var mainHeadSha = acceptance.MainHeadSha ?? observedHeads.MainHeadSha;
+                    var failedChecks = acceptance.FailedChecks is { Count: > 0 }
+                        ? acceptance.FailedChecks
+                        : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
+                    _recordAcceptanceFailure(
+                        goal,
+                        failedChecks,
+                        branchHeadSha,
+                        mainHeadSha,
+                        acceptance.CheckAttributions,
+                        acceptance.BaselineAttestation);
+                    var excludedSummary = string.Join(
+                        ", ",
+                        retryDisposition.ExcludedFailures.Select(FormatExcludedAcceptanceFailure));
+                    var reason =
+                        $"Acceptance gate failures are all outside this goal's attributable scope: {excludedSummary}. " +
+                        "The candidate remains held at Verified for operator/main-red routing; no worker was reopened.";
+                    RecordEscalation(goal, GoalLifecycleState.Verified, reason);
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            GoalLifecycleState.Verified,
+                            reason,
+                            StableIdentity: BuildUnattributableAcceptanceIdentity(
+                                branchHeadSha,
+                                mainHeadSha,
+                                retryDisposition.ExcludedFailures)));
+                }
             }
 
-            if (TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
+            if (!attemptedAllFlakyDisposition &&
+                TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } apparatusRed)
             {
                 return apparatusRed;
             }
@@ -6164,7 +6178,8 @@ internal sealed partial class ConductorDriver
                             identity,
                             attribution.Origin == AcceptanceTestFailureOrigin.Inherited
                                 ? AcceptanceRetryExclusionKind.Inherited
-                                : AcceptanceRetryExclusionKind.UnconfirmedIntroduced));
+                                : AcceptanceRetryExclusionKind.UnconfirmedIntroduced,
+                            attribution.CandidateRerun?.ReceiptPointer));
                     }
                     else
                     {

@@ -86,18 +86,6 @@ internal static class ApparatusRedClassifier
                     $"failing test {failingTest.TestIdentity} lives inside the candidate's changed paths");
             }
 
-            if (failingTest.CandidateRerunFailed)
-            {
-                return new ApparatusRedDisposition.Genuine(
-                    $"failing test {failingTest.TestIdentity} failed again on the candidate");
-            }
-
-            if (failingTest.CandidateRerunPassed)
-            {
-                evidenceKinds.Add(CandidateRerunEvidenceKind);
-                continue;
-            }
-
             if (!string.IsNullOrWhiteSpace(failingTest.ExceptionSignature))
             {
                 evidenceKinds.Add(ApparatusInfrastructureSignatures.EvidenceKind);
@@ -107,6 +95,18 @@ internal static class ApparatusRedClassifier
             if (failingTest.HasCrossGoalOccurrence)
             {
                 evidenceKinds.Add(CrossGoalEvidenceKind);
+                continue;
+            }
+
+            if (failingTest.CandidateRerunFailed)
+            {
+                return new ApparatusRedDisposition.Genuine(
+                    $"failing test {failingTest.TestIdentity} failed again on the candidate");
+            }
+
+            if (failingTest.CandidateRerunPassed)
+            {
+                evidenceKinds.Add(CandidateRerunEvidenceKind);
                 continue;
             }
 

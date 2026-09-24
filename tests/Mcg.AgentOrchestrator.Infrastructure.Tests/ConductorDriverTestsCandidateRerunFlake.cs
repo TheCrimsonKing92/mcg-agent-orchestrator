@@ -103,7 +103,46 @@ public sealed class ConductorDriverTestsCandidateRerunFlake
                 Assert.Contains(index.Read(), record =>
                     record.TestIdentity == FlakyIdentity &&
                     record.EvidenceKind == ApparatusRedClassifier.CandidateRerunEvidenceKind);
+                Assert.DoesNotContain(index.Read(), record =>
+                    record.Kind == AcceptanceFailingTestIndexKinds.ApparatusRegate);
             }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AllFlakyWithoutUsableApparatusDispositionTakesRetryPath(bool gatePresent)
+    {
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            string? retryMessage = null;
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => RedSummary(
+                    FailingCheck(FlakyIdentity, AcceptanceTestFailureOrigin.UnconfirmedIntroduced, "Passed")),
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                {
+                    retryMessage = message;
+                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind, retryCause: cause);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+                getLandingFileScopes: _ => ["src/Changed.cs"],
+                apparatusRedGate: gatePresent ? CreateGate(root, CreateIndex(root)) : null);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.Contains(FlakyIdentity, retryMessage, StringComparison.Ordinal);
         }
         finally
         {
