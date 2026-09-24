@@ -82,7 +82,7 @@ public sealed class CliReadOnlyStartupHydrationTests : CliTaskQueryTestSupport
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("board", "")]
+    [Xunit.InlineData("goals", "--board")]
     [Xunit.InlineData("task", "1")]
     [Xunit.InlineData("tasks", "")]
     [Xunit.InlineData("status", "abc10000")]

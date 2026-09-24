@@ -15,7 +15,7 @@ public sealed class CliGoalEventsStatusGoldenOutputTests : CliTaskQueryTestSuppo
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
-            var kernel = new AgentOrchestratorKernel();
+            var kernel = new AgentOrchestratorKernel(new FixedClock());
             var goal = kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Golden query fixture");
             Directory.CreateDirectory(workspace.GoalLifecycleEventsDirectory);
             File.WriteAllText(Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl"),
@@ -31,6 +31,11 @@ public sealed class CliGoalEventsStatusGoldenOutputTests : CliTaskQueryTestSuppo
                     ref legacyAgents, providers, ref legacyProfiles, ref legacyCurrentGoal);
                 Xunit.Assert.False(changed);
             });
+            var fixture = verb == "status"
+                ? CliGoalEventsStatusGoldenFixtures.Status
+                : CliGoalEventsStatusGoldenFixtures.GoalEvents;
+            Xunit.Assert.Equal(System.Text.Encoding.UTF8.GetBytes(fixture),
+                System.Text.Encoding.UTF8.GetBytes(oldOutput));
 
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
             IReadOnlyList<AgentDefinition> readAgents = AgentCatalog.Default().Agents;
@@ -44,7 +49,8 @@ public sealed class CliGoalEventsStatusGoldenOutputTests : CliTaskQueryTestSuppo
                 Xunit.Assert.False(changed);
             });
 
-            Xunit.Assert.Equal(oldOutput, newOutput);
+            Xunit.Assert.Equal(System.Text.Encoding.UTF8.GetBytes(fixture),
+                System.Text.Encoding.UTF8.GetBytes(newOutput));
         }
         finally
         {
@@ -79,5 +85,10 @@ public sealed class CliGoalEventsStatusGoldenOutputTests : CliTaskQueryTestSuppo
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private sealed class FixedClock : IClock
+    {
+        public DateTimeOffset UtcNow => new(2026, 9, 24, 0, 0, 0, TimeSpan.Zero);
     }
 }

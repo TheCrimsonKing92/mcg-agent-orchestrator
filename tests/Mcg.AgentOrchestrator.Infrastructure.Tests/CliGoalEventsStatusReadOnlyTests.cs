@@ -33,31 +33,33 @@ public sealed class CliGoalEventsStatusReadOnlyTests
             }
 
             var before = await ReadStateRowsAsync(workspace.SqliteStatePath);
-            await using var writer = OpenStateConnection(workspace.SqliteStatePath);
-            await writer.OpenAsync();
-            await using (var begin = writer.CreateCommand())
+            await using (var writer = OpenStateConnection(workspace.SqliteStatePath))
             {
-                begin.CommandText = "BEGIN IMMEDIATE";
-                await begin.ExecuteNonQueryAsync();
-            }
-            try
-            {
-                var events = await RunQueryAsync(root, "goal-events", goal.Id.Value[..8]);
-                Xunit.Assert.Equal(0, events.ExitCode);
-                Xunit.Assert.Equal("{\"eventKind\":\"query-test\"}" + Environment.NewLine, events.Output);
-                Xunit.Assert.Equal(string.Empty, events.Error);
+                await writer.OpenAsync();
+                await using (var begin = writer.CreateCommand())
+                {
+                    begin.CommandText = "BEGIN IMMEDIATE";
+                    await begin.ExecuteNonQueryAsync();
+                }
+                try
+                {
+                    var events = await RunQueryAsync(root, "goal-events", goal.Id.Value[..8]);
+                    Xunit.Assert.Equal(0, events.ExitCode);
+                    Xunit.Assert.Equal("{\"eventKind\":\"query-test\"}" + Environment.NewLine, events.Output);
+                    Xunit.Assert.Equal(string.Empty, events.Error);
 
-                var status = await RunQueryAsync(root, "status", goal.Id.Value[..8]);
-                Xunit.Assert.Equal(0, status.ExitCode);
-                Xunit.Assert.Contains(goal.Id.Value, status.Output, StringComparison.Ordinal);
-                Xunit.Assert.Contains(goal.Objective, status.Output, StringComparison.Ordinal);
-                Xunit.Assert.Equal(string.Empty, status.Error);
-            }
-            finally
-            {
-                await using var rollback = writer.CreateCommand();
-                rollback.CommandText = "ROLLBACK";
-                await rollback.ExecuteNonQueryAsync();
+                    var status = await RunQueryAsync(root, "status", goal.Id.Value[..8]);
+                    Xunit.Assert.Equal(0, status.ExitCode);
+                    Xunit.Assert.Contains(goal.Id.Value, status.Output, StringComparison.Ordinal);
+                    Xunit.Assert.Contains(goal.Objective, status.Output, StringComparison.Ordinal);
+                    Xunit.Assert.Equal(string.Empty, status.Error);
+                }
+                finally
+                {
+                    await using var rollback = writer.CreateCommand();
+                    rollback.CommandText = "ROLLBACK";
+                    await rollback.ExecuteNonQueryAsync();
+                }
             }
 
             Xunit.Assert.Equal(before, await ReadStateRowsAsync(workspace.SqliteStatePath));
@@ -69,7 +71,7 @@ public sealed class CliGoalEventsStatusReadOnlyTests
     }
 
     private static SqliteConnection OpenStateConnection(string path) =>
-        new(new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadWrite }.ToString());
+        new(new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString());
 
     private static async Task<string[]> ReadStateRowsAsync(string path)
     {
