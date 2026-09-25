@@ -244,15 +244,26 @@ internal static class AcceptanceCriterionEvidence
                 !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
                 (item.Owner == CriterionEvidenceOwner.Acceptance &&
-                 item.State == CriterionEvidenceState.Pending &&
+                 (item.State == CriterionEvidenceState.Pending ||
+                  item.State == CriterionEvidenceState.Satisfied && !string.IsNullOrWhiteSpace(executionDirectory)) &&
                  string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal) ||
                  item.Owner == CriterionEvidenceOwner.Operator &&
                  item.State == CriterionEvidenceState.Satisfied))
             .ToArray();
-        var oldHeads = eligible.Select(item => item.ExpectedCandidateSha!)
+        // Check previously eligible heads first so their refusal reason stays unchanged.
+        var oldHeads = eligible
+            .OrderBy(item => item.Owner == CriterionEvidenceOwner.Acceptance && item.State == CriterionEvidenceState.Satisfied)
+            .Select(item => item.ExpectedCandidateSha!)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (eligible.Length == 0) return false;
+        if (eligible.Any(item => item.Owner == CriterionEvidenceOwner.Acceptance && item.State == CriterionEvidenceState.Satisfied) &&
+            goal.GetOutstandingCriterionEvidenceObligations(candidateSha).Any(item =>
+                item.Owner == CriterionEvidenceOwner.Acceptance &&
+                string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal) &&
+                !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                !eligible.Contains(item)))
+            return false;
         if (string.IsNullOrWhiteSpace(executionDirectory))
         {
             refusal = "reason=no-execution-directory";
@@ -265,7 +276,16 @@ internal static class AcceptanceCriterionEvidence
             if (!GoalWorktrees.TryComputePatchEquivalence(
                     executionDirectory, oldHead, candidateSha, out var evidence, out var reason))
             {
-                refusal = $"reason={reason}; head={oldHead}";
+                // Preserve the refusal already shown for a satisfied Acceptance
+                // obligation when its patch is different or cannot be checked.
+                refusal = eligible.Any(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
+                    item.State == CriterionEvidenceState.Satisfied &&
+                    string.Equals(item.ExpectedCandidateSha, oldHead, StringComparison.OrdinalIgnoreCase))
+                    && !eligible.Any(item =>
+                        (item.Owner == CriterionEvidenceOwner.Operator || item.State == CriterionEvidenceState.Pending) &&
+                        string.Equals(item.ExpectedCandidateSha, oldHead, StringComparison.OrdinalIgnoreCase))
+                        ? null
+                        : $"reason={reason}; head={oldHead}";
                 return false;
             }
             evidenceByHead.Add(oldHead, evidence);
@@ -294,6 +314,14 @@ internal static class AcceptanceCriterionEvidence
                     obligation.RequiredScope,
                     passed: true,
                     detail: $"Carried operator evidence from {obligation.ExpectedCandidateSha} to patch-equivalent candidate {candidateSha}; {evidenceByHead[obligation.ExpectedCandidateSha!]}.");
+            }
+            else if (obligation.State == CriterionEvidenceState.Satisfied)
+            {
+                GoalOperationJournal.Completed(
+                    executionDirectory,
+                    goal,
+                    "conductor:criterion-evidence-satisfied-acceptance-carry",
+                    $"obligation={obligation.Id}; oldHead={obligation.ExpectedCandidateSha}; newHead={candidateSha}; reason=patch-equivalent carry of satisfied acceptance obligation");
             }
         }
 
