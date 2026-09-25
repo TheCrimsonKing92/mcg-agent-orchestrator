@@ -40,7 +40,6 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
         };
         var deadlineCreated = NewSignal();
         var releaseDeadline = NewSignal();
-        var allowTickLines = NewSignal();
         var sleepEntered = NewSignal();
         var releaseSleep = NewSignal();
         var (kernel, _) = SimpleGoal();
@@ -67,26 +66,22 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
             {
                 successorRequest = request;
                 request.OnStandardOutputLine!("LOOP_READY lock=acquired");
-                request.OnStandardOutputLine("LOOP_START tick=0");
-                loopOutput = Task.Run(() => AsyncLocalConsoleRouter.Capture(() =>
-                    new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
-                        NoStopPath(), maxIterations: 2, watchInterval: TimeSpan.FromMinutes(3),
-                        onTick: tick =>
-                        {
-                            if (!tick.WatchSleeping || tick.Tick != 1)
-                                return;
-                            allowTickLines.Task.GetAwaiter().GetResult();
-                            request.OnStandardOutputLine!("TICK_END tick=1 activation=true");
-                            request.OnStandardOutputLine("WATCH_SLEEP tick=1 seconds=180");
-                        },
-                        sleepFunc: interval =>
-                        {
-                            sleepInterval = interval;
-                            Console.WriteLine("FAKE_SLEEP_ENTERED");
-                            sleepEntered.TrySetResult();
-                            releaseSleep.Task.GetAwaiter().GetResult();
-                            return true;
-                        }, emitActivationHeartbeat: true)));
+                loopOutput = Task.Run(() =>
+                {
+                    var writer = new ForwardingCaptureWriter(line => request.OnStandardOutputLine!(line));
+                    AsyncLocalConsoleRouter.CaptureTo(() =>
+                        new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+                            NoStopPath(), maxIterations: 2, watchInterval: TimeSpan.FromMinutes(3),
+                            sleepFunc: interval =>
+                            {
+                                sleepInterval = interval;
+                                Console.WriteLine("FAKE_SLEEP_ENTERED");
+                                sleepEntered.TrySetResult();
+                                releaseSleep.Task.GetAwaiter().GetResult();
+                                return true;
+                            }, emitActivationHeartbeat: true), writer);
+                    return writer.ToString();
+                });
                 cancellationToken.Register(() => successorExit.TrySetResult(
                     new ConductorSupervisorProcessResult(-1, 701, TerminationConfirmed: true)));
                 return successorExit.Task;
@@ -114,7 +109,6 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
         try
         {
             await deadlineCreated.Task.WaitAsync(TestContext.Current.CancellationToken);
-            allowTickLines.TrySetResult();
             await sleepEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.True(sleepInterval > TimeSpan.FromMinutes(2));
             releaseDeadline.TrySetResult();
@@ -124,7 +118,6 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
         }
         finally
         {
-            allowTickLines.TrySetResult();
             releaseSleep.TrySetResult();
         }
         lines = (await loopOutput!.WaitAsync(TestContext.Current.CancellationToken))
@@ -226,6 +219,16 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
 
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private sealed class ForwardingCaptureWriter(Action<string> onLine) : StringWriter
+    {
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            if (value is not null)
+                onLine(value);
+        }
+    }
 
     private static ConductorPreparedSuccessor Build(string name, IDisposable lease) =>
         new($"C:\\{name}", $"C:\\{name}\\Mcg.AgentOrchestrator.App.dll", name, name,
