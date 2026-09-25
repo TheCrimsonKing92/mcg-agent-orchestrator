@@ -159,6 +159,20 @@ public sealed partial class CollaborationItemStore
         long? expectedGoalStateVersion,
         DecisionResponse response,
         DateTimeOffset recordedAt,
+        CancellationToken cancellationToken = default) =>
+        await RecordDecisionAsync(requestId, actorId, channel, authenticationAssurance,
+            expectedGoalStateVersion, response, recordedAt, null, null, cancellationToken);
+
+    public async Task<DecisionReceipt> RecordDecisionAsync(
+        string requestId,
+        string actorId,
+        string channel,
+        AuthorizationTier authenticationAssurance,
+        long? expectedGoalStateVersion,
+        DecisionResponse response,
+        DateTimeOffset recordedAt,
+        DecisionReversibility? reversibility,
+        string? precedentRef,
         CancellationToken cancellationToken = default)
     {
         return await WithBusyRetryAsync(async () =>
@@ -204,7 +218,9 @@ public sealed partial class CollaborationItemStore
                     expectedGoalStateVersion ?? action.ExpectedGoalStateVersion,
                     normalizedResponse,
                     recordedAt,
-                    null);
+                    null,
+                    reversibility,
+                    precedentRef);
                 await InsertDecisionReceiptAsync(conn, receipt, cancellationToken);
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 return receipt;
@@ -345,7 +361,8 @@ public sealed partial class CollaborationItemStore
                     expectedGoalStateVersion,
                     currentGoalStateVersion,
                     rejection ?? result,
-                    appliedAt);
+                    appliedAt,
+                    rejection is null ? result : $"refused {rejection}");
                 await InsertEffectReceiptAsync(conn, effect, cancellationToken);
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 return new DecisionEffectApplyResult(effect.Status == EffectReceiptStatus.Applied, false, effect, rejection);
@@ -521,12 +538,12 @@ public sealed partial class CollaborationItemStore
                 id, request_id, rendered_text, template_version, evidence_manifest_json,
                 evidence_manifest_hash, actor_id, channel, authentication_assurance,
                 expected_goal_state_version, action_ref, response_value, selected_reuse_scope,
-                permanent_policy_proposed, recorded_at)
+                permanent_policy_proposed, recorded_at, reversibility, precedent_ref)
             VALUES (
                 $id, $request_id, $rendered_text, $template_version, $evidence_manifest_json,
                 $evidence_manifest_hash, $actor_id, $channel, $authentication_assurance,
                 $expected_goal_state_version, $action_ref, $response_value, $selected_reuse_scope,
-                $permanent_policy_proposed, $recorded_at)
+                $permanent_policy_proposed, $recorded_at, $reversibility, $precedent_ref)
             """;
         cmd.Parameters.AddWithValue("$id", receipt.Id);
         cmd.Parameters.AddWithValue("$request_id", receipt.RequestId);
@@ -543,6 +560,8 @@ public sealed partial class CollaborationItemStore
         cmd.Parameters.AddWithValue("$selected_reuse_scope", receipt.Response.SelectedReuseScope.ToString());
         cmd.Parameters.AddWithValue("$permanent_policy_proposed", receipt.Response.PermanentPolicyProposed ? 1 : 0);
         cmd.Parameters.AddWithValue("$recorded_at", receipt.RecordedAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$reversibility", (object?)receipt.Reversibility?.ToString() ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$precedent_ref", (object?)receipt.PrecedentRef ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -555,10 +574,10 @@ public sealed partial class CollaborationItemStore
         cmd.CommandText = """
             INSERT INTO collaboration_effect_receipts (
                 id, request_id, decision_receipt_id, action_ref, status, expected_goal_state_version,
-                actual_goal_state_version, result, recorded_at)
+                actual_goal_state_version, result, recorded_at, outcome)
             VALUES (
                 $id, $request_id, $decision_receipt_id, $action_ref, $status, $expected_goal_state_version,
-                $actual_goal_state_version, $result, $recorded_at)
+                $actual_goal_state_version, $result, $recorded_at, $outcome)
             """;
         cmd.Parameters.AddWithValue("$id", receipt.Id);
         cmd.Parameters.AddWithValue("$request_id", receipt.RequestId);
@@ -569,6 +588,7 @@ public sealed partial class CollaborationItemStore
         cmd.Parameters.AddWithValue("$actual_goal_state_version", (object?)receipt.ActualGoalStateVersion ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$result", receipt.Result);
         cmd.Parameters.AddWithValue("$recorded_at", receipt.RecordedAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$outcome", (object?)receipt.Outcome ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -676,7 +696,7 @@ public sealed partial class CollaborationItemStore
             SELECT id, request_id, rendered_text, template_version, evidence_manifest_json,
                    evidence_manifest_hash, actor_id, channel, authentication_assurance,
                    expected_goal_state_version, action_ref, response_value, selected_reuse_scope,
-                   permanent_policy_proposed, recorded_at
+                   permanent_policy_proposed, recorded_at, reversibility, precedent_ref
             FROM collaboration_decision_receipts
             WHERE id = $id
             LIMIT 1
@@ -703,7 +723,9 @@ public sealed partial class CollaborationItemStore
                 Enum.Parse<DecisionReuseScope>(reader.GetString(12)),
                 reader.GetInt32(13) != 0),
             DateTimeOffset.Parse(reader.GetString(14)),
-            effect);
+            effect,
+            reader.IsDBNull(15) ? null : Enum.Parse<DecisionReversibility>(reader.GetString(15)),
+            reader.IsDBNull(16) ? null : reader.GetString(16));
     }
 
     private static async Task<EffectReceipt?> TryReadEffectReceiptForRequestAsync(
@@ -714,7 +736,7 @@ public sealed partial class CollaborationItemStore
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, request_id, decision_receipt_id, action_ref, status, expected_goal_state_version,
-                   actual_goal_state_version, result, recorded_at
+                   actual_goal_state_version, result, recorded_at, outcome
             FROM collaboration_effect_receipts
             WHERE request_id = $request_id
             ORDER BY CASE status WHEN 'Applied' THEN 0 ELSE 1 END, recorded_at DESC
@@ -736,7 +758,7 @@ public sealed partial class CollaborationItemStore
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, request_id, decision_receipt_id, action_ref, status, expected_goal_state_version,
-                   actual_goal_state_version, result, recorded_at
+                   actual_goal_state_version, result, recorded_at, outcome
             FROM collaboration_effect_receipts
             WHERE request_id = $request_id
               AND decision_receipt_id = $decision_receipt_id

@@ -461,7 +461,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
         Assert.Contains("contract-repair limit (2)", escalation, StringComparison.Ordinal);
         Assert.Contains("ERR_REVIEW_FINDING_IDENTITY_MOVED", escalation, StringComparison.Ordinal);
         Assert.Contains("canonical_open_count=1", escalation, StringComparison.Ordinal);
-        Assert.Contains("verify-manual", escalation, StringComparison.Ordinal);
+        Assert.Contains("adjudicate --goal <goal> <task#> close", escalation, StringComparison.Ordinal);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 

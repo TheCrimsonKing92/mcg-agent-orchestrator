@@ -8,7 +8,9 @@ internal sealed record PreparedOperatorAdjudication(
     string Text,
     IReadOnlyList<string> EvidenceReferences,
     string WorkingDirectory,
-    string? Cause);
+    string? Cause,
+    string? Reversibility,
+    string? Precedent);
 
 internal static partial class CliCommandHandlers
 {
@@ -30,7 +32,9 @@ internal static partial class CliCommandHandlers
             File.ReadAllText(textFile, System.Text.Encoding.UTF8),
             GetAdjudicationEvidence(parts),
             workspace.RootDirectory,
-            GetFlagValue(parts, "--cause"));
+            GetFlagValue(parts, "--cause"),
+            GetFlagValue(parts, "--reversibility"),
+            GetFlagValue(parts, "--precedent"));
         return new GoalScopedTaskMutationCommand(
             OperatorIntentVerbs.Adjudicate,
             parts,
@@ -61,7 +65,9 @@ internal static partial class CliCommandHandlers
             prepared.EvidenceReferences,
             expectedGoalStateVersion,
             prepared.WorkingDirectory,
-            prepared.Cause);
+            prepared.Cause,
+            prepared.Reversibility,
+            prepared.Precedent);
     }
 
     internal static OperatorActorKind ParseOperatorActorKind(string? value)

@@ -24,7 +24,9 @@ public sealed record AdjudicateOperatorIntentPayload(
     IReadOnlyList<string> EvidenceReferences,
     long ExpectedGoalStateVersion,
     string WorkingDirectory,
-    string? Cause = null);
+    string? Cause = null,
+    string? Reversibility = null,
+    string? Precedent = null);
 
 public sealed record ApprovePolicyChangeOperatorIntentPayload(string CandidateSha, string Reason);
 
