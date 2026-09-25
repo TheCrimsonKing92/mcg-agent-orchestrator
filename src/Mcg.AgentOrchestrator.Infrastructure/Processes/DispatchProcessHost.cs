@@ -25,6 +25,7 @@ public static class DispatchProcessHost
     internal const string LowIntegritySetupArtifactName = "low-integrity-setup.json";
     internal const string WorkerCaBundleFileName = "worker-ca-bundle.pem";
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan HeartbeatQuiesceTimeout = TimeSpan.FromSeconds(5);
     private static readonly IcaclsIntegrityLabeler IntegrityLabeler = new();
 
     // Dispatch supervision: an unbounded wait lets a hung worker — or a stuck grandchild such as a
@@ -1353,10 +1354,21 @@ public static void DropToLow() {
             return 1;
         }
 
-        return RunCore(parameters);
+        return RunCore(parameters, null);
     }
 
-    private static int RunCore(DispatchRunParameters parameters)
+    internal sealed class HeartbeatTestHooks
+    {
+        internal Action<int?>? ObserveSelectedChild { get; init; }
+        internal Action<string>? TeardownPhase { get; init; }
+        internal Action<string>? DiagnosticRecorded { get; init; }
+        internal TimeSpan? QuiesceTimeout { get; init; }
+    }
+
+    internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks) =>
+        RunCore(parameters, hooks);
+
+    private static int RunCore(DispatchRunParameters parameters, HeartbeatTestHooks? heartbeatHooks)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var lastProgressAt = startedAt;
@@ -1373,6 +1385,9 @@ public static void DropToLow() {
         OwnedProcessGroup? workerGroup = null;
         Process? selectedChild = null;
         var selectedChildLock = new object();
+        var diagnosticLock = new object();
+        var loggedHeartbeatFailures = new HashSet<Type>();
+        var heartbeatStopping = 0;
         var heartbeatProcessIdentities = new DispatchHeartbeatProcessIdentityTracker();
         string? hostDiagnosticWriteFailure = null;
         var heartbeatInterval = parameters.HeartbeatIntervalMilliseconds > 0
@@ -1387,35 +1402,55 @@ public static void DropToLow() {
 
         void RecordFallbackDiagnostic(string diagnostic)
         {
-            hostDiagnosticWriteFailure = diagnostic;
-            if (string.IsNullOrWhiteSpace(parameters.HostDiagnosticPath))
+            lock (diagnosticLock)
             {
-                return;
-            }
+                hostDiagnosticWriteFailure = diagnostic;
+                heartbeatHooks?.DiagnosticRecorded?.Invoke(diagnostic);
+                if (string.IsNullOrWhiteSpace(parameters.HostDiagnosticPath))
+                {
+                    return;
+                }
 
-            try
-            {
-                AppendAllTextDurable(parameters.HostDiagnosticPath, diagnostic + Environment.NewLine);
-            }
-            catch (Exception fallbackFailure)
-            {
-                hostDiagnosticWriteFailure +=
-                    $"; fallback diagnostic write failed: {fallbackFailure.GetType().Name}: {fallbackFailure.Message}";
+                try
+                {
+                    AppendAllTextDurable(parameters.HostDiagnosticPath, diagnostic + Environment.NewLine);
+                }
+                catch (Exception fallbackFailure)
+                {
+                    hostDiagnosticWriteFailure +=
+                        $"; fallback diagnostic write failed: {fallbackFailure.GetType().Name}: {fallbackFailure.Message}";
+                }
             }
         }
 
-        void ObserveSelectedChild(int? candidatePid)
+        int? ObserveSelectedChild(int? candidatePid)
         {
+            heartbeatHooks?.ObserveSelectedChild?.Invoke(candidatePid);
             if (candidatePid is null || worker is null || candidatePid.Value == worker.Id)
             {
-                return;
+                return candidatePid;
             }
 
             lock (selectedChildLock)
             {
-                if (selectedChild?.Id == candidatePid.Value)
+                if (selectedChild is not null)
                 {
-                    return;
+                    try
+                    {
+                        if (selectedChild.HasExited)
+                        {
+                            return null;
+                        }
+
+                        if (selectedChild.Id == candidatePid.Value)
+                        {
+                            return candidatePid;
+                        }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        selectedChild = null;
+                    }
                 }
 
                 try
@@ -1438,7 +1473,10 @@ public static void DropToLow() {
                 catch
                 {
                     // The next watchdog/heartbeat observation can retry if the candidate raced exit.
+                    return null;
                 }
+
+                return candidatePid;
             }
         }
 
@@ -1521,8 +1559,7 @@ public static void DropToLow() {
             var ownedCpuMs = ownedAccounting?.CpuMilliseconds ?? SumOwnedCpuMs(ownedPids);
             var ownedPeakMemoryBytes = ownedAccounting?.PeakMemoryBytes;
             var ownedIoBytes = ownedAccounting?.IoBytes;
-            var childPid = SelectHeartbeatChildPid(worker, ownedPids);
-            ObserveSelectedChild(childPid);
+            var childPid = ObserveSelectedChild(SelectHeartbeatChildPid(worker, ownedPids));
             providerSessionId ??= TryCaptureProviderSessionId(
                 parameters.Provider,
                 parameters.StdoutPath,
@@ -1663,7 +1700,38 @@ public static void DropToLow() {
             WritePrepHeartbeat(prepExitCode == 0 ? "exited" : "failed", terminal: true);
         }
 
-        using var heartbeatTimer = new Timer(_ => WriteHeartbeat("running"), null, Timeout.Infinite, Timeout.Infinite);
+        void WritePeriodicHeartbeat(object? _)
+        {
+            if (Volatile.Read(ref heartbeatStopping) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                WriteHeartbeat("running");
+            }
+            catch (Exception failure)
+            {
+                try
+                {
+                    lock (loggedHeartbeatFailures)
+                    {
+                        if (loggedHeartbeatFailures.Add(failure.GetType()))
+                        {
+                            RecordFallbackDiagnostic(
+                                $"[dispatch-host] heartbeat callback failed: {failure.GetType().Name}: {failure.Message}");
+                        }
+                    }
+                }
+                catch
+                {
+                    // Diagnostic failures must not escape the timer callback either.
+                }
+            }
+        }
+
+        using var heartbeatTimer = new Timer(WritePeriodicHeartbeat, null, Timeout.Infinite, Timeout.Infinite);
         using var prepHeartbeatTimer = new Timer(_ => WritePrepHeartbeat("preparing-sandbox"), null, Timeout.Infinite, Timeout.Infinite);
 
         try
@@ -1783,6 +1851,7 @@ public static void DropToLow() {
         }
         finally
         {
+            Volatile.Write(ref heartbeatStopping, 1);
             heartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
             prepHeartbeatTimer.Change(Timeout.Infinite, Timeout.Infinite);
             CompletePrep(exitCode == 0 ? 0 : 1);
@@ -1794,7 +1863,20 @@ public static void DropToLow() {
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
             // only after every child/diagnostic artifact the completion path reads is durable.
             TryWriteDispatchExitArtifact(parameters.ExitCodePath, exitCode);
-            selectedChild?.Dispose();
+            heartbeatHooks?.TeardownPhase?.Invoke("quiescing");
+            using var heartbeatQuiesced = new ManualResetEvent(false);
+            if (heartbeatTimer.Dispose(heartbeatQuiesced) &&
+                !heartbeatQuiesced.WaitOne(heartbeatHooks?.QuiesceTimeout ?? HeartbeatQuiesceTimeout))
+            {
+                RecordFallbackDiagnostic("[dispatch-host] heartbeat timer did not quiesce before selected child disposal");
+            }
+
+            lock (selectedChildLock)
+            {
+                heartbeatHooks?.TeardownPhase?.Invoke("disposing-selected-child");
+                selectedChild?.Dispose();
+                selectedChild = null;
+            }
         }
 
         return exitCode;
