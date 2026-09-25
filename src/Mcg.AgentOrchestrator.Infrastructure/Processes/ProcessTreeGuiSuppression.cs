@@ -15,6 +15,7 @@ internal static class ProcessTreeGuiSuppression
     internal sealed class ConsoleSpawnScope : IDisposable
     {
         private readonly Action? _onDispose;
+        private readonly uint? _originalErrorMode;
         private readonly LaunchLockEntryPoint? _entryPoint;
         private readonly long _waitTicks;
         private readonly long _acquiredTimestamp;
@@ -25,6 +26,7 @@ internal static class ProcessTreeGuiSuppression
             bool childConsolePolicyApplied,
             uint childCreationFlags = 0,
             Action? onDispose = null,
+            uint? originalErrorMode = null,
             LaunchLockEntryPoint? entryPoint = null,
             long waitTicks = 0,
             long acquiredTimestamp = 0)
@@ -32,6 +34,7 @@ internal static class ProcessTreeGuiSuppression
             ChildConsolePolicyApplied = childConsolePolicyApplied;
             ChildCreationFlags = childCreationFlags;
             _onDispose = onDispose;
+            _originalErrorMode = originalErrorMode;
             _entryPoint = entryPoint;
             _waitTicks = waitTicks;
             _acquiredTimestamp = acquiredTimestamp;
@@ -53,8 +56,20 @@ internal static class ProcessTreeGuiSuppression
             // Console ownership belongs to the child created by this scope. The
             // launcher never changes its console membership or standard handles.
             _disposed = true;
+            long holdEnded = 0;
             try
             {
+                try
+                {
+                    if (_originalErrorMode is { } originalErrorMode)
+                    {
+                        _ = Windows.SetErrorMode(originalErrorMode);
+                    }
+                }
+                finally
+                {
+                    holdEnded = Stopwatch.GetTimestamp();
+                }
                 _onDispose?.Invoke();
             }
             finally
@@ -64,7 +79,7 @@ internal static class ProcessTreeGuiSuppression
                     LaunchLockTelemetry.Record(
                         entryPoint,
                         _waitTicks,
-                        Stopwatch.GetTimestamp() - _acquiredTimestamp,
+                        holdEnded - _acquiredTimestamp,
                         _childCreateTicks);
                 }
             }
@@ -117,11 +132,8 @@ internal static class ProcessTreeGuiSuppression
             return new ConsoleSpawnScope(
                 childConsolePolicyApplied: childConsolePolicy.ChildCreateNoWindow,
                 childConsolePolicy.ChildCreationFlags,
-                onDispose: () =>
-                {
-                    _ = Windows.SetErrorMode(originalErrorMode);
-                    Monitor.Exit(WindowsLaunchLock);
-                },
+                onDispose: () => Monitor.Exit(WindowsLaunchLock),
+                originalErrorMode: originalErrorMode,
                 entryPoint: LaunchLockEntryPoint.AcquireSuppressedChildSpawn,
                 waitTicks: acquired - waitStarted,
                 acquiredTimestamp: acquired);
@@ -150,11 +162,8 @@ internal static class ProcessTreeGuiSuppression
             _ = Windows.SetErrorMode(originalErrorMode | SuppressedErrorModeFlags);
             return new ConsoleSpawnScope(
                 childConsolePolicyApplied: false,
-                onDispose: () =>
-                {
-                    _ = Windows.SetErrorMode(originalErrorMode);
-                    Monitor.Exit(WindowsLaunchLock);
-                },
+                onDispose: () => Monitor.Exit(WindowsLaunchLock),
+                originalErrorMode: originalErrorMode,
                 entryPoint: LaunchLockEntryPoint.AcquireErrorModeForChildSpawn,
                 waitTicks: acquired - waitStarted,
                 acquiredTimestamp: acquired);
@@ -185,26 +194,34 @@ internal static class ProcessTreeGuiSuppression
         var childConsolePolicy = ChildConsoleLaunchPolicy.Prepare();
         var waitStarted = Stopwatch.GetTimestamp();
         long acquired = 0;
+        long holdEnded = 0;
         try
         {
             lock (WindowsLaunchLock)
             {
                 acquired = Stopwatch.GetTimestamp();
-                var originalErrorMode = Windows.GetErrorMode();
-                var originalCreateNoWindow = startInfo.CreateNoWindow;
-
                 try
                 {
-                    _ = Windows.SetErrorMode(originalErrorMode | SuppressedErrorModeFlags);
-                    startInfo.CreateNoWindow = childConsolePolicy.ChildCreateNoWindow;
+                    var originalErrorMode = Windows.GetErrorMode();
+                    var originalCreateNoWindow = startInfo.CreateNoWindow;
 
-                    return Process.Start(startInfo)
-                        ?? throw new InvalidOperationException($"Failed to start process: {startInfo.FileName}");
+                    try
+                    {
+                        _ = Windows.SetErrorMode(originalErrorMode | SuppressedErrorModeFlags);
+                        startInfo.CreateNoWindow = childConsolePolicy.ChildCreateNoWindow;
+
+                        return Process.Start(startInfo)
+                            ?? throw new InvalidOperationException($"Failed to start process: {startInfo.FileName}");
+                    }
+                    finally
+                    {
+                        startInfo.CreateNoWindow = originalCreateNoWindow;
+                        _ = Windows.SetErrorMode(originalErrorMode);
+                    }
                 }
                 finally
                 {
-                    startInfo.CreateNoWindow = originalCreateNoWindow;
-                    _ = Windows.SetErrorMode(originalErrorMode);
+                    holdEnded = Stopwatch.GetTimestamp();
                 }
             }
         }
@@ -215,7 +232,7 @@ internal static class ProcessTreeGuiSuppression
                 LaunchLockTelemetry.Record(
                     LaunchLockEntryPoint.Start,
                     acquired - waitStarted,
-                    Stopwatch.GetTimestamp() - acquired);
+                    holdEnded - acquired);
             }
         }
     }
