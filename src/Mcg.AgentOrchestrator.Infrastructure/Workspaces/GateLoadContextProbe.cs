@@ -247,7 +247,7 @@ internal static class GateLoadContextProbe
             .ToArray();
     }
 
-    private static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants()
+    internal static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants()
     {
         var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0));
         if (string.IsNullOrWhiteSpace(heartbeatDirectory))

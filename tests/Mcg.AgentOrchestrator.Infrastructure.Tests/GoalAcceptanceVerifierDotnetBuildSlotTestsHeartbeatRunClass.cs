@@ -9,26 +9,25 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsHeartbeatRunClass 
     {
         const int slot = 0;
         const string goalId = "abcdef12abcdef12abcdef12abcdef12";
-        var path = GateHeartbeatArtifacts.GetStableSlotPath(slot);
+        var path = GateHeartbeatArtifacts.GetRunScopedStableSlotPath(slot, Guid.NewGuid().ToString("N"));
         var now = DateTimeOffset.UtcNow;
         var snapshot = new GateHeartbeatSnapshot(
             goalId, "verification-check", "legacy", slot, Environment.ProcessId,
             Environment.ProcessId, "running", now, now, now, 0, 0, 0);
         try
         {
-            TryDeleteStableSlotHeartbeat(slot);
             GateHeartbeatArtifacts.Write(path, snapshot);
             Assert.DoesNotContain("runClass", File.ReadAllText(path), StringComparison.OrdinalIgnoreCase);
 
-            var read = GateHeartbeatArtifacts.ReadStableSlot(slot);
+            var read = GateHeartbeatArtifacts.ReadStableSlots().Single(status => status.Path == path);
             Assert.True(read.IsAvailable);
             Assert.Null(read.Snapshot!.RunClass);
-            Assert.Contains(GateLoadContextProbe.CaptureLiveGateOccupants(), occupant =>
+            Assert.Contains(GateLoadContextProbe.ReadLiveGateOccupants(), occupant =>
                 occupant.GoalId == goalId && occupant.CountsAsAcceptanceOccupant);
         }
         finally
         {
-            TryDeleteStableSlotHeartbeat(slot);
+            GateHeartbeatArtifacts.TryDelete(path);
         }
     }
 
@@ -47,7 +46,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsHeartbeatRunClass 
         string? mirrorPath = null;
         try
         {
-            TryDeleteStableSlotHeartbeat(slot);
             (primaryPath, mirrorPath) = GoalAcceptanceVerifier.WriteGateHeartbeatBeatForTests(
                 "focused lane", goalId, environment, Environment.ProcessId,
                 Path.Combine(root, "run.out"), Path.Combine(root, "run.err"),
@@ -58,14 +56,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsHeartbeatRunClass 
             Assert.Contains(GateHeartbeatArtifacts.ReadStableSlots(), status =>
                 status.Path == mirrorPath &&
                 status.Snapshot?.RunClass == GateHeartbeatRunClass.FocusedEvidence);
-            Assert.Contains(GateLoadContextProbe.CaptureLiveGateOccupants(), occupant =>
+            Assert.Contains(GateLoadContextProbe.ReadLiveGateOccupants(), occupant =>
                 occupant.GoalId == goalId.Value && !occupant.CountsAsAcceptanceOccupant);
         }
         finally
         {
             if (primaryPath is not null) GateHeartbeatArtifacts.TryDelete(primaryPath);
             if (mirrorPath is not null) GateHeartbeatArtifacts.TryDelete(mirrorPath);
-            TryDeleteStableSlotHeartbeat(slot);
             try { DeleteDirectoryWithRetry(root); } catch { }
         }
     }
