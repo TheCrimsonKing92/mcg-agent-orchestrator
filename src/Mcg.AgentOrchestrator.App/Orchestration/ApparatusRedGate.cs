@@ -65,6 +65,24 @@ internal sealed class ApparatusRedGate
 
     internal AcceptanceFailingTestIndex Index => _index;
 
+    internal ApparatusRedDisposition? ClassifyWithinAttemptRerun(
+        Goal goal,
+        AcceptanceVerificationSummary acceptance)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        try
+        {
+            return WithinAttemptRerunApparatusClassifier.Classify(
+                acceptance,
+                AcceptanceFailingTestIndex.CountRegates(_index.Read(), goal.Id.Value),
+                _perGoalRegateCap);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// Records this gate completion in the cross-goal census and returns the materialized evidence.
     /// Called at the acceptance failure handler's single entry point so it runs for every gate
