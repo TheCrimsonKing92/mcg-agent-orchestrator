@@ -761,6 +761,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
             sleeper.Dispose();
             TryDeleteStableSlotHeartbeat(0);
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -880,6 +881,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             TryDeleteStableSlotHeartbeat(0);
             try { File.Delete(stdoutPath); } catch { }
             try { File.Delete(stderrPath); } catch { }
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
             DeleteDirectoryWithRetry(root);
         }
     }

@@ -24,32 +24,19 @@ internal sealed class PerUserGoalRootLeakProbe
 
     internal void AssertScopedTo(string actualGoalRoot, string temporaryDirectory)
     {
-        try
+        Assert.True(Directory.Exists(actualGoalRoot), $"Goal root was not created: {actualGoalRoot}");
+        var relative = Path.GetRelativePath(temporaryDirectory, actualGoalRoot);
+        Assert.False(relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal),
+            $"Goal root escaped test temporary directory: {actualGoalRoot}");
+        Assert.Empty(SnapshotEntries(_perUserGoalsRoot).Except(_beforeEntries, StringComparer.Ordinal));
+        Assert.Equal(_beforeGoalRoot, Snapshot(Path.Combine(_perUserGoalsRoot, _goalPrefix)));
+    }
+
+    internal static void DrainRegistrationReports(DotnetBuildStorageRoot storageRoot)
+    {
+        // An unregistered test root must not leave reports for another test's sweep.
+        while (DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(25, storageRoot).Count == 25)
         {
-            Assert.True(Directory.Exists(actualGoalRoot), $"Goal root was not created: {actualGoalRoot}");
-            var relative = Path.GetRelativePath(temporaryDirectory, actualGoalRoot);
-            Assert.False(relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal),
-                $"Goal root escaped test temporary directory: {actualGoalRoot}");
-            Assert.Empty(SnapshotEntries(_perUserGoalsRoot).Except(_beforeEntries, StringComparer.Ordinal));
-            Assert.Equal(_beforeGoalRoot, Snapshot(Path.Combine(_perUserGoalsRoot, _goalPrefix)));
-        }
-        finally
-        {
-            // These tests deliberately use temporary build roots without a state-store registrar.
-            // Do not leave their registration reports for an unrelated sweep assertion.
-            var goalsDirectory = Path.GetDirectoryName(actualGoalRoot);
-            var storageDirectory = goalsDirectory is null ? null : Path.GetDirectoryName(goalsDirectory);
-            var scopedPath = Path.GetRelativePath(temporaryDirectory, actualGoalRoot);
-            if (scopedPath != ".." &&
-                !scopedPath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
-                storageDirectory is not null &&
-                string.Equals(Path.GetFileName(goalsDirectory), "goals", StringComparison.OrdinalIgnoreCase))
-            {
-                var storageRoot = new DotnetBuildStorageRoot(storageDirectory);
-                while (DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(25, storageRoot).Count == 25)
-                {
-                }
-            }
         }
     }
 

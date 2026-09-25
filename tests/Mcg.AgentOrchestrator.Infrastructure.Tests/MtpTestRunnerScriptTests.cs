@@ -2565,6 +2565,7 @@ file static class MtpTestRunnerScriptTestSupport
         finally
         {
             lease.Dispose();
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storage);
             if (Directory.Exists(testRoot))
                 Directory.Delete(testRoot, recursive: true);

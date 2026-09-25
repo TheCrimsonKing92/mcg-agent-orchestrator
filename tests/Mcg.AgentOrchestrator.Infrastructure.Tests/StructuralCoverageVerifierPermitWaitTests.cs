@@ -63,6 +63,7 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
             holder?.Dispose();
             LockAttribution.AttributeForTests = null;
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storage);
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
             DeleteDirectoryWithRetry(root);
             DeleteDirectoryWithRetry(mainRoot);
         }
@@ -122,6 +123,7 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
         {
             holder?.Dispose();
             DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storage);
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
             DeleteDirectoryWithRetry(root);
             DeleteDirectoryWithRetry(mainRoot);
         }

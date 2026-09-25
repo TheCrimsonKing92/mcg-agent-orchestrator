@@ -2198,6 +2198,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
             TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
             TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
             Directory.Delete(root, recursive: true);
         }
     }
