@@ -50,7 +50,8 @@ internal sealed partial class ConductorContinuitySupervisor
                 {
                     _started = true;
                 }
-                else if (line.StartsWith("TICK_END ", StringComparison.Ordinal) && _started)
+                else if (line.StartsWith("TICK_END ", StringComparison.Ordinal) &&
+                    line.Contains(" activation=true", StringComparison.Ordinal) && _started)
                 {
                     _ticks++;
                 }

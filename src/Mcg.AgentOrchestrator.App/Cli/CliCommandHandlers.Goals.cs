@@ -1849,7 +1849,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     checkpointGoalTick: context.CheckpointGoals,
                     hasTransientLoadHold: () => scheduledLoadHold is not null,
                     maxDurationDeferralCeiling: maxDurationDeferralCeiling,
-                    onMaxDurationDeferralStateChanged: active => suppressGoalRefinementForMaxDurationDeferral = active);
+                    onMaxDurationDeferralStateChanged: active => suppressGoalRefinementForMaxDurationDeferral = active,
+                    emitActivationHeartbeat: supervisedChild);
                 if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                 {
                     ConductorContinuityExitArtifact.Write(

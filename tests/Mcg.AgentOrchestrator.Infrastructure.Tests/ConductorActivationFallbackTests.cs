@@ -24,7 +24,7 @@ public sealed class ConductorActivationFallbackTests
                 var ticks = index == 2 ? 1 : 3;
                 for (var tick = 1; tick <= ticks; tick++)
                 {
-                    request.OnStandardOutputLine($"TICK_END tick={tick}");
+                    request.OnStandardOutputLine($"TICK_END tick={tick} activation=true");
                 }
             }
 
@@ -124,7 +124,7 @@ public sealed class ConductorActivationFallbackTests
                 if (startsLoop)
                 {
                     request.OnStandardOutputLine("LOOP_START tick=0");
-                    request.OnStandardOutputLine("TICK_END tick=1");
+                    request.OnStandardOutputLine("TICK_END tick=1 activation=true");
                 }
 
                 var stopped = new TaskCompletionSource<ConductorSupervisorProcessResult>(
@@ -181,7 +181,7 @@ public sealed class ConductorActivationFallbackTests
             {
                 request.OnStandardOutputLine!("LOOP_READY lock=acquired");
                 request.OnStandardOutputLine("LOOP_START tick=0");
-                request.OnStandardOutputLine("TICK_END tick=1");
+                request.OnStandardOutputLine("TICK_END tick=1 activation=true");
                 if (writeArtifact)
                 {
                     ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
@@ -238,7 +238,7 @@ public sealed class ConductorActivationFallbackTests
                 {
                     request.OnStandardOutputLine!("LOOP_READY lock=acquired");
                     request.OnStandardOutputLine("LOOP_START tick=0");
-                    request.OnStandardOutputLine("TICK_END tick=1");
+                    request.OnStandardOutputLine("TICK_END tick=1 activation=true");
                 }
                 ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
                     new ConductorContinuityExitArtifact(stopReason, 1, 1, restartRequested));
@@ -271,6 +271,83 @@ public sealed class ConductorActivationFallbackTests
             evt.Status == (restartRequested ? "planned" : "completed") && evt.Detail.Contains(stopReason));
     }
 
+    [Xunit.Fact]
+    public async Task IdleCompletedTicksCrossPriorDeadlineWithoutRevert()
+    {
+        var events = new RecordingRunEventStore();
+        var adopted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        events.OnAppend = evt =>
+        {
+            if (evt.Operation == "activation" && evt.Status == "adopted")
+                adopted.TrySetResult();
+        };
+        var firstDeadlineCreated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondDeadlineCreated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdDeadlineCreated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstDeadline = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondDeadline = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdDeadline = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var successorExit = new TaskCompletionSource<ConductorSupervisorProcessResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ConductorSupervisorProcessRequest? successorRequest = null;
+        var successor = Build("head-idle", "idle", new MemoryStream());
+        var host = new ScriptedHost((request, index, _) =>
+        {
+            if (index == 0)
+            {
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, true));
+                return Task.FromResult(new ConductorSupervisorProcessResult(0, 600));
+            }
+
+            successorRequest = request;
+            request.OnStandardOutputLine!("LOOP_READY lock=acquired");
+            request.OnStandardOutputLine("LOOP_START tick=0");
+            return successorExit.Task;
+        });
+        var deadlineCalls = 0;
+        var supervisor = new ConductorContinuitySupervisor(host, events,
+            stageSuccessor: _ => successor, activationHealthyTicks: 3,
+            activationDelay: (_, _) =>
+            {
+                return ++deadlineCalls switch
+                {
+                    1 => SignalDeadline(firstDeadlineCreated, firstDeadline),
+                    2 => SignalDeadline(secondDeadlineCreated, secondDeadline),
+                    3 => SignalDeadline(thirdDeadlineCreated, thirdDeadline),
+                    _ => throw new InvalidOperationException("Unexpected activation deadline")
+                };
+            });
+
+        var run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-activation-idle-{Guid.NewGuid():N}"),
+            "default", "default");
+        await firstDeadlineCreated.Task.WaitAsync(TestContext.Current.CancellationToken);
+        successorRequest!.OnStandardOutputLine!("TICK_SUMMARY tick=1");
+        successorRequest.OnStandardOutputLine("TICK_END tick=1 activation=true");
+        await secondDeadlineCreated.Task.WaitAsync(TestContext.Current.CancellationToken);
+        successorRequest.OnStandardOutputLine("TICK_END tick=1 activation=true");
+        secondDeadline.TrySetResult();
+        await thirdDeadlineCreated.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.False(adopted.Task.IsCompleted);
+        successorRequest.OnStandardOutputLine("TICK_END tick=1 activation=true");
+        await adopted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        ConductorContinuityExitArtifact.Write(successorRequest.ExitArtifactPath,
+            new ConductorContinuityExitArtifact("stop-file", 3, 0, false));
+        successorExit.TrySetResult(new ConductorSupervisorProcessResult(0, 601));
+
+        Assert.Equal(0, await run.WaitAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(2, host.Requests.Count);
+        Assert.DoesNotContain(events.Events, evt => evt.Operation == "activation" && evt.Status == "reverted");
+        Assert.Single(events.Events.Where(evt => evt.Operation == "activation" && evt.Status == "adopted"));
+    }
+
+    private static Task SignalDeadline(TaskCompletionSource created, TaskCompletionSource deadline)
+    {
+        created.TrySetResult();
+        return deadline.Task;
+    }
+
     private static ConductorPreparedSuccessor Build(string head, string name, IDisposable lease) =>
         new($"C:\\{name}", $"C:\\{name}\\Mcg.AgentOrchestrator.App.dll", head, head,
             "LOOP_START selfCheck=true", lease);
@@ -293,10 +370,12 @@ public sealed class ConductorActivationFallbackTests
     private sealed class RecordingRunEventStore : IRunEventStore
     {
         public List<RunEventAppend> Events { get; } = [];
+        public Action<RunEventAppend>? OnAppend { get; set; }
 
         public Task<RunEventRecord> AppendAsync(RunEventAppend evt, CancellationToken cancellationToken = default)
         {
             Events.Add(evt);
+            OnAppend?.Invoke(evt);
             return Task.FromResult(new RunEventRecord(Events.Count, evt.EventId ?? Guid.NewGuid().ToString("N"),
                 evt.OccurredAt ?? DateTimeOffset.MinValue, evt.EventType, evt.GoalId, evt.Operation,
                 evt.Status, evt.Detail, evt.PayloadJson));

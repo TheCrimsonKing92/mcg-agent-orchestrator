@@ -189,7 +189,8 @@ internal sealed partial class ConductorBatchLoop
         Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null,
         Func<bool>? hasTransientLoadHold = null,
         TimeSpan? maxDurationDeferralCeiling = null,
-        Action<bool>? onMaxDurationDeferralStateChanged = null)
+        Action<bool>? onMaxDurationDeferralStateChanged = null,
+        bool emitActivationHeartbeat = false)
     {
         var leaseDirectory = Path.GetDirectoryName(Path.GetFullPath(stopFilePath)) ?? Directory.GetCurrentDirectory();
         var leaseAcquisition = AcquireActiveDatabaseLeases(leaseDirectory, busyWriteDelay);
@@ -223,6 +224,12 @@ internal sealed partial class ConductorBatchLoop
             lifecycleSession?.Stop(reason, totalTicks, detail);
             EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
                          (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
+        }
+
+        void CompleteActivationTick(int tick)
+        {
+            if (emitActivationHeartbeat)
+                EmitProgress($"TICK_END tick={tick} activation=true");
         }
 
         driver.DispatchRecordWriteSucceededSink = goalId =>
@@ -897,6 +904,7 @@ internal sealed partial class ConductorBatchLoop
                         break;
                     }
 
+                    CompleteActivationTick(totalTicks);
                     if (!(keepAliveWhenIdle && watchInterval is not null))
                     {
                         continue;
@@ -1002,6 +1010,7 @@ internal sealed partial class ConductorBatchLoop
                         break;
                     }
 
+                    CompleteActivationTick(nextTick);
                     continue;
                 }
 
@@ -1551,6 +1560,7 @@ internal sealed partial class ConductorBatchLoop
                             transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal)) > 0)
                     {
                         onTick?.Invoke(tickSummary);
+                        CompleteActivationTick(totalTicks);
                         continue;
                     }
 
@@ -1625,10 +1635,12 @@ internal sealed partial class ConductorBatchLoop
                     break;
                 }
 
+                CompleteActivationTick(totalTicks);
                 continue;
             }
 
             onTick?.Invoke(tickSummary);
+            CompleteActivationTick(totalTicks);
         }
 
         AwaitCanaryTasks(canaryTasks, canaryTasksGate);
