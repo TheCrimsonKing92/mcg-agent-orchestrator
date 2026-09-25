@@ -37,13 +37,14 @@ public sealed class AcceptanceFailingTestIndexTests
     {
         var now = DateTimeOffset.Parse("2026-09-05T12:00:00Z", null);
         var window = TimeSpan.FromHours(72);
-        var sameGoal = new[] { Census("goal-a", now.AddHours(-1), Identity) };
-        var candidateOwned = new[] { Census("goal-b", now.AddHours(-1), Identity) with { InsideChangedPaths = true } };
-        var otherGoal = new[] { Census("goal-b", now.AddHours(-1), Identity) };
+        var fingerprint = AcceptanceFailingTestIndex.ComputeMessageFingerprint("same failure");
+        var sameGoal = new[] { Census("goal-a", now.AddHours(-1), Identity) with { MessageFingerprint = fingerprint } };
+        var candidateOwned = new[] { Census("goal-b", now.AddHours(-1), Identity) with { InsideChangedPaths = true, MessageFingerprint = fingerprint } };
+        var otherGoal = new[] { Census("goal-b", now.AddHours(-1), Identity) with { MessageFingerprint = fingerprint } };
 
-        Assert.False(AcceptanceFailingTestIndex.HasCrossGoalOccurrence(sameGoal, "goal-a", Identity, now, window));
-        Assert.False(AcceptanceFailingTestIndex.HasCrossGoalOccurrence(candidateOwned, "goal-a", Identity, now, window));
-        Assert.True(AcceptanceFailingTestIndex.HasCrossGoalOccurrence(otherGoal, "goal-a", Identity, now, window));
+        Assert.False(AcceptanceFailingTestIndex.HasCrossGoalOccurrence(sameGoal, "goal-a", Identity, fingerprint, now, window));
+        Assert.False(AcceptanceFailingTestIndex.HasCrossGoalOccurrence(candidateOwned, "goal-a", Identity, fingerprint, now, window));
+        Assert.True(AcceptanceFailingTestIndex.HasCrossGoalOccurrence(otherGoal, "goal-a", Identity, fingerprint, now, window));
     }
 
     [Theory(DisplayName = "AcceptanceFailingTestIndex_cross_goal_lookup_pins_both_window_edges")]
@@ -52,7 +53,8 @@ public sealed class AcceptanceFailingTestIndexTests
     public void CrossGoalLookupPinsBothWindowEdges(int ageHours, bool expected)
     {
         var now = DateTimeOffset.Parse("2026-09-05T12:00:00Z", null);
-        var records = new[] { Census("goal-b", now.AddHours(ageHours), Identity) };
+        var fingerprint = AcceptanceFailingTestIndex.ComputeMessageFingerprint("same failure");
+        var records = new[] { Census("goal-b", now.AddHours(ageHours), Identity) with { MessageFingerprint = fingerprint } };
 
         Assert.Equal(
             expected,
@@ -60,6 +62,7 @@ public sealed class AcceptanceFailingTestIndexTests
                 records,
                 "goal-a",
                 Identity,
+                fingerprint,
                 now,
                 TimeSpan.FromHours(72)));
     }

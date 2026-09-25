@@ -50,8 +50,9 @@ public sealed class ConductorDriverTestsCandidateRerunFlake
                 record.Kind == AcceptanceFailingTestIndexKinds.GateFailure));
             Assert.Equal(FlakyIdentity, occurrence.TestIdentity);
             Assert.Equal(ApparatusRedClassifier.CandidateRerunEvidenceKind, occurrence.EvidenceKind);
+            Assert.Equal(AcceptanceFailingTestIndex.ComputeMessageFingerprint("candidate failure"), occurrence.MessageFingerprint);
             Assert.True(AcceptanceFailingTestIndex.HasCrossGoalOccurrence(
-                index.Read(), "another-goal", FlakyIdentity,
+                index.Read(), "another-goal", FlakyIdentity, occurrence.MessageFingerprint,
                 DateTimeOffset.Parse("2026-09-24T12:00:00Z"), TimeSpan.FromDays(14)));
         }
         finally
