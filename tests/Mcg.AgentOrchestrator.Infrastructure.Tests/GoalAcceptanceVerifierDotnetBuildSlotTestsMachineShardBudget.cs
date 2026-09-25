@@ -47,7 +47,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
                     events.Enqueue((Interlocked.Increment(ref sequence), "acquire")),
                 OnShardPermitReleasedForTests = _ =>
                 {
-                    events.Enqueue((Interlocked.Increment(ref sequence), "release"));
+                    events.Enqueue((Interlocked.Increment(ref sequence), "permit-release"));
                     var count = Interlocked.Increment(ref releaseCount);
                     if (count == 1) firstReleased.TrySetResult();
                     if (count == 2) secondReleased.TrySetResult();
@@ -68,6 +68,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
                 observed = previous;
             }
             var started = Interlocked.Increment(ref starts);
+            events.Enqueue((Interlocked.Increment(ref sequence), "start"));
             if (started == 6) sixStarted.TrySetResult();
             if (started == 7) seventhStarted.TrySetResult();
             if (started == 8) eighthStarted.TrySetResult();
@@ -99,15 +100,23 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
             Assert.Equal(6, Volatile.Read(ref peak));
             Assert.Equal(2, waiters.Count);
             Assert.True(releases.TryDequeue(out var firstRelease));
+            events.Enqueue((Interlocked.Increment(ref sequence), "release"));
             firstRelease.TrySetResult();
             await Task.WhenAll(firstReleased.Task, seventhStarted.Task).WaitAsync(TimeSpan.FromSeconds(20));
             Assert.Equal(7, Volatile.Read(ref starts));
             Assert.True(releases.TryDequeue(out var secondRelease));
+            events.Enqueue((Interlocked.Increment(ref sequence), "release"));
             secondRelease.TrySetResult();
             await Task.WhenAll(secondReleased.Task, eighthStarted.Task).WaitAsync(TimeSpan.FromSeconds(20));
             var ordered = events.OrderBy(item => item.Sequence).ToArray();
             Assert.Equal(8, ordered.Count(item => item.Kind == "acquire"));
-            Assert.Equal(2, ordered.Count(item => item.Kind == "release"));
+            Assert.Equal(8, ordered.Count(item => item.Kind == "start"));
+            var startsInOrder = ordered.Where(item => item.Kind == "start").ToArray();
+            var releasesInOrder = ordered.Where(item => item.Kind == "release").ToArray();
+            Assert.Equal(2, releasesInOrder.Length);
+            Assert.True(startsInOrder[5].Sequence < releasesInOrder[0].Sequence);
+            Assert.True(releasesInOrder[0].Sequence < startsInOrder[6].Sequence);
+            Assert.True(releasesInOrder[1].Sequence < startsInOrder[7].Sequence);
             Assert.True(Volatile.Read(ref peak) <= 6);
         }
         finally
