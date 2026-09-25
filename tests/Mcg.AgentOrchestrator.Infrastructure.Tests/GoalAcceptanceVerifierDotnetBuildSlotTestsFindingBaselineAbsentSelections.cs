@@ -161,9 +161,14 @@ internal sealed class FindingBaselineProbeFixture : IDisposable
         {
             try
             {
+                foreach (var file in Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
+                {
+                    File.SetAttributes(file, FileAttributes.Normal);
+                }
+
                 Directory.Delete(Root, recursive: true);
             }
-            catch (IOException) when (attempt < 9)
+            catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && attempt < 9)
             {
                 Thread.Sleep(100);
             }
