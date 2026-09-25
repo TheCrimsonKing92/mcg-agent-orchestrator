@@ -16,6 +16,9 @@ public sealed partial class AgentOrchestratorKernel
         verification = verification with { CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal) };
         task.RecordVerification(verification);
 
+        if (verification.AuthoritativeStandardOutput is { } workerOutput)
+            RecordIgnoredCriteriaCorrection(goal, taskId, CriteriaCorrectionSource.WorkerResult, workerOutput);
+
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Verification {status} ({verification.ExitCode}): {verification.Command}");
         var outcome = DispatchFailureClassifier.Classify(task, verification);
@@ -26,7 +29,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (outcome.Kind == DispatchOutcomeKind.VerificationInconclusive)
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 taskId,
                 WorkTaskStatus.Failed,
@@ -117,6 +120,8 @@ public sealed partial class AgentOrchestratorKernel
             AttachAuthoritativeReviewFindingContext(task, verification));
         verification = verification with { CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal) };
         task.RecordVerification(verification);
+        if (verification.AuthoritativeStandardOutput is { } dispatchOutput)
+            RecordIgnoredCriteriaCorrection(goal, taskId, CriteriaCorrectionSource.WorkerResult, dispatchOutput);
         var completedRound = task.VerificationHistory.Count;
 
         var status = verification.Succeeded ? "passed" : "failed";
@@ -254,7 +259,7 @@ public sealed partial class AgentOrchestratorKernel
                 Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
             }
 
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 taskId,
                 WorkTaskStatus.Failed,
@@ -311,7 +316,7 @@ public sealed partial class AgentOrchestratorKernel
                 return;
             }
 
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 taskId,
                 WorkTaskStatus.Failed,
@@ -337,7 +342,7 @@ public sealed partial class AgentOrchestratorKernel
                 return;
             }
 
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 taskId,
                 WorkTaskStatus.Failed,
@@ -350,7 +355,7 @@ public sealed partial class AgentOrchestratorKernel
             string.IsNullOrWhiteSpace(verification.StandardOutput) &&
             string.IsNullOrWhiteSpace(verification.StandardError))
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 taskId,
                 WorkTaskStatus.Failed,
@@ -389,7 +394,7 @@ public sealed partial class AgentOrchestratorKernel
                 $"NO_CHANGE_DISPOSITION task={task.Id.Value} rule={TaskOutcomeRules.VerifiedNoChangeRound.Token} candidate={dispatch.BaseCommit}");
         }
 
-        ReportTaskProgress(
+        ReportWorkerTaskProgress(
             goalId,
             taskId,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
@@ -656,7 +661,7 @@ public sealed partial class AgentOrchestratorKernel
             WorkerResultBlockers.TryFindBlockedAtCapVerdict(verification, out _) &&
             task.LastDispatch?.ReviewRetryCap is not { IsAtCap: true })
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -687,7 +692,7 @@ public sealed partial class AgentOrchestratorKernel
                 !(ReviewFindingConvergence.IsRejectedIdentityTransitionRound(violation) &&
                   verification.MergedReviewFindings is not null))
             {
-                ReportTaskProgress(
+                ReportWorkerTaskProgress(
                     goalId,
                     task.Id,
                     WorkTaskStatus.Failed,
@@ -698,7 +703,7 @@ public sealed partial class AgentOrchestratorKernel
             if (task.RequiredRole == AgentRole.Reviewer &&
                 violation.Code == ReviewFindingConvergence.OmittedOpenFindingViolationCode)
             {
-                ReportTaskProgress(
+                ReportWorkerTaskProgress(
                     goalId,
                     task.Id,
                     WorkTaskStatus.Failed,
@@ -716,7 +721,7 @@ public sealed partial class AgentOrchestratorKernel
                     out var criterionVerdicts,
                     out var criteriaDiagnostic))
             {
-                ReportTaskProgress(
+                ReportWorkerTaskProgress(
                     goalId,
                     task.Id,
                     WorkTaskStatus.Failed,
@@ -734,7 +739,7 @@ public sealed partial class AgentOrchestratorKernel
             var expectedIndices = Enumerable.Range(0, refinedSpec.AcceptanceCriteria.Count).ToArray();
             if (!actualIndices.SequenceEqual(expectedIndices))
             {
-                ReportTaskProgress(
+                ReportWorkerTaskProgress(
                     goalId,
                     task.Id,
                     WorkTaskStatus.Failed,
@@ -847,7 +852,7 @@ public sealed partial class AgentOrchestratorKernel
                 out _,
                 out _))
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -900,7 +905,7 @@ public sealed partial class AgentOrchestratorKernel
             var openIds = string.Join(
                 ", ",
                 workerBlockingFindings.Select(finding => finding.StableId));
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -910,7 +915,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (nonPassingCriteriaDiagnostic is not null)
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -928,7 +933,7 @@ public sealed partial class AgentOrchestratorKernel
             !WorkerResultBlockers.TryFindPassVerdict(verification) &&
             !onlyAuthoritativelyDeferredBlockingFindings)
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -943,7 +948,7 @@ public sealed partial class AgentOrchestratorKernel
         if (!onlyAuthoritativelyDeferredBlockingFindings &&
             WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -958,7 +963,7 @@ public sealed partial class AgentOrchestratorKernel
             var openIds = string.Join(
                 ", ",
                 workerBlockingFindings.Select(finding => finding.StableId));
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -982,7 +987,7 @@ public sealed partial class AgentOrchestratorKernel
                 blocker = effectiveBlocker;
             }
 
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -995,7 +1000,7 @@ public sealed partial class AgentOrchestratorKernel
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, verification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(verification, out blocker))
         {
-            ReportTaskProgress(
+            ReportWorkerTaskProgress(
                 goalId,
                 task.Id,
                 WorkTaskStatus.Failed,

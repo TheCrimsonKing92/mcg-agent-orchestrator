@@ -2731,7 +2731,7 @@ internal sealed partial class ConductorBatchLoop
                 (long)(observedAt - observation.Hold.StartedAt).TotalSeconds);
             EmitProgress(
                 $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} " +
-                $"repeatedForSeconds={repeatedForSeconds} blocker={SanitizeReason(blocker)}",
+                $"repeatedForSeconds={repeatedForSeconds} blocker={FormatStalledBlockerDetail(blocker)}",
                 tickLines);
         }
         catch (Exception ex)

@@ -85,9 +85,9 @@ public static bool ExecuteCommand(
         recordDurableGoalBaseline: recordDurableGoalBaseline)
     {
         EventWriter = eventWriter,
-        AcceptanceVerifier = acceptanceVerifier ?? (operationCleanupContext.Hooks.BuildStorageRoot is { } storageRoot
-            ? new GoalAcceptanceVerifier(storageRoot)
-            : new GoalAcceptanceVerifier()),
+        AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(
+            operationCleanupContext.Hooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+            workspace.OrchestratorDirectory),
         RunInjectedAcceptanceVerifierInCurrentProcess = acceptanceVerifier is not null,
         GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds,
         StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,

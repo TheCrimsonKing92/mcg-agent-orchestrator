@@ -213,7 +213,8 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             InputsHash = effectiveInputsHash
         };
 
-        kernel.RecordTaskNote(goal.Id, taskId, effectiveGuidanceText);
+        kernel.RecordTaskNote(goal.Id, taskId, effectiveGuidanceText,
+            CriteriaCorrectionSource.AgentIntent);
         kernel.RequeueInterruptedDispatch(
             goal.Id,
             taskId,

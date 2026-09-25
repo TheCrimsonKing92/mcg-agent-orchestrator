@@ -78,7 +78,7 @@ internal sealed class OperatorIntentAdjudication(
         switch (shape)
         {
             case "close":
-                CompleteAndVerify(kernel, goal, task, payload, now);
+                CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
             case "reopen-regate":
                 kernel.RetryTaskWithAuthoritativeFeedback(
@@ -87,8 +87,9 @@ internal sealed class OperatorIntentAdjudication(
                     payload.Text,
                     RetryCause.UnchangedContextRepeat,
                     invalidateDownstream: true,
-                    retryRoundKind: RetryRoundKind.Mechanical);
-                CompleteAndVerify(kernel, goal, task, payload, now);
+                    retryRoundKind: RetryRoundKind.Mechanical,
+                    correctionSource: CorrectionSource(intent));
+                CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
             case "route":
                 kernel.RetryTaskWithAuthoritativeFeedback(
@@ -96,7 +97,8 @@ internal sealed class OperatorIntentAdjudication(
                     task.Id,
                     payload.Text,
                     retryCause!.Value,
-                    invalidateDownstream: true);
+                    invalidateDownstream: true,
+                    correctionSource: CorrectionSource(intent));
                 break;
             default:
                 throw new InvalidOperationException($"Unsupported adjudication shape '{shape}'.");
@@ -148,14 +150,20 @@ internal sealed class OperatorIntentAdjudication(
         Goal goal,
         TaskSpec task,
         AdjudicateOperatorIntentPayload payload,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        CriteriaCorrectionSource correctionSource)
     {
-        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, payload.Text);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, payload.Text,
+            correctionSource: correctionSource);
         kernel.RecordTaskVerification(
             goal.Id,
             task.Id,
             ManualVerificationRecorder.Create(true, payload.Text, payload.WorkingDirectory, now));
     }
+
+    private static CriteriaCorrectionSource CorrectionSource(OperatorIntentRecord intent) =>
+        intent.ActorKind == OperatorActorKind.Human
+            ? CriteriaCorrectionSource.Operator : CriteriaCorrectionSource.AgentIntent;
 
     private static void RecordTimeline(
         AgentOrchestratorKernel kernel,

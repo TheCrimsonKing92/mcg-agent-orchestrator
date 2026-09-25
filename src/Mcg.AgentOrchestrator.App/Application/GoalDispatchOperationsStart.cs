@@ -136,8 +136,15 @@ internal sealed partial class GoalDispatchOperations
             batch.Dispatches,
             processes with { RequeueSkippedCount = processes.RequeueSkippedCount + rejectedRecoveryIds.Count },
             safeBatch.Plan,
-            safeBatch.Blocked.Concat(batch.Blocked).ToList());
+            OrderReadyBlockedDiagnostics(batch.Blocked, safeBatch.Blocked));
     }
+
+    internal static IReadOnlyList<ReadyBlockedDiagnostic> OrderReadyBlockedDiagnostics(
+        IReadOnlyList<ReadyBlockedDiagnostic> preflightBlocks,
+        IReadOnlyList<ReadyBlockedDiagnostic> planExclusions) =>
+        preflightBlocks.OrderBy(diagnostic => diagnostic.TaskNumber)
+            .Concat(planExclusions)
+            .ToList();
 
     public ProcessBatchExecutionResult StartDispatches(
         AgentOrchestratorKernel kernel,

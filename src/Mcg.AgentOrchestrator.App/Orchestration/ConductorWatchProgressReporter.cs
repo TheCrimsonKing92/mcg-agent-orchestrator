@@ -342,7 +342,10 @@ internal sealed class ConductorWatchProgressReporter
     internal static TaskSpec? GetActiveTask(Goal goal) =>
         goal.Tasks.FirstOrDefault(task => task.LastProcess is { IsRunning: true }) ??
         goal.Tasks.FirstOrDefault(task => task.Status == WorkTaskStatus.Running && task.LastDispatch is not null) ??
-        goal.Tasks.FirstOrDefault(task => task.LastDispatch is not null && task.Status is WorkTaskStatus.Assigned);
+        goal.Tasks.FirstOrDefault(task =>
+            task.LastDispatch is { } dispatch &&
+            task.Status is WorkTaskStatus.Assigned &&
+            (task.LastVerification is not { } verification || verification.CompletedAt < dispatch.DispatchedAt));
 
     private static string FormatFiles(IReadOnlyList<string> files, int remaining)
     {
