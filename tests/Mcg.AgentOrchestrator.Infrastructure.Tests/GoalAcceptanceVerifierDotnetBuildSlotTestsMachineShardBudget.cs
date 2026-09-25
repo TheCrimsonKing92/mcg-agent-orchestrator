@@ -58,7 +58,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
         async Task<GoalAcceptanceVerifier.CommandResult> RunLane(
             string[] args, string _, TimeSpan timeout, CancellationToken cancellationToken)
         {
-            if (!IsTestCommand(args)) return Passed();
+            if (TryPrepareMtpBuild(args)) return Passed();
+            WriteMtpTrx(args);
             var now = Interlocked.Increment(ref active);
             var observed = Volatile.Read(ref peak);
             while (now > observed)
@@ -88,12 +89,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
 
         var first = new GoalAcceptanceVerifier(Overrides("first"), RunLane);
         var second = new GoalAcceptanceVerifier(Overrides("second"), RunLane);
+        using var firstLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
+        using var secondLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
         Task<AcceptanceVerificationResult>? firstRun = null;
         Task<AcceptanceVerificationResult>? secondRun = null;
         try
         {
-            firstRun = first.RunAsync(workspace);
-            secondRun = second.RunAsync(secondWorkspace);
+            firstRun = first.RunAsync(workspace, new GoalId("11111111111111111111111111111111"),
+                stableSlotIndex: StableSlotIndex(firstLease.Environment.ArtifactsPath), stableSlotLease: firstLease);
+            secondRun = second.RunAsync(secondWorkspace, new GoalId("22222222222222222222222222222222"),
+                stableSlotIndex: StableSlotIndex(secondLease.Environment.ArtifactsPath), stableSlotLease: secondLease);
             await Task.WhenAll(sixStarted.Task, twoWaiting.Task).WaitAsync(TimeSpan.FromSeconds(20));
             Assert.Equal(6, Volatile.Read(ref starts));
             Assert.Equal(6, Volatile.Read(ref active));
@@ -121,11 +126,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
         {
             Volatile.Write(ref draining, true);
             while (releases.TryDequeue(out var release)) release.TrySetResult();
-            if (firstRun is not null && secondRun is not null)
-                await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
-            DeleteDirectoryWithRetry(workspace);
-            DeleteDirectoryWithRetry(secondWorkspace);
-            if (Directory.Exists(permitRoot)) Directory.Delete(permitRoot, recursive: true);
+            try
+            {
+                if (firstRun is not null && secondRun is not null)
+                    await Task.WhenAll(firstRun, secondRun).WaitAsync(TimeSpan.FromSeconds(20));
+            }
+            finally
+            {
+                DeleteDirectoryWithRetry(workspace);
+                DeleteDirectoryWithRetry(secondWorkspace);
+                if (Directory.Exists(permitRoot)) Directory.Delete(permitRoot, recursive: true);
+            }
         }
         Assert.True(firstRun!.Result.Passed, firstRun.Result.OutputTail);
         Assert.True(secondRun!.Result.Passed, secondRun.Result.OutputTail);
@@ -158,6 +169,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
             var verifier = new GoalAcceptanceVerifier(overrides, (
                 string[] args, string _worktree, TimeSpan timeout, CancellationToken _ct) =>
             {
+                if (TryPrepareMtpBuild(args)) return Task.FromResult(Passed());
+                WriteMtpTrx(args);
                 if (IsTestCommand(args))
                 {
                     Interlocked.Increment(ref launches);
@@ -165,7 +178,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
                 }
                 return Task.FromResult(Passed());
             });
-            run = verifier.RunOwnedAsync(workspace, null, null, null, null, CancellationToken.None,
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
+            run = verifier.RunOwnedAsync(workspace, null, null,
+                StableSlotIndex(lease.Environment.ArtifactsPath), lease, CancellationToken.None,
                 new AcceptanceRunExecutionOptions(ProgressSink: progress.Enqueue));
             await waiting.Task.WaitAsync(TimeSpan.FromSeconds(20));
             Assert.Equal(0, Volatile.Read(ref launches));
@@ -209,12 +224,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
             ResolveGateShardBudgetForTests = () => 8,
             ShardPermitRootForTests = permitRoot
         };
+        Task<AcceptanceVerificationResult>? run = null;
         try
         {
             var verifier = new GoalAcceptanceVerifier(overrides, async (
                 string[] args, string _, TimeSpan timeout, CancellationToken cancellationToken) =>
             {
-                if (!IsTestCommand(args)) return Passed();
+                if (TryPrepareMtpBuild(args)) return Passed();
+                WriteMtpTrx(args);
                 var started = Interlocked.Increment(ref starts);
                 var now = Interlocked.Increment(ref active);
                 InterlockedExtensions.Max(ref peak, now);
@@ -226,7 +243,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
                 }
                 finally { Interlocked.Decrement(ref active); }
             });
-            var run = verifier.RunAsync(workspace);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
+            run = verifier.RunAsync(workspace, new GoalId("33333333333333333333333333333333"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath), stableSlotLease: lease);
             try
             {
                 await twoStarted.Task.WaitAsync(TimeSpan.FromSeconds(20));
@@ -241,8 +260,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
         }
         finally
         {
-            DeleteDirectoryWithRetry(workspace);
-            if (Directory.Exists(permitRoot)) Directory.Delete(permitRoot, recursive: true);
+            release.TrySetResult();
+            try
+            {
+                if (run is not null) await run.WaitAsync(TimeSpan.FromSeconds(20));
+            }
+            finally
+            {
+                DeleteDirectoryWithRetry(workspace);
+                if (Directory.Exists(permitRoot)) Directory.Delete(permitRoot, recursive: true);
+            }
         }
     }
 
@@ -269,7 +296,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
             var verifier = new GoalAcceptanceVerifier(overrides, (
                 string[] args, string _, TimeSpan timeout, CancellationToken token) =>
             {
-                if (!IsTestCommand(args)) return Task.FromResult(Passed());
+                if (TryPrepareMtpBuild(args)) return Task.FromResult(Passed());
+                WriteMtpTrx(args);
                 if (outcome == "cancellation")
                 {
                     cancellation.Cancel();
@@ -281,7 +309,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
             });
             try
             {
-                await verifier.RunAsync(workspace, cancellationToken: cancellation.Token);
+                using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
+                await verifier.RunAsync(workspace, new GoalId("44444444444444444444444444444444"),
+                    stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath), stableSlotLease: lease,
+                    cancellationToken: cancellation.Token);
             }
             catch (OperationCanceledException) when (outcome == "cancellation") { }
             Assert.True(acquired > 0);
@@ -299,7 +330,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
 
     private static bool IsTestCommand(string[] args) =>
         args.Length > 1 && args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
-        args[1].Equals("test", StringComparison.OrdinalIgnoreCase);
+        args[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryPrepareMtpBuild(string[] args)
+    {
+        if (IsTestCommand(args)) return false;
+        if (args.Length > 1 && args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            args[1].Equals("build", StringComparison.OrdinalIgnoreCase))
+        {
+            const string projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
+            var outputDirectory = Path.Combine(GetArtifactsPath(args), "bin", projectName, "debug");
+            Directory.CreateDirectory(outputDirectory);
+            File.WriteAllText(Path.Combine(outputDirectory, projectName + ".dll"), "deterministic shard fixture");
+            File.WriteAllText(Path.Combine(outputDirectory, projectName + ".exe"), "deterministic shard fixture");
+        }
+        return true;
+    }
 
     private static GoalAcceptanceVerifier.CommandResult Passed() =>
         new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1.");
@@ -330,12 +376,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMachineShardBudget
               "version": 1,
               "engine": {
                 "maxConcurrentShards": {{lanes}},
-                "infrastructureTestLanes": [{{string.Join(",", laneRows)}}]
+                "infrastructureTestLanes": [{{string.Join(",", laneRows)}}],
+                "mtpInvocations": [{
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                  "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                  "arguments": ["{executable}", "--results-directory", "{resultsDirectory}",
+                    "--report-trx-filename", "{trxFileName}"]
+                }]
               },
               "checks": [{
                 "name": "infrastructure tests",
                 "type": "dotnet-test",
-                "runner": "vstest",
+                "runner": "mtp",
                 "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                 "timeoutMinutes": 2
               }],
