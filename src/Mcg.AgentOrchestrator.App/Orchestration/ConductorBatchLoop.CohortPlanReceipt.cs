@@ -14,7 +14,8 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlyList<Goal> orderedEligible,
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> speculativeCandidates,
         IReadOnlyList<ConductorParallelAcceptanceAttempt> liveAttempts,
-        IReadOnlySet<string> activeAttemptIds,
+        ConductorAcceptanceCapacitySnapshot activeCohorts,
+        LiveAcceptanceCensus acceptanceCensus,
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,
         HashSet<string> completedGoals,
@@ -22,7 +23,6 @@ internal sealed partial class ConductorBatchLoop
         AgentOrchestratorKernel kernel,
         int tick)
     {
-        var activeCohorts = driver.GetActiveAcceptanceCohortCapacity();
         var liveAttemptGoalIds = liveAttempts.Select(attempt => attempt.GoalId)
             .ToHashSet(StringComparer.Ordinal);
         var cohortMemberIds = activeCohorts.ActiveRoots
@@ -71,28 +71,14 @@ internal sealed partial class ConductorBatchLoop
             .Where(candidate => !excludedIds.Contains(candidate.GoalId)).ToArray();
         var plan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(receiptCandidates);
 
-        int? occupiedWidth = null;
-        IReadOnlyList<string>? occupants = null;
-        if (plan.ReadyCandidateCount > 0)
-        {
-            try
-            {
-                var census = BuildLiveAcceptanceCensus(liveAttempts, activeAttemptIds,
-                    activeCohorts, GateLoadContextProbe.CaptureLiveGateOccupants());
-                if (census.OccupiedCount >= policy.AcceptanceWidth)
-                {
-                    occupiedWidth = policy.AcceptanceWidth;
-                    occupants = census.Occupants;
-                }
-            }
-            catch (Exception ex) when (ex is GateLoadContextProbe.LoadProbeUnavailableException or IOException or UnauthorizedAccessException)
-            {
-                // The receipt is advisory; the admission path captures its own blocking census.
-            }
-        }
+        var widthOccupied = plan.ReadyCandidateCount > 0 &&
+            acceptanceCensus.CaptureFailure is null &&
+            acceptanceCensus.OccupiedCount >= policy.AcceptanceWidth;
 
         EmitProgress(plan.FormatReceipt(tick,
-            new ConductorSpeculativeCohortReceiptContext(upstream, occupiedWidth, occupants)));
+            new ConductorSpeculativeCohortReceiptContext(upstream,
+                widthOccupied ? policy.AcceptanceWidth : null,
+                widthOccupied ? acceptanceCensus.Occupants : null)));
     }
 
     private static ConductorSpeculativeUpstreamExclusionReason ClassifyBatchPlannerInputExclusion(

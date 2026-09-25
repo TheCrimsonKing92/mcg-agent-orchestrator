@@ -3091,13 +3091,17 @@ internal sealed partial class ConductorBatchLoop
                 goal.Id,
                 driver.ProjectGateReadyCandidate(goal, policy)))
             .ToArray();
+        var activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+        var acceptanceCensus = CaptureLiveAcceptanceCensus(
+            liveAttempts, activeAttemptIds, activeCohortCapacity, tick,
+            changedGoalLines, blockAdmissionOnFailure: true);
         EmitSpeculativeCohortPlanReceipt(scopedGoals, verifiedGoalIdsAtTickStart,
             preWalkIntentChangedGoalIds, eligible, orderedEligible, speculativeCandidates,
-            liveAttempts, activeAttemptIds, driver, policy, completedGoals, escalatedGoals, kernel, tick);
+            liveAttempts, activeCohortCapacity, acceptanceCensus, driver, policy,
+            completedGoals, escalatedGoals, kernel, tick);
         var liveAttemptGoalIds = liveAttempts
             .Select(attempt => attempt.GoalId)
             .ToHashSet(StringComparer.Ordinal);
-        var activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         var activeCohortMemberGoalIds = driver.GetActiveCohortGateMemberGoalIds((memberGoalIds, detail) =>
         {
             var memberIds = memberGoalIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
@@ -3105,13 +3109,6 @@ internal sealed partial class ConductorBatchLoop
                 $"ACCEPTANCE_COHORT_INFLIGHT tick={tick} goal={memberIds[0][..8]} " +
                 $"members={string.Join(',', memberIds.Select(id => id[..8]))} {detail}");
         });
-        var acceptanceCensus = CaptureLiveAcceptanceCensus(
-            liveAttempts,
-            activeAttemptIds,
-            activeCohortCapacity,
-            tick,
-            changedGoalLines,
-            blockAdmissionOnFailure: true);
         var cohortEligible = orderedEligible
             .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value) &&
                            !activeCohortMemberGoalIds.Contains(goal.Id.Value))

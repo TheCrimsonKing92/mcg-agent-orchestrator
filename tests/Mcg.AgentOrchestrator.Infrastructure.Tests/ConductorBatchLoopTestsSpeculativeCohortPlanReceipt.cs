@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsSpeculativeCohortPlanReceipt : ConductorBatchLoopTests
@@ -81,11 +82,22 @@ public sealed class ConductorBatchLoopTestsSpeculativeCohortPlanReceipt : Conduc
     private static string TickReceipt(
         AgentOrchestratorKernel kernel, ConductorDriver driver, ConductorAutonomyPolicy policy)
     {
-        BatchTickSummary? tick = null;
-        new ConductorBatchLoop().Run(kernel, driver, policy, NoStopPath(), maxIterations: 1,
-            onTick: current => tick = current);
-        return Assert.Single(tick!.ProgressLines!, line =>
-            line.StartsWith("SPECULATIVE_COHORT_PLAN", StringComparison.Ordinal));
+        var logPath = Path.Combine(Path.GetTempPath(), $"speculative-cohort-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            new ConductorBatchLoop(conductEventLogWriter: new ConductEventLogWriter(logPath))
+                .Run(kernel, driver, policy, NoStopPath(), maxIterations: 1);
+            var receipts = File.ReadAllLines(logPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .Where(record => record.EventKind == "speculative-cohort-plan")
+                .ToArray();
+            return Assert.Single(receipts).Detail;
+        }
+        finally
+        {
+            if (File.Exists(logPath)) File.Delete(logPath);
+        }
     }
 
     private static GateReadyCandidateProjection ReadyProjection(GoalId goalId, string path) =>
