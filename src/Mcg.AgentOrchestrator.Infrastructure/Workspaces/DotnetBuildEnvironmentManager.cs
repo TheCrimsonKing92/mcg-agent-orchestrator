@@ -134,9 +134,7 @@ public static class DotnetBuildEnvironmentManager
         CreateDefaultOwnedRunRootRegistrar;
     private static readonly ConcurrentDictionary<string, IOwnedRunRootRegistrar> OwnedRunRootRegistrarsForTests =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-    private sealed record OwnedRunRootWriteFailure(string StorageRootPath, string Message);
-    private static readonly ConcurrentQueue<OwnedRunRootWriteFailure> OwnedRunRootWriteFailures = new();
-    private static readonly object OwnedRunRootWriteFailureDrainGate = new();
+    private static readonly OwnedRunRootWriteFailureBuffer OwnedRunRootWriteFailures = new();
     private static int s_nextStableSlotScanStart = -1;
     private static int s_heldExecutionLeaseCount;
     private static int s_compilerLockRecoveryRequested;
@@ -1305,29 +1303,13 @@ public static class DotnetBuildEnvironmentManager
     private static void EnqueueOwnedRunRootWriteFailure(string runRootPath, string message)
     {
         var storageRootPath = Path.GetDirectoryName(Path.GetDirectoryName(runRootPath)!)!;
-        OwnedRunRootWriteFailures.Enqueue(new OwnedRunRootWriteFailure(storageRootPath, message));
+        OwnedRunRootWriteFailures.Enqueue(storageRootPath, message);
     }
 
     internal static IReadOnlyList<string> DrainOwnedRunRootWriteFailures(
         int maxCount, DotnetBuildStorageRoot? storageRoot = null)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
-        var failures = new List<string>(maxCount);
-        lock (OwnedRunRootWriteFailureDrainGate)
-        {
-            var pending = OwnedRunRootWriteFailures.Count;
-            for (var i = 0; i < pending && failures.Count < maxCount; i++)
-            {
-                if (!OwnedRunRootWriteFailures.TryDequeue(out var failure))
-                    break;
-                if (storageRoot is null || string.Equals(failure.StorageRootPath, storageRoot.RootPath,
-                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-                    failures.Add(failure.Message);
-                else
-                    OwnedRunRootWriteFailures.Enqueue(failure);
-            }
-        }
-        return failures;
+        return OwnedRunRootWriteFailures.Drain(maxCount, storageRoot?.RootPath);
     }
 
     private static IOwnedRunRootRegistrar? CreateDefaultOwnedRunRootRegistrar(DotnetBuildStorageRoot _)
