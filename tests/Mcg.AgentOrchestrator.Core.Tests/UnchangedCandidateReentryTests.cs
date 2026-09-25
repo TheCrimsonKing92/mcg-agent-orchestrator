@@ -89,11 +89,14 @@ public sealed class UnchangedCandidateReentryTests
             kernel.RecordTaskDispatch(goal.Id, task.Id,
                 new TaskDispatchRecord("worker", "command", "C:\\repo", DateTimeOffset.UtcNow.AddMinutes(-2),
                     CandidateIdentity: identity));
-            kernel.RecordTaskVerification(goal.Id, task.Id,
-                new TaskVerificationRecord("command", "C:\\repo",
-                    task == tester ? 1 : 0, task == tester ? "finding" : "ok", "",
-                    DateTimeOffset.UtcNow.AddMinutes(-1), WorkerResultPresent: true,
-                    CandidateIdentity: identity));
+            var verification = new TaskVerificationRecord("command", "C:\\repo",
+                task == tester ? 1 : 0, task == tester ? "finding" : "ok", "",
+                DateTimeOffset.UtcNow.AddMinutes(-1), WorkerResultPresent: true,
+                CandidateIdentity: identity);
+            if (task == tester)
+                kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+            else
+                kernel.RecordTaskVerification(goal.Id, task.Id, verification);
         }
         return (kernel, goal, developer, tester, identity);
     }
