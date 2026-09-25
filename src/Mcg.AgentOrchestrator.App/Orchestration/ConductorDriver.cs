@@ -4266,13 +4266,13 @@ internal sealed partial class ConductorDriver
         {
             return structuralPrecheck;
         }
-        if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
-        {
-            return preReviewResult;
-        }
         if (TryRefuseUnchangedCandidateDispatch(goal, goalPrefix, policy, fromState, out var unchangedCandidateHold))
         {
             return unchangedCandidateHold;
+        }
+        if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
+        {
+            return preReviewResult;
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
