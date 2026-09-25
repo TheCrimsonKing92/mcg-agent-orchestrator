@@ -33,7 +33,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFindingBaselineAbs
             check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionApparatusFailure &&
             check.ExecutedTestCount == 0);
         Assert.DoesNotContain(baseline.Checks, check =>
-            check.Name.Contains("PreExistingProbeTests", StringComparison.Ordinal) &&
+            check.Name.EndsWith("[FullyQualifiedName~PreExistingProbeTests]", StringComparison.Ordinal) &&
             check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline);
     }
 
@@ -55,7 +55,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFindingBaselineAbs
     {
         using var fixture = FindingBaselineProbeFixture.Create(candidateAddedMethod: true);
         var result = await fixture.RunAsync(
-            "Core.Tests: PreExistingProbeTests.AddedBehavior; Core.Tests: PreExistingProbeTests.ExistingBehavior");
+            "Core.Tests: FullyQualifiedName~PreExistingProbeTests.AddedBehavior; " +
+            "Core.Tests: FullyQualifiedName~PreExistingProbeTests.ExistingBehavior");
         var baseline = Assert.Single(result.Arms!, arm => arm.Arm == FindingEvidenceArm.Baseline);
 
         Assert.Equal(FindingEvidenceArmDisposition.Green, baseline.Disposition);
