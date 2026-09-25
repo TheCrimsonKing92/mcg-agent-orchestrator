@@ -50,7 +50,14 @@ internal sealed partial class ConductorDriver
         ConductorFocusedEvidenceRequestContext? requestContext,
         ConductorParallelAcceptanceAttemptDecision attemptDecision)
     {
-        if (requestContext?.RunBaselineArm == true &&
+        var deferRerunReconciliation =
+            requestContext?.BatchId.EndsWith("-candidate-rerun", StringComparison.Ordinal) == true &&
+            (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed &&
+             attemptDecision.Run?.Exception is not (
+                 DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException) ||
+             attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun &&
+             IsFocusedEvidenceExecutionFault(attemptDecision.Attempt.Outcome));
+        if ((requestContext?.RunBaselineArm == true || deferRerunReconciliation) &&
             attemptDecision.Run?.Exception is not (
                 DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException) &&
             attemptDecision.Attempt.Outcome is not (
@@ -66,6 +73,14 @@ internal sealed partial class ConductorDriver
 
         _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
     }
+
+    private static bool IsFocusedEvidenceExecutionFault(ConductorParallelAcceptanceAttemptOutcome outcome) =>
+        outcome is
+            ConductorParallelAcceptanceAttemptOutcome.ProcessDied or
+            ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts or
+            ConductorParallelAcceptanceAttemptOutcome.LaunchFailed or
+            ConductorParallelAcceptanceAttemptOutcome.Faulted or
+            ConductorParallelAcceptanceAttemptOutcome.GateEngineFault;
 
     private bool TryRestorePendingBaselineCandidate(
         Goal goal,
@@ -147,12 +162,7 @@ internal sealed partial class ConductorDriver
         {
             if (attemptKind is null or ConductorParallelAcceptanceAttemptDecisionKind.Started or
                     ConductorParallelAcceptanceAttemptDecisionKind.Running || baselineAttempt is null ||
-                baselineAttempt.Outcome is not (
-                    ConductorParallelAcceptanceAttemptOutcome.ProcessDied or
-                    ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts or
-                    ConductorParallelAcceptanceAttemptOutcome.LaunchFailed or
-                    ConductorParallelAcceptanceAttemptOutcome.Faulted or
-                    ConductorParallelAcceptanceAttemptOutcome.GateEngineFault))
+                !IsFocusedEvidenceExecutionFault(baselineAttempt.Outcome))
             {
                 return false;
             }
@@ -257,10 +267,10 @@ internal sealed partial class ConductorDriver
         if (terminal is not null)
         {
             decision = terminal.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal)
-                ? BuildCappedFindingEvidenceDeliveryRetry(
-                    goal, requestingTask, candidateSha, batch.Findings,
-                    batch.Findings.Select(finding => finding.EvidenceOutcome?.ReceiptId ?? originalReceiptId).ToArray(),
-                    "The candidate re-run was GREEN after baseline execution failed.")
+                ? BuildCandidateRerunGreenDecision(
+                    goal, requestingTask, candidateSha, batch, requestContext,
+                    CreateFindingEvidenceReceiptId(
+                        candidateSha, findingRoundFingerprint, batch.Identity + ":candidate-rerun"))
                 : BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
             return false;
         }
@@ -283,17 +293,15 @@ internal sealed partial class ConductorDriver
                 goal, policy, batch.Request, candidateSha, "finding-candidate-rerun", rerunContext,
                 out var rerun, out var rerunAttempt, out decision, out var attemptKind))
         {
-            if (attemptKind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun)
+            if (attemptKind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun &&
+                rerunAttempt is not null && IsFocusedEvidenceExecutionFault(rerunAttempt.Outcome) ||
+                attemptKind == ConductorParallelAcceptanceAttemptDecisionKind.Completed &&
+                decision.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
             {
                 _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
                     $"finding-evidence disposition=candidate-rerun-unusable; {guard}; " +
                     $"reason={TrimForConductorMessage(decision.Evidence)}");
-                decision = BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
-            }
-            else if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending)
-            {
-                _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
-                    $"finding-evidence disposition=candidate-rerun-red; {guard}; reason={TrimForConductorMessage(decision.Evidence)}");
+                if (rerunAttempt is not null) _focusedEvidenceAttemptCoordinator.MarkReconciled(rerunAttempt);
                 decision = BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
             }
             return false;
@@ -313,6 +321,14 @@ internal sealed partial class ConductorDriver
                 candidate.ReceiptArtifacts,
                 candidate.ExecutedTestCount!.Value,
                 ResolveFindingEvidenceRequiredTestClasses(batch.TypedRequest));
+        var confirmedRed = rerun.Accepted && candidate is
+        {
+            Accepted: true,
+            Disposition: FindingEvidenceArmDisposition.Red,
+            Passed: false,
+            FailingTestIdentities.Count: > 0
+        } && string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase);
+        var disposition = green ? "green" : confirmedRed ? "red" : "unusable";
         var rerunReceiptId = CreateFindingEvidenceReceiptId(
             candidateSha, findingRoundFingerprint, batch.Identity + ":candidate-rerun");
         if (green)
@@ -320,7 +336,8 @@ internal sealed partial class ConductorDriver
             var receipt = new FindingEvidenceReceipt(
                 rerunReceiptId, candidateSha, batch.TypedRequest, rerun.Accepted,
                 rerun.IsValidEvidence, rerun.Summary, rerunArms,
-                FindingRoundFingerprint: findingRoundFingerprint);
+                requestContext.RequestDispositions, findingRoundFingerprint,
+                BuildFindingEvidenceExecutionBasisIdentity(_getFindingEvidenceEngineSettings(goal)));
             foreach (var finding in batch.Findings)
             {
                 _recordFindingEvidenceOutcome(goal.Id, requestingTask.Id, finding.StableId,
@@ -333,16 +350,28 @@ internal sealed partial class ConductorDriver
             }
         }
         _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
-            $"finding-evidence disposition=candidate-rerun-{(green ? "green" : "red")}; {guard}; " +
+            $"finding-evidence disposition=candidate-rerun-{disposition}; {guard}; " +
             $"receipt_id={rerunReceiptId}; original_receipt_id={originalReceiptId}");
         if (rerunAttempt is not null) _focusedEvidenceAttemptCoordinator.MarkReconciled(rerunAttempt);
         decision = green
-            ? BuildCappedFindingEvidenceDeliveryRetry(
-                goal, requestingTask, candidateSha, batch.Findings, [rerunReceiptId],
-                "The candidate re-run was GREEN after baseline execution failed.")
+            ? BuildCandidateRerunGreenDecision(
+                goal, requestingTask, candidateSha, batch, requestContext, rerunReceiptId)
             : BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
         return false;
     }
+
+    private FailedGoalFindingObservation BuildCandidateRerunGreenDecision(
+        Goal goal, TaskSpec requestingTask, string candidateSha,
+        FindingEvidenceBatch batch, ConductorFocusedEvidenceRequestContext requestContext,
+        string receiptId) =>
+        requestContext.RequestDispositions.Any(disposition =>
+            disposition.Disposition.StartsWith("pending-", StringComparison.Ordinal))
+            ? FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingEvidencePending,
+                "The candidate re-run was GREEN; another distinct request from the same finding round remains pending.")
+            : BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, candidateSha, batch.Findings, [receiptId],
+                "The candidate re-run was GREEN after baseline execution failed.");
 
     private static FailedGoalFindingObservation BuildBaselineExecutionFailureEscalation(
         string candidateSha, FindingEvidenceBatch batch, string receiptId) =>
