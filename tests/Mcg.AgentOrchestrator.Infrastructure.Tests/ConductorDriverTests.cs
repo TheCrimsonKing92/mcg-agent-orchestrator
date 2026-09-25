@@ -588,7 +588,7 @@ public sealed class ConductorDriverTests
             Checks:
             [
                 new AcceptanceCheckResult(
-                    "pre-review focused evidence",
+                    $"pre-review focused evidence: {request}",
                     true,
                     0,
                     "Passed: 7",
@@ -601,7 +601,7 @@ public sealed class ConductorDriverTests
         string candidateSha = "candidate-sha")
     {
         var candidateCheck = new AcceptanceCheckResult(
-            "candidate focused evidence",
+            $"candidate focused evidence: {request}",
             true,
             0,
             null,

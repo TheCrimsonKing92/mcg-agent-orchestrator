@@ -1401,7 +1401,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         Assert.True(PreReviewEvidenceReceipts.ValidateCoverage(context, complete, out var completeFailure));
         Assert.Equal(string.Empty, completeFailure);
         Assert.False(PreReviewEvidenceReceipts.ValidateCoverage(context, partial, out var partialFailure));
-        Assert.Equal($"cardinality mismatch: planned={items.Count} actual={items.Count - 1}", partialFailure);
+        Assert.Contains("SplitCoverageClass60", partialFailure, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
