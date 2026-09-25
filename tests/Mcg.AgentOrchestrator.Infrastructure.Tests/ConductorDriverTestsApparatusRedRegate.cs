@@ -45,7 +45,9 @@ public sealed class ConductorDriverTestsApparatusRedRegate
                         CheckName: "infrastructure tests: dispatch host",
                         TestIdentity: HeartbeatIdentity,
                         ResolvedSourcePath: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchHostTests.cs",
-                        InsideChangedPaths: false)
+                        InsideChangedPaths: false,
+                        MessageFingerprint: AcceptanceFailingTestIndex.ComputeMessageFingerprint(
+                            "heartbeat observer did not see the second beat before the 200ms deadline"))
                 ],
                 now.AddHours(-6));
 
@@ -114,8 +116,14 @@ public sealed class ConductorDriverTestsApparatusRedRegate
             var index = CreateIndex(root);
             index.Append(
                 [
-                    Census("6cd11d28", now.AddDays(-2)),
-                    Census("36169fb0", now.AddDays(-1))
+                    Census("6cd11d28", now.AddDays(-2)) with
+                    {
+                        MessageFingerprint = AcceptanceFailingTestIndex.ComputeMessageFingerprint("Fast-forwarded was absent")
+                    },
+                    Census("36169fb0", now.AddDays(-1)) with
+                    {
+                        MessageFingerprint = AcceptanceFailingTestIndex.ComputeMessageFingerprint("Fast-forwarded was absent")
+                    }
                 ],
                 now.AddDays(-1));
             var (kernel, goal) = SimpleGoal();

@@ -1,4 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -25,7 +28,8 @@ internal sealed record AcceptanceFailingTestIndexRecord(
     string? ExceptionSignature = null,
     string? ResolvedSourcePath = null,
     bool InsideChangedPaths = false,
-    string? EvidenceKind = null);
+    string? EvidenceKind = null,
+    string? MessageFingerprint = null);
 
 internal sealed record AcceptanceFailingTestCensusRow(
     string TestIdentity,
@@ -53,6 +57,11 @@ internal sealed class AcceptanceFailingTestIndex
     internal const int MaximumRecords = 5000;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly Regex AbsolutePath = new(@"(?<![\w.])(?:[A-Za-z]:[\\/]|\\\\|//|/)[^\s<>""',;:?!]+", RegexOptions.Compiled);
+    private static readonly Regex Id = new(@"\b(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{40}|[0-9a-fA-F]{32})\b", RegexOptions.Compiled);
+    private static readonly Regex Timestamp = new(@"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?\b", RegexOptions.Compiled);
+    private static readonly Regex Duration = new(@"(?<![\w.])\d+(?:\.\d+)?(?:milliseconds|minutes|seconds|msec|ms|sec|min|s)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
 
     private readonly string _path;
     private readonly TimeSpan _censusRetention;
@@ -66,6 +75,26 @@ internal sealed class AcceptanceFailingTestIndex
     }
 
     internal string Path => _path;
+
+    internal static string NormalizeFailureMessage(string message)
+    {
+        var normalized = AbsolutePath.Replace(message, "<path>");
+        normalized = Id.Replace(normalized, "<id>");
+        normalized = Timestamp.Replace(normalized, "<time>");
+        normalized = Duration.Replace(normalized, "<dur>");
+        return Whitespace.Replace(normalized, " ").Trim();
+    }
+
+    internal static string? ComputeMessageFingerprint(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return null;
+        }
+
+        var normalized = NormalizeFailureMessage(message);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(normalized[..Math.Min(2000, normalized.Length)])));
+    }
 
     internal void Append(IReadOnlyList<AcceptanceFailingTestIndexRecord> records, DateTimeOffset now)
     {
@@ -136,13 +165,15 @@ internal sealed class AcceptanceFailingTestIndex
         IReadOnlyList<AcceptanceFailingTestIndexRecord> records,
         string goalId,
         string testIdentity,
+        string? messageFingerprint,
         DateTimeOffset now,
         TimeSpan window) =>
-        records.Any(record =>
+        !string.IsNullOrWhiteSpace(messageFingerprint) && records.Any(record =>
             record.Kind.Equals(AcceptanceFailingTestIndexKinds.GateFailure, StringComparison.Ordinal) &&
             !record.InsideChangedPaths &&
             !record.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(record.TestIdentity, testIdentity, StringComparison.Ordinal) &&
+            string.Equals(record.MessageFingerprint, messageFingerprint, StringComparison.Ordinal) &&
             now - record.RecordedAt <= window &&
             record.RecordedAt <= now);
 
