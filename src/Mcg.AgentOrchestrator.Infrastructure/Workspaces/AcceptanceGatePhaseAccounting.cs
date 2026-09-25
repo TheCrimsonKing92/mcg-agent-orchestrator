@@ -101,7 +101,9 @@ public sealed record AcceptanceGatePhaseBreakdown(
     int? EffectiveShardConcurrency = null,
     int? PeakShardConcurrency = null,
     TimeSpan? LongestLaneDuration = null,
-    TimeSpan? SlotWaitDuration = null);
+    TimeSpan? SlotWaitDuration = null,
+    int? ShardPermitBudget = null,
+    TimeSpan? ShardPermitWaitDuration = null);
 
 internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 {
@@ -124,6 +126,8 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private int? _peakShardConcurrency;
     private long _longestLaneTicks;
     private TimeSpan? _slotWaitDuration;
+    private int _shardPermitBudget;
+    private long _shardPermitWaitTicks;
     private string _outcome = "faulted";
     private bool _disposed;
 
@@ -163,6 +167,20 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 
     internal static void RecordCurrentSlotWait(TimeSpan? duration) =>
         CurrentAccountant.Value?.RecordSlotWait(duration);
+
+    internal static void RecordCurrentShardPermitBudget(int budget)
+    {
+        var accountant = CurrentAccountant.Value;
+        if (accountant is not null)
+            Interlocked.Exchange(ref accountant._shardPermitBudget, budget);
+    }
+
+    internal static void RecordCurrentShardPermitWait(TimeSpan duration)
+    {
+        var accountant = CurrentAccountant.Value;
+        if (accountant is not null)
+            Interlocked.Add(ref accountant._shardPermitWaitTicks, duration.Ticks);
+    }
 
     internal static AcceptanceGateDiagnosticSnapshot CurrentSnapshot =>
         CurrentAccountant.Value?.Snapshot ?? new(null, null);
@@ -345,7 +363,9 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             _effectiveShardConcurrency,
             _peakShardConcurrency,
             _longestLaneTicks > 0 ? TimeSpan.FromTicks(_longestLaneTicks) : null,
-            _slotWaitDuration);
+            _slotWaitDuration,
+            _shardPermitBudget > 0 ? _shardPermitBudget : null,
+            _shardPermitBudget > 0 ? TimeSpan.FromTicks(Interlocked.Read(ref _shardPermitWaitTicks)) : null);
     }
 
     private static string FormatCompact(AcceptanceGatePhaseBreakdown breakdown)
@@ -363,6 +383,8 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             $"shard_concurrency_peak={breakdown.PeakShardConcurrency?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}",
             $"longest_lane_ms={(breakdown.LongestLaneDuration is { } longestLane ? Milliseconds(longestLane) : "unavailable")}",
             $"slot_wait_ms={(breakdown.SlotWaitDuration is { } slotWait ? Milliseconds(slotWait) : "unavailable")}",
+            $"shard_permit_budget={breakdown.ShardPermitBudget?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"}",
+            $"shard_permit_wait_ms={(breakdown.ShardPermitWaitDuration is { } shardPermitWait ? Milliseconds(shardPermitWait) : "unavailable")}",
             $"attributed_ms={Milliseconds(breakdown.AttributedPhaseDuration)}",
             $"unattributed_ms={Milliseconds(breakdown.UnattributedDuration)}"
         };

@@ -15,6 +15,12 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal Func<string, string?>? ResolveMainWorktreePathForTests { get; set; }
     internal Func<string, string[]>? ResolveDeletedTestFilesForTests { get; set; }
     internal Func<int>? ResolveShardCoreBudgetForTests { get; set; }
+    internal Func<int>? ResolveGateShardBudgetForTests { get; set; }
+    internal string? ShardPermitRootForTests { get; set; }
+    internal TimeSpan? ShardPermitPollInterval { get; set; }
+    internal Action<string>? OnShardPermitWaitingForTests { get; set; }
+    internal Action<string>? OnShardPermitAcquiredForTests { get; set; }
+    internal Action<string>? OnShardPermitReleasedForTests { get; set; }
     internal Action<string>? OnInfrastructureShardResourcesAcquiredForTests { get; set; }
     internal Action? OnStructuralCoverageStartedForTests { get; set; }
     internal TimeSpan? StructuralCoveragePermitWaitBound { get; set; }
@@ -39,6 +45,12 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         ResolveMainWorktreePathForTests = ResolveMainWorktreePathForTests,
         ResolveDeletedTestFilesForTests = ResolveDeletedTestFilesForTests,
         ResolveShardCoreBudgetForTests = ResolveShardCoreBudgetForTests,
+        ResolveGateShardBudgetForTests = ResolveGateShardBudgetForTests,
+        ShardPermitRootForTests = ShardPermitRootForTests,
+        ShardPermitPollInterval = ShardPermitPollInterval,
+        OnShardPermitWaitingForTests = OnShardPermitWaitingForTests,
+        OnShardPermitAcquiredForTests = OnShardPermitAcquiredForTests,
+        OnShardPermitReleasedForTests = OnShardPermitReleasedForTests,
         OnInfrastructureShardResourcesAcquiredForTests = OnInfrastructureShardResourcesAcquiredForTests,
         OnStructuralCoverageStartedForTests = OnStructuralCoverageStartedForTests,
         StructuralCoveragePermitWaitBound = StructuralCoveragePermitWaitBound,
