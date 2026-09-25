@@ -5354,7 +5354,7 @@ internal sealed partial class ConductorDriver
         var blockers = taskReasons.Length == 0
             ? "no Assigned tasks remained when the batch was evaluated"
             : string.Join("; ", taskReasons);
-        return $"Assigned tasks exist but no ready batch formed for goal {goal.Id.Value}; will retry next tick. Blockers: {blockers}.";
+        return $"{NoReadyBatchHoldPrefix} for goal {goal.Id.Value}; will retry next tick. Blockers: {blockers}.";
     }
 
     private static string FormatAssignedTaskBlocker(
