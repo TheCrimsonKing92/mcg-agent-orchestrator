@@ -36,8 +36,7 @@ public static class UnchangedCandidateRule
         if (task.AcceptedRetryFeedback?.AcceptedAt > verdictAt ||
             goal.Timeline.Any(evt => evt.Kind == ProgressKind.HumanInputReceived && evt.OccurredAt > verdictAt))
             return true;
-        if (task.LatestRetryAt > verdictAt &&
-            task.PendingRetryCause != RetryCause.UnchangedContextRepeat)
+        if (task.LatestRoleInputRetryAt > verdictAt)
             return true;
         if (task.RequiredRole == AgentRole.Reviewer &&
             task.PreReviewEvidenceHistory.Any(receipt => receipt.RecordedAt > verdictAt))

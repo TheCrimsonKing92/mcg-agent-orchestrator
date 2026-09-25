@@ -132,7 +132,8 @@ public sealed record TaskSnapshot(
     int ConductorRoutingRevision = 0,
     PreDispatchIntegrationReceipt? PendingPreDispatchIntegrationReceipt = null,
     DateTimeOffset? LatestProviderBudgetRecoveryAt = null,
-    int WorkerBuildCheckRecoveryCount = 0);
+    int WorkerBuildCheckRecoveryCount = 0,
+    DateTimeOffset? LatestRoleInputRetryAt = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
