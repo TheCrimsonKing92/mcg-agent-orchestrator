@@ -795,7 +795,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 startupInfo.lpAttributeList = attributes.AttributeList;
                 inheritableWindowObserver?.Invoke();
                 var createStarted = Stopwatch.GetTimestamp();
-                if (!CreateProcessW(
+                var created = CreateProcessW(
                         null,
                         commandLine,
                         IntPtr.Zero,
@@ -805,15 +805,16 @@ internal sealed class OwnedProcessGroup : IDisposable
                         environment,
                         workingDirectory,
                         ref startupInfo,
-                        out processInformation))
+                        out processInformation);
+                var nativeErrorCode = created ? 0 : Marshal.GetLastWin32Error();
+                suppression.RecordChildCreateTicks(Stopwatch.GetTimestamp() - createStarted);
+                if (!created)
                 {
-                    var nativeErrorCode = Marshal.GetLastWin32Error();
                     throw new OwnedProcessLaunchException(
                         nativeErrorCode,
                         "Failed to start suspended process in owned job object.",
                         CaptureLaunchFailureEvidence(job));
                 }
-                suppression.RecordChildCreateTicks(Stopwatch.GetTimestamp() - createStarted);
             }
 
             // Inheritable duplicates are already closed here, before the comparatively slow

@@ -67,4 +67,21 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchLockTiming
         }
         Xunit.Assert.True(LaunchLockTelemetry.Process.Snapshot().Launches - processBefore >= expectedLaunches);
     }
+
+    [Xunit.Fact(Skip = "Requires Windows suspended-process handles.", SkipUnless = nameof(IsWindows))]
+    public void FailedOwnedProcessLaunchRecordsCreateDuration()
+    {
+        using var capture = LaunchLockTelemetry.BeginCapture();
+        var missingExecutable = Path.Combine(Path.GetTempPath(), $"mcg-missing-{Guid.NewGuid():N}.exe");
+
+        Xunit.Assert.Throws<OwnedProcessLaunchException>(() => OwnedProcessGroup.StartSuspended(
+            new ProcessStartInfo(missingExecutable) { UseShellExecute = false }));
+
+        var snapshot = capture.Snapshot();
+        Xunit.Assert.Equal(1, snapshot.Launches);
+        Xunit.Assert.Equal(1, snapshot.ByEntry[(int)LaunchLockEntryPoint.AcquireSuppressedChildSpawn]);
+        var sample = Xunit.Assert.Single(capture.Samples);
+        Xunit.Assert.True(sample.CreateTicks > 0);
+        Xunit.Assert.True(sample.HoldTicks >= sample.CreateTicks);
+    }
 }
