@@ -1537,7 +1537,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 executionOwner.CancellationToken,
-                executionOwner: executionOwner).ConfigureAwait(false);
+                executionOwner: executionOwner,
+                partitionCandidateOnlySelections: true).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1661,7 +1662,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken,
         bool classifyMissingSelectionsAsAbsent = false,
-        IAcceptanceRunExecutionContext? executionOwner = null)
+        IAcceptanceRunExecutionContext? executionOwner = null,
+        bool partitionCandidateOnlySelections = false)
     {
         if (string.IsNullOrWhiteSpace(baselineSha))
         {
@@ -1688,18 +1690,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? baselineEnvironmentId = null;
         try
         {
-            var sourcePlan = new AcceptanceFailureAttributionPlanner.BaselineSourceSelectionPlan(
-                focusedChecks,
-                []);
-            if (classifyMissingSelectionsAsAbsent)
-            {
-                sourcePlan = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
-                    baselineSha,
-                    focusedChecks,
-                    ProjectLabel,
-                    EngineSettings,
-                    baselinePath);
-            }
+            var sourcePlan = SelectBaselineFocusedChecks(
+                focusedChecks, baselineSha, baselinePath,
+                classifyMissingSelectionsAsAbsent, partitionCandidateOnlySelections);
 
             // The baseline owns a fresh artifact environment. Sharing candidate artifacts could make
             // a structurally broken baseline look like a meaningful RED arm.
@@ -1738,11 +1731,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     executionOwner: executionOwner).ConfigureAwait(false);
             }
 
-            return AcceptanceFailureAttributionPlanner.CombineBaselineArm(
-                focusedChecks,
-                executedArm,
-                sourcePlan.SourceClassificationChecks,
-                ClassifyFocusedEvidenceArm);
+            return partitionCandidateOnlySelections
+                ? CombineFindingBaselineArm(executedArm, sourcePlan.SourceClassificationChecks)
+                : AcceptanceFailureAttributionPlanner.CombineBaselineArm(
+                    focusedChecks, executedArm, sourcePlan.SourceClassificationChecks,
+                    ClassifyFocusedEvidenceArm);
         }
         finally
         {
