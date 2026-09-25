@@ -51,7 +51,8 @@ public enum DecisionActionKind
     Intake = 7,
     VerifyManual = 8,
     RiskyLanding = 9,
-    DenylistChange = 10
+    DenylistChange = 10,
+    AcceptancePolicyChangeApproved = 11
 }
 
 public enum EffectReceiptStatus
@@ -213,6 +214,7 @@ public static class DecisionAuthorization
         DecisionActionKind.VerifyManual => AuthorizationTier.AttestLand,
         DecisionActionKind.RiskyLanding => AuthorizationTier.AttestLand,
         DecisionActionKind.DenylistChange => AuthorizationTier.AttestLand,
+        DecisionActionKind.AcceptancePolicyChangeApproved => AuthorizationTier.AttestLand,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown decision action kind.")
     };
 

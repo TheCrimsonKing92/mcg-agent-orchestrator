@@ -127,8 +127,15 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         TaskId? taskId,
         ProgressKind sourceKind,
-        string message)
+        string message,
+        CriteriaCorrectionSource source = CriteriaCorrectionSource.Operator)
     {
+        if (source != CriteriaCorrectionSource.Operator)
+        {
+            RecordIgnoredCriteriaCorrection(goal, taskId, source, message);
+            return;
+        }
+
         var corrections = EffectiveAcceptanceCriteriaCorrectionParser.Parse(
             message,
             CriteriaCorrectionActor,

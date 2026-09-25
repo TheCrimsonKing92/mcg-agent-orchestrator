@@ -132,6 +132,13 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["capturedAcceptanceCriteriaHash"] = capturedAcceptanceCriteriaHash;
         });
 
+    public void AppendCriteriaCorrectionIgnored(GoalId goalId, TaskId? taskId, string source) =>
+        Append(goalId, "CriteriaCorrectionIgnored", obj =>
+        {
+            obj["taskId"] = taskId?.Value;
+            obj["source"] = source;
+        });
+
     public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) =>
         Append(goalId, "WorkerProgress", obj =>
         {

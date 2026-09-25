@@ -83,7 +83,7 @@ public sealed class AgentTaskRunner
             [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, startMessage, _clock.UtcNow)],
             workspaceDiff,
             matchedPractices);
-        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
+        _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
 
         ModelResponse response;
         try
@@ -92,11 +92,12 @@ public sealed class AgentTaskRunner
         }
         catch (Exception ex)
         {
-            _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, $"Model execution failed: {ex.Message}");
+            _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, $"Model execution failed: {ex.Message}");
             throw;
         }
 
         var output = response.Text.Trim();
+        _kernel.RecordWorkerResultCriteriaCorrection(goal.Id, task.Id, output);
         var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(output, task.RequiredRole);
         var humanInputQuestion = humanInputDirective.Directive?.Question;
         var execution = new TaskExecutionRecord(
@@ -117,7 +118,7 @@ public sealed class AgentTaskRunner
 
         if (humanInputDirective.IsMalformed)
         {
-            _kernel.ReportTaskProgress(
+            _kernel.ReportWorkerTaskProgress(
                 goal.Id,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -223,7 +224,7 @@ public sealed class AgentTaskRunner
         if (hasCompleteWorkerResult &&
             WorkerResultBlockers.TryFindMalformedEvidenceBoundOutcome(output, out var outcomeDiagnostic))
         {
-            _kernel.ReportTaskProgress(
+            _kernel.ReportWorkerTaskProgress(
                 goal.Id,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -233,7 +234,7 @@ public sealed class AgentTaskRunner
 
         if (HasOutputTokenLimitHit(execution))
         {
-            _kernel.ReportTaskProgress(
+            _kernel.ReportWorkerTaskProgress(
                 goal.Id,
                 task.Id,
                 WorkTaskStatus.Failed,
@@ -262,7 +263,7 @@ public sealed class AgentTaskRunner
 
             if (!assignedScopeComplete)
             {
-                _kernel.ReportTaskProgress(
+                _kernel.ReportWorkerTaskProgress(
                     goal.Id,
                     task.Id,
                     WorkTaskStatus.Failed,
@@ -272,7 +273,7 @@ public sealed class AgentTaskRunner
             return new AgentTaskRunResult(goal, task, execution);
         }
 
-        _kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{agent.Name} completed task.");
+        _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{agent.Name} completed task.");
 
         return new AgentTaskRunResult(goal, task, execution);
     }

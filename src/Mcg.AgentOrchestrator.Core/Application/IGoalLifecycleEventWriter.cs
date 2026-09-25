@@ -48,6 +48,7 @@ public interface IGoalLifecycleEventWriter
         DateTimeOffset recordedAt,
         string reason,
         string capturedAcceptanceCriteriaHash);
+    void AppendCriteriaCorrectionIgnored(GoalId goalId, TaskId? taskId, string source) { }
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
     void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha);
     void AppendGoalLandedFromMergeEvidence(GoalId goalId, string goalBranch, string integrateSha, string mainSha);

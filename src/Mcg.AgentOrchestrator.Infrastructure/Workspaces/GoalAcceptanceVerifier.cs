@@ -515,6 +515,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     ];
     public GoalAcceptanceVerifier() : this(DotnetBuildEnvironmentManager.CaptureStorageRoot()) { }
     public GoalAcceptanceVerifier(DotnetBuildStorageRoot storageRoot) : this(new GoalAcceptanceVerifierTestOverrides(), storageRoot) { }
+    public GoalAcceptanceVerifier(DotnetBuildStorageRoot storageRoot, string ownerPolicyDecisionStoreDirectory) : this(storageRoot)
+    {
+        _ownerPolicyDecisionStoreDirectory = Path.GetFullPath(ownerPolicyDecisionStoreDirectory);
+    }
     internal GoalAcceptanceVerifier(GoalAcceptanceVerifierTestOverrides testOverrides, DotnetBuildStorageRoot? storageRoot = null)
         : this(
             (arguments, workingDirectory, timeout, cancellationToken) => RunProcessAsync(
@@ -591,6 +595,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         _runner = source._runner;
         _storageRoot = source._storageRoot;
+        _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
         _leaseSleep = source._leaseSleep;
@@ -602,6 +607,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         _runner = source._runner;
         _storageRoot = source._storageRoot;
+        _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
         _leaseSleep = source._leaseSleep;
@@ -722,7 +728,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "Acceptance execution context was not supplied."));
         var engineSettings = executionOwner.Settings;
         using var laneDurationScope = AcceptanceLaneDurationStore.PushRecordingScope(worktreePath);
-        if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure)
+        if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure && !HasOwnerPolicyApproval(worktreePath, goalId))
         {
             phaseAccountant.MarkCompleted(passed: false);
             return new AcceptanceVerificationResult(
@@ -6795,54 +6801,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string? ResolveBaseBuildMainSha(string worktreePath)
     {
         return ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
-    }
-
-    private static AcceptanceCheckResult? TryClassifyManifestTrust(
-        string worktreePath,
-        IReadOnlyList<string>? changedFiles) =>
-        TryClassifyManifestTrustCore(worktreePath, changedFiles, AcceptanceGitTextResolver.Resolve);
-
-    internal static AcceptanceCheckResult? TryClassifyManifestTrustWithGitForTests(
-        string worktreePath,
-        IReadOnlyList<string>? changedFiles,
-        Func<string, string[], string?> resolveGitText) =>
-        TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText);
-
-    private static AcceptanceCheckResult? TryClassifyManifestTrustCore(
-        string worktreePath,
-        IReadOnlyList<string>? changedFiles,
-        Func<string, string[], string?> resolveGitText)
-    {
-        if (changedFiles is null ||
-            !changedFiles.Any(path =>
-                NormalizePath(path).Equals("config/acceptance-manifest.json", StringComparison.OrdinalIgnoreCase)))
-        {
-            return null;
-        }
-
-        var candidatePath = Path.Combine(worktreePath, "config", "acceptance-manifest.json");
-        var trustedJson = resolveGitText(worktreePath, ["show", "main:config/acceptance-manifest.json"]);
-        if (!File.Exists(candidatePath) || string.IsNullOrWhiteSpace(trustedJson))
-        {
-            return new AcceptanceCheckResult(
-                "acceptance manifest trusted dimensions",
-                false,
-                1,
-                "Trusted main acceptance manifest could not be compared; refusing candidate engine settings.",
-                ResultSummary: "trusted manifest comparison unavailable");
-        }
-
-        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(
-            trustedJson,
-            File.ReadAllText(candidatePath));
-        return decision.RequiresTrustedReview
-            ? new AcceptanceCheckResult(
-                "acceptance manifest trusted dimensions",
-                false,
-                1,
-                decision.Evidence,
-                ResultSummary: "operator review required")
-            : null;
     }
 
     private static string? ResolveGitScalar(string worktreePath, params string[] arguments)
