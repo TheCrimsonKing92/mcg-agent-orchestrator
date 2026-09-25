@@ -69,7 +69,8 @@ internal static partial class TerminalGoalSweep
     }
 
     internal static TerminalGoalSweepOwnedRootResult ExecuteOwnedBuildRootReap(
-        Func<TerminalGoalSweepOwnedRootResult> reap)
+        Func<TerminalGoalSweepOwnedRootResult> reap,
+        DotnetBuildStorageRoot? writeFailureScope = null)
     {
         ArgumentNullException.ThrowIfNull(reap);
         TerminalGoalSweepOwnedRootResult result;
@@ -89,7 +90,7 @@ internal static partial class TerminalGoalSweep
         }
 
         var writeFailures = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
-            MaxOwnedBuildRootsPerSweep);
+            MaxOwnedBuildRootsPerSweep, writeFailureScope);
         return writeFailures.Count == 0
             ? result
             : result with

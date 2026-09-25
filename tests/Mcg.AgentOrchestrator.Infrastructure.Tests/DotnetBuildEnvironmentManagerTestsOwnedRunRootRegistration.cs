@@ -115,7 +115,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration :
 
             var disposeException = Record.Exception(lease.Dispose);
             var sweep = TerminalGoalSweep.ExecuteOwnedBuildRootReap(
-                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []));
+                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []), StorageRoot);
 
             Assert.Null(disposeException);
             var operatorEvent = Assert.Single(sweep.OperatorEvents);
@@ -144,7 +144,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration :
 
             Assert.True(RootedDotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(StorageRoot, environment));
             var sweep = TerminalGoalSweep.ExecuteOwnedBuildRootReap(
-                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []));
+                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []), StorageRoot);
 
             var operatorEvent = Assert.Single(sweep.OperatorEvents);
             Assert.Contains("SWEEP_OWNED_ROOT_OBSERVED", operatorEvent, StringComparison.Ordinal);
@@ -357,7 +357,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration :
         {
             Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT", priorRepositoryRoot);
             DotnetBuildEnvironmentManager.SetOwnedRunRootRegistrarForTests(StorageRoot, registeredRegistrar);
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(10);
+            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(10, StorageRoot);
         }
     }
 
