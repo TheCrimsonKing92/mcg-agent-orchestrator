@@ -15,21 +15,33 @@ internal static class ProcessTreeGuiSuppression
     internal sealed class ConsoleSpawnScope : IDisposable
     {
         private readonly Action? _onDispose;
+        private readonly LaunchLockEntryPoint? _entryPoint;
+        private readonly long _waitTicks;
+        private readonly long _acquiredTimestamp;
+        private long _childCreateTicks;
         private bool _disposed;
 
         internal ConsoleSpawnScope(
             bool childConsolePolicyApplied,
             uint childCreationFlags = 0,
-            Action? onDispose = null)
+            Action? onDispose = null,
+            LaunchLockEntryPoint? entryPoint = null,
+            long waitTicks = 0,
+            long acquiredTimestamp = 0)
         {
             ChildConsolePolicyApplied = childConsolePolicyApplied;
             ChildCreationFlags = childCreationFlags;
             _onDispose = onDispose;
+            _entryPoint = entryPoint;
+            _waitTicks = waitTicks;
+            _acquiredTimestamp = acquiredTimestamp;
         }
 
         internal bool ChildConsolePolicyApplied { get; }
 
         internal uint ChildCreationFlags { get; }
+
+        internal void RecordChildCreateTicks(long ticks) => _childCreateTicks = ticks;
 
         public void Dispose()
         {
@@ -41,7 +53,21 @@ internal static class ProcessTreeGuiSuppression
             // Console ownership belongs to the child created by this scope. The
             // launcher never changes its console membership or standard handles.
             _disposed = true;
-            _onDispose?.Invoke();
+            try
+            {
+                _onDispose?.Invoke();
+            }
+            finally
+            {
+                if (_entryPoint is { } entryPoint)
+                {
+                    LaunchLockTelemetry.Record(
+                        entryPoint,
+                        _waitTicks,
+                        Stopwatch.GetTimestamp() - _acquiredTimestamp,
+                        _childCreateTicks);
+                }
+            }
         }
     }
 
@@ -53,13 +79,18 @@ internal static class ProcessTreeGuiSuppression
         }
 
         var childConsolePolicy = ChildConsoleLaunchPolicy.Prepare();
+        var waitStarted = Stopwatch.GetTimestamp();
         Monitor.Enter(WindowsLaunchLock);
+        var acquired = Stopwatch.GetTimestamp();
         try
         {
             return new ConsoleSpawnScope(
                 childConsolePolicyApplied: childConsolePolicy.ChildCreateNoWindow,
                 childConsolePolicy.ChildCreationFlags,
-                onDispose: () => Monitor.Exit(WindowsLaunchLock));
+                onDispose: () => Monitor.Exit(WindowsLaunchLock),
+                entryPoint: LaunchLockEntryPoint.AcquireConsoleForChildSpawn,
+                waitTicks: acquired - waitStarted,
+                acquiredTimestamp: acquired);
         }
         catch
         {
@@ -76,7 +107,9 @@ internal static class ProcessTreeGuiSuppression
         }
 
         var childConsolePolicy = ChildConsoleLaunchPolicy.Prepare();
+        var waitStarted = Stopwatch.GetTimestamp();
         Monitor.Enter(WindowsLaunchLock);
+        var acquired = Stopwatch.GetTimestamp();
         var originalErrorMode = Windows.GetErrorMode();
         try
         {
@@ -88,7 +121,10 @@ internal static class ProcessTreeGuiSuppression
                 {
                     _ = Windows.SetErrorMode(originalErrorMode);
                     Monitor.Exit(WindowsLaunchLock);
-                });
+                },
+                entryPoint: LaunchLockEntryPoint.AcquireSuppressedChildSpawn,
+                waitTicks: acquired - waitStarted,
+                acquiredTimestamp: acquired);
         }
         catch
         {
@@ -105,7 +141,9 @@ internal static class ProcessTreeGuiSuppression
             return new ConsoleSpawnScope(childConsolePolicyApplied: false);
         }
 
+        var waitStarted = Stopwatch.GetTimestamp();
         Monitor.Enter(WindowsLaunchLock);
+        var acquired = Stopwatch.GetTimestamp();
         var originalErrorMode = Windows.GetErrorMode();
         try
         {
@@ -116,7 +154,10 @@ internal static class ProcessTreeGuiSuppression
                 {
                     _ = Windows.SetErrorMode(originalErrorMode);
                     Monitor.Exit(WindowsLaunchLock);
-                });
+                },
+                entryPoint: LaunchLockEntryPoint.AcquireErrorModeForChildSpawn,
+                waitTicks: acquired - waitStarted,
+                acquiredTimestamp: acquired);
         }
         catch
         {
@@ -142,23 +183,39 @@ internal static class ProcessTreeGuiSuppression
         }
 
         var childConsolePolicy = ChildConsoleLaunchPolicy.Prepare();
-        lock (WindowsLaunchLock)
+        var waitStarted = Stopwatch.GetTimestamp();
+        long acquired = 0;
+        try
         {
-            var originalErrorMode = Windows.GetErrorMode();
-            var originalCreateNoWindow = startInfo.CreateNoWindow;
-
-            try
+            lock (WindowsLaunchLock)
             {
-                _ = Windows.SetErrorMode(originalErrorMode | SuppressedErrorModeFlags);
-                startInfo.CreateNoWindow = childConsolePolicy.ChildCreateNoWindow;
+                acquired = Stopwatch.GetTimestamp();
+                var originalErrorMode = Windows.GetErrorMode();
+                var originalCreateNoWindow = startInfo.CreateNoWindow;
 
-                return Process.Start(startInfo)
-                    ?? throw new InvalidOperationException($"Failed to start process: {startInfo.FileName}");
+                try
+                {
+                    _ = Windows.SetErrorMode(originalErrorMode | SuppressedErrorModeFlags);
+                    startInfo.CreateNoWindow = childConsolePolicy.ChildCreateNoWindow;
+
+                    return Process.Start(startInfo)
+                        ?? throw new InvalidOperationException($"Failed to start process: {startInfo.FileName}");
+                }
+                finally
+                {
+                    startInfo.CreateNoWindow = originalCreateNoWindow;
+                    _ = Windows.SetErrorMode(originalErrorMode);
+                }
             }
-            finally
+        }
+        finally
+        {
+            if (acquired != 0)
             {
-                startInfo.CreateNoWindow = originalCreateNoWindow;
-                _ = Windows.SetErrorMode(originalErrorMode);
+                LaunchLockTelemetry.Record(
+                    LaunchLockEntryPoint.Start,
+                    acquired - waitStarted,
+                    Stopwatch.GetTimestamp() - acquired);
             }
         }
     }

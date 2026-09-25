@@ -794,6 +794,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 using var attributes = WindowsJobAttributeList.Create(job, inheritedHandles);
                 startupInfo.lpAttributeList = attributes.AttributeList;
                 inheritableWindowObserver?.Invoke();
+                var createStarted = Stopwatch.GetTimestamp();
                 if (!CreateProcessW(
                         null,
                         commandLine,
@@ -812,6 +813,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                         "Failed to start suspended process in owned job object.",
                         CaptureLaunchFailureEvidence(job));
                 }
+                suppression.RecordChildCreateTicks(Stopwatch.GetTimestamp() - createStarted);
             }
 
             // Inheritable duplicates are already closed here, before the comparatively slow
