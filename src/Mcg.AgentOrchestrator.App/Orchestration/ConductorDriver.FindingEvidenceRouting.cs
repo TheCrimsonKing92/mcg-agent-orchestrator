@@ -8,6 +8,44 @@ internal sealed partial class ConductorDriver
 {
     private readonly HashSet<string> _resolvedMissingBaselineRequests = new(StringComparer.Ordinal);
 
+    private bool TryResumeUnconfirmedCandidateRed(
+        Goal goal,
+        TaskSpec requestingTask,
+        ConductorAutonomyPolicy policy,
+        FindingEvidenceBatch batch,
+        string candidateSha,
+        string findingRoundFingerprint,
+        ConductorFocusedEvidenceRequestContext requestContext,
+        out FailedGoalFindingObservation decision)
+    {
+        decision = FailedGoalFindingObservation.None;
+        var guard = $"candidate_sha={candidateSha}; finding_round={findingRoundFingerprint}; " +
+                    $"request_identity={BuildFindingEvidenceRequestIdentity(batch.Findings)}";
+        var recorded = goal.Timeline.LastOrDefault(evt =>
+                evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+                evt.TaskId == requestingTask.Id &&
+                evt.Message.Contains("disposition=baseline-arm-absent;", StringComparison.Ordinal) &&
+                evt.Message.Contains(guard, StringComparison.Ordinal));
+        if (recorded is null)
+        {
+            return false;
+        }
+
+        const string marker = "; receipt_id=";
+        var receiptStart = recorded.Message.IndexOf(marker, StringComparison.Ordinal);
+        if (receiptStart < 0)
+            throw new InvalidDataException("Recorded baseline-arm-absent decision has no candidate receipt id.");
+        receiptStart += marker.Length;
+        var receiptEnd = recorded.Message.IndexOf(';', receiptStart);
+        var receiptId = recorded.Message[receiptStart..(receiptEnd < 0 ? recorded.Message.Length : receiptEnd)];
+        if (string.IsNullOrWhiteSpace(receiptId))
+            throw new InvalidDataException("Recorded baseline-arm-absent decision has an empty candidate receipt id.");
+        RouteUnconfirmedCandidateRed(
+            goal, requestingTask, policy, batch, candidateSha, findingRoundFingerprint,
+            requestContext, receiptId, guard, out decision);
+        return true;
+    }
+
     private void MarkFocusedEvidenceAttemptIfReady(
         ConductorFocusedEvidenceRequestContext? requestContext,
         ConductorParallelAcceptanceAttemptDecision attemptDecision)

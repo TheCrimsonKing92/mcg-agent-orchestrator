@@ -25,7 +25,7 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
                 EvidenceFindingWithRequest("First focused request", "green-first",
                     FindingCategory.TestCoverage, classes: ["ConductorDriverTests"]),
                 EvidenceFindingWithRequest("Queued focused request", "green-second",
-                    FindingCategory.TestEvidence, classes: ["GoalAcceptanceVerifierTests"])
+                    FindingCategory.TestEvidence, project: "Core.Tests", classes: ["GoalLifecycleTests"])
             };
             var stdout = string.Join(Environment.NewLine,
                 "WORKER_RESULT:", "files: none", "commands: inspect focused behavior",
@@ -70,7 +70,7 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
             Assert.Equal(2, requests.Count);
-            Assert.Contains(requests, request => request.Contains("GoalAcceptanceVerifierTests", StringComparison.Ordinal));
+            Assert.Contains(requests, request => request.Contains("Core.Tests:GoalLifecycleTests", StringComparison.Ordinal));
             Assert.Equal([tester.Id], retried);
             Assert.Contains("finding evidence-on-demand:", Assert.Single(messages), StringComparison.Ordinal);
             Assert.DoesNotContain(developer.Id, retried);

@@ -2102,6 +2102,12 @@ internal sealed partial class ConductorDriver
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
             initialRequestDispositions);
+        if (TryResumeUnconfirmedCandidateRed(
+                goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint,
+                requestContext, out decision))
+        {
+            return true;
+        }
         if (!TryRestorePendingBaselineCandidate(goal, runnable.Request, candidateSha!, requestContext,
                 out var evidence, out var evidenceAttempt) && !TryReconcileFocusedEvidenceAttempt(
                 goal,
