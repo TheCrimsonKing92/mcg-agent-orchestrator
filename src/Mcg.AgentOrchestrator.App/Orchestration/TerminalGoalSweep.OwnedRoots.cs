@@ -54,7 +54,7 @@ internal static partial class TerminalGoalSweep
     {
         var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
         return ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
-            stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true), storageRoot);
+            stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true));
     }
 
     // A temporary or scoped store cannot prove that a root in the shared folder is orphaned.
@@ -67,7 +67,7 @@ internal static partial class TerminalGoalSweep
     }
 
     internal static TerminalGoalSweepOwnedRootResult ExecuteOwnedBuildRootReap(
-        Func<TerminalGoalSweepOwnedRootResult> reap, DotnetBuildStorageRoot? storageRoot = null)
+        Func<TerminalGoalSweepOwnedRootResult> reap)
     {
         ArgumentNullException.ThrowIfNull(reap);
         TerminalGoalSweepOwnedRootResult result;
@@ -87,7 +87,7 @@ internal static partial class TerminalGoalSweep
         }
 
         var writeFailures = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
-            MaxOwnedBuildRootsPerSweep, storageRoot);
+            MaxOwnedBuildRootsPerSweep);
         return writeFailures.Count == 0
             ? result
             : result with
