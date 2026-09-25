@@ -3630,8 +3630,9 @@ internal sealed partial class ConductorDriver
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
             receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
         {
-            var first = RunCohortPartition(bindings[0], 0, identity, cancellationToken);
-            var second = RunCohortPartition(bindings[1], 1, identity, cancellationToken);
+            AppendCohortAttributionStartEvent(gateProgressEventWriter, identity, bindings);
+            var first = RunCohortPartition(bindings[0], 0, identity, gateProgressEventWriter, cancellationToken);
+            var second = RunCohortPartition(bindings[1], 1, identity, gateProgressEventWriter, cancellationToken);
             var attribution = ConductorAcceptanceCohortAttribution.Classify(first.Outcome, second.Outcome);
             var innocentGoalId = attribution switch
             {
@@ -3654,6 +3655,7 @@ internal sealed partial class ConductorDriver
         AcceptanceCohortMemberBinding member,
         int memberOrdinal,
         AcceptanceCohortIdentity identity,
+        ConductEventLogWriter gateProgressEventWriter,
         CancellationToken cancellationToken)
     {
         var workspace = _cohortWorkspace
@@ -3678,7 +3680,8 @@ internal sealed partial class ConductorDriver
                 member.LandingPaths);
             var result = AcceptanceExecutionRunner.RunAttempt(
                 verifier, partition.Path, member.GoalId, member.LandingPaths,
-                stableSlotIndex: null, stableSlotLease: null, cancellationToken);
+                stableSlotIndex: null, stableSlotLease: null, cancellationToken,
+                CreateCohortAttributionExecutionOptions(gateProgressEventWriter, identity, member));
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             partition.AssertGoalBranchesUnchanged();
             outcome = ClassifyCohortVerification(result);
