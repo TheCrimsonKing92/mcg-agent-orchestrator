@@ -9,7 +9,7 @@ public sealed class ConductorDriverTestsGoalAddedTestFileInsideChanges
 {
     [Xunit.Theory]
     [Xunit.InlineData(true, 1)]
-    [Xunit.InlineData(false, 2)]
+    [Xunit.InlineData(false, 3)]
     public void DataCaseInGoalAddedFileIsCandidateChangeOnlyWithKnownScope(
         bool knownScope, int expectedRuns)
     {
@@ -37,6 +37,7 @@ public sealed class ConductorDriverTestsGoalAddedTestFileInsideChanges
 
             var focusedRuns = 0;
             TaskId? retried = null;
+            string? escalation = null;
             var driver = MakeDriver(
                 executionDirectory: root,
                 getLandingFileScopes: _ => knownScope ? [addedPath] : [],
@@ -56,12 +57,27 @@ public sealed class ConductorDriverTestsGoalAddedTestFileInsideChanges
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
                     kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+                    kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
+                writeEscalation: (_, _, message) => escalation = message);
 
             driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
             Assert.Equal(expectedRuns, focusedRuns);
-            Assert.Equal(developer.Id, retried);
+            if (knownScope)
+            {
+                Assert.Equal(developer.Id, retried);
+                Assert.Null(escalation);
+            }
+            else
+            {
+                Assert.Null(retried);
+                Assert.Contains("Baseline execution failure", escalation, StringComparison.Ordinal);
+                Assert.Contains("No worker was dispatched", escalation, StringComparison.Ordinal);
+                Assert.Single(goal.Timeline.Where(evt =>
+                    evt.Message.Contains("disposition=candidate-rerun-requested", StringComparison.Ordinal)));
+                Assert.Single(goal.Timeline.Where(evt =>
+                    evt.Message.Contains("disposition=candidate-rerun-red", StringComparison.Ordinal)));
+            }
             Assert.Equal(!knownScope, goal.Timeline.Any(evt =>
                 evt.Message.Contains("disposition=baseline-arm-absent", StringComparison.Ordinal)));
         }
