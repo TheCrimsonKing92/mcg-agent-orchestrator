@@ -97,14 +97,14 @@ internal static class CliOwnerDigestCommand
     private static IReadOnlyList<OwnerDigestCanaryReceipt> ReadCanaryReceipts(string path)
     {
         if (!File.Exists(path))
+        {
+            Console.Error.WriteLine("Warning: run-events database is missing; canary outcomes are unavailable.");
             return [];
+        }
         var rows = new List<OwnerDigestCanaryReceipt>();
-        var storeFiles = new[] { path, path + "-wal", path + "-shm" };
-        var before = SnapshotStoreFiles(storeFiles);
         var connectionString = new SqliteConnectionStringBuilder
         {
-            // An ordinary read-only WAL connection may create -wal and -shm files.
-            DataSource = new Uri(Path.GetFullPath(path)).AbsoluteUri + "?immutable=1",
+            DataSource = path,
             Mode = SqliteOpenMode.ReadOnly, Pooling = false
         }.ToString();
         using var connection = new SqliteConnection(connectionString);
@@ -124,17 +124,8 @@ internal static class CliOwnerDigestCommand
                 DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture),
                 status == "Passed"));
         }
-        if (before != SnapshotStoreFiles(storeFiles))
-            throw new IOException("Run event store changed while reading the owner digest.");
         return rows;
     }
-
-    private static string SnapshotStoreFiles(IEnumerable<string> paths) =>
-        string.Join("|", paths.Select(path =>
-        {
-            var file = new FileInfo(path);
-            return file.Exists ? $"{file.Length}:{file.LastWriteTimeUtc.Ticks}" : "missing";
-        }));
 
     private static (DateTimeOffset? Since, DateTimeOffset? Until, bool Json) Parse(IReadOnlyList<string> args)
     {

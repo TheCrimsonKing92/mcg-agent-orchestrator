@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 public sealed class OwnerDigestSyntheticStoreTests
 {
@@ -21,15 +22,52 @@ public sealed class OwnerDigestSyntheticStoreTests
         var b = digest.Goals.Single(g => g.GoalId == OwnerDigestTestFixture.GoalB);
         Assert.Equal("escape", b.LandingStatus);
         Assert.Equal(2, b.TailHours);
+        Assert.Equal(new OwnerDigestActorTotals(0, 0, 0), b.Interventions);
+        Assert.Equal(new OwnerDigestHours(0, 0, 0), b.MechanicalHours);
         Assert.Equal(3, digest.Totals.Interventions.Total);
+        Assert.Equal(new OwnerDigestActorTotals(2, 1, 0), digest.Totals.Interventions);
         Assert.Equal(1.5, digest.Totals.MeanInterventionsPerLanding);
         Assert.Equal(1, digest.Totals.CorrectLandings);
         Assert.Equal(1, digest.Totals.Escapes);
+        Assert.Equal(0.5, digest.Totals.CorrectLandingRate);
         Assert.Equal(2, digest.Totals.TailMedianHours);
         Assert.Equal(4, digest.Totals.TailP90Hours);
         Assert.Equal(2.5, digest.Totals.MechanicalHours.Total);
+        Assert.Equal(new OwnerDigestHours(1.5, 1, 0), digest.Totals.MechanicalHours);
         Assert.Equal(1, digest.NonLandedGoalsWithInterventions);
         Assert.Equal("not tracked", digest.Reverts);
+    }
+
+    [Fact]
+    public async Task DigestReadsCanaryReceiptFromUncheckpointedWal()
+    {
+        using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = fixture.Workspace.RunEventStorePath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString();
+        using var writer = new SqliteConnection(connectionString);
+        writer.Open();
+        using (var command = writer.CreateCommand())
+        {
+            command.CommandText = """
+                INSERT INTO run_events (event_id, occurred_at, event_type, operation, status, payload_json)
+                VALUES ($id, $at, $type, 'receipt', 'Failed', $payload)
+                """;
+            command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("N"));
+            command.Parameters.AddWithValue("$at", OwnerDigestTestFixture.Start.AddHours(10).ToString("O"));
+            command.Parameters.AddWithValue("$type", RunEventTypes.PostLandingCanary);
+            command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(new { landingSha = "aaaa" }));
+            command.ExecuteNonQuery();
+        }
+        Assert.True(new FileInfo(fixture.Workspace.RunEventStorePath + "-wal").Length > 0);
+
+        var digest = CliOwnerDigestCommand.Read(fixture.Workspace, fixture.Clock,
+            OwnerDigestTestFixture.Start, OwnerDigestTestFixture.End);
+
+        Assert.Equal("escape", digest.Goals.Single(g => g.GoalId == OwnerDigestTestFixture.GoalA).LandingStatus);
     }
 }
 

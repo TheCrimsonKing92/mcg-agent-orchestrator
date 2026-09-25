@@ -89,6 +89,47 @@ public sealed class OwnerDigestReportTests
         Assert.Equal(Start, OwnerDigestReport.Build(goals, [], new FixedClock(End)).Since);
     }
 
+    [Fact]
+    public void CanaryFallbackCannotReuseEarlierLandingOrUnknownSha()
+    {
+        var goals = new[]
+        {
+            new OwnerDigestGoalInput("earlier", Start.AddHours(8), "aaaa", []),
+            new OwnerDigestGoalInput("later", Start.AddHours(9), "bbbb", []),
+            new OwnerDigestGoalInput("coalesced", Start.AddHours(10), "cccc", [])
+        };
+        var receipts = new[]
+        {
+            new OwnerDigestCanaryReceipt("aaaa", Start.AddHours(11), false),
+            new OwnerDigestCanaryReceipt("unknown", Start.AddHours(12), false),
+            new OwnerDigestCanaryReceipt("cccc", Start.AddHours(13), true)
+        };
+
+        var result = OwnerDigestReport.Build(goals, receipts, new FixedClock(End), Start, End);
+
+        Assert.Equal("escape", result.Goals.Single(g => g.GoalId == "earlier").LandingStatus);
+        Assert.Equal("correct", result.Goals.Single(g => g.GoalId == "later").LandingStatus);
+        Assert.Equal("correct", result.Goals.Single(g => g.GoalId == "coalesced").LandingStatus);
+        Assert.Equal(1, result.Totals.Escapes);
+    }
+
+    [Fact]
+    public void UnknownCanaryShaLeavesLandingPendingAndPriorLandingIsNotNonLanded()
+    {
+        var goals = new[]
+        {
+            new OwnerDigestGoalInput("prior", Start.AddHours(-1), "prior",
+                [Intent("prior", 2, "h1", OperatorActorKind.Human)]),
+            new OwnerDigestGoalInput("current", Start.AddHours(4), null, [])
+        };
+        var receipts = new[] { new OwnerDigestCanaryReceipt("unknown", Start.AddHours(5), false) };
+
+        var result = OwnerDigestReport.Build(goals, receipts, new FixedClock(End), Start, End);
+
+        Assert.Equal("pending", Assert.Single(result.Goals).LandingStatus);
+        Assert.Equal(0, result.NonLandedGoalsWithInterventions);
+    }
+
     private static ProgressEvent Tick(string id, double hour, string outcome, string state) =>
         new(new GoalId(id), null, ProgressKind.GoalPolicyDecision, "tick", Start.AddHours(hour),
             TickOutcome: new ConductorTickOutcomePayload(outcome, state, null));

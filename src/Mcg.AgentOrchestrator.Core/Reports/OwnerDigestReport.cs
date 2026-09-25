@@ -53,8 +53,11 @@ public static class OwnerDigestReport
 
         var landed = goals.Where(g => g.LandedAt is { } at && at >= start && at < end)
             .OrderBy(g => g.LandedAt).ThenBy(g => g.GoalId, StringComparer.Ordinal).ToArray();
-        var rows = landed.Select(g => BuildRow(g, receipts, end)).ToArray();
-        var nonLanded = goals.Count(g => !landed.Contains(g) &&
+        var landingBySha = goals.Where(g => g.LandedAt is not null && !string.IsNullOrWhiteSpace(g.LandingSha))
+            .GroupBy(g => g.LandingSha!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Min(goal => goal.LandedAt!.Value), StringComparer.OrdinalIgnoreCase);
+        var rows = landed.Select(g => BuildRow(g, receipts, end, landingBySha)).ToArray();
+        var nonLanded = goals.Count(g => g.LandedAt is null &&
             g.Timeline.Any(e => e.OperatorIntentApplied is not null && e.OccurredAt >= start && e.OccurredAt < end));
         var interventionTotals = new OwnerDigestActorTotals(
             rows.Sum(r => r.Interventions.Human), rows.Sum(r => r.Interventions.Agent),
@@ -78,7 +81,7 @@ public static class OwnerDigestReport
 
     private static OwnerDigestGoalRow BuildRow(
         OwnerDigestGoalInput goal, IReadOnlyList<OwnerDigestCanaryReceipt> receipts,
-        DateTimeOffset end)
+        DateTimeOffset end, IReadOnlyDictionary<string, DateTimeOffset> landingBySha)
     {
         var landedAt = goal.LandedAt!.Value;
         var events = goal.Timeline.Where(e => e.OccurredAt <= landedAt)
@@ -115,9 +118,12 @@ public static class OwnerDigestReport
         var matching = eligible.Where(r => !string.IsNullOrWhiteSpace(goal.LandingSha) &&
             string.Equals(r.LandingSha, goal.LandingSha, StringComparison.OrdinalIgnoreCase))
             .OrderBy(r => r.OccurredAt).ToArray();
-        // A coalesced canary may be recorded for a later SHA; use the first later receipt when no exact SHA exists.
+        // A coalesced canary may cover this landing if its SHA belongs to a later landing.
         if (matching.Length == 0)
-            matching = eligible.OrderBy(r => r.OccurredAt).Take(1).ToArray();
+            matching = eligible.Where(r => r.LandingSha is not null &&
+                    landingBySha.TryGetValue(r.LandingSha, out var receiptLanding) &&
+                    receiptLanding >= landedAt && receiptLanding <= r.OccurredAt)
+                .OrderBy(r => r.OccurredAt).Take(1).ToArray();
         var status = matching.Length == 0 ? "pending" :
             matching.Any(r => !r.Passed) ? "escape" : "correct";
         return new OwnerDigestGoalRow(goal.GoalId, landedAt, goal.LandingSha,
