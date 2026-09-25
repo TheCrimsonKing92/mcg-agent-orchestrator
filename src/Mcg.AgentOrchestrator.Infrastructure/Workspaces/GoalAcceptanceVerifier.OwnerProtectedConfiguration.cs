@@ -74,7 +74,8 @@ public sealed partial class GoalAcceptanceVerifier
         var details = new List<string>();
 
         string[] noRenamePaths = changedFiles.Any(path =>
-            !RepositoryChangeClassifier.IsOwnerProtectedPolicyPath(path))
+            !RepositoryChangeClassifier.IsOwnerProtectedPolicyPath(path) &&
+            !NormalizePath(path).Equals(manifestPath, StringComparison.OrdinalIgnoreCase))
             ? resolveGitText(worktreePath,
                 ["diff", "--name-only", "--no-renames", "main...HEAD", "--"])?
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? []
