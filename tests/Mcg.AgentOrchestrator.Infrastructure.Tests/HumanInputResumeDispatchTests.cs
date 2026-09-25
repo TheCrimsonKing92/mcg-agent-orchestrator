@@ -30,7 +30,7 @@ public sealed class HumanInputResumeDispatchTests
             dispatchAndStart: currentGoal =>
             {
                 dispatches++;
-                var currentTask = currentGoal.FindTask(task.Id);
+                var currentTask = kernel.GetTask(currentGoal.Id, task.Id);
                 var prepared = WorkerProfileDispatcher.PrepareTask(
                     kernel,
                     currentGoal,
