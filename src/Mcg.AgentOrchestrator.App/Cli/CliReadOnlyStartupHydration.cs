@@ -27,7 +27,8 @@ internal static class CliReadOnlyStartupHydration
         ref Goal? currentGoal,
         bool hydrated,
         IOperatorChannel? channel = null,
-        WorktreeCleanupContext? acceptanceCleanupContext = null)
+        WorktreeCleanupContext? acceptanceCleanupContext = null,
+        Action? onReadOnlyDeclined = null)
     {
         if (!hydrated)
         {
@@ -35,12 +36,14 @@ internal static class CliReadOnlyStartupHydration
                 channel, ref agents, ref workerProfiles, ref currentGoal, out var changed))
                 return changed;
 
+            onReadOnlyDeclined?.Invoke();
             currentGoal = OrchestratorEntityResolver.GetLatestGoal(
                 stateRepository.LoadAsync().GetAwaiter().GetResult());
         }
 
         return CliPersistentStateRunner.ExecuteCommand(args, stateRepository, workspace, ref agents,
             providers, ref workerProfiles, ref currentGoal, channel,
-            acceptanceCleanupContext: acceptanceCleanupContext);
+            acceptanceCleanupContext: acceptanceCleanupContext,
+            skipReadOnlyRoute: !hydrated);
     }
 }

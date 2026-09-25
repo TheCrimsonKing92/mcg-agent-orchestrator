@@ -16,10 +16,10 @@ internal static class CliCommandCapabilities
 
     private static readonly HashSet<string> QueryCommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "tasks", "task", "status", "next", "goals", "monitor-goal",
+        "tasks", "task", "status", "goals", "monitor-goal",
         "architecture", "config", "agent-list", "worker-profile-list", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-depends", "backlog-similar", "goal-events", "timeline",
-        "dashboard", "transcript", "owner-digest"
+        "dashboard", "transcript", "owner-digest", "next"
     };
 
     public static CliCommandCapability Classify(IReadOnlyList<string> args)
@@ -30,7 +30,8 @@ internal static class CliCommandCapabilities
         if (DashboardCommands.Contains(args[0]) || IsDashboardModeCommand(args))
             return CliCommandCapability.DashboardHost;
 
-        return QueryCommands.Contains(args[0]) || CliCommandHelp.IsCommandSpecificHelp(args)
+        return QueryCommands.Contains(args[0]) ||
+               CliCommandHelp.IsCommandSpecificHelp(args)
             ? CliCommandCapability.QueryOnly
             : CliCommandCapability.Execution;
     }

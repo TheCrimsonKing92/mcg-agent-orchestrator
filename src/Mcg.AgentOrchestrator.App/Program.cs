@@ -386,7 +386,8 @@ try
 
     ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
-    if (commandCapability == CliCommandCapability.Execution)
+    if (commandCapability == CliCommandCapability.Execution &&
+        !CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs))
     {
         ProgramStartupLifecycle.InitializeWorkerProcessTracking(
             RunsStartupCleanup(startupArgs),
@@ -410,7 +411,15 @@ if (startupArgs.Count > 0)
     {
         CliReadOnlyStartupHydration.ExecuteStartupCommand(startupArgs, stateRepository, workspace,
             ref agents, providers, ref workerProfiles, ref currentGoal, stateHydrated,
-            operatorChannel, acceptanceCleanupContext: cleanupContext);
+            operatorChannel, acceptanceCleanupContext: cleanupContext,
+            onReadOnlyDeclined: CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs)
+                ? () => ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+                    RunsStartupCleanup(startupArgs),
+                    ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs),
+                    workspace.SqliteStatePath,
+                    workspace.ExecutionDirectory,
+                    cleanupContext)
+                : null);
         return ExitCompletedStartupCommand(0);
     }
     catch (CliExitException ex)
