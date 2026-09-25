@@ -4317,12 +4317,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         PrepareTestTelemetryForRun(telemetry);
         var arguments = BuildMtpTestArguments(check, executableEnvironment ?? environment, telemetry);
         ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
-        var result = await RunWithGateHeartbeatAsync(
+        var result = await RunLaneTestHostWithShardPermitAsync(
             arguments,
             worktreePath,
             EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
             CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, isMtpLane: true).ConfigureAwait(false);
 
         elapsed.Stop();
         var processPassed = !result.TimedOut && result.ExitCode == 0;
@@ -5322,7 +5322,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
         var effectiveArguments = WithBuildEnvironmentArguments(telemetry?.Arguments ?? arguments, environment);
         ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
-        return await RunWithGateHeartbeatAsync(
+        return await RunLaneTestHostWithShardPermitAsync(
             effectiveArguments,
             worktreePath,
             timeout,
