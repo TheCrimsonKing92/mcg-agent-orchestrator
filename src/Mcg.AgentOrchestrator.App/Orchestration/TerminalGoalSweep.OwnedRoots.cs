@@ -9,7 +9,9 @@ internal sealed record TerminalGoalSweepOwnedRootResult(
     int RetainedCount,
     int FailedCount,
     IReadOnlyList<string> ObserveOnlyReports,
-    string? DeferredReason = null)
+    string? DeferredReason = null,
+    IReadOnlyList<string>? ReclaimedGoalRoots = null,
+    IReadOnlyList<string>? GoalRootReclaimFailures = null)
 {
     internal IReadOnlyList<string> OperatorEvents
     {
@@ -20,6 +22,12 @@ internal sealed record TerminalGoalSweepOwnedRootResult(
                 events.Add($"SWEEP_OWNED_ROOT_DEFERRED reason=\"{Sanitize(DeferredReason)}\"");
             events.AddRange(ObserveOnlyReports.Select(report =>
                 $"SWEEP_OWNED_ROOT_OBSERVED detail=\"{Sanitize(report)}\""));
+            if (ReclaimedGoalRoots is not null)
+                events.AddRange(ReclaimedGoalRoots.Select(path =>
+                    $"SWEEP_GOAL_ROOT_RECLAIMED path=\"{Sanitize(path)}\""));
+            if (GoalRootReclaimFailures is not null)
+                events.AddRange(GoalRootReclaimFailures.Select(failure =>
+                    $"SWEEP_GOAL_ROOT_RECLAIM_FAILED detail=\"{Sanitize(failure)}\""));
             return events;
         }
     }
@@ -33,11 +41,32 @@ internal sealed record TerminalGoalSweepOwnedRootResult(
 internal static partial class TerminalGoalSweep
 {
     internal const int MaxOwnedBuildRootsPerSweep = 25;
-    private static long s_ownedRootCursor;
-    private static int s_ownedRootObservationCursor;
+    private static readonly OwnedRootSweepState s_ownedRootState = new();
 
-    private static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(string stateDbPath)
-        => ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(stateDbPath));
+    internal sealed class OwnedRootSweepState
+    {
+        internal long ReapCursor;
+        internal int ObservationCursor;
+        internal readonly OwnedRunRootObservationLedger ObservationLedger = new();
+    }
+
+    private static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(
+        string stateDbPath, bool reclaimGoalRoots)
+    {
+        var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
+        return ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
+            stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true,
+            reclaimGoalRoots: reclaimGoalRoots, requireSharedRootOwnership: reclaimGoalRoots));
+    }
+
+    // A temporary or scoped store cannot prove that a root in the shared folder is orphaned.
+    internal static bool IsCanonicalGoalRootStore(string stateDbPath)
+    {
+        var repoRoot = OrchestratorWorkspace.ResolveRepoRoot();
+        var canonicalDb = OrchestratorWorkspace.ForDirectory(repoRoot).SqliteStatePath;
+        return string.Equals(Path.GetFullPath(stateDbPath), Path.GetFullPath(canonicalDb),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
 
     internal static TerminalGoalSweepOwnedRootResult ExecuteOwnedBuildRootReap(
         Func<TerminalGoalSweepOwnedRootResult> reap)
@@ -69,12 +98,17 @@ internal static partial class TerminalGoalSweep
             };
     }
 
-    private static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRootsCore(string stateDbPath)
+    internal static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRootsCore(
+        string stateDbPath, DotnetBuildStorageRoot storageRoot, OwnedRootSweepState state,
+        Func<int, bool>? isOwnerRunning = null, bool usesSharedStorageRoot = false,
+        string? canonicalRepoRoot = null, OrchestratorProjectRegistry? projectRegistry = null,
+        bool reclaimGoalRoots = true, bool requireSharedRootOwnership = false)
     {
+        ArgumentNullException.ThrowIfNull(storageRoot);
+        ArgumentNullException.ThrowIfNull(state);
         if (!File.Exists(stateDbPath) || !StateDbMigrations.IsUpToDate(stateDbPath))
             return new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []);
 
-        var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
         var registry = new OwnedRunRootRegistry(stateDbPath);
         var reaper = new OwnedRunRootReaper(
             registry,
@@ -83,21 +117,46 @@ internal static partial class TerminalGoalSweep
             new SystemOwnedRunRootProcessInspector(),
             new SystemOwnedRunRootFileSystem(),
             TimeSpan.FromMinutes(5));
-        var reap = reaper.Reap(Interlocked.Read(ref s_ownedRootCursor), MaxOwnedBuildRootsPerSweep);
-        Interlocked.Exchange(ref s_ownedRootCursor, reap.NextCursor);
+        var reap = reaper.Reap(Interlocked.Read(ref state.ReapCursor), MaxOwnedBuildRootsPerSweep);
+        Interlocked.Exchange(ref state.ReapCursor, reap.NextCursor);
+        GoalBuildRootReclaimResult reclaimed = new([], []);
+        string? discoveryFailure = null;
+        var repoRoot = canonicalRepoRoot ?? OrchestratorWorkspace.ResolveRepoRoot();
+        var hasReclaimAuthority = !requireSharedRootOwnership ||
+            string.Equals(Path.GetFullPath(stateDbPath),
+                Path.GetFullPath(OrchestratorWorkspace.ForDirectory(repoRoot).SqliteStatePath),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        var sharedStores = !reclaimGoalRoots || !hasReclaimAuthority ? null : usesSharedStorageRoot
+            ? GetSharedGoalStorePaths(stateDbPath, out discoveryFailure, canonicalRepoRoot, projectRegistry)
+            : [stateDbPath];
+        if (sharedStores is null)
+        {
+            if (discoveryFailure is not null)
+                reclaimed = new GoalBuildRootReclaimResult([], [discoveryFailure]);
+        }
+        else if (TryReadGoalIds(sharedStores, out var storedGoalIds, out var readFailure))
+        {
+            reclaimed = new GoalBuildRootReclaimer(storageRoot, registry, repoRoot, isOwnerRunning)
+                .Reclaim(storedGoalIds, MaxOwnedBuildRootsPerSweep);
+        }
+        else
+            reclaimed = new GoalBuildRootReclaimResult([], [readFailure!]);
         var observer = new OwnedRunRootObserver(
             registry,
             storageRoot,
-            new SystemOwnedRunRootDirectoryEnumerator());
+            new SystemOwnedRunRootDirectoryEnumerator(),
+            state.ObservationLedger);
         var observation = observer.ObserveUnregisteredRoots(
-            Volatile.Read(ref s_ownedRootObservationCursor),
+            Volatile.Read(ref state.ObservationCursor),
             MaxOwnedBuildRootsPerSweep);
-        Volatile.Write(ref s_ownedRootObservationCursor, observation.NextCursor);
+        Volatile.Write(ref state.ObservationCursor, observation.NextCursor);
         return new TerminalGoalSweepOwnedRootResult(
             reap.ProcessedCount,
             reap.RemovedCount,
             reap.RetainedCount,
             reap.FailedCount,
-            observation.UnregisteredRoots);
+            observation.UnregisteredRoots,
+            ReclaimedGoalRoots: reclaimed.ReclaimedRoots,
+            GoalRootReclaimFailures: reclaimed.Failures);
     }
 }

@@ -233,7 +233,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                         goal.Id,
                         context.StableSlotAcquisitionTimeout,
                         onSlotWait,
-                        context.CleanupHooks.BuildStorageRoot);
+                        context.CleanupHooks.BuildStorageRoot,
+                        context.Workspace.ExecutionDirectory);
                 if (context.CleanupHooks.BuildStorageRoot is { } configuredRoot &&
                     (!configuredRoot.ContainsPath(stableSlotLease.Environment.RootPath) ||
                      !configuredRoot.ContainsPath(stableSlotLease.Environment.ArtifactsPath) ||
@@ -649,9 +650,11 @@ private static DotnetBuildEnvironmentLease SelectGoalBuildPermit(
     GoalId goalId,
     TimeSpan? timeout,
     Action<DotnetBuildStableSlotWait>? onWait,
-    DotnetBuildStorageRoot? storageRoot)
+    DotnetBuildStorageRoot? storageRoot,
+    string repositoryRoot)
 {
-    var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "acceptance", storageRoot: storageRoot);
+    var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+        goalId, "acceptance", storageRoot: storageRoot, repositoryRoot: repositoryRoot);
     if (environment.BuildPermitIndex is { } permitIndex &&
         !DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(permitIndex, storageRoot))
     {

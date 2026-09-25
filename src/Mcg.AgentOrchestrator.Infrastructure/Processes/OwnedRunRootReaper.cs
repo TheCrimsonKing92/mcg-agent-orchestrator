@@ -108,10 +108,19 @@ internal sealed record OwnedRunRootObservationResult(
     IReadOnlyList<string> UnregisteredRoots,
     int NextCursor);
 
+internal sealed class OwnedRunRootObservationLedger
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _reported =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    public bool TryMarkReported(string canonicalPath) => _reported.TryAdd(canonicalPath, 0);
+}
+
 internal sealed class OwnedRunRootObserver(
     IOwnedRunRootStore store,
     DotnetBuildStorageRoot storageRoot,
-    IOwnedRunRootDirectoryEnumerator directoryEnumerator)
+    IOwnedRunRootDirectoryEnumerator directoryEnumerator,
+    OwnedRunRootObservationLedger? ledger = null)
 {
     public OwnedRunRootObservationResult ObserveUnregisteredRoots(int afterIndex, int maxRoots)
     {
@@ -123,7 +132,7 @@ internal sealed class OwnedRunRootObserver(
             .ToArray();
         var registered = store.ReadRegisteredPaths(canonicalPaths);
         var unregistered = canonicalPaths
-            .Where(path => !registered.Contains(path))
+            .Where(path => !registered.Contains(path) && (ledger?.TryMarkReported(path) ?? true))
             .Select(path => $"observe-only unregistered build root: {path}")
             .ToArray();
         return new OwnedRunRootObservationResult(canonicalPaths.Length, unregistered, page.NextCursor);
