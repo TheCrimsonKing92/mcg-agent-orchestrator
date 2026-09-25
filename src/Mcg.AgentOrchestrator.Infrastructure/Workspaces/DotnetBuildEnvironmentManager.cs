@@ -134,7 +134,9 @@ public static class DotnetBuildEnvironmentManager
         CreateDefaultOwnedRunRootRegistrar;
     private static readonly ConcurrentDictionary<string, IOwnedRunRootRegistrar> OwnedRunRootRegistrarsForTests =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-    private static readonly ConcurrentQueue<string> OwnedRunRootWriteFailures = new();
+    private sealed record OwnedRunRootWriteFailure(string StorageRootPath, string Message);
+    private static readonly ConcurrentQueue<OwnedRunRootWriteFailure> OwnedRunRootWriteFailures = new();
+    private static readonly object OwnedRunRootWriteFailureDrainGate = new();
     private static int s_nextStableSlotScanStart = -1;
     private static int s_heldExecutionLeaseCount;
     private static int s_compilerLockRecoveryRequested;
@@ -1216,7 +1218,7 @@ public static class DotnetBuildEnvironmentManager
             var registrar = ResolveOwnedRunRootRegistrar(storageRoot);
             if (registrar is null)
             {
-                OwnedRunRootWriteFailures.Enqueue(
+                EnqueueOwnedRunRootWriteFailure(canonicalRoot,
                     $"owned-root registration unavailable; created as unregistered path={canonicalRoot}");
                 return null;
             }
@@ -1239,7 +1241,7 @@ public static class DotnetBuildEnvironmentManager
         }
         catch (Exception ex)
         {
-            OwnedRunRootWriteFailures.Enqueue(
+            EnqueueOwnedRunRootWriteFailure(canonicalRoot,
                 $"owned-root registration failed; created as unregistered path={canonicalRoot} error={ex.GetType().Name}: {ex.Message}");
             return null;
         }
@@ -1295,17 +1297,36 @@ public static class DotnetBuildEnvironmentManager
         }
         catch (Exception ex)
         {
-            OwnedRunRootWriteFailures.Enqueue(
+            EnqueueOwnedRunRootWriteFailure(environment.RootPath,
                 $"owned-root release persistence failed path={environment.RootPath} outcome={outcome} error={ex.GetType().Name}: {ex.Message}");
         }
     }
 
-    internal static IReadOnlyList<string> DrainOwnedRunRootWriteFailures(int maxCount)
+    private static void EnqueueOwnedRunRootWriteFailure(string runRootPath, string message)
+    {
+        var storageRootPath = Path.GetDirectoryName(Path.GetDirectoryName(runRootPath)!)!;
+        OwnedRunRootWriteFailures.Enqueue(new OwnedRunRootWriteFailure(storageRootPath, message));
+    }
+
+    internal static IReadOnlyList<string> DrainOwnedRunRootWriteFailures(
+        int maxCount, DotnetBuildStorageRoot? storageRoot = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         var failures = new List<string>(maxCount);
-        while (failures.Count < maxCount && OwnedRunRootWriteFailures.TryDequeue(out var failure))
-            failures.Add(failure);
+        lock (OwnedRunRootWriteFailureDrainGate)
+        {
+            var pending = OwnedRunRootWriteFailures.Count;
+            for (var i = 0; i < pending && failures.Count < maxCount; i++)
+            {
+                if (!OwnedRunRootWriteFailures.TryDequeue(out var failure))
+                    break;
+                if (storageRoot is null || string.Equals(failure.StorageRootPath, storageRoot.RootPath,
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    failures.Add(failure.Message);
+                else
+                    OwnedRunRootWriteFailures.Enqueue(failure);
+            }
+        }
         return failures;
     }
 
@@ -1337,7 +1358,7 @@ public static class DotnetBuildEnvironmentManager
         }
         catch (Exception ex)
         {
-            OwnedRunRootWriteFailures.Enqueue(
+            EnqueueOwnedRunRootWriteFailure(canonicalPath,
                 $"owned-root cleanup persistence failed path={canonicalPath} operation={operation} error={ex.GetType().Name}: {ex.Message}");
         }
     }

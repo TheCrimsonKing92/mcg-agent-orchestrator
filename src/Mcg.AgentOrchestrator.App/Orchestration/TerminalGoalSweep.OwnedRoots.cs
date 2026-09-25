@@ -51,9 +51,11 @@ internal static partial class TerminalGoalSweep
     }
 
     private static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(string stateDbPath)
-        => ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
-            stateDbPath, DotnetBuildEnvironmentManager.CaptureStorageRoot(), s_ownedRootState,
-            usesSharedStorageRoot: true));
+    {
+        var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
+        return ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
+            stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true), storageRoot);
+    }
 
     // The per-user build folder is shared by every temporary and project state store in this
     // process. Only the default repository store may use absence from its goals table as
@@ -67,7 +69,7 @@ internal static partial class TerminalGoalSweep
     }
 
     internal static TerminalGoalSweepOwnedRootResult ExecuteOwnedBuildRootReap(
-        Func<TerminalGoalSweepOwnedRootResult> reap)
+        Func<TerminalGoalSweepOwnedRootResult> reap, DotnetBuildStorageRoot? storageRoot = null)
     {
         ArgumentNullException.ThrowIfNull(reap);
         TerminalGoalSweepOwnedRootResult result;
@@ -86,8 +88,10 @@ internal static partial class TerminalGoalSweep
                 $"owned-root reap deferred: sqlite code {ex.SqliteErrorCode}: {ex.Message}");
         }
 
-        var writeFailures = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
-            MaxOwnedBuildRootsPerSweep);
+        IReadOnlyList<string> writeFailures = storageRoot is null
+            ? []
+            : DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
+                MaxOwnedBuildRootsPerSweep, storageRoot);
         return writeFailures.Count == 0
             ? result
             : result with
