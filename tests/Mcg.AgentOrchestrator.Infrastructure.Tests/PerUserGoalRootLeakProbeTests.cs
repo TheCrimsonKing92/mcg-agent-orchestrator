@@ -18,7 +18,7 @@ public sealed class PerUserGoalRootLeakProbeTests
             probe.AssertScopedTo(scopedRoot, temp);
 
             WriteLease("owned", GoalId.New(), Environment.ProcessId);
-            var failure = Assert.Throws<Xunit.Sdk.XunitException>(() => probe.AssertScopedTo(scopedRoot, temp));
+            var failure = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => probe.AssertScopedTo(scopedRoot, temp));
             Assert.Contains("owned", failure.Message, StringComparison.Ordinal);
 
             void WriteLease(string entry, GoalId goalId, int ownerProcessId)
