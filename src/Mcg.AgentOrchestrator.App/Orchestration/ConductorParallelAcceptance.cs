@@ -145,7 +145,7 @@ internal abstract record ConductorSpeculativeAcceptanceDisposition(GoalId GoalId
         : ConductorSpeculativeAcceptanceDisposition(GoalId);
 }
 
-internal sealed record ConductorSpeculativeAcceptancePlan(
+internal sealed partial record ConductorSpeculativeAcceptancePlan(
     int ReadyCandidateCount,
     IReadOnlyList<ConductorSpeculativeAcceptanceCohort> Cohorts,
     IReadOnlyList<ConductorSpeculativeAcceptanceDisposition> Dispositions)

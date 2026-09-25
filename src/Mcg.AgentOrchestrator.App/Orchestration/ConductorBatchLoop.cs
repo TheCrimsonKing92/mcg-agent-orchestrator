@@ -721,6 +721,8 @@ internal sealed partial class ConductorBatchLoop
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))
                 .ToArray();
+            var verifiedGoalIdsAtTickStart = scopedGoals.Where(goal => goal.Status == GoalStatus.Verified)
+                .Select(goal => goal.Id).ToHashSet();
             var scopedGoalsById = scopedGoals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
             var preWalkIntentChangedGoalIds = new HashSet<GoalId>();
             if (_operatorIntents is not null)
@@ -1069,6 +1071,9 @@ internal sealed partial class ConductorBatchLoop
             var dispatchRecordWriteBoundGoalIds = new HashSet<GoalId>();
             var parallelLandingResults = RunParallelAcceptanceBatch(
                 eligible,
+                scopedGoals,
+                verifiedGoalIdsAtTickStart,
+                preWalkIntentChangedGoalIds,
                 kernel,
                 driver,
                 policy,
@@ -2851,6 +2856,9 @@ internal sealed partial class ConductorBatchLoop
 
     private IReadOnlyDictionary<string, ParallelLandingOutcome> RunParallelAcceptanceBatch(
         IReadOnlyList<Goal> eligible,
+        IReadOnlyList<Goal> scopedGoals,
+        IReadOnlySet<GoalId> verifiedGoalIdsAtTickStart,
+        IReadOnlySet<GoalId> preWalkIntentChangedGoalIds,
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,
@@ -3083,7 +3091,9 @@ internal sealed partial class ConductorBatchLoop
                 goal.Id,
                 driver.ProjectGateReadyCandidate(goal, policy)))
             .ToArray();
-        EmitProgress(ConductorSpeculativeAcceptanceCohortPlanner.Plan(speculativeCandidates).FormatReceipt(tick));
+        EmitSpeculativeCohortPlanReceipt(scopedGoals, verifiedGoalIdsAtTickStart,
+            preWalkIntentChangedGoalIds, eligible, orderedEligible, speculativeCandidates,
+            liveAttempts, activeAttemptIds, driver, policy, completedGoals, escalatedGoals, kernel, tick);
         var liveAttemptGoalIds = liveAttempts
             .Select(attempt => attempt.GoalId)
             .ToHashSet(StringComparer.Ordinal);
