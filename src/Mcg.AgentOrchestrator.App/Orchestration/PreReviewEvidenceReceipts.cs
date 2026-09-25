@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -7,6 +8,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // The driver supplies its authoritative recording callback; this helper owns no kernel state.
 internal static class PreReviewEvidenceReceipts
 {
+    private static readonly Regex ClassTokenPattern = new(
+        @"(?<![A-Za-z0-9_!])FullyQualifiedName\s*~\s*([A-Za-z_][A-Za-z0-9_.]*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     internal static PreReviewEvidenceReceipt Record(
         Action<GoalId, TaskId, PreReviewEvidenceReceipt> record,
         Goal goal,
@@ -28,7 +33,7 @@ internal static class PreReviewEvidenceReceipts
             checks.Count(check => !check.Passed),
             checks.Select((check, index) => new PreReviewEvidenceCheckReceipt(
                 check.Name,
-                ResolvePreReviewReceiptTarget(context, index, checks.Count),
+                ResolvePreReviewReceiptTarget(context, check.Name, index, checks.Count),
                 check.Passed,
                 check.ExitCode,
                 check.ArtifactsPath,
@@ -36,7 +41,8 @@ internal static class PreReviewEvidenceReceipts
             failingTests,
             context.MappingReason,
             evidencePointer,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            Advisories: FindExtraneousChecks(context, checks));
         record(goal.Id, reviewerTask.Id, receipt);
         return receipt;
     }
@@ -137,22 +143,86 @@ internal static class PreReviewEvidenceReceipts
         out string failure)
     {
         failure = string.Empty;
+        if (context.SelectedFocusedTests.Count == 0)
+        {
+            return true;
+        }
+
+        var itemClasses = context.SelectedFocusedTests.Select(ExtractClassTokens).ToArray();
+        var checkClasses = evidence.Checks.Select(check => ExtractClassTokens(check.Name)).ToArray();
+        if (itemClasses.All(classes => classes.Count > 0))
+        {
+            var missing = context.SelectedFocusedTests.Select((item, index) =>
+            {
+                var uncovered = itemClasses[index].Where(className =>
+                    !checkClasses.Any(classes => classes.Contains(className))).ToArray();
+                return uncovered.Length == 0
+                    ? null
+                    : $"item '{item}' uncovered {string.Join(", ", uncovered)}";
+            }).OfType<string>().ToArray();
+            if (missing.Length == 0)
+            {
+                return true;
+            }
+
+            failure = $"focused evidence missing selected classes: {string.Join("; ", missing)}";
+            return false;
+        }
+
+        // Older whole-project and synthetic checks have no class identity to attribute.
         if (evidence.Checks.Count == context.SelectedFocusedTests.Count)
         {
             return true;
         }
 
-        failure = $"cardinality mismatch: planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
+        failure = $"focused evidence carries no FullyQualifiedName~ class identity; positional mapping needs one check per selected item (planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count})";
         return false;
     }
 
     private static string ResolvePreReviewReceiptTarget(
         PreReviewEvidenceContext context,
+        string checkName,
         int index,
         int checkCount)
     {
+        var checkClasses = ExtractClassTokens(checkName);
+        if (checkClasses.Count > 0 &&
+            context.SelectedFocusedTests.All(item => ExtractClassTokens(item).Count > 0))
+        {
+            var matchingItems = context.SelectedFocusedTests.Where(item =>
+                ExtractClassTokens(item).Overlaps(checkClasses)).ToArray();
+            return matchingItems.Length > 0
+                ? string.Join("; ", matchingItems)
+                : "(unmapped: check covers no selected class)";
+        }
+
         return checkCount == context.SelectedFocusedTests.Count
             ? context.SelectedFocusedTests[index]
             : "(unmapped: check/command cardinality mismatch)";
+    }
+
+    private static HashSet<string> ExtractClassTokens(string value) =>
+        ClassTokenPattern.Matches(value)
+            .Select(match => match.Groups[1].Value.Trim())
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static IReadOnlyList<string>? FindExtraneousChecks(
+        PreReviewEvidenceContext context,
+        IReadOnlyList<AcceptanceCheckResult> checks)
+    {
+        var selectedClasses = context.SelectedFocusedTests
+            .SelectMany(ExtractClassTokens)
+            .ToHashSet(StringComparer.Ordinal);
+        if (context.SelectedFocusedTests.Count > 0 && selectedClasses.Count == 0)
+        {
+            return null;
+        }
+
+        var advisories = checks.Where(check =>
+            ExtractClassTokens(check.Name) is { Count: > 0 } classes &&
+            !classes.Overlaps(selectedClasses))
+            .Select(check => $"extraneous-focused-check: {check.Name}")
+            .ToArray();
+        return advisories.Length == 0 ? null : advisories;
     }
 }
