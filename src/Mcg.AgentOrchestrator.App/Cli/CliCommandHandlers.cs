@@ -34,6 +34,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
     }
 
     var handled =
+        (command == "owner-digest" ? CliOwnerDigestCommand.Run(parts, context.Workspace) == 0 ? false : throw new InvalidOperationException("Owner digest failed.") : (bool?)null) ??
         TryExecuteFundamentalsAlias(command, parts, context) ??
         TryExecuteFlakeCensusCommand(command, parts, context) ??
         TryExecuteSystemCommand(command, parts, context) ??

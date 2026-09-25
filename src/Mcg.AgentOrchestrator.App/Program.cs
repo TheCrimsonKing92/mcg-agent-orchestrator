@@ -167,6 +167,11 @@ if (GoalBoardCommand.IsBoardCommand(startupArgs))
     return ExitCompletedStartupCommand(ProgramStartupLifecycle.RunGoalBoard(startupArgs, workspace));
 }
 
+if (CliOwnerDigestCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliOwnerDigestCommand.Run(startupArgs, workspace));
+}
+
 if (ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))

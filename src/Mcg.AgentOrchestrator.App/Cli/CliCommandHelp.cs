@@ -73,6 +73,7 @@ internal static class CliCommandHelp
     public const string StateDatabaseMaintenanceUsage = "Usage: state-db-maintenance plan | state-db-maintenance execute --confirm-offline | state-db-maintenance convert-copy --output <path> --confirm-offline | state-db-maintenance convert-live --confirm-offline --confirm-live-replacement";
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
     public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
+    public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -506,6 +507,11 @@ internal static class CliCommandHelp
         "Summarize recurring test failures from the retained acceptance failing-test index.",
         ["--min-goals", "--since", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry OwnerDigest = new(
+        OwnerDigestUsage,
+        "Report interventions, landings, escapes, tail time and mechanical hours.",
+        ["--since", "--until", "--json", "--help", "-h"]);
+
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
@@ -928,6 +934,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("flake-census", StringComparison.OrdinalIgnoreCase))
         {
             entry = FlakeCensus;
+            return true;
+        }
+
+        if (args[0].Equals("owner-digest", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = OwnerDigest;
             return true;
         }
 
