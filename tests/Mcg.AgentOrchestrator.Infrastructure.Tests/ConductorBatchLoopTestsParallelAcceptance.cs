@@ -2741,7 +2741,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(1, summary.Held);
             Assert.Equal(1, acceptanceRuns);
             Assert.Equal(GoalStatus.Verified, goal.Status);
-            Assert.Equal(4, goal.Tasks.Count);
+            Assert.Equal(5, goal.Tasks.Count);
             Assert.All(goal.Tasks, task => Assert.Equal(WorkTaskStatus.Completed, task.Status));
             Assert.All(goal.Tasks, task => Assert.Equal(0, task.CriterionRetryCount));
             Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
