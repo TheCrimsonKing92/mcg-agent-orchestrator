@@ -3,7 +3,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("ProcessSpawning")]
-public sealed class DispatchProcessHostHeartbeatRaceTests
+public sealed class DispatchProcessHostTestsHeartbeatRace
 {
     [Xunit.Fact]
     public void HeartbeatCallbackParkedInObserveSelectedChild_TeardownWaitsBeforeDisposingChild()
