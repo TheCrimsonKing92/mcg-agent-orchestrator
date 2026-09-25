@@ -49,8 +49,8 @@ public sealed class GoalWorktreeTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "Cli_lifecycle_goal_runs_five_role_goal_accepts_and_defers_workspace_cleanup")]
-    public void CliLifecycleGoalRunsFiveRoleGoalAcceptsAndDefersWorkspaceCleanup()
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_goal_runs_scout_goal_accepts_and_defers_workspace_cleanup")]
+    public void CliLifecycleGoalRunsScoutGoalAcceptsAndDefersWorkspaceCleanup()
     {
         var root = CreateTempDirectory();
         try
@@ -60,12 +60,14 @@ public sealed class GoalWorktreeTests
             var context = CreateLifecycleContext(root, worktrees, verifier, fiveRole: true);
 
             CliCommandHandlers.Execute(
-                ["lifecycle-goal", "Ship a five-role echo change", "--pipeline", "five-role", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                ["lifecycle-goal", "Ship a scout echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                 context);
 
             var goal = context.CurrentGoal!;
             Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
-            Xunit.Assert.Equal(5, goal.Tasks.Count);
+            Xunit.Assert.Equal(
+                [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+                goal.Tasks.Select(task => task.RequiredRole));
             Xunit.Assert.NotNull(worktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Equal(1, verifier.RunCount);
             Xunit.Assert.Equal(1, worktrees.MergeCount);

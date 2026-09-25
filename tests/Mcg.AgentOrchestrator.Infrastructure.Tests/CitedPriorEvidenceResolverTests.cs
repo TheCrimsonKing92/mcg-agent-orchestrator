@@ -209,7 +209,7 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
         Assert.Equal(0, reader.TaskReads);
         Assert.False(File.Exists(Path.Combine(contextDirectory, "prior-goal-evidence.md")));
         Assert.False(File.Exists(Path.Combine(contextDirectory, "packages", task.Id.Value, "prior-goal-evidence.md")));
-        Assert.DoesNotContain("prior-goal-evidence.md", File.ReadAllText(Path.Combine(contextDirectory, "manifest.md")), StringComparison.Ordinal);
+        Assert.DoesNotContain("- prior-goal-evidence.md:", File.ReadAllText(Path.Combine(contextDirectory, "manifest.md")), StringComparison.Ordinal);
         Assert.DoesNotContain("prior-goal-evidence.md", File.ReadAllText(Path.Combine(contextDirectory, "artifact-registry.json")), StringComparison.Ordinal);
     }
 

@@ -3,8 +3,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ScoutDispatchCompletionTests : WorkerDispatchTestSupport
 {
-    [Xunit.Fact]
-    public void SuccessfulScoutPersistsPlanAndResearchForNextTask()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void SuccessfulScoutPersistsPlanAndResearchForNextTask(bool externalPlan)
     {
         var kernel = new AgentOrchestratorKernel();
         var planner = new TaskSpec(TaskId.New(), "Inspect source and plan.", AgentRole.Planner);
@@ -20,9 +22,14 @@ public sealed class ScoutDispatchCompletionTests : WorkerDispatchTestSupport
         var stdout = Path.Combine(root, "scout.out.log");
         var stderr = Path.Combine(root, "scout.err.log");
         var exit = Path.Combine(root, "scout.exit.txt");
+        var planPath = Path.Combine(root, "scout-plan.md");
+        if (externalPlan)
+        {
+            File.WriteAllText(planPath, PlannerContractPlanFixture());
+        }
         File.WriteAllText(stdout, string.Join(Environment.NewLine,
             ResearcherContractFixture(),
-            PlannerContractPlanFixture(),
+            externalPlan ? $"Plan file: `{planPath}`" : PlannerContractPlanFixture(),
             "WORKER_RESULT:",
             "files: none",
             "commands: source inspection",
