@@ -5666,6 +5666,10 @@ internal sealed partial class ConductorDriver
         // git call at exactly one per advance and off gate completions that never need it.
         var landingFileScopes = new Lazy<IReadOnlyList<string>>(() => _getLandingFileScopes(goal));
         var apparatusRedReading = _apparatusRedGate?.RecordGateCompletion(goal, acceptance, landingFileScopes);
+        if (TryDisposeWithinAttemptRerunApparatus(goal, goalPrefix, policy, acceptance) is { } rerunApparatus)
+        {
+            return rerunApparatus;
+        }
         if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
             var failedChecks = acceptance.FailedChecks is { Count: > 0 }

@@ -538,11 +538,26 @@ internal sealed class AcceptancePartitionVerdictCache
                     _sharedApparatusInvalidation,
                     partitionId);
             }
+            if (IsWithinAttemptRerunPass(firstRun, decision, probe))
+            {
+                verdict = verdict with
+                {
+                    WithinAttemptRerun = new AcceptanceWithinAttemptRerunEvidence(
+                        partitionId,
+                        decision.FailedPredicate,
+                        completedReceipt.OriginalInvocationId,
+                        completedReceipt.RetryInvocationId,
+                        probe.CompletionDecision?.ExecutedTestCount ?? probe.ExecutedTestCount!.Value,
+                        probe.TestResultPaths!)
+                };
+            }
         }
 
         var detail =
             $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source=first_run " +
-            $"probe_ran=true flake_confirmed={probe.Passed.ToString().ToLowerInvariant()}";
+            $"probe_ran=true flake_confirmed={probe.Passed.ToString().ToLowerInvariant()}" +
+            (verdict.WithinAttemptRerun is null ? string.Empty :
+                $" apparatus_reason={AcceptanceWithinAttemptRerunEvidence.Reason}");
         AppendPartitionVerdictJournalEntries(
             JournalPath,
             [new PartitionVerdictJournalEntry(
@@ -563,6 +578,19 @@ internal sealed class AcceptancePartitionVerdictCache
                 PartitionRetryReceipt: completedReceipt)]);
         return verdict;
     }
+
+    private static bool IsWithinAttemptRerunPass(
+        AcceptanceCheckResult firstRun,
+        AcceptanceShardCompletionDecision decision,
+        AcceptanceCheckResult probe) =>
+        (decision.FailedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
+            AcceptanceShardCompletionPredicates.MalformedTrx) &&
+        firstRun.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) != true &&
+        probe.Passed &&
+        probe.CompletionDecision is { Passed: true } &&
+        (probe.CompletionDecision.ExecutedTestCount ?? probe.ExecutedTestCount) > 0 &&
+        probe.TestResultPaths is { Count: > 0 } &&
+        probe.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) != true;
 
     private static bool IsApparatusInvalidatingPredicate(string failedPredicate) =>
         failedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
