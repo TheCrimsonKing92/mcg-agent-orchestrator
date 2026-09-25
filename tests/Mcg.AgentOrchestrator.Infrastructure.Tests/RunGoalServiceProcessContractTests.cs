@@ -75,7 +75,8 @@ public sealed class RunGoalServiceProcessContractTests
 
     private static string PlannerSuccessCommand(string marker)
     {
-        var plan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
+        var plan = WorkerDispatchTestSupport.ResearcherContractFixture() + Environment.NewLine +
+            WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
             "`seed.txt`, ",
             string.Empty,
             StringComparison.Ordinal);

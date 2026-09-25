@@ -31,6 +31,7 @@ public sealed class PlannerEvidenceDispatchTests
             StringComparison.Ordinal);
         File.WriteAllText(stdout, string.Join(Environment.NewLine,
             new string('H', VerificationTextBounds.PreviewHeadChars),
+            WorkerDispatchTestSupport.ResearcherContractFixture(),
             plannerPlan,
             evidenceRequest,
             new string('T', VerificationTextBounds.PreviewTailChars + 1_000),

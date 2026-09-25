@@ -21,8 +21,8 @@ public sealed class ScoutDispatchCompletionTests : WorkerDispatchTestSupport
         var stderr = Path.Combine(root, "scout.err.log");
         var exit = Path.Combine(root, "scout.exit.txt");
         File.WriteAllText(stdout, string.Join(Environment.NewLine,
-            PlannerContractPlanFixture(),
             ResearcherContractFixture(),
+            PlannerContractPlanFixture(),
             "WORKER_RESULT:",
             "files: none",
             "commands: source inspection",
@@ -51,5 +51,7 @@ public sealed class ScoutDispatchCompletionTests : WorkerDispatchTestSupport
         var contextDirectory = new WorkerArtifactWriter().Write(goal, developer, root);
         Xunit.Assert.Contains("CURRENT-SOURCE-RESEARCH-9182",
             File.ReadAllText(Path.Combine(contextDirectory, "research-notes.md")), StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("CURRENT-SOURCE-RESEARCH-9182",
+            File.ReadAllText(Path.Combine(contextDirectory, "planner-plan.md")), StringComparison.Ordinal);
     }
 }

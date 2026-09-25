@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -18,14 +19,16 @@ public sealed partial class BackgroundDispatchRunner
             (plannerIndex > 0 && goal.Tasks.Take(plannerIndex).Any(candidate => candidate.RequiredRole == AgentRole.Researcher));
     }
 
-    private static bool TryPersistScoutResearch(string standardOutputPath, out string diagnostic)
+    private static bool TryPersistScoutResearch(string selectedSourcePath, string standardOutputPath, out string diagnostic)
     {
-        var captured = ResearcherOutputContract.ReadCapturedOutputTail(standardOutputPath);
-        var contract = ResearcherOutputContract.Resolve(captured);
+        var captured = ResearcherOutputContract.ReadCapturedOutputTail(selectedSourcePath);
+        var planStart = Regex.Match(captured, @"(?im)^\s*#{1,6}\s+Premise\s+Validity\b");
+        var researchOutput = planStart.Success ? captured[..planStart.Index] : captured;
+        var contract = ResearcherOutputContract.Resolve(researchOutput);
         if (!contract.Succeeded || contract.Research is null)
         {
             diagnostic = AppendDiagnostic(
-                contract.Diagnostic,
+                contract.Diagnostic.Replace("Retry Researcher", "Retry Planner", StringComparison.Ordinal),
                 DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.ResearcherOutputContractRejected));
             return false;
         }

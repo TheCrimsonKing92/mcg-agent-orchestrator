@@ -370,6 +370,7 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
             "1. disposition=undecidable; would-settle=an historical diagnostic; required-source=the original process; unavailable-because=the process never recorded it",
             StringComparison.Ordinal);
         File.WriteAllText(stdout, string.Join(Environment.NewLine,
+            WorkerDispatchTestSupport.ResearcherContractFixture(),
             plannerPlan,
             "WORKER_RESULT:",
             "files: none",

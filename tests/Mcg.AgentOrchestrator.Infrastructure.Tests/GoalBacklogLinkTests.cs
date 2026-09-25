@@ -347,7 +347,7 @@ public sealed class GoalBacklogLinkTests
             .Id;
         Assert.True(changed);
         Assert.NotNull(currentGoal);
-        Assert.Equal(5, currentGoal!.Tasks.Count);
+        Assert.Equal(4, currentGoal!.Tasks.Count);
         Assert.Equal(seededId, currentGoal.SourceBacklogItemId);
         Assert.False(File.Exists(Path.Combine(root, "BACKLOG.md")));
     }

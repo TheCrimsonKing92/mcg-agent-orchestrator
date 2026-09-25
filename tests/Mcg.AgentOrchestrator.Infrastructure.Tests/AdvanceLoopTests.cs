@@ -75,7 +75,7 @@ public sealed class AdvanceLoopTests
         goal = GoalLifecycleCommands.CreateAndActivateGoal(
             kernel,
             agents,
-            "Start subscription handoff on create",
+            GoalObjectivePlanner.Build("Start subscription handoff on create", GoalIntakePipeline.FiveRole),
             workspace,
             providers);
         var advancement = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(

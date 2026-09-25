@@ -2830,7 +2830,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [Xunit.InlineData(AgentRole.Developer, "artifact-registry.json: verify current context artifacts", "workflow-brokers.md: use deterministic broker actions")]
     [Xunit.InlineData(AgentRole.Tester, "artifact-registry.json: verify artifact freshness", "workflow-brokers.md: use deterministic broker actions")]
     [Xunit.InlineData(AgentRole.Reviewer, "artifact-registry.json: verify hashes", "workflow-brokers.md: check deterministic broker failures")]
-    [Xunit.InlineData(AgentRole.Planner, "artifact-registry.json: confirm available artifacts", "selected-skills.md: read the selected planning skill")]
+    [Xunit.InlineData(AgentRole.Planner, "artifact-registry.json: confirm available artifacts", "selected-skills.md: read the selected planning and research skills")]
     [Xunit.InlineData(AgentRole.Researcher, "artifact-registry.json: identify relevant artifacts", "selected-skills.md: read the selected research skill")]
     public void WorkerContextArtifactsWritesRoleSpecificPrioritiesAndPriorSummaries(
         AgentRole role,
@@ -2958,7 +2958,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
     [Xunit.Theory]
     [Xunit.InlineData(AgentRole.Researcher, "selected-skills.md: read the selected research skill")]
-    [Xunit.InlineData(AgentRole.Planner, "selected-skills.md: read the selected planning skill")]
+    [Xunit.InlineData(AgentRole.Planner, "selected-skills.md: read the selected planning and research skills")]
     public void WorkerContextArtifactsWritesSelectedSkillsPriorityForUpstreamRoles(
         AgentRole role,
         string expectedPriority)

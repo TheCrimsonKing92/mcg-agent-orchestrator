@@ -4568,7 +4568,7 @@ private sealed class SignalBackedProcessLifecycle
 private static string BuildSuccessfulReadOnlyOutput(AgentRole role)
 {
     var roleOutput = role == AgentRole.Planner
-        ? PlannerContractPlanFixture() + Environment.NewLine
+        ? ResearcherContractFixture() + Environment.NewLine + PlannerContractPlanFixture() + Environment.NewLine
         : $"Completed {role} analysis." + Environment.NewLine;
     var workerResult = WorkerResultBlock(
         "none",

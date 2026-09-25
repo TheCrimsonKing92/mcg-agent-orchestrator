@@ -1412,7 +1412,7 @@ public sealed partial class BackgroundDispatchRunner
                         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed));
                 }
                 else if (ScoutRoundPolicy.IsScoutPlanner(goal, task) &&
-                    !TryPersistScoutResearch(processRecord.StandardOutputPath, out var scoutDiagnostic))
+                    !TryPersistScoutResearch(durableSource, processRecord.StandardOutputPath, out var scoutDiagnostic))
                 {
                     exitCode = 1;
                     completionContractSucceeded = false;

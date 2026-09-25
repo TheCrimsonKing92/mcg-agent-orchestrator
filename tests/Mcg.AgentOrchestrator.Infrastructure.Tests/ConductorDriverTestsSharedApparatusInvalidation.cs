@@ -54,7 +54,7 @@ public sealed class ConductorDriverTestsSharedApparatusInvalidation
         Xunit.Assert.Equal(GoalLifecycleState.Verified, held.State);
         Xunit.Assert.Contains("no worker was reopened", held.Reason, StringComparison.Ordinal);
         Xunit.Assert.Equal(0, retryCalls);
-        Xunit.Assert.Equal(5, goal.Tasks.Count);
+        Xunit.Assert.Equal(4, goal.Tasks.Count);
         Xunit.Assert.All(goal.Tasks, task =>
         {
             Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);

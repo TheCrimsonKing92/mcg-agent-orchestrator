@@ -1396,6 +1396,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
             "1. disposition=undecidable; would-settle=a historical diagnostic; required-source=the original process; unavailable-because=the process did not record it",
             StringComparison.Ordinal);
         File.WriteAllText(stdout, string.Join(Environment.NewLine,
+            WorkerDispatchTestSupport.ResearcherContractFixture(),
             plannerPlan,
             "WORKER_RESULT:",
             "files: none",

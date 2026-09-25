@@ -60,7 +60,7 @@ public sealed class GoalWorktreeTests
             var context = CreateLifecycleContext(root, worktrees, verifier, fiveRole: true);
 
             CliCommandHandlers.Execute(
-                ["lifecycle-goal", "Ship a five-role echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                ["lifecycle-goal", "Ship a five-role echo change", "--pipeline", "five-role", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                 context);
 
             var goal = context.CurrentGoal!;

@@ -312,7 +312,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
             var output = CaptureConsole(() =>
             {
                 invocationError = Record.Exception(() => CliCommandHandlers.Execute(
-                    ["lifecycle-goal", "Ship a five-role echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                    ["lifecycle-goal", "Ship a five-role echo change", "--pipeline", "five-role", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                     context));
             });
             Assert.True(invocationError is null, $"{invocationError}{Environment.NewLine}{output}");
