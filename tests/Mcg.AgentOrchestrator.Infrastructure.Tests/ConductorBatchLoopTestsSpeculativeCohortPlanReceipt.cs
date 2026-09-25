@@ -47,8 +47,8 @@ public sealed class ConductorBatchLoopTestsSpeculativeCohortPlanReceipt : Conduc
         var second = CreateVerifiedSimpleGoal(kernel, "Second ready goal");
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/App/First.cs"],
-            [second.Id] = ["tests/Second.cs"]
+            [first.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/First.cs"],
+            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Second.cs"]
         };
         var driver = ReadyDriver(paths);
         using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
