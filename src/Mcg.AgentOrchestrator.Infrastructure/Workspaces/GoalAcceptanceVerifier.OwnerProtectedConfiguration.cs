@@ -6,6 +6,28 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
+    private static bool HasOwnerPolicyApproval(string worktreePath, GoalId? goalId)
+    {
+        if (goalId is null) return false;
+        var candidateSha = ResolveGitScalar(worktreePath, "rev-parse", "HEAD");
+        var commonGitDirectory = AcceptanceGitTextResolver.Resolve(worktreePath, "rev-parse", "--git-common-dir")?.Trim();
+        if (candidateSha is null || commonGitDirectory is null) return false;
+        var gitPath = Path.GetFullPath(Path.IsPathRooted(commonGitDirectory)
+            ? commonGitDirectory : Path.Combine(worktreePath, commonGitDirectory));
+        var repositoryRoot = Directory.GetParent(gitPath)?.FullName;
+        if (repositoryRoot is null) return false;
+        var storeDirectory = Path.Combine(repositoryRoot, ".orchestrator");
+        if (!Directory.Exists(storeDirectory)) return false;
+        var store = CollaborationItemStore.ForDirectory(storeDirectory);
+        return AcceptancePolicyChangeDecision.IsApprovedAsync(store, goalId.Value, candidateSha)
+            .GetAwaiter().GetResult();
+    }
+
+    internal static bool HasOwnerPolicyApprovalForTests(
+        ICollaborationItemStore store, GoalId goalId, string candidateSha) =>
+        AcceptancePolicyChangeDecision.IsApprovedAsync(store, goalId.Value, candidateSha)
+            .GetAwaiter().GetResult();
+
     private static AcceptanceCheckResult? TryClassifyManifestTrust(
         string worktreePath,
         IReadOnlyList<string>? changedFiles) =>
@@ -16,6 +38,19 @@ public sealed partial class GoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles,
         Func<string, string[], string?> resolveGitText) =>
         TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText);
+
+    internal static AcceptanceCheckResult? TryClassifyManifestTrustWithGitForTests(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles,
+        Func<string, string[], string?> resolveGitText,
+        ICollaborationItemStore decisions,
+        GoalId goalId,
+        string candidateSha)
+    {
+        var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText);
+        return failure is not null && HasOwnerPolicyApprovalForTests(decisions, goalId, candidateSha)
+            ? null : failure;
+    }
 
     private static AcceptanceCheckResult? TryClassifyManifestTrustCore(
         string worktreePath,

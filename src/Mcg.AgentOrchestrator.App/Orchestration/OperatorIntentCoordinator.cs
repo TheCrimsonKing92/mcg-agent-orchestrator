@@ -18,6 +18,7 @@ internal sealed class OperatorIntentCoordinator
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<GoalId, string?>? _goalHeadResolver;
     private readonly OperatorIntentAdjudication? _adjudication;
+    private readonly ICollaborationItemStore? _decisions;
     private readonly Dictionary<string, List<(string IntentId, string Outcome)>> _pendingCompletions =
         new(StringComparer.Ordinal);
 
@@ -40,6 +41,7 @@ internal sealed class OperatorIntentCoordinator
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _goalHeadResolver = goalHeadResolver;
+        _decisions = decisions;
         if ((decisions is null) != (goalStateVersionResolver is null))
             throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
         _adjudication = decisions is null ? null : new OperatorIntentAdjudication(decisions, goalStateVersionResolver!);
@@ -223,6 +225,11 @@ internal sealed class OperatorIntentCoordinator
     {
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.ApprovePolicyChange:
+                OperatorIntentPolicyApproval.Apply(
+                    _decisions ?? throw new InvalidOperationException("Policy approval decision store is not configured."),
+                    goal, intent, Deserialize<ApprovePolicyChangeOperatorIntentPayload>(intent), _utcNow());
+                return;
             case OperatorIntentVerbs.CriterionEvidenceMap:
                 var mapping = Deserialize<CriterionEvidenceMappingOperatorIntentPayload>(intent);
                 kernel.MapCriterionEvidenceOwner(

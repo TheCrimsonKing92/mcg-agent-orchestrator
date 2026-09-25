@@ -19,6 +19,7 @@ internal static class CliCommandHelp
     public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>]";
     public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
     public const string AdjudicateUsage = "Usage: adjudicate [--goal <goal-prefix>] <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>... [--cause <cause>] [--actor-kind <human|agent>]";
+    public const string ApprovePolicyChangeUsage = "Usage: approve-policy-change <goal-prefix> <full-candidate-sha> --text-file <reason-path> [--idempotency-key <key>]";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>]";
@@ -214,6 +215,11 @@ internal static class CliCommandHelp
         AdjudicateUsage,
         "Atomically close, reopen for a gate, or route a task with decision evidence. Evidence may be ref or id=hash.",
         ["--goal", "--text-file", "--evidence", "--cause", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry ApprovePolicyChange = new(
+        ApprovePolicyChangeUsage,
+        "Record a human candidate-bound approval for acceptance policy changes.",
+        ["--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
 
     public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> <criterion-index> <criterion-version> <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>]";
     public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>]";
@@ -838,6 +844,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("adjudicate", StringComparison.OrdinalIgnoreCase))
         {
             entry = Adjudicate;
+            return true;
+        }
+
+        if (args[0].Equals("approve-policy-change", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ApprovePolicyChange;
             return true;
         }
 
