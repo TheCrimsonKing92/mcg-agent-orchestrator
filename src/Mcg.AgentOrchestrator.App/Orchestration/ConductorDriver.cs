@@ -164,7 +164,7 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy,
         ConductorAcceptanceCohortRunResult>? _runAcceptanceCohortOverride;
     private readonly ConcurrentDictionary<string, CohortGateRun> _cohortGateRuns = new(StringComparer.Ordinal);
-    private readonly Action<Action> _startCohortGateBackground;
+    private Action<Action> _startCohortGateBackground;
     private readonly Func<
         ConductorMergeTrainSelection,
         IReadOnlyList<Goal>,

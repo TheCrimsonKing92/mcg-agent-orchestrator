@@ -11,27 +11,34 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
     {
         var (repo, kernel, goals) = CreateReadyTrain();
         var cleanup = CreateIsolatedCleanupContext(repo);
-        using var gateStarted = new ManualResetEventSlim();
-        using var gateRelease = new ManualResetEventSlim();
         using var cancellation = new CancellationTokenSource();
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
+            var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
                 new AcceptanceVerificationResult(true, false, 0, null,
                     Checks: [new AcceptanceCheckResult("train fault", true, 0, null)],
-                    TestResultPaths: [WritePassingTrx(repo, "train-fault-green.trx")]));
+                    TestResultPaths: [WritePassingTrx(repo, "train-fault-green.trx")]),
+                (run, token) =>
+                {
+                    if (run == 1)
+                    {
+                        cancellation.Cancel();
+                        token.ThrowIfCancellationRequested();
+                    }
+                });
             var driver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+            var starts = new BackgroundGateStartHarness();
+            starts.Capture(driver);
             var train = ProjectTrainSelection(driver, goals);
             _ = driver.RunMergeTrain(train, goals, ConductorAutonomyPolicy.Permissive,
                 cancellation.Token, runGateInBackground: true);
-            Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The train gate did not start.");
-            cancellation.Cancel();
-            Assert.True(SpinWait.SpinUntil(() =>
-                driver.GetActiveCohortGateMemberGoalIds().Count == 0,
-                TimeSpan.FromSeconds(15)), "The faulted train gate did not finish.");
-            gateRelease.Set();
+            Assert.Equal(1, starts.StartCount);
+            Assert.Equal(0, verifier.RunCount);
+            starts.RunPending();
+            Assert.Equal(1, verifier.RunCount);
+            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
 
             var pair = ConductorAcceptanceCohortSelector.Select(goals.Take(2).Select(goal =>
                 new ConductorSpeculativeAcceptanceCandidate(goal.Id,
@@ -41,16 +48,15 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Null(cohort.Fault);
             Assert.DoesNotContain("gate infrastructure failure", cohort.Run.Detail, StringComparison.Ordinal);
-            Assert.True(SpinWait.SpinUntil(() =>
-                driver.GetActiveCohortGateMemberGoalIds().Count == 0,
-                TimeSpan.FromSeconds(15)), "The cohort gate did not finish.");
+            Assert.Equal(2, starts.StartCount);
+            starts.RunPending();
+            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             var trainFault = driver.RunMergeTrain(train, goals,
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Contains("OperationCanceledException", trainFault.Detail, StringComparison.Ordinal);
         }
         finally
         {
-            gateRelease.Set();
             DeleteDirectory(repo);
         }
     }
@@ -69,16 +75,17 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                     TestResultPaths: [WritePassingTrx(repo, "train-restart-green.trx")])]);
             var firstDriver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+            var starts = new BackgroundGateStartHarness();
+            starts.Inline(firstDriver);
             var selection = ProjectTrainSelection(firstDriver, goals);
             var started = firstDriver.RunMergeTrain(selection, goals,
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Contains("outcome=inflight", started.Detail, StringComparison.Ordinal);
             var store = new MergeTrainAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
-            Assert.True(SpinWait.SpinUntil(() =>
-                store.ReadPassedReceiptsForGoal(goals[0].Id).Count == 1 &&
-                firstDriver.GetActiveCohortGateMemberGoalIds().Count == 0,
-                TimeSpan.FromSeconds(15)), "The first driver did not persist its train receipt.");
+            Assert.Equal(1, starts.StartCount);
+            Assert.Single(store.ReadPassedReceiptsForGoal(goals[0].Id));
+            Assert.Empty(firstDriver.GetActiveCohortGateMemberGoalIds());
 
             var restartedVerifier = new SequenceAcceptanceVerifier([]);
             var restartedDriver = new ConductorDriver(kernel, workspace, restartedVerifier,
@@ -102,49 +109,51 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
     {
         var (repo, kernel, goals) = CreateReadyTrain();
         var cleanup = CreateIsolatedCleanupContext(repo);
-        using var gateStarted = new ManualResetEventSlim();
-        using var gateRelease = new ManualResetEventSlim();
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
+            var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
                 new AcceptanceVerificationResult(true, false, 0, null,
                     Checks: [new AcceptanceCheckResult("train stale main", true, 0, null)],
-                    TestResultPaths: [WritePassingTrx(repo, "train-stale-main-green.trx")]));
+                    TestResultPaths: [WritePassingTrx(repo, "train-stale-main-green.trx")]),
+                (run, _) =>
+                {
+                    if (run == 1)
+                    {
+                        File.WriteAllText(Path.Combine(repo, "unrelated-main.txt"), "another landing");
+                        RunGit(repo, "add", "unrelated-main.txt");
+                        RunGit(repo, "commit", "-m", "Advance main independently");
+                    }
+                });
             var driver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 cleanupHooks: cleanup.Hooks);
+            var starts = new BackgroundGateStartHarness();
+            starts.Capture(driver);
             var firstSelection = ProjectTrainSelection(driver, goals);
             var firstMain = firstSelection.Members[0].MainRevision;
             _ = driver.RunMergeTrain(firstSelection, goals,
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
-            Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The initial train gate did not start.");
-            File.WriteAllText(Path.Combine(repo, "unrelated-main.txt"), "another landing");
-            RunGit(repo, "add", "unrelated-main.txt");
-            RunGit(repo, "commit", "-m", "Advance main independently");
-            gateRelease.Set();
+            Assert.Equal(1, starts.StartCount);
+            starts.RunPending();
             var store = new MergeTrainAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
-            Assert.True(SpinWait.SpinUntil(() =>
-                store.ReadPassedReceiptsForGoal(goals[0].Id).Count == 1 &&
-                driver.GetActiveCohortGateMemberGoalIds().Count == 0,
-                TimeSpan.FromSeconds(15)), "The old-main train receipt was not persisted.");
+            Assert.Single(store.ReadPassedReceiptsForGoal(goals[0].Id));
+            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             var reselection = ProjectTrainSelection(driver, goals);
             Assert.NotEqual(firstMain, reselection.Members[0].MainRevision);
             var retried = driver.RunMergeTrain(reselection, goals,
                 ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
             Assert.Contains("outcome=inflight", retried.Detail, StringComparison.Ordinal);
-            Assert.True(SpinWait.SpinUntil(() => verifier.RunCount == 2,
-                TimeSpan.FromSeconds(15)), "The train was not gated against the new main.");
-            Assert.True(SpinWait.SpinUntil(() =>
-                store.ReadPassedReceiptsForGoal(goals[0].Id).Count == 2 &&
-                driver.GetActiveCohortGateMemberGoalIds().Count == 0,
-                TimeSpan.FromSeconds(15)), "The new-main train gate did not finish.");
+            Assert.Equal(2, starts.StartCount);
+            starts.RunPending();
+            Assert.Equal(2, verifier.RunCount);
+            Assert.Equal(2, store.ReadPassedReceiptsForGoal(goals[0].Id).Count);
+            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             Assert.All(goals, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
         }
         finally
         {
-            gateRelease.Set();
             DeleteDirectory(repo);
         }
     }
@@ -154,9 +163,6 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanup = CreateIsolatedCleanupContext(repo);
-        using var gateStarted = new ManualResetEventSlim();
-        using var gateRelease = new ManualResetEventSlim();
-        Task? tick = null;
         try
         {
             AddAcceptanceManifest(repo);
@@ -184,7 +190,7 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
                     CriterionEvidenceOwner.Acceptance, "test",
                     CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
             }
-            var verifier = new BlockingAcceptanceVerifier(gateStarted, gateRelease,
+            var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
                 new AcceptanceVerificationResult(true, false, 0, null,
                     Checks: [new AcceptanceCheckResult("background train", true, 0, null)],
                     TestResultPaths: [WritePassingTrx(repo, "background-train-green.trx")]));
@@ -192,13 +198,24 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
             var driver = new ConductorDriver(kernel, workspace, verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks);
+            var starts = new BackgroundGateStartHarness();
+            starts.Capture(driver);
             var stopPath = Path.Combine(repo, "stop-does-not-exist");
-            tick = Task.Run(() => new ConductorBatchLoop().Run(kernel, driver,
-                ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1));
-            Assert.True(tick.Wait(TimeSpan.FromSeconds(30)),
-                "The train tick waited for its blocked acceptance gate.");
-            Assert.True(gateStarted.Wait(TimeSpan.FromSeconds(10)), "The train gate did not start.");
-            Assert.Equal(1, verifier.RunCount);
+            BatchTickSummary? heldTick = null;
+            _ = new ConductorBatchLoop().Run(kernel, driver,
+                ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1,
+                onTick: summary => heldTick = summary);
+            Assert.Equal(1, starts.StartCount);
+            Assert.Equal(1, starts.PendingCount);
+            Assert.Equal(0, verifier.RunCount);
+            var heldProgress = string.Join(" | ", heldTick?.ProgressLines ?? []);
+            Assert.Contains("ACCEPTANCE_TRAIN", heldProgress, StringComparison.Ordinal);
+            Assert.Contains("outcome=inflight", heldProgress, StringComparison.Ordinal);
+            foreach (var goal in new[] { first, second, third })
+            {
+                Assert.Contains(goal.Id.Value[..8], heldProgress, StringComparison.Ordinal);
+                Assert.NotEqual(GoalStatus.Completed, goal.Status);
+            }
             Assert.Subset(
                 driver.GetActiveCohortGateMemberGoalIds().ToHashSet(StringComparer.Ordinal),
                 new[] { first.Id.Value, second.Id.Value, third.Id.Value }.ToHashSet(StringComparer.Ordinal));
@@ -209,14 +226,15 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
 
             _ = new ConductorBatchLoop().Run(kernel, driver,
                 ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1);
+            Assert.Equal(1, starts.StartCount);
+            Assert.Equal(1, starts.PendingCount);
+            Assert.Equal(0, verifier.RunCount);
+            starts.RunPending();
             Assert.Equal(1, verifier.RunCount);
-            gateRelease.Set();
             var store = new MergeTrainAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
-            Assert.True(SpinWait.SpinUntil(() =>
-                store.ReadPassedReceiptsForGoal(first.Id).Count == 1 &&
-                driver.GetActiveCohortGateMemberGoalIds().Count == 0,
-                TimeSpan.FromSeconds(15)), "The background train receipt was not persisted.");
+            Assert.Single(store.ReadPassedReceiptsForGoal(first.Id));
+            Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
             BatchTickSummary? observedTick = null;
             _ = new ConductorBatchLoop().Run(kernel, driver,
                 ConductorAutonomyPolicy.Permissive, stopPath, maxIterations: 1,
@@ -233,8 +251,6 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
         }
         finally
         {
-            gateRelease.Set();
-            _ = tick?.Wait(TimeSpan.FromSeconds(30));
             DeleteDirectory(repo);
         }
     }

@@ -10,6 +10,12 @@ internal sealed partial class ConductorDriver
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ConductorAcceptanceCohortGateFault>
         _trainGateFaults = new(StringComparer.Ordinal);
 
+    internal void SetCohortGateBackgroundStartForTests(Action<Action> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        _startCohortGateBackground = start;
+    }
+
     internal bool MergeTrainsEnabled =>
         !string.Equals(Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED"), "1", StringComparison.Ordinal) &&
         (_runMergeTrainOverride is not null ||
