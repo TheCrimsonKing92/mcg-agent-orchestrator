@@ -35,9 +35,9 @@ public sealed class TerminalGoalSweepSharedGoalRootTests
 
             var storage = new DotnetBuildStorageRoot(Path.Combine(temp, "isolated"));
             var root = DotnetBuildEnvironmentManager.CreateAttempt(
-                goal, "acceptance", storageRoot: storage).RootPath;
+                goal, "acceptance", storageRoot: storage, repositoryRoot: repoRoot).RootPath;
             var orphanRoot = DotnetBuildEnvironmentManager.CreateAttempt(
-                GoalId.New(), "acceptance", storageRoot: storage).RootPath;
+                GoalId.New(), "acceptance", storageRoot: storage, repositoryRoot: repoRoot).RootPath;
             File.WriteAllText(Path.Combine(root, "keep.bin"), "project goal bytes");
             var before = Snapshot(root);
 

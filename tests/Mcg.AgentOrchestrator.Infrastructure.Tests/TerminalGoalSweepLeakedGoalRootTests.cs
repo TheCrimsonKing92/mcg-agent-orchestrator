@@ -80,13 +80,23 @@ public sealed class TerminalGoalSweepLeakedGoalRootTests
         {
             var storage = new DotnetBuildStorageRoot(Path.Combine(temp, "isolated"));
             var db = Path.Combine(temp, "state.db");
+            var repoRoot = Path.Combine(temp, "repo");
             StateDbMigrations.EnsureUpToDate(db);
             var absent = GoalId.New();
             var held = GoalId.New();
             var withoutLease = GoalId.New();
-            var absentRoot = DotnetBuildEnvironmentManager.CreateAttempt(absent, "acceptance", storageRoot: storage).RootPath;
-            var heldRoot = DotnetBuildEnvironmentManager.CreateAttempt(held, "acceptance", storageRoot: storage).RootPath;
+            var unmarked = GoalId.New();
+            var absentRoot = DotnetBuildEnvironmentManager.CreateAttempt(
+                absent, "acceptance", storageRoot: storage, repositoryRoot: repoRoot).RootPath;
+            var heldRoot = DotnetBuildEnvironmentManager.CreateAttempt(
+                held, "acceptance", storageRoot: storage, repositoryRoot: repoRoot).RootPath;
             var noLeaseRoot = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(withoutLease, storage).RootPath;
+            var unmarkedRoot = DotnetBuildEnvironmentManager.CreateAttempt(
+                unmarked, "acceptance", storageRoot: storage, repositoryRoot: repoRoot).RootPath;
+            var unmarkedLeasePath = Path.Combine(unmarkedRoot, "lease", "lease.json");
+            var unmarkedLease = JsonNode.Parse(File.ReadAllText(unmarkedLeasePath))!;
+            unmarkedLease.AsObject().Remove("repositoryRoot");
+            File.WriteAllText(unmarkedLeasePath, unmarkedLease.ToJsonString());
             using (var connection = new SqliteConnection($"Data Source={db};Pooling=False"))
             {
                 connection.Open();
@@ -97,15 +107,19 @@ public sealed class TerminalGoalSweepLeakedGoalRootTests
             }
             File.WriteAllText(Path.Combine(heldRoot, "keep.bin"), "held bytes");
             File.WriteAllText(Path.Combine(noLeaseRoot, "keep.bin"), "no lease bytes");
+            File.WriteAllText(Path.Combine(unmarkedRoot, "keep.bin"), "unmarked bytes");
             var heldBytes = Snapshot(heldRoot);
             var noLeaseBytes = Snapshot(noLeaseRoot);
+            var unmarkedBytes = Snapshot(unmarkedRoot);
 
             var result = TerminalGoalSweep.ReapOwnedBuildRootsCore(
-                db, storage, new TerminalGoalSweep.OwnedRootSweepState(), _ => false);
+                db, storage, new TerminalGoalSweep.OwnedRootSweepState(), _ => false,
+                canonicalRepoRoot: repoRoot);
 
             Assert.False(Directory.Exists(absentRoot));
             Assert.Equal(heldBytes, Snapshot(heldRoot));
             Assert.Equal(noLeaseBytes, Snapshot(noLeaseRoot));
+            Assert.Equal(unmarkedBytes, Snapshot(unmarkedRoot));
             Assert.Contains(absentRoot, result.ReclaimedGoalRoots!);
             Assert.Single(result.OperatorEvents.Where(line => line.Contains("SWEEP_GOAL_ROOT_RECLAIMED", StringComparison.Ordinal)));
         }

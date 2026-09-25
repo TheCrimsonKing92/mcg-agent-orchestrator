@@ -136,8 +136,7 @@ internal static partial class TerminalGoalSweep
         }
         else if (TryReadGoalIds(sharedStores, out var storedGoalIds, out var readFailure))
         {
-            reclaimed = new GoalBuildRootReclaimer(storageRoot, registry, isOwnerRunning,
-                    requireSharedRootOwnership ? repoRoot : null)
+            reclaimed = new GoalBuildRootReclaimer(storageRoot, registry, repoRoot, isOwnerRunning)
                 .Reclaim(storedGoalIds, MaxOwnedBuildRootsPerSweep);
         }
         else

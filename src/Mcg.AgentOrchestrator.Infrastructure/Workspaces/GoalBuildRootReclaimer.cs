@@ -11,8 +11,8 @@ internal sealed record GoalBuildRootReclaimResult(
 internal sealed class GoalBuildRootReclaimer(
     DotnetBuildStorageRoot storageRoot,
     IOwnedRunRootStore ownedRoots,
-    Func<int, bool>? isOwnerRunning = null,
-    string? owningRepositoryRoot = null)
+    string owningRepositoryRoot,
+    Func<int, bool>? isOwnerRunning = null)
 {
     private readonly Func<int, bool> _isOwnerRunning = isOwnerRunning ?? IsProcessRunning;
 
@@ -45,13 +45,13 @@ internal sealed class GoalBuildRootReclaimer(
                 storedPrefixes.Contains(Path.GetFileName(canonical)) ||
                 IsReparsePointOrMissing(canonical) ||
                 !TryReadLease(canonical, out var goalId, out var ownerProcessId, out var repositoryRoot) ||
-                (owningRepositoryRoot is not null && !SamePath(repositoryRoot, owningRepositoryRoot)) ||
+                !SamePath(repositoryRoot, owningRepositoryRoot) ||
                 storedGoalIds.Contains(goalId) ||
                 ownedRoots.ReadRegisteredPaths([canonical]).Contains(canonical) ||
                 _isOwnerRunning(ownerProcessId) ||
                 !TryReadLease(canonical, out var confirmedId, out var confirmedOwner, out var confirmedRepositoryRoot) ||
                 !string.Equals(goalId, confirmedId, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(repositoryRoot, confirmedRepositoryRoot, StringComparison.Ordinal) ||
+                !SamePath(confirmedRepositoryRoot, owningRepositoryRoot) ||
                 ownerProcessId != confirmedOwner)
                 continue;
 
