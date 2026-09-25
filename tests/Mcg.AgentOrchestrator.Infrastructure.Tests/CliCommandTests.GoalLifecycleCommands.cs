@@ -2807,6 +2807,8 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
             [
                 "goal",
                 "Implement roster overrides",
+                "--pipeline",
+                "five-role",
                 "--planner",
                 "planner-alt",
                 "--researcher",

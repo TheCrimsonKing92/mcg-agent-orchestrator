@@ -509,10 +509,13 @@ public sealed class GoalRefinementTests
         ]));
         var kernel = new AgentOrchestratorKernel();
 
+        var plan = GoalObjectivePlanner.Build(
+            "Research and plan a focused implementation with tests.",
+            GoalIntakePipeline.FiveRole);
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(
             kernel,
             AgentCatalog.Default().Agents,
-            "Research and plan a focused implementation with tests.",
+            plan,
             workspace,
             providers);
 
