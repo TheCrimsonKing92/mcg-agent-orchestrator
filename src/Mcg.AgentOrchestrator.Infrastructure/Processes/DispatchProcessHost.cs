@@ -1424,7 +1424,7 @@ public static void DropToLow() {
             }
         }
 
-        int? ObserveSelectedChild(int? candidatePid)
+        int? ObserveSelectedChild(int? candidatePid, bool periodic = false)
         {
             heartbeatHooks?.ObserveSelectedChild?.Invoke(candidatePid);
             if (candidatePid is null || worker is null || candidatePid.Value == worker.Id)
@@ -1434,22 +1434,24 @@ public static void DropToLow() {
 
             lock (selectedChildLock)
             {
+                // A timed-out callback may resume after teardown disposed the selected handle.
+                if (periodic && Volatile.Read(ref heartbeatStopping) != 0)
+                {
+                    return null;
+                }
+
                 if (selectedChild is not null)
                 {
                     try
                     {
-                        if (selectedChild.HasExited)
-                        {
-                            return null;
-                        }
-
                         if (selectedChild.Id == candidatePid.Value)
                         {
-                            return candidatePid;
+                            return selectedChild.HasExited ? null : candidatePid;
                         }
                     }
                     catch (InvalidOperationException)
                     {
+                        selectedChild.Dispose();
                         selectedChild = null;
                     }
                 }
@@ -1546,7 +1548,7 @@ public static void DropToLow() {
             }
         }
 
-        void WriteHeartbeat(string state, bool terminal = false)
+        void WriteHeartbeat(string state, bool terminal = false, bool periodic = false)
         {
             if (heartbeatWriter is null)
             {
@@ -1560,7 +1562,11 @@ public static void DropToLow() {
             var ownedCpuMs = ownedAccounting?.CpuMilliseconds ?? SumOwnedCpuMs(ownedPids);
             var ownedPeakMemoryBytes = ownedAccounting?.PeakMemoryBytes;
             var ownedIoBytes = ownedAccounting?.IoBytes;
-            var childPid = ObserveSelectedChild(SelectHeartbeatChildPid(worker, ownedPids));
+            var childPid = ObserveSelectedChild(SelectHeartbeatChildPid(worker, ownedPids), periodic);
+            if (periodic && Volatile.Read(ref heartbeatStopping) != 0)
+            {
+                return;
+            }
             providerSessionId ??= TryCaptureProviderSessionId(
                 parameters.Provider,
                 parameters.StdoutPath,
@@ -1710,7 +1716,7 @@ public static void DropToLow() {
 
             try
             {
-                WriteHeartbeat("running");
+                WriteHeartbeat("running", periodic: true);
             }
             catch (Exception failure)
             {

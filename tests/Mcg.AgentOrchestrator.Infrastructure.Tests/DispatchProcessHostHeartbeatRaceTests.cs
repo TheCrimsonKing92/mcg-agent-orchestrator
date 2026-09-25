@@ -176,6 +176,58 @@ public sealed class DispatchProcessHostHeartbeatRaceTests
         }
     }
 
+    [Xunit.Fact]
+    public void ExitedSelectedChild_IsReplacedByNextChildInHeartbeatAndExitRecord()
+    {
+        var dir = NewDirectory();
+        var firstGate = Path.Combine(dir, "release-first");
+        var secondGate = Path.Combine(dir, "release-second");
+        var firstReady = Path.Combine(dir, "first-ready");
+        var secondReady = Path.Combine(dir, "second-ready");
+        var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+        var childExitPath = Path.Combine(dir, "child-exit.json");
+        Task<int>? runTask = null;
+        try
+        {
+            var firstScript = Path.Combine(dir, "first.ps1");
+            var secondScript = Path.Combine(dir, "second.ps1");
+            File.WriteAllText(firstScript,
+                $"[IO.File]::WriteAllText('{Escape(firstReady)}', [string]$PID); while (!(Test-Path -LiteralPath '{Escape(firstGate)}')) {{ [void][Math]::Sqrt(1234567) }}{Environment.NewLine}exit 11",
+                new UTF8Encoding(false));
+            File.WriteAllText(secondScript,
+                $"[IO.File]::WriteAllText('{Escape(secondReady)}', [string]$PID); while (!(Test-Path -LiteralPath '{Escape(secondGate)}')) {{ [void][Math]::Sqrt(1234567) }}{Environment.NewLine}exit 29",
+                new UTF8Encoding(false));
+            var shell = Escape(WorkerShell.Executable);
+            var command = $"& '{shell}' -NoProfile -NonInteractive -InputFormat None -File '{Escape(firstScript)}'; " +
+                $"& '{shell}' -NoProfile -NonInteractive -InputFormat None -File '{Escape(secondScript)}'; exit 0";
+            var parameters = Parameters(dir, command, heartbeatPath, Path.Combine(dir, "host.err.log")) with
+            {
+                ChildExitRecordPath = childExitPath
+            };
+            runTask = StartHost(parameters, new DispatchProcessHost.HeartbeatTestHooks());
+
+            Assert.True(SpinWait.SpinUntil(() => HeartbeatHasChild(heartbeatPath, firstReady), TimeSpan.FromSeconds(10)),
+                "The first selected child was not observed.");
+            File.WriteAllText(firstGate, "release");
+            Assert.True(SpinWait.SpinUntil(() => HeartbeatHasChild(heartbeatPath, secondReady), TimeSpan.FromSeconds(10)),
+                "The exited selected child was not replaced in the heartbeat.");
+            var secondPid = int.Parse(File.ReadAllText(secondReady));
+            File.WriteAllText(secondGate, "release");
+
+            Assert.Equal(0, runTask.GetAwaiter().GetResult());
+            using var childExit = JsonDocument.Parse(File.ReadAllText(childExitPath));
+            Assert.Equal(secondPid, childExit.RootElement.GetProperty("processId").GetInt32());
+            Assert.Equal(29, childExit.RootElement.GetProperty("exitCode").GetInt32());
+        }
+        finally
+        {
+            try { File.WriteAllText(firstGate, "release"); } catch { }
+            try { File.WriteAllText(secondGate, "release"); } catch { }
+            try { runTask?.Wait(TimeSpan.FromSeconds(10)); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static DispatchProcessHost.DispatchRunParameters Parameters(string dir, string command, string heartbeatPath, string diagnosticPath) =>
         new(command, dir, Path.Combine(dir, "out.log"), Path.Combine(dir, "err.log"),
             Path.Combine(dir, "exit.txt"), heartbeatPath, DisableSharedCompilation: false,
