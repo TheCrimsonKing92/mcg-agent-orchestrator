@@ -1362,6 +1362,7 @@ public static void DropToLow() {
         internal Action<int?>? ObserveSelectedChild { get; init; }
         internal Action<string>? TeardownPhase { get; init; }
         internal Action<string>? DiagnosticRecorded { get; init; }
+        internal Action<WaitHandle>? QuiesceSignalCreated { get; init; }
         internal TimeSpan? QuiesceTimeout { get; init; }
     }
 
@@ -1864,11 +1865,24 @@ public static void DropToLow() {
             // only after every child/diagnostic artifact the completion path reads is durable.
             TryWriteDispatchExitArtifact(parameters.ExitCodePath, exitCode);
             heartbeatHooks?.TeardownPhase?.Invoke("quiescing");
-            using var heartbeatQuiesced = new ManualResetEvent(false);
+            var heartbeatQuiesced = new ManualResetEvent(false);
+            heartbeatHooks?.QuiesceSignalCreated?.Invoke(heartbeatQuiesced);
             if (heartbeatTimer.Dispose(heartbeatQuiesced) &&
                 !heartbeatQuiesced.WaitOne(heartbeatHooks?.QuiesceTimeout ?? HeartbeatQuiesceTimeout))
             {
                 RecordFallbackDiagnostic("[dispatch-host] heartbeat timer did not quiesce before selected child disposal");
+                // Dispose(WaitHandle) can still signal after this wait times out. Keep the
+                // notification handle alive until the last callback actually returns.
+                ThreadPool.RegisterWaitForSingleObject(
+                    heartbeatQuiesced,
+                    static (state, _) => ((ManualResetEvent)state!).Dispose(),
+                    heartbeatQuiesced,
+                    Timeout.Infinite,
+                    executeOnlyOnce: true);
+            }
+            else
+            {
+                heartbeatQuiesced.Dispose();
             }
 
             lock (selectedChildLock)

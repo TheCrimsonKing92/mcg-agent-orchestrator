@@ -123,6 +123,59 @@ public sealed class DispatchProcessHostHeartbeatRaceTests
         }
     }
 
+    [Xunit.Fact]
+    public void HeartbeatQuiesceTimeout_KeepsNotificationHandleAliveUntilCallbackReturns()
+    {
+        var dir = NewDirectory();
+        var gatePath = Path.Combine(dir, "release-worker");
+        var diagnosticPath = Path.Combine(dir, "host.err.log");
+        using var callbackParked = new ManualResetEventSlim();
+        using var releaseCallback = new ManualResetEventSlim();
+        using var callbackReturned = new ManualResetEventSlim();
+        WaitHandle? quiesceSignal = null;
+        var parked = 0;
+        Task<int>? runTask = null;
+        try
+        {
+            var command = $"while (!(Test-Path -LiteralPath '{Escape(gatePath)}')) {{ [void][Math]::Sqrt(1234567) }}; exit 0";
+            var hooks = new DispatchProcessHost.HeartbeatTestHooks
+            {
+                QuiesceTimeout = TimeSpan.Zero,
+                QuiesceSignalCreated = signal => quiesceSignal = signal,
+                ObserveSelectedChild = _ =>
+                {
+                    if (!Thread.CurrentThread.IsThreadPoolThread ||
+                        Interlocked.CompareExchange(ref parked, 1, 0) != 0) return;
+
+                    callbackParked.Set();
+                    try { releaseCallback.Wait(); }
+                    finally { callbackReturned.Set(); }
+                }
+            };
+            runTask = StartHost(Parameters(dir, command, Path.Combine(dir, "heartbeat.json"), diagnosticPath), hooks);
+            Assert.True(callbackParked.Wait(TimeSpan.FromSeconds(10)), "The heartbeat callback did not park.");
+            File.WriteAllText(gatePath, "release");
+            Assert.True(runTask.Wait(TimeSpan.FromSeconds(10)), "Teardown did not finish after the zero quiesce timeout.");
+            Assert.Equal(0, runTask.GetAwaiter().GetResult());
+            Assert.NotNull(quiesceSignal);
+            // This fails with the former using declaration: teardown closed the event while
+            // Timer.Dispose still owed it a signal from the parked callback.
+            Assert.False(quiesceSignal.SafeWaitHandle.IsClosed);
+            Assert.Contains("heartbeat timer did not quiesce", ReadIfExists(diagnosticPath), StringComparison.Ordinal);
+            releaseCallback.Set();
+            Assert.True(callbackReturned.Wait(TimeSpan.FromSeconds(10)), "The heartbeat callback did not return.");
+            Assert.True(SpinWait.SpinUntil(() => quiesceSignal.SafeWaitHandle.IsClosed, TimeSpan.FromSeconds(10)),
+                "The quiesce notification handle was not released after the callback.");
+        }
+        finally
+        {
+            releaseCallback.Set();
+            try { File.WriteAllText(gatePath, "release"); } catch { }
+            try { runTask?.Wait(TimeSpan.FromSeconds(10)); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static DispatchProcessHost.DispatchRunParameters Parameters(string dir, string command, string heartbeatPath, string diagnosticPath) =>
         new(command, dir, Path.Combine(dir, "out.log"), Path.Combine(dir, "err.log"),
             Path.Combine(dir, "exit.txt"), heartbeatPath, DisableSharedCompilation: false,
