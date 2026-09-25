@@ -106,7 +106,7 @@ internal static class CliOwnerDigestCommand
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT occurred_at, status, payload_json FROM run_events WHERE event_type = $type AND operation = 'receipt' ORDER BY sequence";
+        command.CommandText = "SELECT occurred_at, status, payload_json FROM run_events WHERE event_type = $type AND operation = 'receipt' ORDER BY seq";
         command.Parameters.AddWithValue("$type", RunEventTypes.PostLandingCanary);
         using var reader = command.ExecuteReader();
         while (reader.Read())
