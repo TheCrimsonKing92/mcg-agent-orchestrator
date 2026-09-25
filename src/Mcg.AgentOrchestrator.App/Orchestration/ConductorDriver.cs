@@ -291,7 +291,7 @@ internal sealed partial class ConductorDriver
             buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         _cohortKernel = kernel;
-        ConfigureCandidateIdentity(kernel);
+        ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath);
         _cohortWorkspace = workspace;
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;

@@ -7,14 +7,17 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private ConductEventLogWriter? _candidateIdentityEventWriter;
+
     private Func<Goal, (CandidateIdentity? Identity, string Failure)> _resolveCandidateIdentity =
         _ => (null, "resolver-unavailable");
 
     internal void OverrideCandidateIdentityResolverForTests(Func<Goal, CandidateIdentity?> resolver) =>
         _resolveCandidateIdentity = goal => (resolver(goal), "test-resolver-unavailable");
 
-    private void ConfigureCandidateIdentity(AgentOrchestratorKernel kernel)
+    private void ConfigureCandidateIdentity(AgentOrchestratorKernel kernel, string conductEventsLogPath)
     {
+        _candidateIdentityEventWriter = new ConductEventLogWriter(conductEventsLogPath);
         _resolveCandidateIdentity = goal =>
         {
             var path = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
@@ -47,8 +50,7 @@ internal sealed partial class ConductorDriver
         if (identity is null)
         {
             foreach (var task in ready.DistinctBy(candidate => candidate.RequiredRole))
-                _recordTaskNote(goal.Id, task.Id,
-                    $"CANDIDATE_IDENTITY_UNAVAILABLE goal={goal.Id.Value} role={task.RequiredRole} reason={failure}");
+                TryRecordCandidateIdentityFailure(goal.Id, task.RequiredRole, failure);
             return false;
         }
         var reasons = ready.Select(task => UnchangedCandidateRule.Evaluate(goal, task, identity)).ToArray();
@@ -60,6 +62,20 @@ internal sealed partial class ConductorDriver
         };
         result = MakeResult(goal.Id.Value, goalPrefix, policy, hold);
         return true;
+    }
+
+    private void TryRecordCandidateIdentityFailure(GoalId goalId, AgentRole role, string failure)
+    {
+        try
+        {
+            _candidateIdentityEventWriter?.Append(
+                "candidate-identity-unavailable", goalId.Value,
+                $"CANDIDATE_IDENTITY_UNAVAILABLE goal={goalId.Value} role={role} reason={failure}");
+        }
+        catch (Exception)
+        {
+            // A diagnostic write cannot block a fail-open dispatch.
+        }
     }
 
     private static TaskSpec[] ReadyCandidateTasks(Goal goal) => goal.Tasks
