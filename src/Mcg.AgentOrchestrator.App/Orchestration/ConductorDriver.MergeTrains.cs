@@ -172,7 +172,8 @@ internal sealed partial class ConductorDriver
                         workspace.Path,
                         members[0].GoalId,
                         stableSlotLease.Environment.BuildPermitIndex,
-                        cancellationToken);
+                        cancellationToken,
+                        CreateMergeTrainGateExecutionOptions(identity, members));
                     var verification = AcceptanceExecutionOwnerLifetime.Run(
                         executionOwner,
                         () => _cohortAcceptanceVerifier.RunOwnedAsync(
