@@ -84,6 +84,36 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData(OperatorActorKind.Agent, false)]
+    [Xunit.InlineData(OperatorActorKind.Human, true)]
+    public async Task AdjudicationCorrectionUsesIntentActorKind(OperatorActorKind actorKind, bool applies)
+    {
+        await WithHarness(async harness =>
+        {
+            var (kernel, goal) = SimpleGoal("Protect criteria during adjudication");
+            var task = goal.Tasks.Single();
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+                "Protect criteria", ["ship it"], VerificationClass.TestVerifiable, [], []));
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var correction = "CRITERIA CORRECTION: supersedes=\"ship it\"; correction=\"skip it\"";
+            await harness.Enqueue(goal, task,
+                Payload("route") with { Cause = nameof(RetryCause.ContractClarification), Text = correction },
+                actorKind);
+
+            harness.Coordinator.ExecutePending(kernel, goal);
+
+            if (applies)
+                Assert.Equal("operator", Assert.Single(goal.EffectiveAcceptanceCriteriaCorrections).Actor);
+            else
+            {
+                Assert.Empty(goal.EffectiveAcceptanceCriteriaCorrections);
+                Assert.Contains(goal.Timeline, item => item.Message.Contains(
+                    "CRITERIA_CORRECTION_IGNORED source=agent-intent", StringComparison.Ordinal));
+            }
+        });
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("missing-text")]
     [Xunit.InlineData("missing-evidence")]
     [Xunit.InlineData("unknown-cause")]

@@ -23,4 +23,15 @@ public sealed class RepositoryChangeClassifierOwnerProtectedTests
         Assert.Equal(["checks[1]"], RepositoryChangeClassifier.DescribeJsonChanges(
             """{"checks":["a","b"]}""", """{"checks":["a"]}"""));
     }
+
+    [Xunit.Fact]
+    public void DuplicateJsonKeyIsReportedWithoutThrowing()
+    {
+        var fields = RepositoryChangeClassifier.DescribeJsonChanges(
+            """{"checks":[{"command":"old"}]}""",
+            """{"checks":[{"command":"old","command":"new"}]}""");
+
+        Assert.Contains("checks[0].command (duplicate key)", fields);
+        Assert.Contains("checks[0].command", fields);
+    }
 }

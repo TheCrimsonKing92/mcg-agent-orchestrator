@@ -38,8 +38,18 @@ public static partial class RepositoryChangeClassifier
 
         if (trusted.Value.ValueKind == JsonValueKind.Object)
         {
-            var left = trusted.Value.EnumerateObject().ToDictionary(p => p.Name, p => p.Value, StringComparer.Ordinal);
-            var right = candidate.Value.EnumerateObject().ToDictionary(p => p.Name, p => p.Value, StringComparer.Ordinal);
+            var leftProperties = trusted.Value.EnumerateObject().ToArray();
+            var rightProperties = candidate.Value.EnumerateObject().ToArray();
+            foreach (var name in leftProperties.Concat(rightProperties)
+                         .GroupBy(property => property.Name, StringComparer.Ordinal)
+                         .Where(group => leftProperties.Count(property => property.Name == group.Key) > 1 ||
+                                         rightProperties.Count(property => property.Name == group.Key) > 1)
+                         .Select(group => group.Key))
+                changes.Add($"{(path.Length == 0 ? name : $"{path}.{name}")} (duplicate key)");
+            var left = leftProperties.GroupBy(p => p.Name, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Last().Value, StringComparer.Ordinal);
+            var right = rightProperties.GroupBy(p => p.Name, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Last().Value, StringComparer.Ordinal);
             foreach (var name in left.Keys.Union(right.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal))
             {
                 var child = path.Length == 0 ? name : $"{path}.{name}";

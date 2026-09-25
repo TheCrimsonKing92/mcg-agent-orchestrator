@@ -414,7 +414,9 @@ internal sealed class OperatorIntentCoordinator
             retry.Message,
             retryCause: cause,
             retryRoundKind: retry.RetryRoundKind,
-            invalidateDownstream: true);
+            invalidateDownstream: true,
+            correctionSource: intent.ActorKind == OperatorActorKind.Human
+                ? CriteriaCorrectionSource.Operator : CriteriaCorrectionSource.AgentIntent);
         GoalLifecycleCommands.RecordCapabilityWarnings(
             kernel,
             goal.Id,

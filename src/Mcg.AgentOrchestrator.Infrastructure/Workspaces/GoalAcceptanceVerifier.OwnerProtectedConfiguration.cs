@@ -6,19 +6,23 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
-    private static bool HasOwnerPolicyApproval(string worktreePath, GoalId? goalId)
+    private string? _ownerPolicyDecisionStoreDirectory;
+
+    private bool HasOwnerPolicyApproval(string worktreePath, GoalId? goalId)
+    {
+        var candidateSha = ResolveGitScalar(worktreePath, "rev-parse", "HEAD");
+        return HasOwnerPolicyApprovalForCandidate(goalId, candidateSha);
+    }
+
+    internal bool HasOwnerPolicyApprovalForCandidateTests(GoalId goalId, string candidateSha) =>
+        HasOwnerPolicyApprovalForCandidate(goalId, candidateSha);
+
+    private bool HasOwnerPolicyApprovalForCandidate(GoalId? goalId, string? candidateSha)
     {
         if (goalId is null) return false;
-        var candidateSha = ResolveGitScalar(worktreePath, "rev-parse", "HEAD");
-        var commonGitDirectory = AcceptanceGitTextResolver.Resolve(worktreePath, "rev-parse", "--git-common-dir")?.Trim();
-        if (candidateSha is null || commonGitDirectory is null) return false;
-        var gitPath = Path.GetFullPath(Path.IsPathRooted(commonGitDirectory)
-            ? commonGitDirectory : Path.Combine(worktreePath, commonGitDirectory));
-        var repositoryRoot = Directory.GetParent(gitPath)?.FullName;
-        if (repositoryRoot is null) return false;
-        var storeDirectory = Path.Combine(repositoryRoot, ".orchestrator");
-        if (!Directory.Exists(storeDirectory)) return false;
-        var store = CollaborationItemStore.ForDirectory(storeDirectory);
+        if (candidateSha is null || _ownerPolicyDecisionStoreDirectory is null ||
+            !Directory.Exists(_ownerPolicyDecisionStoreDirectory)) return false;
+        var store = CollaborationItemStore.ForDirectory(_ownerPolicyDecisionStoreDirectory);
         return AcceptancePolicyChangeDecision.IsApprovedAsync(store, goalId.Value, candidateSha)
             .GetAwaiter().GetResult();
     }
@@ -69,7 +73,12 @@ public sealed partial class GoalAcceptanceVerifier
             !File.Exists(candidateManifestPath);
         var details = new List<string>();
 
-        foreach (var rawPath in changedFiles.Where(RepositoryChangeClassifier.IsOwnerProtectedPolicyPath))
+        var noRenamePaths = resolveGitText(worktreePath,
+            ["diff", "--name-only", "--no-renames", "main...HEAD", "--"])?
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        foreach (var rawPath in changedFiles.Concat(noRenamePaths)
+                     .Where(RepositoryChangeClassifier.IsOwnerProtectedPolicyPath)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var path = NormalizePath(rawPath);
             var fullPath = Path.GetFullPath(Path.Combine(worktreePath, path.Replace('/', Path.DirectorySeparatorChar)));
@@ -96,10 +105,14 @@ public sealed partial class GoalAcceptanceVerifier
             if (string.IsNullOrWhiteSpace(trusted))
             {
                 if (manifestChanged)
-                    return new AcceptanceCheckResult(
-                        "acceptance manifest trusted dimensions", false, 1,
-                        "Trusted main acceptance manifest could not be compared; refusing candidate engine settings.",
-                        ResultSummary: "trusted manifest comparison unavailable");
+                {
+                    if (details.Count == 0 && !File.Exists(candidateManifestPath))
+                        return new AcceptanceCheckResult(
+                            "acceptance manifest trusted dimensions", false, 1,
+                            "Trusted main acceptance manifest could not be compared; refusing candidate engine settings.",
+                            ResultSummary: "trusted manifest comparison unavailable");
+                    details.Add($"{manifestPath}: changed field(s) $ (trusted main unavailable)");
+                }
             }
             else if (manifestMissing)
             {
@@ -108,14 +121,22 @@ public sealed partial class GoalAcceptanceVerifier
             else
             {
                 var candidate = File.ReadAllText(candidateManifestPath);
-                var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
-                if (decision.RequiresTrustedReview)
-                    return new AcceptanceCheckResult(
-                        "acceptance manifest trusted dimensions", false, 1, decision.Evidence,
-                        ResultSummary: "operator review required");
-                var fields = RepositoryChangeClassifier.DescribeJsonChanges(trusted, candidate);
-                if (fields.Count > 0)
-                    details.Add($"{manifestPath}: changed field(s) {string.Join(", ", fields)}");
+                try
+                {
+                    var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+                    var fields = RepositoryChangeClassifier.DescribeJsonChanges(trusted, candidate);
+                    if (decision.RequiresTrustedReview && details.Count == 0 &&
+                        fields.All(IsExistingGuardedEnginePath))
+                        return new AcceptanceCheckResult(
+                            "acceptance manifest trusted dimensions", false, 1, decision.Evidence,
+                            ResultSummary: "operator review required");
+                    if (fields.Count > 0 || decision.RequiresTrustedReview)
+                        details.Add($"{manifestPath}: changed field(s) {string.Join(", ", fields.Count == 0 ? decision.SecurityCriticalChanges : fields)}");
+                }
+                catch (JsonException)
+                {
+                    details.Add($"{manifestPath}: changed field(s) $ (unparseable JSON)");
+                }
             }
         }
 
@@ -124,4 +145,8 @@ public sealed partial class GoalAcceptanceVerifier
             $"{string.Join("; ", details)}; owner decision required for this candidate",
             ResultSummary: "operator review required");
     }
+
+    private static bool IsExistingGuardedEnginePath(string path) =>
+        path is "engine.enforceStructuralCoverage" or "engine.partitionVerdictFullRerunEveryN" ||
+        path.StartsWith("engine.mtpInvocations", StringComparison.Ordinal);
 }

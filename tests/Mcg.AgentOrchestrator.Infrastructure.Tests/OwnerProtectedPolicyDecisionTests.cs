@@ -30,6 +30,10 @@ public sealed class OwnerProtectedPolicyDecisionTests : IDisposable
             [], "owner", "cli", "local-process", DateTimeOffset.UtcNow, ActorKind: actorKind));
         new OperatorIntentCoordinator(intentStore, decisions: decisions, goalStateVersionResolver: _ => 0)
             .ExecutePending(kernel, goal);
+        var verifier = new GoalAcceptanceVerifier(
+            DotnetBuildEnvironmentManager.CaptureStorageRoot(), _root);
+        Assert.Equal(sameCandidate && actorKind == OperatorActorKind.Human,
+            verifier.HasOwnerPolicyApprovalForCandidateTests(goal.Id, candidateSha));
 
         var config = Path.Combine(_root, "config");
         Directory.CreateDirectory(config);

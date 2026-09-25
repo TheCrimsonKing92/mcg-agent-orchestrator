@@ -515,6 +515,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     ];
     public GoalAcceptanceVerifier() : this(DotnetBuildEnvironmentManager.CaptureStorageRoot()) { }
     public GoalAcceptanceVerifier(DotnetBuildStorageRoot storageRoot) : this(new GoalAcceptanceVerifierTestOverrides(), storageRoot) { }
+    public GoalAcceptanceVerifier(DotnetBuildStorageRoot storageRoot, string ownerPolicyDecisionStoreDirectory) : this(storageRoot)
+    {
+        _ownerPolicyDecisionStoreDirectory = Path.GetFullPath(ownerPolicyDecisionStoreDirectory);
+    }
     internal GoalAcceptanceVerifier(GoalAcceptanceVerifierTestOverrides testOverrides, DotnetBuildStorageRoot? storageRoot = null)
         : this(
             (arguments, workingDirectory, timeout, cancellationToken) => RunProcessAsync(
@@ -591,6 +595,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         _runner = source._runner;
         _storageRoot = source._storageRoot;
+        _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
         _leaseSleep = source._leaseSleep;
@@ -602,6 +607,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         _runner = source._runner;
         _storageRoot = source._storageRoot;
+        _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
         _leaseSleep = source._leaseSleep;
