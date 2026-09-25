@@ -6,7 +6,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static partial class CliPersistentStateRunner
 {
     private static readonly HashSet<string> GoalScopedLifecycleVerbs =
-        new(StringComparer.OrdinalIgnoreCase) { "park-goal", "unpark-goal", "abandon-goal", "cancel-goal" };
+        new(StringComparer.OrdinalIgnoreCase) { "park-goal", "unpark-goal", "abandon-goal", "cancel-goal", "supersede-goal" };
+
+    private static bool IsGoalScopedLifecycleInvocation(IReadOnlyList<string> args) =>
+        GoalScopedLifecycleVerbs.Contains(args[0]) || CliCommandHandlers.IsStopSupersedeAlias(args);
 
     private static bool ExecuteGoalLifecycleDispositionCommand(
         IReadOnlyList<string> args,
@@ -34,6 +37,13 @@ internal static partial class CliPersistentStateRunner
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             return ExecuteGoalCancelTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
+        if (args[0].Equals("supersede-goal", StringComparison.OrdinalIgnoreCase) ||
+            CliCommandHandlers.IsStopSupersedeAlias(args))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalSupersedeTransition(args, stateRepository, workspace, ref currentGoal);
         }
 
         if (!args[0].Equals("unpark-goal", StringComparison.OrdinalIgnoreCase))

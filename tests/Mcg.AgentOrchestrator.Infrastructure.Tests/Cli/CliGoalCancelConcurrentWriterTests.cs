@@ -25,7 +25,6 @@ public sealed class CliGoalCancelConcurrentWriterTests : CliGoalParkTestSupport
 
             var stored = await seed.Repository.LoadGoalAsync(seed.GoalId);
             Xunit.Assert.True(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["cancel-goal"]));
-            Xunit.Assert.False(CliPersistentStateRunner.IsGoalLifecycleDispositionCommand(["supersede-goal"]));
             Xunit.Assert.Equal("cli:cancel-goal", probe.OperationName);
             Xunit.Assert.True(probe.ApplicationCount > 0);
             Xunit.Assert.Equal(0, probe.WholeKernelLoadCount);

@@ -15,7 +15,7 @@ using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed record AcceptanceCheckResult(
+public sealed partial record AcceptanceCheckResult(
     string Name,
     bool Passed,
     int? ExitCode,

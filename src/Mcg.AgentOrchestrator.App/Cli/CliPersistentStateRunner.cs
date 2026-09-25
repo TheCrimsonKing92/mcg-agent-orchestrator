@@ -787,7 +787,7 @@ internal static partial class CliPersistentStateRunner
             return false;
         }
 
-        return GoalScopedLifecycleVerbs.Contains(args[0]);
+        return IsGoalScopedLifecycleInvocation(args);
     }
 
     private static bool ExecuteGoalMarkLandedWithPromptBudget(

@@ -1150,6 +1150,9 @@ public sealed partial class AgentOrchestratorKernel
 
     public Goal SupersedeGoal(GoalId goalId, string reason) => StopGoal(goalId, GoalStatus.Superseded, reason);
 
+    public Goal SupersedeGoal(GoalId goalId, string reason, bool allowLiveDispatches) =>
+        StopGoal(goalId, GoalStatus.Superseded, reason, allowLiveDispatches);
+
     public Goal ParkGoal(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
