@@ -33,11 +33,13 @@ public static class DispatchReadinessRules
     public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
         Goal goal,
         IReadOnlyList<AgentDefinition>? agents = null,
-        bool approveHighRiskOwnership = false)
+        bool approveHighRiskOwnership = false,
+        IReadOnlySet<TaskId>? excludedTaskIds = null)
     {
         var assigned = goal.Tasks
             .Where(IsSubscriptionStartCandidate)
             .Where(task => IsRefinementEligible(goal, task))
+            .Where(task => excludedTaskIds?.Contains(task.Id) != true)
             .ToList();
         var intents = assigned
             .Select(task =>
@@ -64,13 +66,15 @@ public static class DispatchReadinessRules
     internal static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
-        bool approveHighRiskOwnership = false)
+        bool approveHighRiskOwnership = false,
+        IReadOnlySet<TaskId>? excludedTaskIds = null)
     {
         var assigned = goal.Tasks
             .Where(IsSubscriptionStartCandidate)
             .Where(task => IsRefinementEligible(goal, task))
+            .Where(task => excludedTaskIds?.Contains(task.Id) != true)
             .ToList();
-        var plan = BuildReadyTaskParallelPlan(goal, agents, approveHighRiskOwnership);
+        var plan = BuildReadyTaskParallelPlan(goal, agents, approveHighRiskOwnership, excludedTaskIds);
         var firstBatch = plan.Batches.FirstOrDefault();
         var taskIds = firstBatch is null
             ? []

@@ -169,7 +169,8 @@ public sealed class TaskSpec
                     LastVerification.PlannerCandidateDivergence,
                     LastVerification.CompletionVerdictVerifiedSuccess,
                     LastVerification.CompletionVerdictRule,
-                    LastVerification.AssignedScopeComplete),
+                    LastVerification.AssignedScopeComplete,
+                    LastVerification.CandidateIdentity),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -199,7 +200,8 @@ public sealed class TaskSpec
                     verification.PlannerCandidateDivergence,
                     verification.CompletionVerdictVerifiedSuccess,
                     verification.CompletionVerdictRule,
-                    verification.AssignedScopeComplete))
+                    verification.AssignedScopeComplete,
+                    verification.CandidateIdentity))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -332,7 +334,8 @@ public sealed class TaskSpec
                     PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
                     CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
                     CompletionVerdictRule: verification.CompletionVerdictRule,
-                    AssignedScopeComplete: verification.AssignedScopeComplete));
+                    AssignedScopeComplete: verification.AssignedScopeComplete,
+                    CandidateIdentity: verification.CandidateIdentity));
             }
         }
 
@@ -372,7 +375,8 @@ public sealed class TaskSpec
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
                 CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
-                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete);
+                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete,
+                CandidateIdentity: snapshot.LastVerification.CandidateIdentity);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -1020,7 +1024,8 @@ public sealed class TaskSpec
         dispatch.AssignedAgentId,
         dispatch.ConductorRoutingRevision,
         dispatch.PreDispatchIntegrationReceipt,
-        dispatch.GoalId);
+        dispatch.GoalId,
+        dispatch.CandidateIdentity);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1059,7 +1064,8 @@ public sealed class TaskSpec
         dispatch.AssignedAgentId,
         dispatch.ConductorRoutingRevision,
         dispatch.PreDispatchIntegrationReceipt,
-        dispatch.GoalId);
+        dispatch.GoalId,
+        dispatch.CandidateIdentity);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

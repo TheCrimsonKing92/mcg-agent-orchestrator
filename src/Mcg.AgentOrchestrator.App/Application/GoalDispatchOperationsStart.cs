@@ -26,11 +26,12 @@ internal sealed partial class GoalDispatchOperations
         WorkerSandboxOptions? sandboxOptions = null,
         int? plannerSampleCount = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
-        Action<GoalSnapshot>? recordDurableGoalBaseline = null)
+        Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+        IReadOnlySet<TaskId>? excludedTaskIds = null)
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
-        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
+        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks

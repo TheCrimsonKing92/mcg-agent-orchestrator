@@ -181,7 +181,8 @@ public sealed record TaskVerificationSnapshot(
     PlannerCandidateDivergenceReceipt? PlannerCandidateDivergence = null,
     bool CompletionVerdictVerifiedSuccess = false,
     string? CompletionVerdictRule = null,
-    bool? AssignedScopeComplete = null)
+    bool? AssignedScopeComplete = null,
+    CandidateIdentity? CandidateIdentity = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -227,7 +228,8 @@ public sealed record TaskDispatchSnapshot(
     string? AssignedAgentId = null,
     int ConductorRoutingRevision = 0,
     PreDispatchIntegrationReceipt? PreDispatchIntegrationReceipt = null,
-    GoalId? GoalId = null);
+    GoalId? GoalId = null,
+    CandidateIdentity? CandidateIdentity = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

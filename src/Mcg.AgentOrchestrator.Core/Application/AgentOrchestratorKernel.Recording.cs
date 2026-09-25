@@ -13,6 +13,7 @@ public sealed partial class AgentOrchestratorKernel
             goal,
             task,
             AttachAuthoritativeReviewFindingContext(task, verification));
+        verification = verification with { CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal) };
         task.RecordVerification(verification);
 
         var status = verification.Succeeded ? "passed" : "failed";
@@ -114,6 +115,7 @@ public sealed partial class AgentOrchestratorKernel
             goal,
             task,
             AttachAuthoritativeReviewFindingContext(task, verification));
+        verification = verification with { CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal) };
         task.RecordVerification(verification);
         var completedRound = task.VerificationHistory.Count;
 
@@ -1563,6 +1565,7 @@ public sealed partial class AgentOrchestratorKernel
         dispatch.GoalId = goalId;
         dispatch = dispatch with
         {
+            CandidateIdentity = dispatch.CandidateIdentity ?? ResolveCandidateIdentity(goal),
             PreDispatchIntegrationReceipt = task.PendingPreDispatchIntegrationReceipt ??
                 (allowPendingRecordedDispatchRefresh ? task.LastDispatch?.PreDispatchIntegrationReceipt : null)
         };

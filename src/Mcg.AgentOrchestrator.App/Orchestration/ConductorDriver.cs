@@ -291,6 +291,7 @@ internal sealed partial class ConductorDriver
             buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         _cohortKernel = kernel;
+        ConfigureCandidateIdentity(kernel);
         _cohortWorkspace = workspace;
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
@@ -443,7 +444,8 @@ internal sealed partial class ConductorDriver
                     },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
-                    recordDurableGoalBaseline: recordDurableGoalBaseline);
+                    recordDurableGoalBaseline: recordDurableGoalBaseline,
+                    excludedTaskIds: GetUnchangedCandidateExclusions(goal));
             }
             catch (DispatchRecordWriteException ex)
             {
@@ -4264,6 +4266,10 @@ internal sealed partial class ConductorDriver
         if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
         {
             return preReviewResult;
+        }
+        if (TryRefuseUnchangedCandidateDispatch(goal, goalPrefix, policy, fromState, out var unchangedCandidateHold))
+        {
+            return unchangedCandidateHold;
         }
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
