@@ -34,6 +34,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
     }
 
     var handled =
+        TryExecuteOwnerDigestCommand(command, parts, context) ??
         TryExecuteFundamentalsAlias(command, parts, context) ??
         TryExecuteFlakeCensusCommand(command, parts, context) ??
         TryExecuteSystemCommand(command, parts, context) ??
@@ -49,5 +50,15 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
     }
 
     throw new ArgumentException(CliArgumentParser.FormatUnknownCommandMessage(parts));
+}
+
+private static bool? TryExecuteOwnerDigestCommand(string command, IReadOnlyList<string> parts,
+    CliExecutionContext context)
+{
+    if (command != "owner-digest")
+        return null;
+    if (CliOwnerDigestCommand.Run(parts, context.Workspace) != 0)
+        throw new InvalidOperationException("Owner digest failed.");
+    return false;
 }
 }

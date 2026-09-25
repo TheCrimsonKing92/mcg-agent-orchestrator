@@ -43,6 +43,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "record-goal",
     "failure-triage",
     "flake-census",
+    "owner-digest",
     "retention-plan",
     "run-events-maintenance",
     "state-db-maintenance",
