@@ -1482,7 +1482,8 @@ public sealed partial class AgentOrchestratorKernel
         TaskSpec task,
         DateTimeOffset retryAt,
         RetryCause retryCause,
-        RetryRoundKind? retryRoundKind = null)
+        RetryRoundKind? retryRoundKind = null,
+        bool inherited = false)
     {
         task.ClearLatestVerification();
         task.ClearLastExecution();
@@ -1490,7 +1491,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
         task.SetInterruptedDispatchRecovery(null);
-        task.RecordRetry(retryAt, retryCause, retryRoundKind);
+        task.RecordRetry(retryAt, retryCause, retryRoundKind, inherited);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
     }
 
@@ -1551,7 +1552,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            ResetTaskForRetry(downstream, retryAt, retryCause);
+            ResetTaskForRetry(downstream, retryAt, retryCause, inherited: true);
             Append(
                 goal,
                 downstream.Id,
@@ -1602,7 +1603,7 @@ public sealed partial class AgentOrchestratorKernel
             var invalidationReason = currentCandidateKnown
                 ? $"changed candidate from {reviewedCandidate} to {currentCandidate}"
                 : $"did not prove candidate {reviewedCandidate} unchanged (result {currentCandidate}; status {retriedTask.Status})";
-            ResetTaskForRetry(downstream, reconciledAt, retriedTask.PendingRetryCause);
+            ResetTaskForRetry(downstream, reconciledAt, retriedTask.PendingRetryCause, inherited: true);
             Append(
                 goal,
                 downstream.Id,
@@ -1641,7 +1642,7 @@ public sealed partial class AgentOrchestratorKernel
             var repairTask = decision.RepairTaskId is { } repairTaskId
                 ? goal.FindTask(repairTaskId)
                 : null;
-            ResetTaskForRetry(downstream, reconciledAt, repairTask?.PendingRetryCause ?? downstream.PendingRetryCause);
+            ResetTaskForRetry(downstream, reconciledAt, repairTask?.PendingRetryCause ?? downstream.PendingRetryCause, inherited: true);
             var reason = decision.Disposition == VerifyingFindingDisposition.SupersededByCompletedRepair
                 ? $"completed Developer repair {repairTask!.Id.Value[..8]} produced candidate {decision.RepairedCandidate}"
                 : "a later verification superseded that stored verdict";

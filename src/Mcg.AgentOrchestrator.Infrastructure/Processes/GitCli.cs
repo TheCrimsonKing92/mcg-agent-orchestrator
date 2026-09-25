@@ -55,10 +55,22 @@ internal static class GitCli
     public static GitResult Run(string workingDirectory, int timeoutMilliseconds, params string[] args)
         => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
 
+    public static GitResult RunWithStandardInput(
+        string workingDirectory, int timeoutMilliseconds, string standardInput, params string[] args) =>
+        RunExecutableCore("git", workingDirectory, timeoutMilliseconds, standardInput, args);
+
     internal static GitResult RunExecutable(
         string executable,
         string workingDirectory,
         int timeoutMilliseconds,
+        params string[] args)
+        => RunExecutableCore(executable, workingDirectory, timeoutMilliseconds, null, args);
+
+    private static GitResult RunExecutableCore(
+        string executable,
+        string workingDirectory,
+        int timeoutMilliseconds,
+        string? standardInput,
         params string[] args)
     {
         var processStarted = false;
@@ -69,6 +81,7 @@ internal static class GitCli
                 FileName = executable,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = standardInput is not null,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WorkingDirectory = workingDirectory
@@ -95,6 +108,26 @@ internal static class GitCli
             // thread would block on an inherited pipe after git exits.
             var outputDrain = PipeDrain.Start(process.StandardOutput, "git-stdout-drain");
             var errorDrain = PipeDrain.Start(process.StandardError, "git-stderr-drain");
+
+            // Write while both output pipes drain: git may emit diagnostics before consuming stdin.
+            var inputWrite = standardInput is null ? null : Task.Run(() =>
+            {
+                process.StandardInput.Write(standardInput);
+                process.StandardInput.Close();
+            });
+
+            bool inputCompleted;
+            try { inputCompleted = inputWrite?.Wait(timeoutMilliseconds) ?? true; }
+            catch (AggregateException ex)
+            {
+                TryKillTree(process);
+                return new GitResult(1, outputDrain.Text, ex.GetBaseException().Message);
+            }
+            if (!inputCompleted)
+            {
+                TryKillTree(process);
+                return new GitResult(-1, outputDrain.Text, "git stdin write timed out");
+            }
 
             if (!process.WaitForExit(timeoutMilliseconds))
             {

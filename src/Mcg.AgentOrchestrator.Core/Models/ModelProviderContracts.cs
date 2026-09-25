@@ -91,7 +91,8 @@ public sealed record TaskVerificationRecord(
     // Carried alongside the fingerprints because the directive text is stripped from the recorded
     // stdout snapshot, so kernel reparse cannot recover the classification on its own.
     HumanWaitKind? HumanInputKind = null,
-    string? HumanInputEvidenceOwner = null)
+    string? HumanInputEvidenceOwner = null,
+    CandidateIdentity? CandidateIdentity = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -139,6 +140,7 @@ public sealed record TaskVerificationRecord(
         return this with
         {
             ModelFitNote = preferred.ModelFitNote ?? ModelFitNote,
+            CandidateIdentity = preferred.CandidateIdentity ?? CandidateIdentity,
             HasCommittedChanges = HasCommittedChanges || preferred.HasCommittedChanges,
             HeartbeatStandardOutputBytes = preferred.HeartbeatStandardOutputBytes ?? HeartbeatStandardOutputBytes,
             HumanInputQuestion = preferred.HumanInputQuestion ?? HumanInputQuestion,
@@ -303,7 +305,8 @@ public sealed record TaskDispatchRecord(
     string? AssignedAgentId = null,
     int ConductorRoutingRevision = 0,
     PreDispatchIntegrationReceipt? PreDispatchIntegrationReceipt = null,
-    GoalId? GoalId = null)
+    GoalId? GoalId = null,
+    CandidateIdentity? CandidateIdentity = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

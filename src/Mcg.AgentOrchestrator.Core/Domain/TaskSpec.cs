@@ -45,6 +45,8 @@ public sealed class TaskSpec
 
     public DateTimeOffset? LatestRetryAt { get; private set; }
 
+    public DateTimeOffset? LatestRoleInputRetryAt { get; private set; }
+
     public DateTimeOffset? LatestProviderBudgetRecoveryAt { get; private set; }
 
     public RetryRoundKind? PendingRetryRoundKind { get; private set; }
@@ -169,7 +171,8 @@ public sealed class TaskSpec
                     LastVerification.PlannerCandidateDivergence,
                     LastVerification.CompletionVerdictVerifiedSuccess,
                     LastVerification.CompletionVerdictRule,
-                    LastVerification.AssignedScopeComplete),
+                    LastVerification.AssignedScopeComplete,
+                    LastVerification.CandidateIdentity),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -199,7 +202,8 @@ public sealed class TaskSpec
                     verification.PlannerCandidateDivergence,
                     verification.CompletionVerdictVerifiedSuccess,
                     verification.CompletionVerdictRule,
-                    verification.AssignedScopeComplete))
+                    verification.AssignedScopeComplete,
+                    verification.CandidateIdentity))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -260,7 +264,8 @@ public sealed class TaskSpec
             ConductorRoutingRevision,
             PendingPreDispatchIntegrationReceipt,
             LatestProviderBudgetRecoveryAt,
-            WorkerBuildCheckRecoveryCount);
+            WorkerBuildCheckRecoveryCount,
+            LatestRoleInputRetryAt);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -332,7 +337,8 @@ public sealed class TaskSpec
                     PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
                     CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
                     CompletionVerdictRule: verification.CompletionVerdictRule,
-                    AssignedScopeComplete: verification.AssignedScopeComplete));
+                    AssignedScopeComplete: verification.AssignedScopeComplete,
+                    CandidateIdentity: verification.CandidateIdentity));
             }
         }
 
@@ -372,7 +378,8 @@ public sealed class TaskSpec
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
                 CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
-                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete);
+                AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete,
+                CandidateIdentity: snapshot.LastVerification.CandidateIdentity);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -480,6 +487,7 @@ public sealed class TaskSpec
         task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
+        task.LatestRoleInputRetryAt = snapshot.LatestRoleInputRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
         task.PendingRetryCause = snapshot.PendingRetryCause;
@@ -696,9 +704,12 @@ public sealed class TaskSpec
     internal void RecordRetry(
         DateTimeOffset retriedAt,
         RetryCause retryCause,
-        RetryRoundKind? retryRoundKind = null)
+        RetryRoundKind? retryRoundKind = null,
+        bool inherited = false)
     {
         LatestRetryAt = retriedAt;
+        if (!inherited && retryCause != RetryCause.UnchangedContextRepeat)
+            LatestRoleInputRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;
         var priorVerification = _verificationHistory.LastOrDefault();
         PendingReviewFindingRepairCheckpoint = retryRoundKind == RetryRoundKind.Mechanical &&
@@ -1020,7 +1031,8 @@ public sealed class TaskSpec
         dispatch.AssignedAgentId,
         dispatch.ConductorRoutingRevision,
         dispatch.PreDispatchIntegrationReceipt,
-        dispatch.GoalId);
+        dispatch.GoalId,
+        dispatch.CandidateIdentity);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1059,7 +1071,8 @@ public sealed class TaskSpec
         dispatch.AssignedAgentId,
         dispatch.ConductorRoutingRevision,
         dispatch.PreDispatchIntegrationReceipt,
-        dispatch.GoalId);
+        dispatch.GoalId,
+        dispatch.CandidateIdentity);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
