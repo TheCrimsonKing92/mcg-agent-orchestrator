@@ -82,7 +82,18 @@ internal sealed partial class ConductorContinuitySupervisor
         ConductorActivationRevertReason? Reason,
         string Detail,
         ConductorSupervisorProcessResult? ProcessResult,
-        bool TerminationConfirmed);
+        bool TerminationConfirmed,
+        bool DeliberateStop = false);
+
+    private static bool HasDeliberateStopArtifact(string artifactPath)
+    {
+        var artifact = ConductorContinuityExitArtifact.TryRead(artifactPath);
+        return artifact?.StopReason is
+            "stop-file" or "stop-file-during-sleep" or "stop-while-idle" or
+            "stop-after-operator-intent" or "max-duration" or "max-iter" or
+            "self-relaunch-handoff" or "blocked-recheck-exhausted" or
+            "no-progress-no-watch" or "all-terminal" or "no-recheckable-work";
+    }
 
     private async Task<ActivationWindowResult> ObserveActivationAsync(
         Task<ConductorSupervisorProcessResult> runTask,
@@ -103,9 +114,10 @@ internal sealed partial class ConductorContinuitySupervisor
             if (runTask.IsCompleted)
             {
                 var ended = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
-                if (ended is { ExitCode: 0 } && ConductorContinuityExitArtifact.TryRead(artifactPath) is not null)
+                if (ended is not null && HasDeliberateStopArtifact(artifactPath))
                 {
-                    return new(true, null, "clean-exit", ended, true);
+                    return new(false, null, "deliberate-stop", ended,
+                        ended?.TerminationConfirmed == true, DeliberateStop: true);
                 }
 
                 return new(false, ConductorActivationRevertReason.SuccessorExited,

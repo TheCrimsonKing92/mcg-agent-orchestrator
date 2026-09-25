@@ -162,6 +162,115 @@ public sealed class ConductorActivationFallbackTests
         Assert.Throws<ObjectDisposedException>(() => lease.ReadByte());
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public async Task CleanExitWithoutDeliberateStopBeforeThresholdReverts(bool writeArtifact)
+    {
+        var events = new RecordingRunEventStore();
+        using var lease = new MemoryStream();
+        var successor = Build("head-clean", "clean", lease);
+        var host = new ScriptedHost((request, index, _) =>
+        {
+            if (index == 0)
+            {
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, true));
+            }
+            else if (index == 1)
+            {
+                request.OnStandardOutputLine!("LOOP_READY lock=acquired");
+                request.OnStandardOutputLine("LOOP_START tick=0");
+                request.OnStandardOutputLine("TICK_END tick=1");
+                if (writeArtifact)
+                {
+                    ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                        new ConductorContinuityExitArtifact("", 1, 0, false));
+                }
+            }
+            else
+            {
+                Assert.Null(request.CommandPrefix);
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("stop-file", 1, 0, false));
+            }
+
+            return Task.FromResult(new ConductorSupervisorProcessResult(0, 400 + index));
+        });
+        var supervisor = new ConductorContinuitySupervisor(host, events,
+            stageSuccessor: _ => successor, activationHealthyTicks: 3,
+            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
+
+        var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-activation-clean-{Guid.NewGuid():N}"),
+            "default", "default");
+
+        Assert.Equal(0, result);
+        Assert.Equal(3, host.Requests.Count);
+        var reverted = Assert.Single(events.Events.Where(evt =>
+            evt.Operation == "activation" && evt.Status == "reverted"));
+        Assert.Contains("reason=SuccessorExited", reverted.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(events.Events, evt => evt.Operation == "activation" && evt.Status == "adopted");
+        Assert.Throws<ObjectDisposedException>(() => lease.ReadByte());
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("stop-file", false, true)]
+    [Xunit.InlineData("max-duration", true, true)]
+    [Xunit.InlineData("stop-file", false, false)]
+    public async Task RecordedDeliberateStopBeforeThresholdUsesExistingStopHandling(
+        string stopReason, bool restartRequested, bool reportsReady)
+    {
+        var events = new RecordingRunEventStore();
+        using var lease = new MemoryStream();
+        var successor = Build("head-stopped", "stopped", lease);
+        var stageCount = 0;
+        var host = new ScriptedHost((request, index, _) =>
+        {
+            if (index == 0)
+            {
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("max-duration", 1, 1, true));
+            }
+            else if (index == 1)
+            {
+                if (reportsReady)
+                {
+                    request.OnStandardOutputLine!("LOOP_READY lock=acquired");
+                    request.OnStandardOutputLine("LOOP_START tick=0");
+                    request.OnStandardOutputLine("TICK_END tick=1");
+                }
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact(stopReason, 1, 1, restartRequested));
+            }
+            else
+            {
+                Assert.Equal(successor.AppDllPath, request.CommandPrefix![1]);
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    new ConductorContinuityExitArtifact("stop-file", 1, 0, false));
+            }
+
+            return Task.FromResult(new ConductorSupervisorProcessResult(0, 500 + index));
+        });
+        var supervisor = new ConductorContinuitySupervisor(host, events,
+            stageSuccessor: _ => ++stageCount == 1
+                ? successor
+                : throw new InvalidOperationException("No newer HEAD"),
+            activationHealthyTicks: 3,
+            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
+
+        var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
+            Path.Combine(Path.GetTempPath(), $"mcg-activation-stop-{Guid.NewGuid():N}"),
+            "default", "default");
+
+        Assert.Equal(0, result);
+        Assert.Equal(restartRequested ? 3 : 2, host.Requests.Count);
+        Assert.DoesNotContain(events.Events, evt => evt.Operation == "activation" &&
+            evt.Status is "reverted" or "adopted");
+        Assert.Contains(events.Events, evt => evt.Operation == (restartRequested ? "restart" : "stopped") &&
+            evt.Status == (restartRequested ? "planned" : "completed") && evt.Detail.Contains(stopReason));
+    }
+
     private static ConductorPreparedSuccessor Build(string head, string name, IDisposable lease) =>
         new($"C:\\{name}", $"C:\\{name}\\Mcg.AgentOrchestrator.App.dll", head, head,
             "LOOP_START selfCheck=true", lease);

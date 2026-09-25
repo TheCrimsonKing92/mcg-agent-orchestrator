@@ -212,7 +212,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         var restore = await ObserveActivationAsync(
                             restoreTask, activationMonitor, artifactPath, restoreCts, cancellationToken)
                             .ConfigureAwait(false);
-                        if (!restore.Adopted)
+                        if (!restore.Adopted && !restore.DeliberateStop)
                         {
                             if (!restore.TerminationConfirmed)
                             {
@@ -233,7 +233,10 @@ internal sealed partial class ConductorContinuitySupervisor(
                         }
 
                         restoring = false;
-                        RecordActivation("restored", attempt, failedActivationBuild!, currentBuild, null, restore.Detail);
+                        if (restore.Adopted)
+                        {
+                            RecordActivation("restored", attempt, failedActivationBuild!, currentBuild, null, restore.Detail);
+                        }
                         failedActivationBuild = null;
                         result = restore.ProcessResult ?? await restoreTask.ConfigureAwait(false);
                     }
@@ -294,7 +297,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                             runTask, activationMonitor, artifactPath, processCts, cancellationToken)
                             .ConfigureAwait(false);
                         var candidateBuild = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
-                        if (!activation.Adopted)
+                        if (!activation.Adopted && !activation.DeliberateStop)
                         {
                             if (!activation.TerminationConfirmed)
                             {
@@ -317,8 +320,19 @@ internal sealed partial class ConductorContinuitySupervisor(
 
                         currentBuild.Lease?.Dispose();
                         currentBuild = candidateBuild;
-                        RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
+                        if (activation.Adopted)
+                        {
+                            RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
+                        }
                         result = activation.ProcessResult ?? await runTask.ConfigureAwait(false);
+                    }
+                    else if (runTask.IsCompletedSuccessfully && HasDeliberateStopArtifact(artifactPath))
+                    {
+                        timeoutCts.Cancel();
+                        pendingSuccessor = null;
+                        currentBuild.Lease?.Dispose();
+                        currentBuild = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
+                        result = await runTask.ConfigureAwait(false);
                     }
                     else
                     {
