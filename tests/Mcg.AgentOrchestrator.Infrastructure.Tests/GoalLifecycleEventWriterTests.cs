@@ -475,6 +475,8 @@ public sealed class GoalLifecycleEventWriterTests
         };
 
         startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(workingDirectory, ".orchestrator", "test-dotnet");
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
         foreach (var arg in args)

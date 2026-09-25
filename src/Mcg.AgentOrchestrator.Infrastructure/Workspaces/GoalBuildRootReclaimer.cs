@@ -11,7 +11,8 @@ internal sealed record GoalBuildRootReclaimResult(
 internal sealed class GoalBuildRootReclaimer(
     DotnetBuildStorageRoot storageRoot,
     IOwnedRunRootStore ownedRoots,
-    Func<int, bool>? isOwnerRunning = null)
+    Func<int, bool>? isOwnerRunning = null,
+    string? owningRepositoryRoot = null)
 {
     private readonly Func<int, bool> _isOwnerRunning = isOwnerRunning ?? IsProcessRunning;
 
@@ -43,12 +44,14 @@ internal sealed class GoalBuildRootReclaimer(
             if (!storageRoot.ContainsPath(canonical) ||
                 storedPrefixes.Contains(Path.GetFileName(canonical)) ||
                 IsReparsePointOrMissing(canonical) ||
-                !TryReadLease(canonical, out var goalId, out var ownerProcessId) ||
+                !TryReadLease(canonical, out var goalId, out var ownerProcessId, out var repositoryRoot) ||
+                (owningRepositoryRoot is not null && !SamePath(repositoryRoot, owningRepositoryRoot)) ||
                 storedGoalIds.Contains(goalId) ||
                 ownedRoots.ReadRegisteredPaths([canonical]).Contains(canonical) ||
                 _isOwnerRunning(ownerProcessId) ||
-                !TryReadLease(canonical, out var confirmedId, out var confirmedOwner) ||
+                !TryReadLease(canonical, out var confirmedId, out var confirmedOwner, out var confirmedRepositoryRoot) ||
                 !string.Equals(goalId, confirmedId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(repositoryRoot, confirmedRepositoryRoot, StringComparison.Ordinal) ||
                 ownerProcessId != confirmedOwner)
                 continue;
 
@@ -66,10 +69,12 @@ internal sealed class GoalBuildRootReclaimer(
         return new GoalBuildRootReclaimResult(reclaimed, failures);
     }
 
-    private static bool TryReadLease(string root, out string goalId, out int ownerProcessId)
+    private static bool TryReadLease(string root, out string goalId, out int ownerProcessId,
+        out string? repositoryRoot)
     {
         goalId = string.Empty;
         ownerProcessId = 0;
+        repositoryRoot = null;
         var path = Path.Combine(root, "lease", "lease.json");
         try
         {
@@ -81,10 +86,27 @@ internal sealed class GoalBuildRootReclaimer(
                 !lease.TryGetProperty("ownerProcessId", out var pid) || !pid.TryGetInt32(out ownerProcessId))
                 return false;
             goalId = id.GetString() ?? string.Empty;
+            if (lease.TryGetProperty("repositoryRoot", out var repo) && repo.ValueKind == JsonValueKind.String)
+                repositoryRoot = repo.GetString();
             return goalId.Length == 32 && goalId.All(Uri.IsHexDigit) && ownerProcessId > 0 &&
                 string.Equals(goalId[..8], Path.GetFileName(root), StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool SamePath(string? left, string right)
+    {
+        if (string.IsNullOrWhiteSpace(left))
+            return false;
+        try
+        {
+            return string.Equals(Path.GetFullPath(left), Path.GetFullPath(right),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return false;
         }

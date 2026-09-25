@@ -50,11 +50,13 @@ internal static partial class TerminalGoalSweep
         internal readonly OwnedRunRootObservationLedger ObservationLedger = new();
     }
 
-    private static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(string stateDbPath)
+    private static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRoots(
+        string stateDbPath, bool reclaimGoalRoots)
     {
         var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
         return ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
-            stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true));
+            stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true,
+            reclaimGoalRoots: reclaimGoalRoots, requireSharedRootOwnership: reclaimGoalRoots));
     }
 
     // A temporary or scoped store cannot prove that a root in the shared folder is orphaned.
@@ -99,7 +101,8 @@ internal static partial class TerminalGoalSweep
     internal static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRootsCore(
         string stateDbPath, DotnetBuildStorageRoot storageRoot, OwnedRootSweepState state,
         Func<int, bool>? isOwnerRunning = null, bool usesSharedStorageRoot = false,
-        string? canonicalRepoRoot = null, OrchestratorProjectRegistry? projectRegistry = null)
+        string? canonicalRepoRoot = null, OrchestratorProjectRegistry? projectRegistry = null,
+        bool reclaimGoalRoots = true, bool requireSharedRootOwnership = false)
     {
         ArgumentNullException.ThrowIfNull(storageRoot);
         ArgumentNullException.ThrowIfNull(state);
@@ -118,7 +121,12 @@ internal static partial class TerminalGoalSweep
         Interlocked.Exchange(ref state.ReapCursor, reap.NextCursor);
         GoalBuildRootReclaimResult reclaimed = new([], []);
         string? discoveryFailure = null;
-        var sharedStores = usesSharedStorageRoot
+        var repoRoot = canonicalRepoRoot ?? OrchestratorWorkspace.ResolveRepoRoot();
+        var hasReclaimAuthority = !requireSharedRootOwnership ||
+            string.Equals(Path.GetFullPath(stateDbPath),
+                Path.GetFullPath(OrchestratorWorkspace.ForDirectory(repoRoot).SqliteStatePath),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        var sharedStores = !reclaimGoalRoots || !hasReclaimAuthority ? null : usesSharedStorageRoot
             ? GetSharedGoalStorePaths(stateDbPath, out discoveryFailure, canonicalRepoRoot, projectRegistry)
             : [stateDbPath];
         if (sharedStores is null)
@@ -128,7 +136,8 @@ internal static partial class TerminalGoalSweep
         }
         else if (TryReadGoalIds(sharedStores, out var storedGoalIds, out var readFailure))
         {
-            reclaimed = new GoalBuildRootReclaimer(storageRoot, registry, isOwnerRunning)
+            reclaimed = new GoalBuildRootReclaimer(storageRoot, registry, isOwnerRunning,
+                    requireSharedRootOwnership ? repoRoot : null)
                 .Reclaim(storedGoalIds, MaxOwnedBuildRootsPerSweep);
         }
         else

@@ -165,13 +165,14 @@ public static class DotnetBuildEnvironmentManager
         GoalId? goalId,
         string attemptName,
         int slotCount = StableSlotCount,
-        DotnetBuildStorageRoot? storageRoot = null)
+        DotnetBuildStorageRoot? storageRoot = null,
+        string? repositoryRoot = null)
     {
         storageRoot ??= CaptureStorageRoot();
         ValidateRequestedSlotCount(slotCount);
         if (goalId is not null)
         {
-            return CreateGoalLease(goalId, attemptName, slotCount, storageRoot);
+            return CreateGoalLease(goalId, attemptName, slotCount, storageRoot, repositoryRoot);
         }
 
         var owner = $"{Environment.ProcessId}-{Sanitize(attemptName)}-{Guid.NewGuid():N}";
@@ -1077,7 +1078,8 @@ public static class DotnetBuildEnvironmentManager
         GoalId goalId,
         string attemptName,
         int slotCount,
-        DotnetBuildStorageRoot storageRoot)
+        DotnetBuildStorageRoot storageRoot,
+        string? repositoryRoot)
     {
         var root = GoalRoot(goalId, storageRoot);
         var leaseId = $"goal-{Prefix(goalId)}";
@@ -1115,7 +1117,10 @@ public static class DotnetBuildEnvironmentManager
                 DateTimeOffset.UtcNow,
                 attemptName,
                 staleLockCleared,
-                staleLockCleared ? reclaimedProcessId : null),
+                staleLockCleared ? reclaimedProcessId : null,
+                Path.GetFullPath(repositoryRoot ??
+                    Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ??
+                    Environment.CurrentDirectory)),
             JsonOptions));
 
         var environment = new DotnetBuildEnvironment(
@@ -2873,7 +2878,8 @@ public static class DotnetBuildEnvironmentManager
         DateTimeOffset LastUsedAt,
         string LastAttemptName,
         bool StaleLockCleared,
-        int? ReclaimedProcessId = null);
+        int? ReclaimedProcessId = null,
+        string? RepositoryRoot = null);
 
     private sealed record ArtifactsOwnerMarker(
         int Version,
