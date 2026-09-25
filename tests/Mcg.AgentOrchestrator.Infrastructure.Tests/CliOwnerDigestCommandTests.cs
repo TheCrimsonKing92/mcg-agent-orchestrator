@@ -10,6 +10,7 @@ public sealed class CliOwnerDigestCommandTests
     {
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
         var before = HashFiles(fixture.Workspace.OrchestratorDirectory);
+        var walBefore = HashWalFiles(fixture.Workspace.OrchestratorDirectory);
         var table = await RunAsync(fixture, false);
         Assert.Equal(0, table.ExitCode);
         Assert.Contains("Goal | Landed UTC", table.Output, StringComparison.Ordinal);
@@ -25,10 +26,24 @@ public sealed class CliOwnerDigestCommandTests
         Assert.Equal("not tracked", parsed.RootElement.GetProperty("reverts").GetString());
         Assert.Equal(string.Empty, json.Error);
         Assert.Equal(before, HashFiles(fixture.Workspace.OrchestratorDirectory));
+        foreach (var (path, hash) in HashWalFiles(fixture.Workspace.OrchestratorDirectory))
+            Assert.True(hash == EmptyFileHash ||
+                (walBefore.TryGetValue(path, out var original) && hash == original),
+                $"SQLite WAL file changed and is not empty: {path}");
     }
+
+    private static readonly string EmptyFileHash = Convert.ToHexString(SHA256.HashData(Array.Empty<byte>()));
 
     private static Dictionary<string, string> HashFiles(string root) =>
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(path => !path.EndsWith("-shm", StringComparison.OrdinalIgnoreCase) &&
+                !path.EndsWith("-wal", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(path => Path.GetRelativePath(root, path),
+                path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))),
+                StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<string, string> HashWalFiles(string root) =>
+        Directory.EnumerateFiles(root, "*-wal", SearchOption.AllDirectories)
             .ToDictionary(path => Path.GetRelativePath(root, path),
                 path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))),
                 StringComparer.OrdinalIgnoreCase);
