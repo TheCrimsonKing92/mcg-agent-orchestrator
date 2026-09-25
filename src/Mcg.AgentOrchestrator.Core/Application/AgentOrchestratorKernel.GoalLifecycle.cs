@@ -2262,6 +2262,7 @@ public sealed partial class AgentOrchestratorKernel
             (task.LastDispatch is not null && task.LastProcess is null)
             ? WorkTaskStatus.Running
             : WorkTaskStatus.Assigned;
+        if (restoredStatus == WorkTaskStatus.Assigned) ClearStaleVerificationForAnsweredRestore(task);
         if (task.Status == restoredStatus)
         {
             return;
