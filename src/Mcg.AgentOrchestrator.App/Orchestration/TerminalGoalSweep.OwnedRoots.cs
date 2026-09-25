@@ -57,9 +57,7 @@ internal static partial class TerminalGoalSweep
             stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true), storageRoot);
     }
 
-    // The per-user build folder is shared by every temporary and project state store in this
-    // process. Only the default repository store may use absence from its goals table as
-    // evidence that a goal root is orphaned.
+    // A temporary or scoped store cannot prove that a root in the shared folder is orphaned.
     internal static bool IsCanonicalGoalRootStore(string stateDbPath)
     {
         var repoRoot = OrchestratorWorkspace.ResolveRepoRoot();
@@ -100,7 +98,8 @@ internal static partial class TerminalGoalSweep
 
     internal static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRootsCore(
         string stateDbPath, DotnetBuildStorageRoot storageRoot, OwnedRootSweepState state,
-        Func<int, bool>? isOwnerRunning = null, bool usesSharedStorageRoot = false)
+        Func<int, bool>? isOwnerRunning = null, bool usesSharedStorageRoot = false,
+        string? canonicalRepoRoot = null, OrchestratorProjectRegistry? projectRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(storageRoot);
         ArgumentNullException.ThrowIfNull(state);
@@ -118,20 +117,22 @@ internal static partial class TerminalGoalSweep
         var reap = reaper.Reap(Interlocked.Read(ref state.ReapCursor), MaxOwnedBuildRootsPerSweep);
         Interlocked.Exchange(ref state.ReapCursor, reap.NextCursor);
         GoalBuildRootReclaimResult reclaimed = new([], []);
-        if (!usesSharedStorageRoot || IsCanonicalGoalRootStore(stateDbPath))
+        string? discoveryFailure = null;
+        var sharedStores = usesSharedStorageRoot
+            ? GetSharedGoalStorePaths(stateDbPath, out discoveryFailure, canonicalRepoRoot, projectRegistry)
+            : [stateDbPath];
+        if (sharedStores is null)
         {
-            var storedGoalIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using (var connection = StateDbConnectionFactory.Open(stateDbPath, StateDbConnectionProfile.FastFailRead))
-            using (var goals = connection.CreateCommand())
-            {
-                goals.CommandText = "SELECT id FROM goals";
-                using var reader = goals.ExecuteReader();
-                while (reader.Read())
-                    storedGoalIds.Add(reader.GetString(0));
-            }
+            if (discoveryFailure is not null)
+                reclaimed = new GoalBuildRootReclaimResult([], [discoveryFailure]);
+        }
+        else if (TryReadGoalIds(sharedStores, out var storedGoalIds, out var readFailure))
+        {
             reclaimed = new GoalBuildRootReclaimer(storageRoot, registry, isOwnerRunning)
                 .Reclaim(storedGoalIds, MaxOwnedBuildRootsPerSweep);
         }
+        else
+            reclaimed = new GoalBuildRootReclaimResult([], [readFailure!]);
         var observer = new OwnedRunRootObserver(
             registry,
             storageRoot,
