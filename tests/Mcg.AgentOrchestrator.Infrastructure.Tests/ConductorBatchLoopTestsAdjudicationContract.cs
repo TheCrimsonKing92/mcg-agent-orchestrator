@@ -5,11 +5,11 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class AdjudicationContractTests : ConductorBatchLoopTests
+public sealed class ConductorBatchLoopTestsAdjudicationContract : ConductorBatchLoopTests
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public AdjudicationContractTests(ITestOutputHelper output) : base(output) { }
+    public ConductorBatchLoopTestsAdjudicationContract(ITestOutputHelper output) : base(output) { }
 
     [Xunit.Fact]
     public async Task Decision_and_effect_round_trip_reversibility_precedent_and_final_outcome()
