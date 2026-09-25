@@ -294,7 +294,9 @@ internal sealed class OperatorIntentCoordinator
                     taskId,
                     progress.Status,
                     progress.Message,
-                    observedCandidate);
+                    observedCandidate,
+                    correctionSource: intent.ActorKind == OperatorActorKind.Agent
+                        ? CriteriaCorrectionSource.AgentIntent : CriteriaCorrectionSource.Operator);
                 break;
 
             case OperatorIntentVerbs.Retry:
@@ -314,7 +316,9 @@ internal sealed class OperatorIntentCoordinator
                     retry.Message,
                     retryCause: retry.RetryCause.Value,
                     retryRoundKind: retry.RetryRoundKind,
-                    invalidateDownstream: true);
+                    invalidateDownstream: true,
+                    correctionSource: intent.ActorKind == OperatorActorKind.Agent
+                        ? CriteriaCorrectionSource.AgentIntent : CriteriaCorrectionSource.Operator);
                 GoalLifecycleCommands.RecordCapabilityWarnings(
                     kernel,
                     goal.Id,

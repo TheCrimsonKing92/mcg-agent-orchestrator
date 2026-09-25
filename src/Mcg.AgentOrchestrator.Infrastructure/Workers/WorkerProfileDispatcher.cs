@@ -259,7 +259,7 @@ public static class WorkerProfileDispatcher
                 workerProfile: profile,
                 priorContextPackageReceipt: priorDispatch?.ContextPackageReceipt,
                 typedSource: briefSource,
-                legacyIngressProgressRecorder: message => kernel.RecordTaskNote(goal.Id, task.Id, message));
+                legacyIngressProgressRecorder: message => kernel.RecordTaskNote(goal.Id, task.Id, message, CriteriaCorrectionSource.WorkerResult));
             var deliveryPolicy = contextPackage.ReviewFindingProjection?.Mode ==
                 ReviewFindingHistoryProjectionMode.ContractRepair
                 ? WorkerContextDeliveryPolicy.CompactRepair

@@ -280,7 +280,9 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
-    public TaskSpec RecordTaskNote(GoalId goalId, TaskId taskId, string message)
+    public TaskSpec RecordTaskNote(
+        GoalId goalId, TaskId taskId, string message,
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -290,7 +292,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Task note message cannot be empty.", nameof(message));
         }
 
-        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskNote, noteMessage);
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskNote, noteMessage, correctionSource);
         Append(goal, taskId, ProgressKind.TaskNote, noteMessage);
         return task;
     }
@@ -501,8 +503,10 @@ public sealed partial class AgentOrchestratorKernel
         string message,
         RetryCause retryCause,
         bool invalidateDownstream = true,
-        RetryRoundKind? retryRoundKind = null) =>
-        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind, authoritativeRetryFeedback: true);
+        RetryRoundKind? retryRoundKind = null,
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator) =>
+        RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind,
+            authoritativeRetryFeedback: true, correctionSource: correctionSource);
 
     public TaskSpec RetryTaskAfterWorkerBuildCheckRecovery(GoalId goalId, TaskId taskId, string message)
     {
@@ -524,7 +528,8 @@ public sealed partial class AgentOrchestratorKernel
         RetryRoundKind? retryRoundKind = null,
         bool authoritativeRetryFeedback = false) =>
         RetryTaskCore(goalId, taskId, message, retryCause, invalidateDownstream, retryRoundKind,
-            authoritativeRetryFeedback: authoritativeRetryFeedback, preserveEquivalentPendingRetry: true);
+            authoritativeRetryFeedback: authoritativeRetryFeedback, preserveEquivalentPendingRetry: true,
+            correctionSource: CriteriaCorrectionSource.Escalation);
 
     private TaskSpec RetryTaskCore(
         GoalId goalId,
@@ -534,7 +539,8 @@ public sealed partial class AgentOrchestratorKernel
         bool invalidateDownstream,
         RetryRoundKind? retryRoundKind,
         bool authoritativeRetryFeedback,
-        bool preserveEquivalentPendingRetry = false)
+        bool preserveEquivalentPendingRetry = false,
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -577,7 +583,7 @@ public sealed partial class AgentOrchestratorKernel
             if (!goal.Timeline.Any(evt => evt.TaskId == taskId && evt.OccurredAt >= task.LatestRetryAt!.Value &&
                 evt.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRetryFeedbackUpdated && evt.Message == retryMessage))
             {
-                RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetryFeedbackUpdated, retryMessage);
+                RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetryFeedbackUpdated, retryMessage, correctionSource);
                 Append(goal, taskId, ProgressKind.TaskRetryFeedbackUpdated, retryMessage);
             }
         }
@@ -589,7 +595,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.RecordCriterionRetryFeedback([retryMessage]);
                 task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
             }
-            RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+            RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage, correctionSource);
             Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         }
         if (invalidateDownstream)
@@ -1418,7 +1424,8 @@ public sealed partial class AgentOrchestratorKernel
         TaskId taskId,
         WorkTaskStatus status,
         string message,
-        string? observedCandidate = null)
+        string? observedCandidate = null,
+        CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator)
     {
         if (status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.WaitingForHuman)
         {
@@ -1438,7 +1445,7 @@ public sealed partial class AgentOrchestratorKernel
             _ => ProgressKind.TaskUpdated
         };
 
-        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, kind, message);
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, kind, message, correctionSource);
         Append(goal, taskId, kind, message);
         if (status is WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled)
         {
@@ -1468,7 +1475,8 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         task.SetStatus(WorkTaskStatus.Failed);
-        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskFailed, escalationMessage);
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskFailed, escalationMessage,
+            CriteriaCorrectionSource.Escalation);
         Append(goal, taskId, ProgressKind.TaskFailed, escalationMessage);
         goal.SetStatus(GoalStatus.Failed);
         Append(

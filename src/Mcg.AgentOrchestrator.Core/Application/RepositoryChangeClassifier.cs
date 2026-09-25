@@ -37,7 +37,7 @@ public sealed record AcceptanceManifestTrustDecision(
     IReadOnlyList<string> SecurityCriticalChanges,
     string Evidence);
 
-public static class RepositoryChangeClassifier
+public static partial class RepositoryChangeClassifier
 {
     private static readonly string[] GeneratedSegments =
     [
