@@ -3049,16 +3049,7 @@ internal static partial class CliPersistentStateRunner
                     System.Text.Encoding.UTF8.GetBytes(normalizedObjective)))
             .ToLowerInvariant();
         var pipeline = NormalizeGoalReplacementPipelineRequest(args);
-        var orderedRoles = pipeline.Equals("five-role", StringComparison.OrdinalIgnoreCase)
-            ? string.Join(',', new[]
-            {
-                AgentRole.Researcher,
-                AgentRole.Planner,
-                AgentRole.Developer,
-                AgentRole.Tester,
-                AgentRole.Reviewer
-            })
-            : $"unprepared:{pipeline}";
+        var orderedRoles = ResolveGoalReplacementPreflightRoles(pipeline);
         var requestedDisposition = TryGetGoalReplacementFlag(args, "--disposition")?.Trim();
         return ComputeGoalReplacementFingerprint(
             predecessorGoalId,
@@ -3320,16 +3311,7 @@ internal static partial class CliPersistentStateRunner
                     System.Security.Cryptography.SHA256.HashData(
                         System.Text.Encoding.UTF8.GetBytes(normalizedObjective)))
                 .ToLowerInvariant();
-            var orderedRoles = pipeline.Equals("five-role", StringComparison.OrdinalIgnoreCase)
-                ? string.Join(',', new[]
-                {
-                    AgentRole.Researcher,
-                    AgentRole.Planner,
-                    AgentRole.Developer,
-                    AgentRole.Tester,
-                    AgentRole.Reviewer
-                })
-                : $"unprepared:{pipeline}";
+            var orderedRoles = ResolveGoalReplacementPreflightRoles(pipeline);
             const string assignedAgents = "unprepared";
             var requestedAgentOverrides = BuildGoalReplacementRequestedAgentOverrides(args);
             var fingerprint = ComputeGoalReplacementFingerprint(
@@ -3411,6 +3393,7 @@ internal static partial class CliPersistentStateRunner
         {
             null or "" or "auto" => "auto",
             "five-role" => "five-role",
+            "scout" => "scout",
             _ => pipeline.ToLowerInvariant()
         };
     }

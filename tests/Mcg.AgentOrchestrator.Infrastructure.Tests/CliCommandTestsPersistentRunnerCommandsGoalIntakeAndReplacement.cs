@@ -664,8 +664,10 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Xunit.Assert.Contains("\"verdict\"", output, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public async Task GoalCreateForcedFiveRolePersistsExactTaskOrder()
+    [Xunit.Theory]
+    [Xunit.InlineData("five-role")]
+    [Xunit.InlineData("scout")]
+    public async Task GoalCreateForcedPipelinePersistsExactTaskOrder(string pipeline)
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -684,11 +686,11 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         const string objective = "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with one focused assertion.";
 
         var automaticPlan = GoalObjectivePlanner.Build(objective);
-        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, automaticPlan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.Scout, automaticPlan.PipelineDecision.Pipeline);
         Xunit.Assert.False(automaticPlan.PipelineDecision.IsOverride);
 
         _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["goal", objective, "--pipeline", "five-role"],
+            ["goal", objective, "--pipeline", pipeline],
             repository,
             workspace,
             ref agents,
@@ -699,12 +701,16 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
         var persistedGoal = Xunit.Assert.Single(restored.Goals);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            pipeline == "scout"
+                ? (AgentRole[])[AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]
+                : (AgentRole[])[AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             persistedGoal.Tasks.Select(task => task.RequiredRole));
     }
 
-    [Xunit.Fact]
-    public async Task GoalReplaceCancelledZeroWorkCreatesFiveRoleSuccessor()
+    [Xunit.Theory]
+    [Xunit.InlineData("five-role")]
+    [Xunit.InlineData("scout")]
+    public async Task GoalReplaceCancelledZeroWorkCreatesSelectedPipelineSuccessor(string pipeline)
     {
         var root = CreateAcceptanceRepository();
         var workspace = CreateRefinedWorkspace(root);
@@ -745,7 +751,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
             "--reason-file", reasonPath, "--request-id", requestId.ToString(),
             "--disposition", "zero-work-correction", "--confirm-goal-replace",
-            "--pipeline", "five-role"
+            "--pipeline", pipeline
         ];
 
         var error = Xunit.Record.Exception(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
@@ -764,7 +770,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
         Xunit.Assert.Equal(item.Id, successor.SourceBacklogItemId);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            pipeline == "scout"
+                ? (AgentRole[])[AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]
+                : (AgentRole[])[AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             successor.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.All(successor.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
         Xunit.Assert.False(Directory.Exists(GoalWorktrees.WorktreePath(workspace.ExecutionDirectory, successor.Id)));
@@ -798,7 +806,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             audit.AssignedAgents);
 
         var changedPipeline = replacementCommand.ToArray();
-        changedPipeline[Array.IndexOf(changedPipeline, "five-role")] = "auto";
+        changedPipeline[Array.IndexOf(changedPipeline, pipeline)] = "auto";
         Xunit.Assert.IsType<GoalReplacementIdempotencyConflictException>(Xunit.Assert.ThrowsAny<Exception>(() =>
             CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
                 changedPipeline,

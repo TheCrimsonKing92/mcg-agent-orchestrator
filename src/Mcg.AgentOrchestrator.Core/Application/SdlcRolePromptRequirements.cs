@@ -155,6 +155,21 @@ internal static class SdlcRolePromptRequirements
         return requirements;
     }
 
+    public static IReadOnlyList<string> BuildScout(
+        TaskComplexity complexity,
+        bool includeHighRiskReviewerEnumerationContract)
+    {
+        return
+        [
+            "## Scout Requirements",
+            "- Perform the current source survey and inspect prior goal evidence yourself; no Researcher ran before this Planner task.",
+            "- Put the Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks sections after the Planner plan sections, directly before WORKER_RESULT. Cite repository evidence for each material claim and distinguish facts from inferences.",
+            "- Keep the plan's numbered criterion mapping lines only in the plan; do not start research lines with a digit and period.",
+            .. Build(AgentRole.Researcher, complexity),
+            .. Build(AgentRole.Planner, complexity, includeHighRiskReviewerEnumerationContract, hasDurableResearch: false)
+        ];
+    }
+
     public static string BuildPlainText(AgentRole role)
     {
         return string.Join(Environment.NewLine, Build(role));

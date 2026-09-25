@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class BackgroundDispatchRunner
+public sealed partial class BackgroundDispatchRunner
 {
     private const int ApparatusHoldObservationsBeforeEscalation = 2;
     private const int AnsweredApparatusHoldObservationsBeforeFailure = 3;
@@ -1411,6 +1411,15 @@ public sealed class BackgroundDispatchRunner
                             $"Planner output contract could not persist the accepted plan: {appendDiagnostic}. Retry Planner for contract repair."),
                         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed));
                 }
+                else if (ScoutRoundPolicy.IsScoutPlanner(goal, task) &&
+                    !TryPersistScoutResearch(processRecord.StandardOutputPath, out var scoutDiagnostic))
+                {
+                    exitCode = 1;
+                    completionContractSucceeded = false;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        scoutDiagnostic);
+                }
             }
         }
 
@@ -1862,20 +1871,6 @@ public sealed class BackgroundDispatchRunner
 
     internal static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
         WorkerDispatchCompletionClassifier.ShouldReconcileWrapperExit(evidence);
-
-    private static bool RequiresDurableResearchArtifact(Goal goal, TaskSpec researcher)
-    {
-        var researcherIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == researcher.Id);
-        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Planner);
-        return researcherIndex >= 0 && plannerIndex > researcherIndex;
-    }
-
-    private static bool RequiresDurablePlanArtifact(Goal goal, TaskSpec planner)
-    {
-        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == planner.Id);
-        return plannerIndex > 0 &&
-            goal.Tasks.Take(plannerIndex).Any(candidate => candidate.RequiredRole == AgentRole.Researcher);
-    }
 
     private static string? TryGetWorktreeHead(string workingDirectory)
     {

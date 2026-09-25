@@ -282,7 +282,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
-    public void CliBacklogIntakeReportsAutomaticFiveRolePipeline()
+    public void CliBacklogIntakeReportsAutomaticScoutPipeline()
     {
         var root = CreateTempDirectory();
         SeedBacklog(root, """
@@ -311,18 +311,20 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             currentGoal!.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains("Created goal from backlog slice.", output, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("Created five-role", output, StringComparison.Ordinal);
-        Xunit.Assert.Contains("\"workflow\":\"five-role\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"workflow\":\"scout\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"selectionSource\":\"automatic\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"reasons\":[", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("require an explicit --pipeline value", output, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public void CliBacklogIntakeForcedFiveRoleUsesExactPersistedOrder()
+    [Xunit.Theory]
+    [Xunit.InlineData("five-role")]
+    [Xunit.InlineData("scout")]
+    public void CliBacklogIntakeForcedPipelineUsesExactPersistedOrder(string pipeline)
     {
         var root = CreateTempDirectory();
         SeedBacklog(root, """
@@ -341,7 +343,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var output = CaptureConsole(() =>
             CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", "Update forced CLI help label", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                ["backlog-intake", "Update forced CLI help label", "--create-goal", "--pipeline", pipeline, "--backlog-coverage", "full"],
                 kernel,
                 workspace,
                 ref agents,
@@ -351,9 +353,11 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            pipeline == "scout"
+                ? (AgentRole[])[AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]
+                : (AgentRole[])[AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             currentGoal!.Tasks.Select(task => task.RequiredRole));
-        Xunit.Assert.Contains("\"workflow\":\"five-role\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"\"workflow\":\"{pipeline}\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
     }
 
@@ -425,7 +429,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var existingGoal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, agents, item.SuggestedObjective);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             existingGoal.Tasks.Select(task => task.RequiredRole));
         if (reuseByIntakeRecord)
         {
@@ -457,7 +461,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("does not match the explicitly requested intake pipeline", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Requested workflow='five-role'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("selectionSource='explicitly-required'", exception.Message, StringComparison.Ordinal);
-        Xunit.Assert.Contains("persisted workflow='five-role'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("persisted workflow='scout'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("selectionSource='automatic'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Existing goal was not reused", exception.Message, StringComparison.Ordinal);
     }
@@ -608,27 +612,27 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("high-risk", high.RiskLabels);
         Xunit.Assert.Contains("multi-scope", high.RiskLabels);
         Xunit.Assert.Contains("security-risk", high.RiskLabels);
-        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, docs.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.Scout, docs.PipelineDecision.Pipeline);
         Xunit.Assert.False(docs.PipelineDecision.IsOverride);
         Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, code.PipelineDecision.Pipeline);
         Xunit.Assert.True(code.PipelineDecision.IsOverride);
-        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, high.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal(GoalIntakePipeline.Scout, high.PipelineDecision.Pipeline);
         Xunit.Assert.False(high.PipelineDecision.IsOverride);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             high.TaskBoundaries.Select(boundary => boundary.Role));
         Xunit.Assert.Contains(high.PipelineDecision.Reasons, reason => reason.Contains("security-risk", StringComparison.Ordinal));
     }
 
 
-    [Xunit.Fact(DisplayName = "GoalObjectivePlanner_routes_open_ended_objectives_to_five_role_pipeline")]
-    public void GoalObjectivePlannerRoutesOpenEndedObjectivesToFiveRolePipeline()
+    [Xunit.Fact(DisplayName = "GoalObjectivePlanner_routes_open_ended_objectives_to_scout_pipeline")]
+    public void GoalObjectivePlannerRoutesOpenEndedObjectivesToScoutPipeline()
     {
         var plan = GoalObjectivePlanner.Build("Build a dashboard supervision workflow for unattended goals", simple: false);
 
         Xunit.Assert.Contains("scope-implicit", plan.RiskLabels);
-        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, plan.PipelineDecision.Pipeline);
-        Xunit.Assert.Equal([AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer], plan.TaskBoundaries.Select(boundary => boundary.Role));
+        Xunit.Assert.Equal(GoalIntakePipeline.Scout, plan.PipelineDecision.Pipeline);
+        Xunit.Assert.Equal([AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer], plan.TaskBoundaries.Select(boundary => boundary.Role));
     }
 
 
