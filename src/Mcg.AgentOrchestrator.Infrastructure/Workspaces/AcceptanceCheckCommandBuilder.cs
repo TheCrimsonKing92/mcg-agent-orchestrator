@@ -35,14 +35,16 @@ internal static class AcceptanceCheckCommandBuilder
 
             var fullyQualifiedName = Regex.Match(
                 token,
-                @"^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
+                @"^FullyQualifiedName\s*(?<op>!~|~|!=|=)\s*(?<value>[A-Za-z_][A-Za-z0-9_.+]*)$",
                 RegexOptions.IgnoreCase);
             if (fullyQualifiedName.Success)
             {
-                yield return fullyQualifiedName.Groups["op"].Value == "!~"
+                var op = fullyQualifiedName.Groups["op"].Value;
+                yield return op is "!~" or "!="
                     ? "--filter-not-class"
                     : "--filter-class";
-                yield return $"*{fullyQualifiedName.Groups["value"].Value}*";
+                var value = fullyQualifiedName.Groups["value"].Value;
+                yield return op is "!~" or "~" ? $"*{value}*" : value;
                 continue;
             }
 

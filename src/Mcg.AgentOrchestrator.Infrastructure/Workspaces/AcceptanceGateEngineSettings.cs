@@ -94,6 +94,7 @@ internal sealed class AcceptanceGateEngineSettings
             throw new InvalidDataException($"Acceptance manifest test lane name '{duplicateLane.Key}' is duplicated.");
         }
 
+        var collectionOwners = new HashSet<string>(StringComparer.Ordinal);
         foreach (var lane in InfrastructureTestLanes)
         {
             if (string.IsNullOrWhiteSpace(lane.Name) || string.IsNullOrWhiteSpace(lane.Filter))
@@ -122,6 +123,23 @@ internal sealed class AcceptanceGateEngineSettings
             {
                 throw new InvalidDataException(
                     $"Acceptance manifest test lane '{lane.Name}' exclusive resource key '{duplicateResourceKey.Key}' is duplicated.");
+            }
+            if (lane.OwnedCollections is null || lane.OwnedCollections.Any(string.IsNullOrWhiteSpace) ||
+                lane.OwnedCollections.Any(name => name != name.Trim()))
+            {
+                throw new InvalidDataException($"Acceptance manifest test lane '{lane.Name}' has an invalid owned collection.");
+            }
+            if (lane.OwnedCollections.Count > 0 &&
+                !AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).Contains("--filter-class"))
+            {
+                throw new InvalidDataException($"Acceptance manifest test lane '{lane.Name}' must have an inclusion filter to own a collection.");
+            }
+            foreach (var collection in lane.OwnedCollections)
+            {
+                if (!collectionOwners.Add(collection))
+                {
+                    throw new InvalidDataException($"Acceptance manifest collection '{collection}' has multiple owners.");
+                }
             }
         }
 
@@ -155,6 +173,7 @@ internal sealed record AcceptanceTestLane(
     double EstimatedSerialSeconds = 0)
 {
     public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
+    public IReadOnlyList<string> OwnedCollections { get; init; } = [];
     public bool RequiresBuildSystemChange { get; init; }
 }
 

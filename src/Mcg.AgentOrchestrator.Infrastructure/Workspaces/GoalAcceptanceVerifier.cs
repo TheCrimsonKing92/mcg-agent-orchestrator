@@ -3364,7 +3364,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
-            engineSettings.InfrastructureTestLanes,
+            ResolveOwnedCollectionLanes(engineSettings, worktreePath),
             changedFiles,
             policyShardPlan);
 
