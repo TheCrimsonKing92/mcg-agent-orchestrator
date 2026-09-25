@@ -88,10 +88,8 @@ internal static partial class TerminalGoalSweep
                 $"owned-root reap deferred: sqlite code {ex.SqliteErrorCode}: {ex.Message}");
         }
 
-        IReadOnlyList<string> writeFailures = storageRoot is null
-            ? []
-            : DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
-                MaxOwnedBuildRootsPerSweep, storageRoot);
+        var writeFailures = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
+            MaxOwnedBuildRootsPerSweep, storageRoot);
         return writeFailures.Count == 0
             ? result
             : result with

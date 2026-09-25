@@ -32,6 +32,7 @@ public sealed class TerminalGoalSweepLeakedGoalRootTests
         }
         finally
         {
+            DrainTemporaryRootFailures(temp);
             Directory.Delete(temp, recursive: true);
         }
     }
@@ -66,6 +67,7 @@ public sealed class TerminalGoalSweepLeakedGoalRootTests
         }
         finally
         {
+            DrainTemporaryRootFailures(temp);
             Directory.Delete(temp, recursive: true);
         }
     }
@@ -109,6 +111,7 @@ public sealed class TerminalGoalSweepLeakedGoalRootTests
         }
         finally
         {
+            DrainTemporaryRootFailures(temp);
             Directory.Delete(temp, recursive: true);
         }
     }
@@ -123,4 +126,12 @@ public sealed class TerminalGoalSweepLeakedGoalRootTests
             .Select(path => "file:" + Path.GetRelativePath(root, path) + ":" +
                 Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))))
     ];
+
+    private static void DrainTemporaryRootFailures(string temp)
+    {
+        var storage = new DotnetBuildStorageRoot(Path.Combine(temp, "isolated"));
+        while (DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(25, storage).Count == 25)
+        {
+        }
+    }
 }

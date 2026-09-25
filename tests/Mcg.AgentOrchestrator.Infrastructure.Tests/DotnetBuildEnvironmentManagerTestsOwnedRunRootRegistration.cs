@@ -115,7 +115,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration :
 
             var disposeException = Record.Exception(lease.Dispose);
             var sweep = TerminalGoalSweep.ExecuteOwnedBuildRootReap(
-                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []), StorageRoot);
+                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []));
 
             Assert.Null(disposeException);
             var operatorEvent = Assert.Single(sweep.OperatorEvents);
@@ -137,11 +137,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration :
         try
         {
             DotnetBuildEnvironmentManager.OwnedRunRootRegistrarFactory = _ => new CleanupWriteThrowingRegistrar();
-            var otherStorageRoot = new DotnetBuildStorageRoot(Path.Combine(StorageRoot.RootPath, "other-root"));
-            var otherEnvironment = RootedDotnetBuildEnvironmentManager.CreateAttempt(
-                otherStorageRoot, null, "other-cleanup-write-failure");
-            Assert.True(RootedDotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(
-                otherStorageRoot, otherEnvironment));
             var environment = RootedDotnetBuildEnvironmentManager.CreateAttempt(
                 StorageRoot,
                 null,
@@ -149,16 +144,13 @@ public sealed class DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration :
 
             Assert.True(RootedDotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(StorageRoot, environment));
             var sweep = TerminalGoalSweep.ExecuteOwnedBuildRootReap(
-                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []), StorageRoot);
+                () => new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, []));
 
             var operatorEvent = Assert.Single(sweep.OperatorEvents);
             Assert.Contains("SWEEP_OWNED_ROOT_OBSERVED", operatorEvent, StringComparison.Ordinal);
             Assert.Contains("cleanup persistence failed", operatorEvent, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(environment.RootPath, operatorEvent, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("synthetic cleanup write failure", operatorEvent, StringComparison.Ordinal);
-            Assert.Contains(otherEnvironment.RootPath,
-                Assert.Single(DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(1, otherStorageRoot)),
-                StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -365,7 +357,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration :
         {
             Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT", priorRepositoryRoot);
             DotnetBuildEnvironmentManager.SetOwnedRunRootRegistrarForTests(StorageRoot, registeredRegistrar);
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(10, StorageRoot);
+            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(10);
         }
     }
 
