@@ -8,7 +8,7 @@ public sealed class AcceptanceLaneMembershipTests
     {
         Xunit.Assert.Equal(
             ["--filter-class", "Example.Outer+Nested", "--filter-not-class", "Example.Other"],
-            AcceptanceCheckCommandBuilder.TranslateMtpFilter(
+            AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(
                 "FullyQualifiedName=Example.Outer+Nested&FullyQualifiedName!=Example.Other").ToArray());
     }
 

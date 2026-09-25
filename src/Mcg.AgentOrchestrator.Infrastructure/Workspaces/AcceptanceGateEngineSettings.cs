@@ -129,8 +129,9 @@ internal sealed class AcceptanceGateEngineSettings
             {
                 throw new InvalidDataException($"Acceptance manifest test lane '{lane.Name}' has an invalid owned collection.");
             }
+            var translatedFilter = AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).ToArray();
             if (lane.OwnedCollections.Count > 0 &&
-                !AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).Contains("--filter-class"))
+                !translatedFilter.Contains("--filter-class"))
             {
                 throw new InvalidDataException($"Acceptance manifest test lane '{lane.Name}' must have an inclusion filter to own a collection.");
             }

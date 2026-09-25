@@ -56,7 +56,7 @@ internal static class AcceptanceLaneMembership
 
     private static bool Includes(AcceptanceTestLane lane, string classFullName)
     {
-        var args = AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).ToArray();
+        var args = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
         var included = new List<string>();
         var excluded = new List<string>();
         for (var index = 0; index < args.Length; index += 2)
@@ -82,7 +82,7 @@ internal static class AcceptanceLaneMembership
 
     private static bool ExplicitlyExcludes(AcceptanceTestLane lane, string classFullName)
     {
-        var args = AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).ToArray();
+        var args = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
         for (var index = 0; index + 1 < args.Length; index += 2)
         {
             if (args[index] == "--filter-not-class" && Matches(classFullName, args[index + 1]))
