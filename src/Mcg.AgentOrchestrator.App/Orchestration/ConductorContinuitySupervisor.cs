@@ -66,7 +66,7 @@ internal sealed record ConductorContinuityExitArtifact(
     }
 }
 
-internal sealed class ConductorContinuitySupervisor(
+internal sealed partial class ConductorContinuitySupervisor(
     IConductorSupervisorProcessHost processHost,
     IRunEventStore eventStore,
     TimeProvider? timeProvider = null,
@@ -78,7 +78,11 @@ internal sealed class ConductorContinuitySupervisor(
     Action<string, string?, string>? appendConductEvent = null,
     TimeSpan? readinessTimeout = null,
     int maxConsecutiveStagingFailures = 2,
-    string? dotnetPath = null)
+    string? dotnetPath = null,
+    int? activationHealthyTicks = null,
+    Func<TimeSpan, CancellationToken, Task>? activationDelay = null,
+    TimeSpan? activationStallTimeout = null,
+    Action<string>? raiseActivationAttention = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -89,6 +93,12 @@ internal sealed class ConductorContinuitySupervisor(
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
     private readonly TimeSpan _restartWindow = restartWindow ?? TimeSpan.FromMinutes(10);
     private readonly TimeSpan _readinessTimeout = readinessTimeout ?? TimeSpan.FromMinutes(2);
+    private readonly int _activationHealthyTicks = Math.Max(1, activationHealthyTicks ?? ResolveActivationHealthyTicks(
+        Environment.GetEnvironmentVariable(ActivationHealthyTicksEnvironmentVariable)));
+    private readonly Func<TimeSpan, CancellationToken, Task> _activationDelay = activationDelay ??
+        ((duration, token) => Task.Delay(duration, timeProvider ?? TimeProvider.System, token));
+    private readonly TimeSpan _activationStallTimeout = activationStallTimeout ?? readinessTimeout ?? TimeSpan.FromMinutes(2);
+    private readonly Action<string>? _raiseActivationAttention = raiseActivationAttention;
     private readonly string _dotnetPath = dotnetPath ??
         Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ??
         "dotnet";
@@ -115,6 +125,10 @@ internal sealed class ConductorContinuitySupervisor(
         var consecutiveStagingFailures = 0;
         var stagingDisabled = false;
         ConductorPreparedSuccessor? pendingSuccessor = null;
+        var currentBuild = new ConductorActivationBuild("incumbent", "default", null, null);
+        ConductorActivationBuild? failedActivationBuild = null;
+        string? blockedActivationCommit = null;
+        var restoring = false;
         var attempt = 0;
 
         try
@@ -144,11 +158,12 @@ internal sealed class ConductorContinuitySupervisor(
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             var successor = pendingSuccessor;
+            var activationMonitor = new ActivationMonitor();
             var readiness = successor is null
                 ? null
                 : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var commandPrefix = successor is null
-                ? null
+                ? currentBuild.CommandPrefix
                 : new[]
                 {
                     _dotnetPath,
@@ -163,6 +178,7 @@ internal sealed class ConductorContinuitySupervisor(
                 commandPrefix,
                 line =>
                 {
+                    activationMonitor.OnLine(line);
                     if (line.StartsWith(LoopReadyLinePrefix, StringComparison.Ordinal) ||
                         line.StartsWith("LOOP_START ", StringComparison.Ordinal))
                     {
@@ -173,7 +189,58 @@ internal sealed class ConductorContinuitySupervisor(
             {
                 if (successor is null)
                 {
-                    result = await processHost.RunAsync(request, cancellationToken).ConfigureAwait(false);
+                    if (restoring)
+                    {
+                        using var restoreCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        Task<ConductorSupervisorProcessResult> restoreTask;
+                        try
+                        {
+                            restoreTask = processHost.RunAsync(request, restoreCts.Token);
+                        }
+                        catch (Exception ex)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            RecordActivation("failed-both", attempt, failedActivationBuild!, currentBuild,
+                                ConductorActivationRevertReason.SuccessorExited,
+                                $"restored-build-launch-failed {ex.GetType().Name}:{ex.Message}");
+                            RaiseFailedBothAttention(workingDirectory, failedActivationBuild!, currentBuild,
+                                $"restored-build-launch-failed {ex.GetType().Name}:{ex.Message}");
+                            Record("restart", "escalated", attempt, "activation-failed-both", 0, stdoutPath, stderrPath);
+                            Console.Error.WriteLine("[conduct supervisor] Escalated: both activation builds failed.");
+                            return 1;
+                        }
+                        var restore = await ObserveActivationAsync(
+                            restoreTask, activationMonitor, artifactPath, restoreCts, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (!restore.Adopted)
+                        {
+                            if (!restore.TerminationConfirmed)
+                            {
+                                RecordActivation("failed-both", attempt, failedActivationBuild!, currentBuild,
+                                    restore.Reason, restore.Detail + " terminationConfirmed=false");
+                                RaiseFailedBothAttention(workingDirectory, failedActivationBuild!, currentBuild,
+                                    restore.Detail + " terminationConfirmed=false");
+                                return 1;
+                            }
+
+                            RecordActivation("failed-both", attempt, failedActivationBuild!, currentBuild,
+                                restore.Reason, restore.Detail);
+                            RaiseFailedBothAttention(workingDirectory, failedActivationBuild!, currentBuild,
+                                restore.Detail);
+                            Record("restart", "escalated", attempt, "activation-failed-both", 0, stdoutPath, stderrPath);
+                            Console.Error.WriteLine("[conduct supervisor] Escalated: both activation builds failed.");
+                            return 1;
+                        }
+
+                        restoring = false;
+                        RecordActivation("restored", attempt, failedActivationBuild!, currentBuild, null, restore.Detail);
+                        failedActivationBuild = null;
+                        result = restore.ProcessResult ?? await restoreTask.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        result = await processHost.RunAsync(request, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 else
                 {
@@ -189,14 +256,17 @@ internal sealed class ConductorContinuitySupervisor(
                         cancellationToken.ThrowIfCancellationRequested();
                         pendingSuccessor = null;
                         successor.RunDirectoryLease?.Dispose();
-                        consecutiveStagingFailures++;
-                        stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
+                        var failed = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
+                        blockedActivationCommit = failed.CommitSha;
+                        failedActivationBuild = failed;
+                        restoring = true;
+                        RecordActivation("reverted", attempt, failed, currentBuild,
+                            ConductorActivationRevertReason.SuccessorExited, ex.Message);
                         EmitHandoff(
                             "failed",
                             attempt,
                             $"LOOP_HANDOFF_FAILED attempt={attempt} phase=readiness " +
-                            $"reason={Sanitize($"successor-launch-failed {ex.GetType().Name}:{ex.Message}")}" +
-                            (stagingDisabled ? " stagingDisabled=true" : string.Empty),
+                            $"reason={Sanitize($"successor-launch-failed {ex.GetType().Name}:{ex.Message}")}",
                             0,
                             stdoutPath,
                             stderrPath);
@@ -212,7 +282,6 @@ internal sealed class ConductorContinuitySupervisor(
                         timeoutCts.Cancel();
                         consecutiveStagingFailures = 0;
                         pendingSuccessor = null;
-                        successor.RunDirectoryLease?.Dispose();
                         EmitHandoff(
                             "completed",
                             attempt,
@@ -221,7 +290,35 @@ internal sealed class ConductorContinuitySupervisor(
                             0,
                             stdoutPath,
                             stderrPath);
-                        result = await runTask.ConfigureAwait(false);
+                        var activation = await ObserveActivationAsync(
+                            runTask, activationMonitor, artifactPath, processCts, cancellationToken)
+                            .ConfigureAwait(false);
+                        var candidateBuild = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
+                        if (!activation.Adopted)
+                        {
+                            if (!activation.TerminationConfirmed)
+                            {
+                                candidateBuild.Lease?.Dispose();
+                                EmitHandoff("failed", attempt,
+                                    $"LOOP_HANDOFF_FAILED attempt={attempt} phase=activation fallbackSuppressed=true reason={activation.Reason}",
+                                    activation.ProcessResult?.ProcessId ?? 0, stdoutPath, stderrPath);
+                                return 1;
+                            }
+
+                            blockedActivationCommit = candidateBuild.CommitSha;
+                            failedActivationBuild = candidateBuild;
+                            restoring = true;
+                            candidateBuild.Lease?.Dispose();
+                            RecordActivation("reverted", attempt, candidateBuild, currentBuild,
+                                activation.Reason, activation.Detail);
+                            TryDeleteArtifact(artifactPath);
+                            continue;
+                        }
+
+                        currentBuild.Lease?.Dispose();
+                        currentBuild = candidateBuild;
+                        RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
+                        result = activation.ProcessResult ?? await runTask.ConfigureAwait(false);
                     }
                     else
                     {
@@ -252,13 +349,17 @@ internal sealed class ConductorContinuitySupervisor(
 
                         pendingSuccessor = null;
                         successor.RunDirectoryLease?.Dispose();
-                        consecutiveStagingFailures++;
-                        stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
+                        var failed = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
+                        blockedActivationCommit = failed.CommitSha;
+                        failedActivationBuild = failed;
+                        restoring = true;
+                        RecordActivation("reverted", attempt, failed, currentBuild,
+                            completed == runTask ? ConductorActivationRevertReason.SuccessorExited :
+                                ConductorActivationRevertReason.ReadinessNeverReported, failureReason);
                         EmitHandoff(
                             "failed",
                             attempt,
-                            $"LOOP_HANDOFF_FAILED attempt={attempt} phase=readiness reason={Sanitize(failureReason)}" +
-                            (stagingDisabled ? " stagingDisabled=true" : string.Empty),
+                            $"LOOP_HANDOFF_FAILED attempt={attempt} phase=readiness reason={Sanitize(failureReason)}",
                             0,
                             stdoutPath,
                             stderrPath);
@@ -307,6 +408,20 @@ internal sealed class ConductorContinuitySupervisor(
                         cancellationToken.ThrowIfCancellationRequested();
                         pendingSuccessor?.RunDirectoryLease?.Dispose();
                         pendingSuccessor = stageSuccessor(cancellationToken);
+                        if (pendingSuccessor is not null &&
+                            string.Equals(pendingSuccessor.RepositoryHead, blockedActivationCommit,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            var suppressed = ConductorActivationBuild.FromSuccessor(pendingSuccessor, _dotnetPath);
+                            suppressed.Lease?.Dispose();
+                            RecordActivation("suppressed", attempt, suppressed, currentBuild, null,
+                                "same-HEAD activation already reverted");
+                            pendingSuccessor = null;
+                        }
+                        else if (pendingSuccessor is not null)
+                        {
+                            blockedActivationCommit = null;
+                        }
                         cancellationToken.ThrowIfCancellationRequested();
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -377,6 +492,7 @@ internal sealed class ConductorContinuitySupervisor(
         finally
         {
             pendingSuccessor?.RunDirectoryLease?.Dispose();
+            currentBuild.Lease?.Dispose();
         }
     }
 

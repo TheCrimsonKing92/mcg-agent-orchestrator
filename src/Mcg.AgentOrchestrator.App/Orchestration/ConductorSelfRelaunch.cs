@@ -74,7 +74,7 @@ internal sealed record ConductorSelfRelaunchResult(
         new(false, phase, reason);
 }
 
-internal static class ConductorSelfRelaunch
+internal static partial class ConductorSelfRelaunch
 {
     private static readonly TimeSpan DefaultBuildTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan DefaultSelfCheckTimeout = TimeSpan.FromSeconds(30);

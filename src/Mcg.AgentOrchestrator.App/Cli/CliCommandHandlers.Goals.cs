@@ -1798,6 +1798,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 using var loopWakeSignal = watchInterval is not null
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
+                var supervisorRestageSetting = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_MAX_DURATION_RESTAGE");
+                var delegateSelfRelaunchToSupervisor = supervisedChild &&
+                    !string.Equals(supervisorRestageSetting, "false", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(supervisorRestageSetting, "0", StringComparison.OrdinalIgnoreCase);
                 var loopSummary = new ConductorBatchLoop(
                     measuredSweepWithCheckpointHolds: reconcileSweep,
                     reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
@@ -1817,9 +1821,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     operatorIntents: operatorIntents,
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
-                    selfRelaunch: selfRelaunch,
+                    selfRelaunch: delegateSelfRelaunchToSupervisor
+                            ? ConductorSelfRelaunch.CreateSupervisorDelegated()
+                            : selfRelaunch,
                     selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
-                        Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable)),
+                        Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),
+                        Console.Error.WriteLine),
                     postLandingCanary: postLandingCanary,
                     goalReloadObservation: resolveGoalReloadObservation,
                     lifecycleRecorder: new ConductorLifecycleRecorder(
@@ -1854,6 +1861,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             RestartRequested: string.Equals(
                                 loopSummary.StopReason,
                                 "max-duration",
+                                StringComparison.Ordinal) || delegateSelfRelaunchToSupervisor && string.Equals(
+                                loopSummary.StopReason,
+                                "self-relaunch-handoff",
                                 StringComparison.Ordinal)));
                 }
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");

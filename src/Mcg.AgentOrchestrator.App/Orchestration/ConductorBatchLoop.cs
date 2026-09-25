@@ -60,7 +60,7 @@ internal sealed partial class ConductorBatchLoop
     internal const int DefaultUnscopedStallTickThreshold = 3;
     internal static readonly TimeSpan DefaultGoalStallThreshold = TimeSpan.FromMinutes(10);
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
-    internal const bool DefaultSelfRelaunchEnabled = false;
+    internal const bool DefaultSelfRelaunchEnabled = true;
     internal const string SetAsideSelfClearDecisionPrefix = "Set-aside self-cleared:";
     private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
@@ -1827,9 +1827,6 @@ internal sealed partial class ConductorBatchLoop
             // worker and therefore still guarantees no canary process escapes this loop.
         }
     }
-
-    internal static bool ResolveSelfRelaunchEnabled(string? configuredValue) =>
-        bool.TryParse(configuredValue, out var enabled) && enabled;
 
     private static void EmitHandoffProgress(
         int tick,

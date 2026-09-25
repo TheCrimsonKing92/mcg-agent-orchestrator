@@ -30,17 +30,18 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Xunit.Assert.True(sanitized.Length > 40);
     }
 
-    [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_activation_switch_defaults_off_and_requires_true")]
-    [Xunit.InlineData(null, false)]
-    [Xunit.InlineData("", false)]
+    [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_activation_switch_defaults_on_and_only_false_disables")]
+    [Xunit.InlineData(null, true)]
+    [Xunit.InlineData("", true)]
     [Xunit.InlineData("false", false)]
-    [Xunit.InlineData("1", false)]
+    [Xunit.InlineData("0", false)]
+    [Xunit.InlineData("1", true)]
     [Xunit.InlineData("true", true)]
-    public void BatchLoopSelfRelaunchActivationSwitchDefaultsOffAndRequiresTrue(
+    public void BatchLoopSelfRelaunchActivationSwitchDefaultsOnAndOnlyFalseDisables(
         string? configuredValue,
         bool expected)
     {
-        Assert.False(ConductorBatchLoop.DefaultSelfRelaunchEnabled);
+        Assert.True(ConductorBatchLoop.DefaultSelfRelaunchEnabled);
         Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
     }
 

@@ -27,8 +27,8 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     public static bool IsWindowsBreakawayPermitted =>
         OperatingSystem.IsWindows() && BreakawayJobProbe.CanCreateBreakawayChild().IsPermitted;
 
-    [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
-    public void BatchLoopDefaultSelfRelaunchActivationDoesNotScheduleOrExecute()
+    [Xunit.Fact(DisplayName = "BatchLoop_explicitly_disabled_self_relaunch_does_not_schedule_or_execute")]
+    public void BatchLoopExplicitlyDisabledSelfRelaunchDoesNotScheduleOrExecute()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
@@ -52,7 +52,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
                 {
                     relaunchCalls++;
                     return new ConductorSelfRelaunchResult(false, "build", "must not run");
-                }).Run(
+                }, selfRelaunchEnabled: false).Run(
                     kernel,
                     driver,
                     ConductorAutonomyPolicy.Conservative,
