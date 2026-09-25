@@ -51,8 +51,8 @@ public sealed class ScoutPlannerBlockerPathTests : WorkerDispatchTestSupport
         File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
         var evidenceRequest = "PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"live-candidate-observation\",\"availability\":\"post-implementation\",\"owner\":\"operator\",\"needed\":\"live observation\",\"reason\":\"candidate does not exist yet\"}";
         var stdout = string.Join(Environment.NewLine,
-            PlannerContractPlanFixture(),
             ResearcherContractFixture(),
+            PlannerContractPlanFixture(),
             evidenceRequest,
             "WORKER_RESULT:",
             "files: none",

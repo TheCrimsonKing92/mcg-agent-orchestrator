@@ -17,6 +17,8 @@ public sealed class ScoutPlannerPromptTests
         Xunit.Assert.Contains("Do NOT build the solution or run tests", brief, StringComparison.Ordinal);
         Xunit.Assert.Contains("Separate confirmed facts from inferences", brief, StringComparison.Ordinal);
         Xunit.Assert.Contains("before the Planner plan sections", brief, StringComparison.Ordinal);
+        Xunit.Assert.Contains("complete research findings followed by the complete Planner plan in one final message", brief, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("print the complete research artifact as your final message", brief, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("Use the complete Durable Research Notes", brief, StringComparison.Ordinal);
     }
 

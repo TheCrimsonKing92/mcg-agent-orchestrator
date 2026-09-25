@@ -163,9 +163,10 @@ internal static class SdlcRolePromptRequirements
         [
             "## Scout Requirements",
             "- Perform the current source survey and inspect prior goal evidence yourself; no Researcher ran before this Planner task.",
+            "- Stdout is the only channel the orchestrator reads: print the complete research findings followed by the complete Planner plan in one final message. Never write a plan file or any other file, and never reply with only a summary or a file path.",
             "- Put the Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks sections before the Planner plan sections. Cite repository evidence for each material claim and distinguish facts from inferences.",
             "- Keep the plan's numbered criterion mapping lines only in the plan; do not start research lines with a digit and period.",
-            .. Build(AgentRole.Researcher, complexity),
+            .. Build(AgentRole.Researcher, complexity).Where(requirement => requirement != ResearcherStdoutOnlyContract),
             .. Build(AgentRole.Planner, complexity, includeHighRiskReviewerEnumerationContract, hasDurableResearch: false)
         ];
     }
