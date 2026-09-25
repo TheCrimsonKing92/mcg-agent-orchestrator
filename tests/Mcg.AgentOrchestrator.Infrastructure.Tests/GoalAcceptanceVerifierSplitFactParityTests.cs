@@ -5,6 +5,25 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
 {
     private const string OriginalBuildSlotClass = nameof(GoalAcceptanceVerifierDotnetBuildSlotTests);
 
+    // The fragments the original class was split into. The ParentSuffix naming convention also gives new, unrelated
+    // subclasses this prefix, so parity is pinned to these names rather than to the prefix.
+    private static readonly HashSet<string> OriginalSplitFragments = new(StringComparer.Ordinal)
+    {
+        nameof(AcceptanceOverlappedCheckSchedulingTests),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardScheduling),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAndTrx),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInvalidation),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery),
+        nameof(GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCache),
+    };
+
     [Xunit.Fact]
     public void SplitPreservesDeclaredFactAndTheoryMethodSet()
     {
@@ -43,7 +62,9 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
             .OrderBy(type => type.Name, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(13, buildSlotFragments.Length);
+        Assert.Subset(
+            buildSlotFragments.Select(type => type.Name).ToHashSet(StringComparer.Ordinal),
+            OriginalSplitFragments);
         Assert.All(
             buildSlotFragments,
             fragment => Assert.Equal(TestCollections.JobAccounting, CollectionName(fragment)));
@@ -69,8 +90,7 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
     private static bool IsAffectedConcreteTestClass(Type type, IReadOnlySet<string> expectedOwners) =>
         type.IsClass &&
         !type.IsAbstract &&
-        (expectedOwners.Contains(type.Name) ||
-            type.Name.StartsWith(OriginalBuildSlotClass, StringComparison.Ordinal));
+        (expectedOwners.Contains(type.Name) || OriginalSplitFragments.Contains(type.Name));
 
     private static bool IsFactOrTheory(MethodInfo method) =>
         method.GetCustomAttributes(inherit: false).Any(attribute => attribute is Xunit.FactAttribute);
