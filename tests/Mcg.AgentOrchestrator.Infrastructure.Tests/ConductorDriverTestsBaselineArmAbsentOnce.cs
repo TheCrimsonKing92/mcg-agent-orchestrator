@@ -201,6 +201,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             var launches = 0;
             var outcomes = 0;
             var retries = 0;
+            string? escalation = null;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 root,
                 isProcessAlive: _ => false,
@@ -225,7 +226,8 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 {
                     outcomes++;
                     kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
-                });
+                },
+                writeEscalation: (_, _, message) => escalation = message);
 
             driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
             var candidateAttempt = Assert.Single(coordinator.GetUnreconciledAttempts([goal.Id.Value]));
@@ -246,6 +248,9 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             Assert.Equal(3, launches);
             Assert.Equal(1, outcomes);
             Assert.Equal(0, retries);
+            Assert.Contains("Baseline execution failure", escalation, StringComparison.Ordinal);
+            Assert.Single(goal.Timeline.Where(evt =>
+                evt.Message.Contains("disposition=candidate-rerun-unusable", StringComparison.Ordinal)));
             Assert.Single(goal.Timeline.Where(evt =>
                 evt.Message.Contains("disposition=baseline-arm-absent", StringComparison.Ordinal)));
             Assert.Single(CollaborationItemStore.OpenExisting(Path.Combine(root, ".orchestrator"))

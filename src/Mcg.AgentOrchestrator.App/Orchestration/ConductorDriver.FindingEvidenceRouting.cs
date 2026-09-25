@@ -252,7 +252,8 @@ internal sealed partial class ConductorDriver
             evt.TaskId == requestingTask.Id &&
             evt.Message.Contains(guard, StringComparison.Ordinal) &&
             (evt.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal) ||
-             evt.Message.Contains("disposition=candidate-rerun-red;", StringComparison.Ordinal)));
+             evt.Message.Contains("disposition=candidate-rerun-red;", StringComparison.Ordinal) ||
+             evt.Message.Contains("disposition=candidate-rerun-unusable;", StringComparison.Ordinal)));
         if (terminal is not null)
         {
             decision = terminal.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal)
@@ -280,9 +281,16 @@ internal sealed partial class ConductorDriver
         };
         if (!TryReconcileFocusedEvidenceAttempt(
                 goal, policy, batch.Request, candidateSha, "finding-candidate-rerun", rerunContext,
-                out var rerun, out var rerunAttempt, out decision, out _))
+                out var rerun, out var rerunAttempt, out decision, out var attemptKind))
         {
-            if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending)
+            if (attemptKind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun)
+            {
+                _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
+                    $"finding-evidence disposition=candidate-rerun-unusable; {guard}; " +
+                    $"reason={TrimForConductorMessage(decision.Evidence)}");
+                decision = BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
+            }
+            else if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending)
             {
                 _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
                     $"finding-evidence disposition=candidate-rerun-red; {guard}; reason={TrimForConductorMessage(decision.Evidence)}");
