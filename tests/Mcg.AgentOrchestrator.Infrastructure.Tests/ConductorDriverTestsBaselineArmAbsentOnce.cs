@@ -76,7 +76,9 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             }
 
             Assert.Equal(isFault ? 1 : 0, outcomes);
-            Assert.Equal(isFault ? 1 : 0, retries);
+            Assert.Equal(0, retries);
+            Assert.Equal(isFault ? 1 : 0, goal.Timeline.Count(evt =>
+                evt.Message.Contains("disposition=candidate-rerun-requested", StringComparison.Ordinal)));
             Assert.Equal(isFault ? 1 : 0, goal.Timeline.Count(evt =>
                 evt.Message.Contains("disposition=baseline-arm-absent", StringComparison.Ordinal)));
         }
@@ -87,7 +89,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
     }
 
     [Fact]
-    public void CandidateOnlyBaselineAttemptRecordsOnceAndRoutesDeveloper()
+    public void CandidateOnlyBaselineAttemptRecordsOnceAndRerunsCandidate()
     {
         const string candidateSha = "abc1234";
         var root = ConductorDriverTests.CreateTempDirectory();
@@ -110,7 +112,6 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 root, runInline: true, acquireStableSlotLease: (_, _) => null);
             var retries = 0;
             var outcomes = 0;
-            string? retryMessage = null;
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                 focusedEvidenceAttemptCoordinator: coordinator,
@@ -124,9 +125,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 },
                 retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 {
-                    Assert.Equal(developer.Id, taskId);
                     retries++;
-                    retryMessage = message;
                     return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
                 },
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
@@ -149,6 +148,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             {
                 Assert.Single(attempts.Where(attempt =>
                     attempt.RootElement.GetProperty("focusedEvidenceRunsBaselineArm").GetBoolean()));
+                Assert.Equal(3, attempts.Length);
             }
             finally
             {
@@ -165,9 +165,11 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 .Single(item => item.StableId == "baseline-missing");
             Assert.False(string.IsNullOrWhiteSpace(finding.EvidenceOutcome?.ReceiptId));
             Assert.Equal(1, outcomes);
-            Assert.Equal(1, retries);
-            Assert.Contains("ACTIONABLE_CANDIDATE_RED", retryMessage, StringComparison.Ordinal);
-            Assert.Contains("OutsideTests.FailingMethod(passed: True)", retryMessage, StringComparison.Ordinal);
+            Assert.Equal(0, retries);
+            Assert.Single(goal.Timeline.Where(evt =>
+                evt.Message.Contains("disposition=candidate-rerun-requested", StringComparison.Ordinal)));
+            Assert.Single(goal.Timeline.Where(evt =>
+                evt.Message.Contains("disposition=candidate-rerun-red", StringComparison.Ordinal)));
         }
         finally
         {
@@ -214,7 +216,6 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                     request, candidateSha, "OutsideTests.FailingMethod(passed: True)"),
                 retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                 {
-                    Assert.Equal(developer.Id, taskId);
                     retries++;
                     return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
                 },
@@ -242,9 +243,9 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                 driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
             }
 
-            Assert.Equal(2, launches);
+            Assert.Equal(3, launches);
             Assert.Equal(1, outcomes);
-            Assert.Equal(1, retries);
+            Assert.Equal(0, retries);
             Assert.Single(goal.Timeline.Where(evt =>
                 evt.Message.Contains("disposition=baseline-arm-absent", StringComparison.Ordinal)));
             Assert.Single(CollaborationItemStore.OpenExisting(Path.Combine(root, ".orchestrator"))

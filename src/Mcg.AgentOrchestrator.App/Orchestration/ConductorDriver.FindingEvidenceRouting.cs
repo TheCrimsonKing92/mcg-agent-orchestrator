@@ -92,12 +92,9 @@ internal sealed partial class ConductorDriver
                 evt.Message.Contains("disposition=baseline-arm-absent;", StringComparison.Ordinal) &&
                 evt.Message.Contains(guard, StringComparison.Ordinal)))
         {
-            var attribution = new ActionableCandidateRedAttribution(
-                batch.Findings, candidateOnlyRed.FailingTestIdentities ?? []);
-            decision = BuildActionableCandidateRedDecision(
-                goal, requestingTask, candidateSha, candidateReceiptId, attribution,
-                "Baseline arm was previously absent; the finding-bound outcome is already recorded.");
-            return false;
+            return RouteUnconfirmedCandidateRed(
+                goal, requestingTask, policy, batch, candidateSha, findingRoundFingerprint,
+                requestContext, candidateReceiptId, guard, out decision);
         }
 
         var baselineContext = requestContext with
@@ -122,7 +119,8 @@ internal sealed partial class ConductorDriver
                 return false;
             }
             return RecordMissingBaselineAndRoute(
-                goal, requestingTask, batch, candidateSha, findingRoundFingerprint, requestIdentity,
+                goal, requestingTask, policy, batch, candidateSha, findingRoundFingerprint,
+                requestContext, requestIdentity,
                 candidateReceiptId, initialEvidence, initialArms, baselineAttempt, baselineAttempt.ResultPath,
                 $"{baselineAttempt.Outcome}: {baselineAttempt.Detail ?? decision.Evidence}", out decision);
         }
@@ -139,7 +137,8 @@ internal sealed partial class ConductorDriver
                 ? "baseline arm absent from focused evidence result"
                 : $"baseline arm {baseline.Disposition}: {baseline.Summary}";
             return RecordMissingBaselineAndRoute(
-                goal, requestingTask, batch, candidateSha, findingRoundFingerprint, requestIdentity,
+                goal, requestingTask, policy, batch, candidateSha, findingRoundFingerprint,
+                requestContext, requestIdentity,
                 candidateReceiptId, initialEvidence, initialArms, baselineAttempt!, baselineAttempt?.ResultPath,
                 reason, out decision);
         }
@@ -153,9 +152,11 @@ internal sealed partial class ConductorDriver
     private bool RecordMissingBaselineAndRoute(
         Goal goal,
         TaskSpec requestingTask,
+        ConductorAutonomyPolicy policy,
         FindingEvidenceBatch batch,
         string candidateSha,
         string findingRoundFingerprint,
+        ConductorFocusedEvidenceRequestContext requestContext,
         string requestIdentity,
         string receiptId,
         FocusedEvidenceRunResult candidateEvidence,
@@ -190,14 +191,120 @@ internal sealed partial class ConductorDriver
         TryRaiseMissingBaselineNotice(goal, guard, receiptId, resultPath, reason);
         _resolvedMissingBaselineRequests.Add(guard);
         _focusedEvidenceAttemptCoordinator.MarkReconciled(baselineAttempt);
-        var candidate = candidateArms.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
-        var attribution = new ActionableCandidateRedAttribution(
-            batch.Findings, candidate.FailingTestIdentities ?? []);
-        decision = BuildActionableCandidateRedDecision(
-            goal, requestingTask, candidateSha, receiptId, attribution,
-            $"Baseline arm absent: {reason}; result_path={resultPath ?? "none"}; candidate_summary={candidate.Summary}");
+        return RouteUnconfirmedCandidateRed(
+            goal, requestingTask, policy, batch, candidateSha, findingRoundFingerprint,
+            requestContext, receiptId, guard, out decision);
+    }
+
+    private bool RouteUnconfirmedCandidateRed(
+        Goal goal,
+        TaskSpec requestingTask,
+        ConductorAutonomyPolicy policy,
+        FindingEvidenceBatch batch,
+        string candidateSha,
+        string findingRoundFingerprint,
+        ConductorFocusedEvidenceRequestContext requestContext,
+        string originalReceiptId,
+        string guard,
+        out FailedGoalFindingObservation decision)
+    {
+        var rerunGuard = $"disposition=candidate-rerun-requested; {guard}";
+        var terminal = goal.Timeline.LastOrDefault(evt =>
+            evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+            evt.TaskId == requestingTask.Id &&
+            evt.Message.Contains(guard, StringComparison.Ordinal) &&
+            (evt.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal) ||
+             evt.Message.Contains("disposition=candidate-rerun-red;", StringComparison.Ordinal)));
+        if (terminal is not null)
+        {
+            decision = terminal.Message.Contains("disposition=candidate-rerun-green;", StringComparison.Ordinal)
+                ? BuildCappedFindingEvidenceDeliveryRetry(
+                    goal, requestingTask, candidateSha, batch.Findings,
+                    batch.Findings.Select(finding => finding.EvidenceOutcome?.ReceiptId ?? originalReceiptId).ToArray(),
+                    "The candidate re-run was GREEN after baseline execution failed.")
+                : BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
+            return false;
+        }
+
+        if (!goal.Timeline.Any(evt => evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+                                     evt.TaskId == requestingTask.Id &&
+                                     evt.Message.Contains(rerunGuard, StringComparison.Ordinal)))
+        {
+            _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
+                $"finding-evidence {rerunGuard}; original_receipt_id={originalReceiptId}");
+        }
+
+        var rerunContext = requestContext with
+        {
+            BatchId = requestContext.BatchId + "-candidate-rerun",
+            RunBaselineArm = false,
+            CandidateEvidenceBeforeBaseline = null
+        };
+        if (!TryReconcileFocusedEvidenceAttempt(
+                goal, policy, batch.Request, candidateSha, "finding-candidate-rerun", rerunContext,
+                out var rerun, out var rerunAttempt, out decision, out _))
+        {
+            if (decision.Kind != FailedGoalFindingObservationKind.FindingEvidencePending)
+            {
+                _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
+                    $"finding-evidence disposition=candidate-rerun-red; {guard}; reason={TrimForConductorMessage(decision.Evidence)}");
+                decision = BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
+            }
+            return false;
+        }
+
+        var rerunArms = (rerun.Arms ?? []).Select(CreateFindingEvidenceArmReceipt).ToArray();
+        var candidate = rerunArms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
+        var green = rerun is { Accepted: true, IsValidEvidence: true } && candidate is
+        {
+            Accepted: true,
+            Passed: true,
+            Disposition: FindingEvidenceArmDisposition.Green,
+            ExecutedTestCount: > 0
+        } && string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+            AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(
+                candidate.TestResultPaths,
+                candidate.ReceiptArtifacts,
+                candidate.ExecutedTestCount!.Value,
+                ResolveFindingEvidenceRequiredTestClasses(batch.TypedRequest));
+        var rerunReceiptId = CreateFindingEvidenceReceiptId(
+            candidateSha, findingRoundFingerprint, batch.Identity + ":candidate-rerun");
+        if (green)
+        {
+            var receipt = new FindingEvidenceReceipt(
+                rerunReceiptId, candidateSha, batch.TypedRequest, rerun.Accepted,
+                rerun.IsValidEvidence, rerun.Summary, rerunArms,
+                FindingRoundFingerprint: findingRoundFingerprint);
+            foreach (var finding in batch.Findings)
+            {
+                _recordFindingEvidenceOutcome(goal.Id, requestingTask.Id, finding.StableId,
+                    new FindingEvidenceOutcome(
+                        Honoured: true, ReceiptId: rerunReceiptId,
+                        ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
+                        RequestedSelectionIdentity: batch.Identity,
+                        DecisionReason: "candidate-rerun-green",
+                        SourceReceiptIds: [originalReceiptId, rerunReceiptId]), receipt);
+            }
+        }
+        _recordFindingEvidenceRequest(goal.Id, requestingTask.Id,
+            $"finding-evidence disposition=candidate-rerun-{(green ? "green" : "red")}; {guard}; " +
+            $"receipt_id={rerunReceiptId}; original_receipt_id={originalReceiptId}");
+        if (rerunAttempt is not null) _focusedEvidenceAttemptCoordinator.MarkReconciled(rerunAttempt);
+        decision = green
+            ? BuildCappedFindingEvidenceDeliveryRetry(
+                goal, requestingTask, candidateSha, batch.Findings, [rerunReceiptId],
+                "The candidate re-run was GREEN after baseline execution failed.")
+            : BuildBaselineExecutionFailureEscalation(candidateSha, batch, originalReceiptId);
         return false;
     }
+
+    private static FailedGoalFindingObservation BuildBaselineExecutionFailureEscalation(
+        string candidateSha, FindingEvidenceBatch batch, string receiptId) =>
+        FailedGoalFindingObservation.Observed(
+            FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
+            $"Baseline execution failure for candidate RED finding(s) " +
+            $"{string.Join(',', batch.Findings.Select(finding => finding.StableId))} at candidate {candidateSha}; " +
+            $"candidate_receipt_id={receiptId}; baseline_receipt_id={receiptId}. No worker was dispatched.");
 
     private void TryRaiseMissingBaselineNotice(
         Goal goal, string guard, string receiptId, string? resultPath, string reason)
@@ -219,7 +326,7 @@ internal sealed partial class ConductorDriver
                 CollaborationItemType.Notice, goal.Id.Value,
                 "Baseline arm absent from focused finding evidence",
                 $"{guard}; receipt_id={receiptId}; result_path={resultPath ?? "none"}; reason={reason}. " +
-                "Candidate RED was routed to the Developer; no operator action is required.",
+                "Candidate RED will be re-run once at this candidate; no Developer was dispatched.",
                 "finding-baseline-arm-absent:" + goal.Id.Value + ":" + receiptId,
                 CancellationToken.None).GetAwaiter().GetResult();
         }
@@ -277,10 +384,7 @@ internal sealed partial class ConductorDriver
         if (baseline?.Disposition is
                 FindingEvidenceArmDisposition.ApparatusFailure or FindingEvidenceArmDisposition.Inconclusive)
         {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
-                $"Baseline execution failure for candidate RED finding(s) {findingIds} at candidate {candidateSha}; " +
-                $"candidate_receipt_id={receiptId}; baseline_receipt_id={receiptId}. No worker was dispatched.");
+            decision = BuildBaselineExecutionFailureEscalation(candidateSha, batch, receiptId);
             return true;
         }
 

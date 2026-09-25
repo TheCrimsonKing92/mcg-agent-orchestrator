@@ -127,6 +127,61 @@ internal sealed partial class ConductorDriver
         task.LastDispatch is null &&
         task.LastVerification is null;
 
+    private bool TryDeliverGreenTesterFindingEvidence(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        VerifyingFindingTrigger trigger,
+        out FailedGoalFindingObservation observation)
+    {
+        observation = FailedGoalFindingObservation.None;
+        if (!_focusedEvidenceRunnerConfigured ||
+            trigger.DeveloperOwnedFindings is not { Count: > 0 } findings ||
+            trigger.TargetTask is not { } upstreamDeveloper ||
+            HasUnconsumedRetry(upstreamDeveloper))
+        {
+            return false;
+        }
+
+        var task = trigger.TriggeringTask;
+        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        if (!ConductorGitRevisionReader.IsValid(candidateSha)) return false;
+        var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(
+            _getFindingEvidenceEngineSettings(goal));
+
+        var currentReceipts = new List<string>();
+        foreach (var finding in findings)
+        {
+            var state = FindingEvidenceExecutionClassifier.Classify(task, finding, candidateSha);
+            if (state == FindingEvidenceExecutionState.PendingExecution) continue;
+            if (state != FindingEvidenceExecutionState.ExecutedOnCandidate ||
+                finding.EvidenceOutcome is not
+                {
+                    Honoured: true,
+                    ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
+                    ReceiptId: { Length: > 0 } receiptId
+                } ||
+                !task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? [])
+                    .Any(receipt =>
+                        string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
+                        string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                        IsReusableGreenFindingEvidenceReceipt(
+                            receipt, candidateSha!, executionBasisIdentity)))
+            {
+                return false;
+            }
+            currentReceipts.Add(receiptId);
+        }
+
+        if (currentReceipts.Count == 0) return false;
+        if (TryBuildFindingEvidenceRequest(goal, task, policy, out observation)) return true;
+        if (currentReceipts.Count != findings.Count) return false;
+
+        observation = BuildCappedFindingEvidenceDeliveryRetry(
+            goal, task, candidateSha!, findings, currentReceipts,
+            "The Developer-owned findings have honoured GREEN evidence at this candidate.");
+        return true;
+    }
+
     private static bool HasCurrentFindingEvidenceReceipt(
         TaskSpec requestingTask,
         ReviewFinding finding,
