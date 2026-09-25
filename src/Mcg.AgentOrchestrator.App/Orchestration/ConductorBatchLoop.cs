@@ -904,9 +904,9 @@ internal sealed partial class ConductorBatchLoop
                         break;
                     }
 
-                    CompleteActivationTick(totalTicks);
                     if (!(keepAliveWhenIdle && watchInterval is not null))
                     {
+                        CompleteActivationTick(totalTicks);
                         continue;
                     }
                 }
