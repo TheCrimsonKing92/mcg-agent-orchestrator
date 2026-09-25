@@ -58,6 +58,20 @@ public sealed class AcceptanceLaneMembershipTests
     }
 
     [Xunit.Fact]
+    public void OwnedCollectionMemberAlsoMatchingAnotherLaneStillUsesItsOwner()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
+        var descriptor = new AcceptanceTestClassDescriptor("WorkerShellTestsQuokka", "ProcessSpawning");
+        var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
+        Xunit.Assert.DoesNotContain(AcceptanceLaneMembership.LanesIncluding(baseline, descriptor.FullName),
+            lane => lane.Name == "Process spawning");
+
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, [descriptor]);
+        Xunit.Assert.Contains(AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName),
+            lane => lane.Name == "Process spawning");
+    }
+
+    [Xunit.Fact]
     public void SourceScanAndReflectionFindTheSameOwnedCollectionMembers()
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();

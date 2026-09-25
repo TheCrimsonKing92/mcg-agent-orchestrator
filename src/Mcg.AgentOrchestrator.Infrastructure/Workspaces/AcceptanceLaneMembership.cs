@@ -23,19 +23,23 @@ internal static class AcceptanceLaneMembership
             var ownerIndex = Array.FindIndex(result, lane => lane.OwnedCollections.Contains(entry.Collection, StringComparer.Ordinal));
             if (ownerIndex < 0) continue;
             var className = entry.FullName;
-            var selectedByNamedLane = LanesIncluding(result, className).Any(lane =>
-                !lane.Name.Equals("Remainder", StringComparison.OrdinalIgnoreCase));
-            if (!selectedByNamedLane)
+            if (ExplicitlyExcludes(result[ownerIndex], className))
             {
-                result[ownerIndex] = result[ownerIndex] with
-                {
-                    Filter = $"{result[ownerIndex].Filter}|FullyQualifiedName={className}"
-                };
+                if (!LanesIncluding(result, className).Any(lane =>
+                        !lane.Name.Equals("Remainder", StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException($"Owned test class '{className}' has no named acceptance lane after its owner's explicit exclusion.");
             }
-            if (!LanesIncluding(result, className).Any(lane =>
-                    !lane.Name.Equals("Remainder", StringComparison.OrdinalIgnoreCase)))
+            else
             {
-                throw new InvalidDataException($"Owned test class '{className}' cannot be selected by an acceptance lane.");
+                if (!Includes(result[ownerIndex], className))
+                {
+                    result[ownerIndex] = result[ownerIndex] with
+                    {
+                        Filter = $"{result[ownerIndex].Filter}|FullyQualifiedName={className}"
+                    };
+                }
+                if (!Includes(result[ownerIndex], className))
+                    throw new InvalidDataException($"Owned test class '{className}' cannot be selected by its acceptance lane.");
             }
             for (var index = 0; index < result.Length; index++)
             {
@@ -75,4 +79,15 @@ internal static class AcceptanceLaneMembership
         pattern.StartsWith('*') && pattern.EndsWith('*')
             ? classFullName.Contains(pattern.Trim('*'), StringComparison.OrdinalIgnoreCase)
             : classFullName.Equals(pattern, StringComparison.Ordinal);
+
+    private static bool ExplicitlyExcludes(AcceptanceTestLane lane, string classFullName)
+    {
+        var args = AcceptanceCheckCommandBuilder.TranslateMtpFilter(lane.Filter).ToArray();
+        for (var index = 0; index + 1 < args.Length; index += 2)
+        {
+            if (args[index] == "--filter-not-class" && Matches(classFullName, args[index + 1]))
+                return true;
+        }
+        return false;
+    }
 }

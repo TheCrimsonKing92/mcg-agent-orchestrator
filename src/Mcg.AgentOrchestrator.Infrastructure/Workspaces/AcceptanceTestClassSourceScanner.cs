@@ -27,13 +27,17 @@ internal static class AcceptanceTestClassSourceScanner
             .ToArray();
         var roots = files.Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot()).ToArray();
         var constants = roots.SelectMany(root => root.DescendantNodes().OfType<FieldDeclarationSyntax>())
-            .Where(field => field.Parent is ClassDeclarationSyntax { Identifier.ValueText: "TestCollections" })
+            .Where(field => field.Parent is ClassDeclarationSyntax)
             .Where(field => field.Modifiers.Any(SyntaxKind.ConstKeyword) &&
                             field.Declaration.Type.ToString() == "string")
-            .SelectMany(field => field.Declaration.Variables)
-            .Where(variable => variable.Initializer?.Value is LiteralExpressionSyntax)
-            .ToDictionary(variable => variable.Identifier.ValueText,
-                variable => ((LiteralExpressionSyntax)variable.Initializer!.Value).Token.ValueText,
+            .SelectMany(field => field.Declaration.Variables.Select(variable => new
+            {
+                Owner = ((ClassDeclarationSyntax)field.Parent!).Identifier.ValueText,
+                Variable = variable
+            }))
+            .Where(item => item.Variable.Initializer?.Value is LiteralExpressionSyntax)
+            .ToDictionary(item => $"{item.Owner}.{item.Variable.Identifier.ValueText}",
+                item => ((LiteralExpressionSyntax)item.Variable.Initializer!.Value).Token.ValueText,
                 StringComparer.Ordinal);
 
         var classes = roots.SelectMany(root => root.DescendantNodes().OfType<ClassDeclarationSyntax>())
@@ -91,11 +95,18 @@ internal static class AcceptanceTestClassSourceScanner
             LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression) => literal.Token.ValueText,
             InvocationExpressionSyntax invocation when invocation.Expression.ToString() == "nameof" =>
                 invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString().Split('.').Last(),
-            MemberAccessExpressionSyntax member when constants.TryGetValue(member.Name.Identifier.ValueText, out var resolved) => resolved,
-            IdentifierNameSyntax identifier when constants.TryGetValue(identifier.Identifier.ValueText, out var resolved) => resolved,
+            MemberAccessExpressionSyntax member when constants.TryGetValue(member.ToString(), out var resolved) => resolved,
+            IdentifierNameSyntax identifier => ResolveUnqualifiedConstant(identifier.Identifier.ValueText, constants),
             _ => null
         };
         return value ?? throw new InvalidDataException($"Cannot resolve test collection on '{NameOf(node)}'.");
+    }
+
+    private static string? ResolveUnqualifiedConstant(string name, IReadOnlyDictionary<string, string> constants)
+    {
+        var values = constants.Where(item => item.Key.EndsWith($".{name}", StringComparison.Ordinal))
+            .Select(item => item.Value).Distinct(StringComparer.Ordinal).ToArray();
+        return values.Length == 1 ? values[0] : null;
     }
 
     private static bool HasRunnableFacts(SourceClass item, IReadOnlyDictionary<string, SourceClass[]> byName,
