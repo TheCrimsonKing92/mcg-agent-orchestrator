@@ -20,13 +20,8 @@ public static class UnchangedCandidateRule
             !CandidateIdentity.AreSameCandidate(prior.verification.CandidateIdentity, current) ||
             HasNewInput(goal, candidateTask, prior.verification.CompletedAt))
             return null;
-        var verdict = WorkerResultBlockers.TryFindNeedsWorkVerdict(prior.verification, out _)
-            ? "needs-work"
-            : WorkerResultBlockers.TryFindBlockedAtCapVerdict(prior.verification, out _)
-                ? "blocked-at-cap"
-                : prior.verification.AssignedScopeComplete is false
-                    ? "revision-requested"
-                    : prior.verification.Succeeded ? "passed" : "failed";
+        var verdict = UnchangedCandidateVerdict.Derive(goal, prior.task, prior.verification);
+        if (verdict == UnchangedCandidateVerdict.Rejected) return null;
         return new UnchangedCandidateHoldReason(
             candidateTask.RequiredRole, prior.task.Id, prior.verification.CompletedAt, verdict, current);
     }
