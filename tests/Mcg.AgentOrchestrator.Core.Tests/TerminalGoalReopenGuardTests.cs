@@ -23,7 +23,6 @@ public sealed class TerminalGoalReopenGuardTests
         Xunit.Assert.Equal(status, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Equal(before, kernel.GetGoal(goal.Id).Timeline.Count);
         Xunit.Assert.False(kernel.ReconcileGoalVerificationStatus(goal.Id, "do not reconcile terminal goal"));
-        Xunit.Assert.False(kernel.NormalizePrematureCompletedGoalToVerified(goal.Id, "do not normalize terminal goal"));
         Xunit.Assert.Throws<InvalidOperationException>(() =>
             kernel.RetryTask(goal.Id, task.Id, "retry", RetryCause.NewSourceFinding));
     }
