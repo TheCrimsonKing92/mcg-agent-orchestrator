@@ -262,7 +262,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                                 outputDirectory, cancellationToken).ConfigureAwait(false);
                             result = watched.Result;
                             stallFailure = watched.Failure;
-                            if (watched.Stalled && !watched.TerminationConfirmed) return 1;
+                            if (watched.Stalled && !watched.TerminationConfirmed)
+                            {
+                                EscalateUnconfirmedTickStall(attempt, watched, stdoutPath, stderrPath);
+                                return 1;
+                            }
                         }
                     }
                     else
@@ -274,7 +278,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                             outputDirectory, cancellationToken).ConfigureAwait(false);
                         result = watched.Result;
                         stallFailure = watched.Failure;
-                        if (watched.Stalled && !watched.TerminationConfirmed) return 1;
+                        if (watched.Stalled && !watched.TerminationConfirmed)
+                        {
+                            EscalateUnconfirmedTickStall(attempt, watched, stdoutPath, stderrPath);
+                            return 1;
+                        }
                     }
                 }
                 else
@@ -367,7 +375,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                                 outputDirectory, cancellationToken).ConfigureAwait(false);
                             result = watched.Result;
                             stallFailure = watched.Failure;
-                            if (watched.Stalled && !watched.TerminationConfirmed) return 1;
+                            if (watched.Stalled && !watched.TerminationConfirmed)
+                            {
+                                EscalateUnconfirmedTickStall(attempt, watched, stdoutPath, stderrPath);
+                                return 1;
+                            }
                         }
                     }
                     else if (runTask.IsCompletedSuccessfully && HasDeliberateStopArtifact(artifactPath))

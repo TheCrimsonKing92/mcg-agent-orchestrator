@@ -70,6 +70,8 @@ public sealed class ConductorContinuitySupervisorTickStallTests
         Assert.Equal(1, run.ExitCode);
         Assert.Equal(2, run.Host.Requests.Count);
         Assert.Contains(run.Events.Events, e => e.Operation == "tick-stall" && e.Status == "escalated");
+        Assert.Contains(run.Events.Events, e => e.Operation == "restart" && e.Status == "escalated" &&
+            e.Detail.Contains("terminationConfirmed=false", StringComparison.Ordinal));
     }
 
     [Xunit.Theory]
@@ -82,6 +84,7 @@ public sealed class ConductorContinuitySupervisorTickStallTests
         var stops = 0;
         var captures = 0;
         var tick = 3;
+        var clock = new AdvancingClock();
         ConductorSupervisorProcessRequest? active = null;
         TaskCompletionSource<ConductorSupervisorProcessResult>? childExit = null;
         var host = new ScriptedHost((request, index, token) =>
@@ -104,7 +107,7 @@ public sealed class ConductorContinuitySupervisorTickStallTests
             return childExit.Task;
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            timeProvider: new FixedClock(), delay: (_, _) => Task.CompletedTask,
+            timeProvider: clock, delay: (_, _) => Task.CompletedTask,
             stageSuccessor: _ => Prepared(), dotnetPath: "dotnet-test",
             activationDelay: (_, _) => throw new InvalidOperationException("Already healthy"),
             tickStallBudget: TimeSpan.FromMinutes(2),
@@ -113,6 +116,7 @@ public sealed class ConductorContinuitySupervisorTickStallTests
                 delays.Add(duration);
                 if (++tick <= 9)
                 {
+                    clock.Advance(TimeSpan.FromMinutes(1));
                     active!.OnStandardOutputLine!($"TICK_END tick={(repeatTickNumber ? 7 : tick)} activation=true");
                 }
                 else
@@ -188,6 +192,9 @@ public sealed class ConductorContinuitySupervisorTickStallTests
     {
         Assert.True(ConductorContinuitySupervisor.ResolveTickStallBudget(null) >=
             AcceptanceCheckTimeouts.DefaultTimeout);
+        Assert.True(ConductorContinuitySupervisor.ResolveTickStallBudget(null) >
+            DispatchRecoveryPolicy.DefaultLiveIdleTimeout +
+            TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds));
         Assert.Equal(TimeSpan.FromMinutes(45), ConductorContinuitySupervisor.ResolveTickStallBudget("45"));
     }
 
@@ -264,6 +271,15 @@ public sealed class ConductorContinuitySupervisorTickStallTests
     private sealed class FixedClock : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(2026, 9, 26, 6, 0, 0, TimeSpan.Zero);
+    }
+
+    private sealed class AdvancingClock : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 9, 26, 6, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        internal void Advance(TimeSpan duration) => _now += duration;
     }
 
     private sealed class ScriptedDump(

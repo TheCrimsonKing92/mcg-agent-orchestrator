@@ -13,7 +13,10 @@ internal sealed partial class ConductorContinuitySupervisor
         double.TryParse(configuredValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var minutes) &&
         minutes > 0 && minutes <= TimeSpan.MaxValue.TotalMinutes
             ? TimeSpan.FromMinutes(minutes)
-            : AcceptanceCheckTimeouts.DefaultTimeout + TickStallGrace;
+            // A self-relaunch drain can occupy one tick for the full live-idle timeout.
+            : (AcceptanceCheckTimeouts.DefaultTimeout > DispatchRecoveryPolicy.DefaultLiveIdleTimeout
+                ? AcceptanceCheckTimeouts.DefaultTimeout
+                : DispatchRecoveryPolicy.DefaultLiveIdleTimeout) + TickStallGrace;
 
     private sealed record TickStallOutcome(
         ConductorSupervisorProcessResult Result,
@@ -135,5 +138,13 @@ internal sealed partial class ConductorContinuitySupervisor
             Console.Error.WriteLine(
                 $"[conduct supervisor] Could not record tick stall: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private void EscalateUnconfirmedTickStall(
+        int attempt, TickStallOutcome watched, string stdoutPath, string stderrPath)
+    {
+        Record("restart", "escalated", attempt, watched.Failure ?? "tick-stall termination-unconfirmed",
+            watched.Result.ProcessId, stdoutPath, stderrPath);
+        Console.Error.WriteLine($"[conduct supervisor] Escalated: {watched.Failure}.");
     }
 }
