@@ -6948,9 +6948,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         string ownerKind)
     {
-        var repositoryRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
-        repositoryRoot = ResolveOwnerResultsRepositoryRoot(
-            string.IsNullOrWhiteSpace(repositoryRoot) ? worktreePath : repositoryRoot);
+        var repositoryRoot = ResolveOwnerResultsRootForCandidate(worktreePath);
         var owner = goalId?.Value ?? "operator";
         var directory = Path.Combine(
             repositoryRoot,
