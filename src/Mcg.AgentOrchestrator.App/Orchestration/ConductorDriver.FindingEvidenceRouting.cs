@@ -614,8 +614,8 @@ internal sealed partial class ConductorDriver
         var developer = goal.Tasks
             .TakeWhile(task => task.Id != requestingTask.Id)
             .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
-        var failingTests = string.Join(",", attribution.FailingTestIdentities);
         var findingIds = string.Join(",", attribution.Findings.Select(finding => finding.StableId));
+        var failingTests = string.Join(",", attribution.FailingTestIdentities);
         return developer is null
             ? FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable,
@@ -625,10 +625,19 @@ internal sealed partial class ConductorDriver
                 FailedGoalFindingObservationKind.FindingActionableRed,
                 developer.Id,
                 BuildFailedGoalAttemptIdentity(developer),
-                $"ACTIONABLE_CANDIDATE_RED candidate_sha={candidateSha}; receipt_id={receiptId}; finding_ids={findingIds}; " +
-                $"failing_tests={failingTests}. {additionalDetail} Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.",
+                FormatActionableCandidateRedMessage(candidateSha, receiptId, findingIds,
+                    attribution.FailingTestIdentities, additionalDetail),
                 null);
     }
+
+    private static string FormatActionableCandidateRedMessage(
+        string candidateSha,
+        string receiptId,
+        string findingIds,
+        IReadOnlyList<string> failingTestIdentities,
+        string? additionalDetail = null) =>
+        $"ACTIONABLE_CANDIDATE_RED candidate_sha={candidateSha}; receipt_id={receiptId}; finding_ids={findingIds}; " +
+        $"failing_tests={string.Join(',', failingTestIdentities)}. {additionalDetail} Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.";
 
     private bool EveryFailingTestIsInsideCandidateChanges(
         Goal goal,
