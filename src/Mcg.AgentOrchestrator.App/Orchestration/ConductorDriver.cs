@@ -1541,7 +1541,7 @@ internal sealed partial class ConductorDriver
                 $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
                 $"submitted_location={violation.SubmittedLocation?.ToString() ?? "none"}; " +
                 $"canonical_open_count={canonicalLedger.Count(finding => finding.State == ReviewFindingState.Open)}. " +
-                "Operator remedy: retry <goal> <task#> \"<reason>\" --mechanical, then progress <task#> completed and verify-manual <task#> passed.";
+                BuildAdjudicateRemedy(goal.Status);
         var selectionFacts = new FailedGoalReviewContractSelectionFacts(
                 candidate,
                 null,

@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -13,7 +11,8 @@ internal sealed class OperatorIntentAdjudicationRejectedException(string reason)
 
 internal sealed class OperatorIntentAdjudication(
     ICollaborationItemStore decisions,
-    Func<GoalId, long?> goalStateVersionResolver)
+    Func<GoalId, long?> goalStateVersionResolver,
+    AdjudicationEvidenceResolver evidenceResolver)
 {
     private const string TemplateVersion = "operator-adjudication-v1";
 
@@ -26,7 +25,11 @@ internal sealed class OperatorIntentAdjudication(
         DateTimeOffset now)
     {
         var shape = NormalizeShape(payload.Shape);
-        var reason = Validate(goal, task, payload, shape, out var retryCause);
+        var manifest = BuildEvidenceManifest(goal, payload, out var unresolvedEvidence);
+        var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause);
+        var reversibility = ParseReversibility(payload.Reversibility, shape, out var invalidReversibility);
+        if (reason is null && invalidReversibility)
+            reason = "unknown-reversibility";
         var currentVersion = goalStateVersionResolver(goal.Id);
         if (reason is null && currentVersion != payload.ExpectedGoalStateVersion)
             reason = "stale-goal-state-version";
@@ -47,7 +50,7 @@ internal sealed class OperatorIntentAdjudication(
                 ? $"Adjudication rejected: {reason ?? "missing-explanation"}."
                 : payload.Text.Trim(),
             TemplateVersion,
-            BuildEvidenceManifest(payload.EvidenceReferences),
+            manifest,
             expiresAt,
             DecisionDefaultDisposition.NoAction,
             new DecisionBlockingImpact("The task remains unchanged when adjudication is rejected.", []),
@@ -62,7 +65,9 @@ internal sealed class OperatorIntentAdjudication(
             assurance,
             payload.ExpectedGoalStateVersion,
             new DecisionResponse(actionRef, shape, DecisionReuseScope.ThisOccurrence, false),
-            now).GetAwaiter().GetResult();
+            now,
+            reversibility,
+            string.IsNullOrWhiteSpace(payload.Precedent) ? null : payload.Precedent.Trim()).GetAwaiter().GetResult();
 
         if (reason is not null)
         {
@@ -105,7 +110,8 @@ internal sealed class OperatorIntentAdjudication(
         }
 
         var applied = decisions.TryApplyDecisionEffectAsync(
-            requestId, receipt.Id, actionRef, currentVersion, $"{shape} applied", now).GetAwaiter().GetResult();
+            requestId, receipt.Id, actionRef, currentVersion,
+            $"applied task={task.Status} goal={goal.Status}", now).GetAwaiter().GetResult();
         if (!applied.Applied)
             throw new InvalidOperationException($"Decision effect was unexpectedly rejected: {applied.Receipt.Result}");
         RecordTimeline(kernel, goal, task, intent, receipt.Id, "applied");
@@ -190,6 +196,7 @@ internal sealed class OperatorIntentAdjudication(
         TaskSpec task,
         AdjudicateOperatorIntentPayload payload,
         string shape,
+        bool unresolvedEvidence,
         out RetryCause? retryCause)
     {
         retryCause = null;
@@ -197,7 +204,8 @@ internal sealed class OperatorIntentAdjudication(
         if (payload.EvidenceReferences is null || payload.EvidenceReferences.All(string.IsNullOrWhiteSpace)) return "missing-evidence";
         if (shape is not ("close" or "reopen-regate" or "route")) return "unknown-shape";
         if (shape == "reopen-regate" && goal.Status != GoalStatus.AcceptanceFailed) return "goal-not-acceptance-failed";
-        if (shape is "close" or "reopen-regate" && task.Status is not (WorkTaskStatus.Failed or WorkTaskStatus.Completed))
+        if (shape is "close" or "reopen-regate" && task.Status is not
+            (WorkTaskStatus.Assigned or WorkTaskStatus.Failed or WorkTaskStatus.Completed))
             return "task-not-closable";
         if (shape == "route" && task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
             return "task-not-retryable";
@@ -206,27 +214,43 @@ internal sealed class OperatorIntentAdjudication(
              !Enum.IsDefined(parsedCause) || parsedCause == RetryCause.Unknown))
             return "unknown-retry-cause";
         if (shape == "route") retryCause = Enum.Parse<RetryCause>(payload.Cause!, ignoreCase: true);
+        if (unresolvedEvidence) return "evidence-reference-unresolved";
         return null;
     }
 
-    private static EvidenceManifest BuildEvidenceManifest(IReadOnlyList<string>? references)
+    private EvidenceManifest BuildEvidenceManifest(
+        Goal goal,
+        AdjudicateOperatorIntentPayload payload,
+        out bool unresolved)
     {
-        var entries = (references ?? [])
+        unresolved = false;
+        var entries = new List<EvidenceManifestEntry>();
+        foreach (var reference in (payload.EvidenceReferences ?? [])
             .Where(reference => !string.IsNullOrWhiteSpace(reference))
             .Select(reference => reference.Trim())
-            .Distinct(StringComparer.Ordinal)
-            .Select(ToEvidenceEntry)
-            .ToArray();
+            .Distinct(StringComparer.Ordinal))
+        {
+            if (!evidenceResolver.TryResolve(reference, goal, payload, out var entry))
+                unresolved = true;
+            entries.Add(entry);
+        }
         return EvidenceManifest.Create(entries);
     }
 
-    private static EvidenceManifestEntry ToEvidenceEntry(string reference)
+    private static DecisionReversibility? ParseReversibility(string? value, string shape, out bool invalid)
     {
-        var separator = reference.IndexOf('=');
-        if (separator > 0 && separator < reference.Length - 1 && reference.IndexOf('=', separator + 1) < 0)
-            return new EvidenceManifestEntry(reference[..separator], reference[(separator + 1)..]);
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(reference))).ToLowerInvariant();
-        return new EvidenceManifestEntry(reference, hash);
+        invalid = false;
+        if (string.IsNullOrWhiteSpace(value))
+            return shape == "route" ? DecisionReversibility.Reversible : DecisionReversibility.ReversibleWithCost;
+        var parsed = value.Trim().ToLowerInvariant() switch
+        {
+            "reversible" => DecisionReversibility.Reversible,
+            "reversible-with-cost" => DecisionReversibility.ReversibleWithCost,
+            "irreversible" => DecisionReversibility.Irreversible,
+            _ => (DecisionReversibility?)null
+        };
+        invalid = parsed is null;
+        return parsed;
     }
 
     private static AuthorizationTier ResolveAuthorizationTier(string assurance) => assurance switch

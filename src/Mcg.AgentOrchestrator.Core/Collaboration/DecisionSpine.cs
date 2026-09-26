@@ -61,6 +61,13 @@ public enum EffectReceiptStatus
     Rejected = 2
 }
 
+public enum DecisionReversibility
+{
+    Reversible = 1,
+    ReversibleWithCost = 2,
+    Irreversible = 3
+}
+
 public sealed record DecisionActionRef(string Value);
 
 public sealed record EvidenceManifestEntry(string ReceiptId, string ContentHash);
@@ -137,7 +144,9 @@ public sealed record DecisionReceipt(
     long? ExpectedGoalStateVersion,
     DecisionResponse Response,
     DateTimeOffset RecordedAt,
-    EffectReceipt? EffectResult);
+    EffectReceipt? EffectResult,
+    DecisionReversibility? Reversibility = null,
+    string? PrecedentRef = null);
 
 public static class OperatorActorIdentity
 {
@@ -181,7 +190,8 @@ public sealed record EffectReceipt(
     long? ExpectedGoalStateVersion,
     long? ActualGoalStateVersion,
     string Result,
-    DateTimeOffset RecordedAt);
+    DateTimeOffset RecordedAt,
+    string? Outcome = null);
 
 public sealed record DecisionState(
     DecisionRequest Request,

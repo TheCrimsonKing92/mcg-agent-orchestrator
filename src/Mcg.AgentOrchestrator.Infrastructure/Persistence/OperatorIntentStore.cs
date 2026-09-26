@@ -380,7 +380,8 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
                 claim_owner                   TEXT,
                 claimed_at                    TEXT,
                 completed_at                  TEXT,
-                outcome                       TEXT
+                outcome                       TEXT,
+                actor_kind                    TEXT
             )
             """);
         AddColumnIfMissing(conn, "operator_intents", "actor_kind", "TEXT");
@@ -528,15 +529,33 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
 
     private static void AddColumnIfMissing(SqliteConnection conn, string table, string column, string definition)
     {
-        var exists = false;
-        using (var inspect = conn.CreateCommand())
+        if (ColumnExists(conn, table, column))
+            return;
+
+        AddColumnTolerant(conn, table, column, definition);
+    }
+
+    internal static void AddColumnTolerant(SqliteConnection conn, string table, string column, string definition)
+    {
+        try
         {
-            inspect.CommandText = $"PRAGMA table_info({table})";
-            using var reader = inspect.ExecuteReader();
-            while (reader.Read())
-                exists |= reader.GetString(1).Equals(column, StringComparison.OrdinalIgnoreCase);
-        }
-        if (!exists)
             RunNonQuery(conn, $"ALTER TABLE {table} ADD COLUMN {column} {definition}");
+        }
+        catch (SqliteException) when (ColumnExists(conn, table, column))
+        {
+            // Another initializer added the column after our schema check.
+        }
+    }
+
+    private static bool ColumnExists(SqliteConnection conn, string table, string column)
+    {
+        using var inspect = conn.CreateCommand();
+        inspect.CommandText = $"PRAGMA table_info({table})";
+        using var reader = inspect.ExecuteReader();
+        while (reader.Read())
+            if (reader.GetString(1).Equals(column, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+        return false;
     }
 }

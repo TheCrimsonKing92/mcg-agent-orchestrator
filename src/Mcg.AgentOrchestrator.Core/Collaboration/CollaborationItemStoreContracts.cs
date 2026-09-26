@@ -105,6 +105,22 @@ public interface ICollaborationItemStore
         DateTimeOffset recordedAt,
         CancellationToken cancellationToken = default);
 
+    Task<DecisionReceipt> RecordDecisionAsync(
+        string requestId,
+        string actorId,
+        string channel,
+        AuthorizationTier authenticationAssurance,
+        long? expectedGoalStateVersion,
+        DecisionResponse response,
+        DateTimeOffset recordedAt,
+        DecisionReversibility? reversibility,
+        string? precedentRef,
+        CancellationToken cancellationToken = default) =>
+        reversibility is null && precedentRef is null
+            ? RecordDecisionAsync(requestId, actorId, channel, authenticationAssurance,
+                expectedGoalStateVersion, response, recordedAt, cancellationToken)
+            : throw new NotSupportedException("This collaboration store cannot record decision reversibility or precedent.");
+
     Task<DecisionReceipt> RecordExpiredDefaultDispositionAsync(
         string requestId,
         DateTimeOffset expiredAt,
