@@ -119,6 +119,7 @@ internal sealed partial class ConductorContinuitySupervisor
         ActivationMonitor monitor,
         string artifactPath,
         CancellationTokenSource processCts,
+        TimeSpan tickGapTimeout,
         CancellationToken cancellationToken)
     {
         while (true)
@@ -145,7 +146,8 @@ internal sealed partial class ConductorContinuitySupervisor
             }
 
             using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var timeout = snapshot.Started ? _activationStallTimeout : _readinessTimeout;
+            var timeout = !snapshot.Started ? _readinessTimeout :
+                snapshot.Ticks == 0 ? _activationStallTimeout : tickGapTimeout;
             var deadline = _activationDelay(timeout, deadlineCts.Token);
             var completed = await Task.WhenAny(runTask, snapshot.Changed, deadline).ConfigureAwait(false);
             deadlineCts.Cancel();
