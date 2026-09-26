@@ -20,7 +20,8 @@ internal sealed record ConductorSupervisorProcessRequest(
     string StdoutPath,
     string StderrPath,
     IReadOnlyList<string>? CommandPrefix = null,
-    Action<string>? OnStandardOutputLine = null);
+    Action<string>? OnStandardOutputLine = null,
+    Action<int>? OnProcessStarted = null);
 
 internal sealed record ConductorSupervisorProcessResult(
     int ExitCode,
@@ -82,7 +83,10 @@ internal sealed partial class ConductorContinuitySupervisor(
     int? activationHealthyTicks = null,
     Func<TimeSpan, CancellationToken, Task>? activationDelay = null,
     TimeSpan? activationStallTimeout = null,
-    Action<string>? raiseActivationAttention = null)
+    Action<string>? raiseActivationAttention = null,
+    TimeSpan? tickStallBudget = null,
+    Func<TimeSpan, CancellationToken, Task>? tickStallDelay = null,
+    IConductorDiagnosticDumpCapture? dumpCapture = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -99,6 +103,12 @@ internal sealed partial class ConductorContinuitySupervisor(
         ((duration, token) => Task.Delay(duration, timeProvider ?? TimeProvider.System, token));
     private readonly TimeSpan _activationStallTimeout = activationStallTimeout ?? readinessTimeout ?? TimeSpan.FromMinutes(2);
     private readonly Action<string>? _raiseActivationAttention = raiseActivationAttention;
+    private readonly TimeSpan _tickStallBudget = tickStallBudget ?? ResolveTickStallBudget(
+        Environment.GetEnvironmentVariable(TickStallBudgetEnvironmentVariable));
+    private readonly Func<TimeSpan, CancellationToken, Task> _tickStallDelay = tickStallDelay ??
+        ((duration, token) => Task.Delay(duration, timeProvider ?? TimeProvider.System, token));
+    private readonly IConductorDiagnosticDumpCapture _dumpCapture = dumpCapture ??
+        new DotnetDumpConductorDiagnosticDumpCapture();
     private readonly string _dotnetPath = dotnetPath ??
         Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ??
         "dotnet";
@@ -157,8 +167,10 @@ internal sealed partial class ConductorContinuitySupervisor(
                 .ToArray();
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
+            string? stallFailure = null;
             var successor = pendingSuccessor;
-            var activationMonitor = new ActivationMonitor();
+            var activationMonitor = new ActivationMonitor(_timeProvider.GetUtcNow);
+            var liveProcessId = 0;
             var readiness = successor is null
                 ? null
                 : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -184,7 +196,8 @@ internal sealed partial class ConductorContinuitySupervisor(
                     {
                         readiness?.TrySetResult();
                     }
-                });
+                },
+                pid => Interlocked.Exchange(ref liveProcessId, pid));
             try
             {
                 if (successor is null)
@@ -238,11 +251,30 @@ internal sealed partial class ConductorContinuitySupervisor(
                             RecordActivation("restored", attempt, failedActivationBuild!, currentBuild, null, restore.Detail);
                         }
                         failedActivationBuild = null;
-                        result = restore.ProcessResult ?? await restoreTask.ConfigureAwait(false);
+                        if (restore.ProcessResult is not null)
+                        {
+                            result = restore.ProcessResult;
+                        }
+                        else
+                        {
+                            var watched = await WatchTickProgressAsync(restoreTask, activationMonitor,
+                                () => Volatile.Read(ref liveProcessId), restoreCts, attempt, currentBuild,
+                                outputDirectory, cancellationToken).ConfigureAwait(false);
+                            result = watched.Result;
+                            stallFailure = watched.Failure;
+                            if (watched.Stalled && !watched.TerminationConfirmed) return 1;
+                        }
                     }
                     else
                     {
-                        result = await processHost.RunAsync(request, cancellationToken).ConfigureAwait(false);
+                        using var plainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        var plainTask = processHost.RunAsync(request, plainCts.Token);
+                        var watched = await WatchTickProgressAsync(plainTask, activationMonitor,
+                            () => Volatile.Read(ref liveProcessId), plainCts, attempt, currentBuild,
+                            outputDirectory, cancellationToken).ConfigureAwait(false);
+                        result = watched.Result;
+                        stallFailure = watched.Failure;
+                        if (watched.Stalled && !watched.TerminationConfirmed) return 1;
                     }
                 }
                 else
@@ -324,7 +356,19 @@ internal sealed partial class ConductorContinuitySupervisor(
                         {
                             RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
                         }
-                        result = activation.ProcessResult ?? await runTask.ConfigureAwait(false);
+                        if (activation.ProcessResult is not null)
+                        {
+                            result = activation.ProcessResult;
+                        }
+                        else
+                        {
+                            var watched = await WatchTickProgressAsync(runTask, activationMonitor,
+                                () => Volatile.Read(ref liveProcessId), processCts, attempt, currentBuild,
+                                outputDirectory, cancellationToken).ConfigureAwait(false);
+                            result = watched.Result;
+                            stallFailure = watched.Failure;
+                            if (watched.Stalled && !watched.TerminationConfirmed) return 1;
+                        }
                     }
                     else if (runTask.IsCompletedSuccessfully && HasDeliberateStopArtifact(artifactPath))
                     {
@@ -395,13 +439,13 @@ internal sealed partial class ConductorContinuitySupervisor(
             var artifact = ConductorContinuityExitArtifact.TryRead(artifactPath);
             TryDeleteArtifact(artifactPath);
 
-            if (result.ExitCode == 0 && artifact is { RestartRequested: false })
+            if (stallFailure is null && result.ExitCode == 0 && artifact is { RestartRequested: false })
             {
                 Record("stopped", "completed", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
                 return 0;
             }
 
-            if (result.ExitCode == 0 && artifact is { RestartRequested: true })
+            if (stallFailure is null && result.ExitCode == 0 && artifact is { RestartRequested: true })
             {
                 renewalsWithoutProgress = artifact.Done > 0 ? 0 : renewalsWithoutProgress + 1;
                 if (renewalsWithoutProgress > maxRenewalsWithoutProgress)
@@ -480,7 +524,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 unexpectedStarts.Dequeue();
             }
             unexpectedStarts.Enqueue(now);
-            var failure = launchFailure ?? (artifact is null
+            var failure = stallFailure ?? launchFailure ?? (artifact is null
                 ? $"exit={result.ExitCode} exit-artifact=missing-or-invalid"
                 : $"exit={result.ExitCode} stop={artifact.StopReason}");
             if (unexpectedStarts.Count > maxUnexpectedRestarts)
@@ -678,6 +722,15 @@ internal sealed class SystemConductorSupervisorProcessHost(
         if (!process.Start())
         {
             throw new InvalidOperationException("Failed to start the supervised conductor process.");
+        }
+        try
+        {
+            request.OnProcessStarted?.Invoke(process.Id);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"[conduct supervisor] Process-start observer failed: {ex.GetType().Name}: {ex.Message}");
         }
         process.StandardInput.Close();
         process.BeginOutputReadLine();
