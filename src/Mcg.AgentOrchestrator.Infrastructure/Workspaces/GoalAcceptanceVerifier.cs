@@ -7909,7 +7909,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             heartbeatPath,
             ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath, _storageRoot),
             string.Join(' ', arguments.Select(QuoteForDisplay)),
-            environment?.RootPath);
+            environment?.RootPath) { RunClass = GateHeartbeatRunClass.Classify(_executionContext) };
     }
 
     // An attempt can run several checks after releasing its build permit, and unrelated goals can hash to
@@ -8031,7 +8031,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string stdoutPath,
         string stderrPath,
         string? finalState = null,
-        string? attemptResultsPrefix = null)
+        string? attemptResultsPrefix = null, string? runClass = null)
     {
         var check = new AcceptanceManifestCheck { Name = checkName };
         var heartbeatPath = ResolveGateHeartbeatPathCore(
@@ -8053,7 +8053,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 heartbeatPath,
                 DotnetBuildEnvironmentManager.CaptureStorageRoot()),
             "dotnet test",
-            environment.RootPath);
+            environment.RootPath) { RunClass = runClass };
         var runtime = new GateHeartbeatRuntime(
             context,
             processId,
@@ -9457,7 +9457,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal readonly record struct CaptureLimitResult(string Path, long WrittenBytes, bool LimitReached);
 
-    private sealed record GateHeartbeatContext(
+    private sealed partial record GateHeartbeatContext(
         string? GoalId,
         string Phase,
         string CurrentTarget,
@@ -9561,7 +9561,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _context.CommandLine,
                 exitCode,
                 _stdoutPath,
-                _stderrPath);
+                _stderrPath, RunClass: _context.RunClass);
         }
 
         private AcceptanceGateProgress ToProgress(GateHeartbeatSnapshot snapshot) =>

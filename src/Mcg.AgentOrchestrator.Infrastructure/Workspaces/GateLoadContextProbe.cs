@@ -242,12 +242,12 @@ internal static class GateLoadContextProbe
         return observed
             .Where(occupant => occupant.HeartbeatAge <= LiveGateHeartbeatFreshness)
             .GroupBy(occupant => occupant.Identity, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
+            .Select(group => group.FirstOrDefault(occupant => occupant.CountsAsAcceptanceOccupant) ?? group.First())
             .OrderBy(occupant => occupant.Identity, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
-    private static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants()
+    internal static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants()
     {
         var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0));
         if (string.IsNullOrWhiteSpace(heartbeatDirectory))
@@ -277,7 +277,8 @@ internal static class GateLoadContextProbe
                 snapshot.GoalId,
                 status.SlotIndex,
                 heartbeatAge,
-                status.Path));
+                status.Path,
+                snapshot.RunClass));
         }
 
         return occupants;
@@ -370,8 +371,10 @@ internal static class GateLoadContextProbe
         string? GoalId,
         int SlotIndex,
         TimeSpan HeartbeatAge,
-        string SourcePath = "")
+        string SourcePath = "",
+        string? RunClass = null)
     {
+        internal bool CountsAsAcceptanceOccupant => GateHeartbeatRunClass.CountsAsAcceptanceOccupant(RunClass);
         internal string Identity => ProcessId is > 0
             ? $"pid:{ProcessId.Value}"
             : $"goal:{GoalId ?? SourcePath}";
