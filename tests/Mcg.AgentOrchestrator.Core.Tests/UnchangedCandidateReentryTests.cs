@@ -112,7 +112,9 @@ public sealed class UnchangedCandidateReentryTests
             new TaskDispatchRecord("worker", "command", "C:\\repo", DateTimeOffset.UtcNow.AddMinutes(-2),
                 CandidateIdentity: identity));
         kernel.RecordTaskVerification(goal.Id, task.Id,
-            new TaskVerificationRecord("command", "C:\\repo", 0, "ok", "", DateTimeOffset.UtcNow.AddMinutes(-1),
+            new TaskVerificationRecord("command", "C:\\repo", 0,
+                role == AgentRole.Reviewer ? "WORKER_RESULT:\nblockers: none\nverdict: pass\nEND_WORKER_RESULT" : "ok",
+                "", DateTimeOffset.UtcNow.AddMinutes(-1),
                 WorkerResultPresent: true, CandidateIdentity: identity));
         return (kernel, goal, task, identity);
     }
