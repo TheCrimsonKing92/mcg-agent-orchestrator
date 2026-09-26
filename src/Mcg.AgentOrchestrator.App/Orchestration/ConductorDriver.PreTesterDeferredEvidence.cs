@@ -25,6 +25,32 @@ internal sealed partial class ConductorDriver
                 selections.Any(selection => !covered.Contains(FormatFindingEvidenceSelection(selection)))))
             return false;
 
+        var request = new FindingEvidenceRequest(requestingFindings
+            .SelectMany(finding => finding.EvidenceRequest!.Selections)
+            .DistinctBy(FormatFindingEvidenceSelection)
+            .ToArray());
+        var passed = receipt.Outcome == "green";
+        var attachedReceipt = new FindingEvidenceReceipt(
+            receipt.ReceiptId, candidateSha, request, Accepted: true, Passed: passed,
+            Summary: $"Pre-Tester focused evidence {receipt.Outcome}; result_path={receipt.ResultPath ?? "none"}",
+            RequestDispositions: requestingFindings.Select(finding =>
+                new FindingEvidenceRequestDisposition(
+                    finding.StableId,
+                    FindingEvidenceExecutionClassifier.BuildRequestIdentity(finding.EvidenceRequest!),
+                    "executed-pre-tester")).ToArray());
+        foreach (var finding in requestingFindings)
+        {
+            var requestIdentity = FindingEvidenceExecutionClassifier.BuildRequestIdentity(finding.EvidenceRequest!);
+            _recordFindingEvidenceOutcome(
+                goal.Id, requestingTask.Id, finding.StableId,
+                new FindingEvidenceOutcome(
+                    Honoured: true, ReceiptId: receipt.ReceiptId,
+                    ResultReason: passed ? FindingEvidenceOutcomeReason.ValidEvidence : FindingEvidenceOutcomeReason.CandidateRed,
+                    RequestedSelectionIdentity: requestIdentity,
+                    DecisionReason: "pre-tester-covered"),
+                attachedReceipt);
+        }
+
         decision = BuildCappedFindingEvidenceDeliveryRetry(
             goal, requestingTask, candidateSha, requestingFindings,
             [receipt.ReceiptId],

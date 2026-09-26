@@ -29,6 +29,7 @@ public sealed class ConductorDriverTestsPreTesterBudgetCoverage
                 category: FindingCategory.TestEvidence, classes: [requestedClass])]);
 
         var runs = 0;
+        var preTesterAttachments = new List<FindingEvidenceReceipt>();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
             runFocusedEvidence: (_, request) =>
@@ -37,15 +38,29 @@ public sealed class ConductorDriverTestsPreTesterBudgetCoverage
                 return new FocusedEvidenceRunResult(request, true, true,
                     "focused evidence executed", []);
             },
+            retryTaskWithCause: (goalId, taskId, message, round, cause) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: round, retryCause: cause),
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceRun: (goalId, taskId, message) =>
                 kernel.RecordFindingEvidenceRun(goalId, taskId, message),
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
-                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+            {
+                if (outcome.DecisionReason == "pre-tester-covered")
+                    preTesterAttachments.Add(Assert.IsType<FindingEvidenceReceipt>(receipt));
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
+            });
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(shouldRun ? 1 : 0, runs);
+        if (shouldRun)
+            Assert.Empty(preTesterAttachments);
+        else
+        {
+            var attached = Assert.Single(preTesterAttachments);
+            Assert.Equal(CandidateSha, attached.CandidateSha);
+            Assert.Equal(requestedClass, Assert.Single(attached.Request.Selections).TestClass);
+        }
     }
 }
