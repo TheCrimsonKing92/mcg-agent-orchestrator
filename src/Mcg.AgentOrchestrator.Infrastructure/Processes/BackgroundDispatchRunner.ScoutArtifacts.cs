@@ -18,6 +18,9 @@ public sealed partial class BackgroundDispatchRunner
             (plannerIndex > 0 && goal.Tasks.Take(plannerIndex).Any(candidate => candidate.RequiredRole == AgentRole.Researcher));
     }
 
+    private static bool RequiresDurableScoutResearchArtifact(Goal goal, TaskSpec planner)
+        => goal.RefinedSpec is not null && ScoutRoundPolicy.IsScoutPlanner(goal, planner);
+
     private static bool TryPersistScoutResearch(string selectedSourcePath, string standardOutputPath, out string diagnostic)
     {
         var captured = ResearcherOutputContract.ReadCapturedOutputTail(selectedSourcePath);

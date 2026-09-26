@@ -1416,7 +1416,7 @@ public sealed partial class BackgroundDispatchRunner
                             $"Planner output contract could not persist the accepted plan: {appendDiagnostic}. Retry Planner for contract repair."),
                         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed));
                 }
-                else if (ScoutRoundPolicy.IsScoutPlanner(goal, task) &&
+                else if (RequiresDurableScoutResearchArtifact(goal, task) &&
                     !TryPersistScoutResearch(scoutResearchSourcePath, processRecord.StandardOutputPath, out var scoutDiagnostic))
                 {
                     exitCode = 1;
