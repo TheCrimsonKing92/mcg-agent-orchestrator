@@ -93,7 +93,7 @@ internal static partial class StorageRetentionMaintenance
             mtpResultsRoot: DefaultMtpResultsRoot());
     }
 
-    internal static IReadOnlyCollection<StorageRetentionGoal> LoadPersistedGoals(
+    internal static StorageRetentionGoalLoadResult LoadPersistedGoals(
         ITransactionalOrchestratorStateRepository stateRepository)
     {
         GoalId[] goalIds;
@@ -104,16 +104,21 @@ internal static partial class StorageRetentionMaintenance
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return [];
+            return new([], ex.GetType().Name, []);
         }
         var goals = new List<StorageRetentionGoal>(goalIds.Length);
+        var failures = new List<StorageRetentionGoalLoadIssue>();
         foreach (var goalId in goalIds)
         {
             GoalSnapshot? snapshot;
+            var loadFailed = false;
             try { snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult(); }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                failures.Add(new StorageRetentionGoalLoadIssue(goalId.Value,
+                    "goal-snapshot-load-failed", ex.GetType().Name));
                 snapshot = null;
+                loadFailed = true;
             }
             if (snapshot is not null)
             {
@@ -121,12 +126,15 @@ internal static partial class StorageRetentionMaintenance
             }
             else
             {
+                if (!loadFailed)
+                    failures.Add(new StorageRetentionGoalLoadIssue(goalId.Value,
+                        "goal-snapshot-missing", null));
                 goals.Add(new StorageRetentionGoal(goalId.Value, GoalStatus.Active,
                     new Dictionary<string, WorkTaskStatus>(), IsStoreStandIn: true));
             }
         }
 
-        return goals;
+        return new(goals, null, failures);
     }
 
     internal static IReadOnlyCollection<string> SelectGoalOperationPrunableIds(
@@ -151,7 +159,8 @@ internal static partial class StorageRetentionMaintenance
         long? mtpUnattributedMaxBytesForTests = null,
         int? mtpUnattributedReclaimsPerSweepForTests = null,
         Func<int, bool>? mtpProcessHasExitedForTests = null,
-        StorageRetentionReclaimOptions? reclaimOptions = null)
+        StorageRetentionReclaimOptions? reclaimOptions = null,
+        StorageRetentionGoalLoadResult? goalLoad = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -196,9 +205,20 @@ internal static partial class StorageRetentionMaintenance
                 if (!goals.Any(goal => !goal.IsStoreStandIn))
                 {
                     decisions.Add(new EvidenceRetentionDecision(EvidenceArtifactFamily.RunEvents,
-                        EvidenceRetentionAction.Failed, orchestratorDirectory, null,
-                        EvidenceOwnerResolution.Unrecorded, "goal-store-unavailable-goal-rules-skipped"));
+                        EvidenceRetentionAction.RetainedUndecidable, orchestratorDirectory, null,
+                        EvidenceOwnerResolution.Unrecorded,
+                        goalLoad?.ListingFailureExceptionType is not null
+                            ? "goal-store-load-failed-goal-rules-skipped"
+                            : goals.Count == 0
+                                ? "goal-store-empty-goal-rules-skipped"
+                                : "goal-store-snapshots-unavailable-goal-rules-skipped",
+                        FailureExceptionType: goalLoad?.ListingFailureExceptionType));
                 }
+                foreach (var failure in goalLoad?.SnapshotFailures ?? [])
+                    decisions.Add(new EvidenceRetentionDecision(EvidenceArtifactFamily.RunEvents,
+                        EvidenceRetentionAction.RetainedUndecidable, orchestratorDirectory,
+                        failure.GoalId, EvidenceOwnerResolution.Unrecorded,
+                        failure.Reason, FailureExceptionType: failure.ExceptionType));
                 SweepWorkerArtifacts(logDirectory, goals, now, decisions);
                 SweepOperatorLogs(logDirectory, now, reclaim, decisions);
                 var retainedMtpAttemptOwnerKeys = SweepMtpResults(
@@ -665,7 +685,8 @@ internal static partial class StorageRetentionMaintenance
             if (goal.IsStoreStandIn)
             {
                 decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.RetainedUndecidable,
-                    goalDirectory, goal.GoalId, EvidenceOwnerResolution.Unrecorded, "goal-snapshot-unavailable"));
+                    goalDirectory, goal.GoalId, EvidenceOwnerResolution.Unrecorded,
+                    "goal-directory-has-no-unique-full-id-owner"));
                 continue;
             }
             if (!goal.IsTerminal)
@@ -707,9 +728,11 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
 
+            var retainedAttemptIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (IsReclaimableTerminalStatus(goal.Status))
             {
-                deleted += ReclaimTerminalGoalAttempts(goalDirectory, family, goal, attempts, now, reclaim, decisions);
+                deleted += ReclaimTerminalGoalAttempts(goalDirectory, family, goal, attempts, now,
+                    reclaim, decisions, retainedAttemptIds);
                 if (!Directory.Exists(goalDirectory))
                 {
                     continue;
@@ -734,6 +757,14 @@ internal static partial class StorageRetentionMaintenance
                 if (owner.Attempt is null && !owner.Ambiguous)
                 {
                     owner = EvidenceRetentionPolicy.ResolveLegacyOwner(attempts, trxPath);
+                }
+
+                if (owner.Attempt is not null && retainedAttemptIds.Contains(owner.Attempt.AttemptId))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.Preserved,
+                        trxPath, goal.GoalId, EvidenceOwnerResolution.UniqueTerminal,
+                        "terminal-attempt-unit-retained", owner.Attempt.AttemptId, owner.Attempt.Ordinal));
+                    continue;
                 }
 
                 if (owner.Attempt is not null && protectedAttemptIds.Contains(owner.Attempt.AttemptId))
@@ -915,6 +946,13 @@ internal static partial class StorageRetentionMaintenance
                 .ThenBy(item => item.File.LastWriteTimeUtc)
                 .ThenBy(item => item.File.FullName, StringComparer.OrdinalIgnoreCase))
             {
+                if (candidate.Owner is not null && retainedAttemptIds.Contains(candidate.Owner.AttemptId))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.Preserved,
+                        candidate.File.FullName, goal.GoalId, EvidenceOwnerResolution.UniqueTerminal,
+                        "terminal-attempt-unit-retained", candidate.Owner.AttemptId, candidate.Owner.Ordinal));
+                    continue;
+                }
                 if (!TryReadAttemptIdentities(goalDirectory, goal.GoalId, out var refreshedAttempts, out var refreshReason))
                 {
                     decisions.Add(new EvidenceRetentionDecision(
@@ -2173,14 +2211,15 @@ internal static partial class StorageRetentionMaintenance
         try
         {
             var directory = new DirectoryInfo(path);
-            var measurement = TryMeasureEntry(directory);
-            if (!measurement.Success)
+            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
             {
-                return (false, 0, measurement.ExceptionType);
+                return (false, 0, nameof(IOException));
             }
-
+            long bytes = 0;
+            foreach (var file in directory.EnumerateFiles("*", SearchOption.AllDirectories))
+                bytes = checked(bytes + file.Length);
             Directory.Delete(path, recursive: true);
-            return (true, measurement.Bytes, null);
+            return (true, bytes, null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OverflowException)
         {

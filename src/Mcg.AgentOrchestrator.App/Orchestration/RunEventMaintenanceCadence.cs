@@ -86,7 +86,7 @@ internal static class RunEventMaintenanceCadence
                     new SqliteOrchestratorStateRepository(workspace.SqliteStatePath));
             var terminalGoalIds = retentionGoals is null
                 ? null
-                : StorageRetentionMaintenance.SelectGoalOperationPrunableIds(retentionGoals);
+                : StorageRetentionMaintenance.SelectGoalOperationPrunableIds(retentionGoals.Goals);
             var options = RunEventMaintenanceOptions.Default with
             {
                 UtcNow = now,
@@ -107,10 +107,11 @@ internal static class RunEventMaintenanceCadence
                         workspace.LogDirectory,
                         workspace.OrchestratorDirectory,
                         workspace.ExecutionDirectory,
-                        retentionGoals,
+                        retentionGoals.Goals,
                         now,
-                        mtpResultsRoot: mtpResultsRootOverride ?? StorageRetentionMaintenance.DefaultMtpResultsRoot())
-                    : artifactRetentionOperation(workspace, retentionGoals, now, mtpResultsRootOverride);
+                        mtpResultsRoot: mtpResultsRootOverride ?? StorageRetentionMaintenance.DefaultMtpResultsRoot(),
+                        goalLoad: retentionGoals)
+                    : artifactRetentionOperation(workspace, retentionGoals.Goals, now, mtpResultsRootOverride);
             var receipt = FormatReceipt("cadence", options, result);
             Console.WriteLine(receipt);
             TryAppendJournal(journal, "run-events-maintenance", receipt, now);

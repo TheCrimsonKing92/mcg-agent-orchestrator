@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -27,6 +28,10 @@ public sealed class StorageRetentionGoalJournalCompressionTests
         Assert.True(File.Exists(failed));
         Assert.Equal(before, GoalOperationJournal.Read(fixture.ExecutionDirectory,
             new GoalId(RetentionReclaimFixture.CompletedId)).Entries);
+        Assert.Equal(before, GoalOperationJournal.ReadActive(fixture.ExecutionDirectory,
+            new GoalId(RetentionReclaimFixture.CompletedId)).Entries);
+        Assert.Equal(before, GoalOperationJournal.ReadStrict(fixture.ExecutionDirectory,
+            new GoalId(RetentionReclaimFixture.CompletedId)).Entries);
         Assert.Equal(completed + ".gz", GoalOperationJournal.ResolveReadPath(fixture.ExecutionDirectory,
             new GoalId(RetentionReclaimFixture.CompletedId)));
         Assert.Contains(new GoalId(RetentionReclaimFixture.CompletedId),
@@ -34,6 +39,70 @@ public sealed class StorageRetentionGoalJournalCompressionTests
         Assert.Contains(result.Decisions, decision => decision.Path == completed &&
             decision.Action == EvidenceRetentionAction.Compressed &&
             decision.Reason == "terminal-goal-journal-compressed");
+    }
+
+    [Xunit.Fact]
+    public void InvalidCompressedSiblingDefersThatJournalAndContinuesToNext()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        var invalid = WriteJournal(fixture, RetentionReclaimFixture.CompletedId);
+        var valid = WriteJournal(fixture, RetentionReclaimFixture.ActiveId);
+        File.WriteAllText(invalid + ".gz", "invalid gzip");
+
+        var result = fixture.Run(null,
+            fixture.Goal(RetentionReclaimFixture.CompletedId, GoalStatus.Completed),
+            fixture.Goal(RetentionReclaimFixture.ActiveId, GoalStatus.Cancelled));
+
+        Assert.True(File.Exists(invalid));
+        Assert.False(File.Exists(valid));
+        Assert.True(File.Exists(valid + ".gz"));
+        Assert.False(result.Failed);
+        Assert.Contains(result.Decisions, decision => decision.Path == invalid &&
+            decision.Reason == "journal-compression-failed" &&
+            decision.FailureExceptionType == nameof(InvalidDataException));
+        Assert.Single(GoalOperationJournal.Read(fixture.ExecutionDirectory,
+            new GoalId(RetentionReclaimFixture.CompletedId)).Entries);
+    }
+
+    [Xunit.Fact]
+    public void CompressedJournalReadIncludesEarlierArchive()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        WriteJournal(fixture, RetentionReclaimFixture.CompletedId);
+        fixture.Run(null, fixture.Goal(RetentionReclaimFixture.CompletedId, GoalStatus.Completed));
+        var goalId = new GoalId(RetentionReclaimFixture.CompletedId);
+        var archive = GoalOperationJournal.ArchivePathFor(fixture.ExecutionDirectory, goalId);
+        Directory.CreateDirectory(Path.GetDirectoryName(archive)!);
+        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        options.Converters.Add(new JsonStringEnumConverter());
+        File.WriteAllText(archive, JsonSerializer.Serialize(new GoalOperationJournalEntry(
+            goalId.Value + ":archive", goalId, "archive", GoalOperationStatus.Completed,
+            RetentionReclaimFixture.Now.AddDays(-40), "earlier"), options) + "\n");
+
+        Assert.Equal(2, GoalOperationJournal.Read(fixture.ExecutionDirectory, goalId).Entries.Count);
+        Assert.Single(GoalOperationJournal.ReadActive(fixture.ExecutionDirectory, goalId).Entries);
+    }
+
+    [Xunit.Fact]
+    public void ReaderAvoidsDuplicateCrashCopyAndIncludesLaterPlainAppend()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        var path = WriteJournal(fixture, RetentionReclaimFixture.CompletedId);
+        fixture.Run(null, fixture.Goal(RetentionReclaimFixture.CompletedId, GoalStatus.Completed));
+        var goalId = new GoalId(RetentionReclaimFixture.CompletedId);
+        using (var gzip = new GZipStream(File.OpenRead(path + ".gz"), CompressionMode.Decompress))
+        using (var plain = File.Create(path))
+            gzip.CopyTo(plain);
+
+        Assert.Single(GoalOperationJournal.ReadActive(fixture.ExecutionDirectory, goalId).Entries);
+
+        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        options.Converters.Add(new JsonStringEnumConverter());
+        File.AppendAllText(path, JsonSerializer.Serialize(new GoalOperationJournalEntry(
+            goalId.Value + ":later", goalId, "later", GoalOperationStatus.Completed,
+            RetentionReclaimFixture.Now.AddDays(-1), "new"), options) + "\n");
+
+        Assert.Equal(2, GoalOperationJournal.ReadActive(fixture.ExecutionDirectory, goalId).Entries.Count);
     }
 
     private static string WriteJournal(RetentionReclaimFixture fixture, string id)

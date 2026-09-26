@@ -30,4 +30,35 @@ public sealed class StorageRetentionTerminalGoalAttemptTests
         Assert.Contains(result.Decisions, decision => decision.Action == EvidenceRetentionAction.Deleted &&
             decision.Reason == "terminal-goal-attempt-past-age" && decision.AttemptId == "old-final");
     }
+
+    [Xunit.Fact]
+    public void YoungCompletedFinalAttemptIsPreserved()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        var young = fixture.WriteAttempt(RetentionReclaimFixture.CompletedId, "young-final", 2, 2);
+
+        fixture.Run(null, fixture.Goal(RetentionReclaimFixture.CompletedId, GoalStatus.Completed));
+
+        Assert.True(File.Exists(young));
+        Assert.True(File.Exists(Path.Combine(fixture.AttemptRoot(),
+            RetentionReclaimFixture.CompletedId, "young-final.attempt.json")));
+    }
+
+    [Xunit.Fact]
+    public void FailedPayloadDeletionKeepsAttemptMetadata()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        var payload = fixture.WriteAttempt(RetentionReclaimFixture.CompletedId, "locked", 1, 30);
+        fixture.WriteAttempt(RetentionReclaimFixture.CompletedId, "later-final", 2, 30);
+        var metadata = Path.Combine(fixture.AttemptRoot(), RetentionReclaimFixture.CompletedId,
+            "locked.attempt.json");
+        using var locked = new FileStream(payload, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        var result = fixture.Run(null,
+            fixture.Goal(RetentionReclaimFixture.CompletedId, GoalStatus.Completed));
+
+        Assert.True(File.Exists(metadata));
+        Assert.Contains(result.Decisions, decision => decision.Path == Path.GetDirectoryName(payload) &&
+            decision.Action == EvidenceRetentionAction.DeferredLocked);
+    }
 }

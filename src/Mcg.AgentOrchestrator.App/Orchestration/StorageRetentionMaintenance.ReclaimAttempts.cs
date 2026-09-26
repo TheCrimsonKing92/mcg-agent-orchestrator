@@ -12,8 +12,22 @@ internal static partial class StorageRetentionMaintenance
         StorageRetentionReclaimOptions options, List<EvidenceRetentionDecision> decisions)
     {
         var deleted = 0;
+        if (options.OwnerlessAttemptMaxAge is null)
+        {
+            decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.RetainedUndecidable,
+                directory, null, EvidenceOwnerResolution.Unrecorded,
+                "goal-directory-has-no-unique-full-id-owner"));
+            return 0;
+        }
         FileSystemInfo[] entries;
-        try { entries = new DirectoryInfo(directory).EnumerateFileSystemInfos().ToArray(); }
+        try
+        {
+            var root = new DirectoryInfo(directory);
+            root.Refresh();
+            if ((root.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new IOException("Operator attempt root is a reparse point.");
+            entries = root.EnumerateFileSystemInfos().ToArray();
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.DeferredLocked,
@@ -32,14 +46,24 @@ internal static partial class StorageRetentionMaintenance
 
     private static int TryReclaimUnknownGoalDirectory(
         string directory, EvidenceArtifactFamily family, DateTimeOffset now,
-        StorageRetentionReclaimOptions options, List<EvidenceRetentionDecision> decisions) =>
-        ReclaimAgedEntry(new DirectoryInfo(directory), family, null, EvidenceOwnerResolution.Unmatched,
+        StorageRetentionReclaimOptions options, List<EvidenceRetentionDecision> decisions)
+    {
+        if (options.OwnerlessAttemptMaxAge is null)
+        {
+            decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.RetainedUndecidable,
+                directory, null, EvidenceOwnerResolution.Unmatched,
+                "goal-directory-has-no-unique-full-id-owner"));
+            return 0;
+        }
+        return ReclaimAgedEntry(new DirectoryInfo(directory), family, null, EvidenceOwnerResolution.Unmatched,
             "unknown-goal-directory-past-age", options.OwnerlessAttemptMaxAge, now, decisions);
+    }
 
     private static int ReclaimTerminalGoalAttempts(
         string directory, EvidenceArtifactFamily family, StorageRetentionGoal goal,
         IReadOnlyCollection<RetentionAttemptIdentity> attempts, DateTimeOffset now,
-        StorageRetentionReclaimOptions options, List<EvidenceRetentionDecision> decisions)
+        StorageRetentionReclaimOptions options, List<EvidenceRetentionDecision> decisions,
+        ISet<string> retainedAttemptIds)
     {
         if (options.TerminalGoalAttemptMaxAge is null) return 0;
         var deleted = 0;
@@ -65,6 +89,7 @@ internal static partial class StorageRetentionMaintenance
             var measurements = entries.Select(TryMeasureEntry).ToArray();
             if (measurements.Any(measurement => !measurement.Success))
             {
+                retainedAttemptIds.Add(attempt.AttemptId);
                 decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.DeferredLocked,
                     directory, goal.GoalId, EvidenceOwnerResolution.UniqueTerminal,
                     "terminal-attempt-measure-failed", attempt.AttemptId, attempt.Ordinal));
@@ -73,13 +98,24 @@ internal static partial class StorageRetentionMaintenance
             if (now - measurements.Max(measurement => measurement.Newest) <=
                 MaxAttemptGrace(options.TerminalGoalAttemptMaxAge.Value))
             {
+                retainedAttemptIds.Add(attempt.AttemptId);
                 continue;
             }
-            foreach (var entry in entries)
+            var payloadDeleteFailed = false;
+            foreach (var entry in entries.OrderBy(entry =>
+                entry.Name.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase) ? 1 : 0))
             {
-                deleted += ReclaimAgedEntry(entry, family, goal.GoalId,
+                if (payloadDeleteFailed && entry.Name.EndsWith(".attempt.json", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                var removed = ReclaimAgedEntry(entry, family, goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal, "terminal-goal-attempt-past-age",
                     options.TerminalGoalAttemptMaxAge, now, decisions, attempt);
+                deleted += removed;
+                if (removed == 0)
+                {
+                    payloadDeleteFailed = true;
+                    retainedAttemptIds.Add(attempt.AttemptId);
+                }
             }
         }
         TryRemoveEmptyAttemptDirectory(directory, family, goal.GoalId, decisions);
@@ -142,7 +178,7 @@ internal static partial class StorageRetentionMaintenance
             return 0;
         }
         var deletion = entry is DirectoryInfo
-            ? TryDeleteDirectory(entry.FullName)
+            ? TryDeleteAttemptDirectory(entry.FullName)
             : DeleteMeasuredFile(entry.FullName, measure.Bytes);
         decisions.Add(new EvidenceRetentionDecision(family,
             deletion.Success ? EvidenceRetentionAction.Deleted : EvidenceRetentionAction.DeferredLocked,
@@ -164,6 +200,21 @@ internal static partial class StorageRetentionMaintenance
     {
         var result = TryDeleteExclusive(path);
         return (result.Success, bytes, result.ExceptionType);
+    }
+
+    private static (bool Success, long BytesAttempted, string? ExceptionType) TryDeleteAttemptDirectory(string path)
+    {
+        var measurement = TryMeasureEntry(new DirectoryInfo(path));
+        if (!measurement.Success) return (false, 0, measurement.ExceptionType);
+        try
+        {
+            Directory.Delete(path, recursive: true);
+            return (true, measurement.Bytes, null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (false, 0, ex.GetType().Name);
+        }
     }
 
     private static (bool Success, DateTimeOffset Newest, long Bytes, string? ExceptionType) TryMeasureEntry(

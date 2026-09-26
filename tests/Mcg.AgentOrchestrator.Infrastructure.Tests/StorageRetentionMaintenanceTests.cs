@@ -118,7 +118,7 @@ public sealed class StorageRetentionMaintenanceTests
             GoalSnapshotFor("33333333333333333333333333333333", GoalStatus.Active, WorkTaskStatus.Running)
         ]);
 
-        var goals = StorageRetentionMaintenance.LoadPersistedGoals(repository);
+        var goals = StorageRetentionMaintenance.LoadPersistedGoals(repository).Goals;
 
         Assert.Equal(2, goals.Count);
         var terminal = Assert.Single(goals, goal => goal.IsTerminal);
@@ -245,8 +245,8 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.Equal("beforeafter", File.ReadAllText(path));
     }
 
-    [Xunit.Fact(DisplayName = "AcceptanceRetention_last_failing_attempt_and_summaries_are_preserved")]
-    public void LastFailingAttemptAndSummariesArePreserved()
+    [Xunit.Fact(DisplayName = "AcceptanceRetention_aged_last_failing_attempt_is_deleted_and_summary_is_preserved")]
+    public void AgedLastFailingAttemptIsDeletedAndSummaryIsPreserved()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -959,7 +959,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void AcceptanceRetention_OrdinalBeatsMtime_PreservesFinalAndLastFailure()
+    public void AcceptanceRetention_OrdinalBeatsMtime_DeletesOldFinalAndKeepsYoungFailure()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -1294,9 +1294,9 @@ public sealed class StorageRetentionMaintenanceTests
 
         Assert.True(Directory.Exists(inaccessibleOwner));
         Assert.True(laterFamilyReached);
-        Assert.True(result.Failed, "An empty goal store leaves goal-dependent retention rules unavailable.");
+        Assert.False(result.Failed, "An empty goal store produces a partial retention receipt.");
         Assert.Contains(result.Decisions, decision =>
-            decision.Reason == "goal-store-unavailable-goal-rules-skipped");
+            decision.Reason == "goal-store-empty-goal-rules-skipped");
         Assert.Contains(result.Decisions, decision =>
             decision.Path == inaccessibleOwner &&
             decision.Action == EvidenceRetentionAction.Preserved &&
@@ -1501,7 +1501,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void MtpRetention_AmbiguousRunRetainsEveryCandidateOwnerMetadata()
+    public void MtpRetention_AmbiguousRunKeepsMtpRunButDeletesAgedTerminalMetadata()
     {
         const string secondGoalId = "33333333333333333333333333333333";
         using var fixture = new RetentionFixture();

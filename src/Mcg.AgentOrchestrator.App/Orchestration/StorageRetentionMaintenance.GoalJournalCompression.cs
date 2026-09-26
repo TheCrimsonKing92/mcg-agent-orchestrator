@@ -28,38 +28,39 @@ internal static partial class StorageRetentionMaintenance
                         EvidenceOwnerResolution.UniqueTerminal, "within-grace-period"));
                     continue;
                 }
-                if (File.Exists(destination))
-                {
-                    decisions.Add(new EvidenceRetentionDecision(EvidenceArtifactFamily.GoalOperationJournals,
-                        EvidenceRetentionAction.Preserved, source, goalId,
-                        EvidenceOwnerResolution.UniqueTerminal, "journal-compressed-sibling-exists"));
-                    continue;
-                }
                 long bytes;
-                byte[] expectedHash;
-                using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None))
+                using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Delete))
                 {
                     bytes = input.Length;
-                    expectedHash = SHA256.HashData(input);
+                    var expectedHash = SHA256.HashData(input);
                     input.Position = 0;
-                    using var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                    using var gzip = new GZipStream(output, CompressionLevel.SmallestSize);
-                    input.CopyTo(gzip);
-                }
-                using (var verification = new GZipStream(File.OpenRead(temporary), CompressionMode.Decompress))
-                {
-                    if (!SHA256.HashData(verification).AsSpan().SequenceEqual(expectedHash))
+                    if (!File.Exists(destination))
+                    {
+                        using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                        using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize))
+                            input.CopyTo(gzip);
+                    }
+                    var compressed = File.Exists(destination) ? destination : temporary;
+                    using (var verification = new GZipStream(File.OpenRead(compressed), CompressionMode.Decompress))
+                    {
+                        if (!SHA256.HashData(verification).AsSpan().SequenceEqual(expectedHash))
+                            throw new InvalidDataException("Compressed journal failed content verification.");
+                    }
+                    if (compressed == temporary)
+                    {
+                        File.Move(temporary, destination);
+                        published = true;
+                    }
+                    if (input.Length != bytes)
                         throw new InvalidDataException("Compressed journal failed content verification.");
+                    File.Delete(source);
                 }
-                File.Move(temporary, destination);
-                published = true;
-                File.Delete(source);
                 decisions.Add(new EvidenceRetentionDecision(EvidenceArtifactFamily.GoalOperationJournals,
                     EvidenceRetentionAction.Compressed, source, goalId,
                     EvidenceOwnerResolution.UniqueTerminal, "terminal-goal-journal-compressed",
                     BytesAttempted: bytes, BytesReclaimed: Math.Max(0, bytes - new FileInfo(destination).Length)));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
             {
                 TryDelete(temporary);
                 if (published && File.Exists(source)) TryDelete(destination);

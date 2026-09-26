@@ -693,30 +693,24 @@ internal static partial class GoalOperationJournal
         bool rejectMalformedEntries)
     {
         var path = PathFor(executionDirectory, goalId);
-        if (!File.Exists(path))
-        {
-            if (!includeArchive)
-            {
-                return new GoalOperationJournalSummary(path, [], [], []);
-            }
-
-            var compressedPath = path + ".gz";
-            var archivePath = ArchivePathFor(executionDirectory, goalId);
-            if (!File.Exists(compressedPath) && !File.Exists(archivePath))
-            {
-                return new GoalOperationJournalSummary(path, [], [], []);
-            }
-
-            path = File.Exists(compressedPath) ? compressedPath : archivePath;
-        }
-
-        var entries = ReadEntries(path, rejectMalformedEntries);
-        if (includeArchive && !path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) &&
-            File.Exists(path + ".gz"))
-        {
-            entries = ReadEntries(path + ".gz", rejectMalformedEntries).Concat(entries)
+        var plainExists = File.Exists(path);
+        var compressedPath = path + ".gz";
+        var compressedExists = File.Exists(compressedPath);
+        var archivePath = ArchivePathFor(executionDirectory, goalId);
+        var plainEntries = plainExists ? ReadEntries(path, rejectMalformedEntries) : [];
+        GoalOperationJournalEntry[] compressedEntries;
+        try { compressedEntries = compressedExists ? ReadEntries(compressedPath, rejectMalformedEntries) : []; }
+        catch (InvalidDataException) when (plainExists) { compressedEntries = []; }
+        var plainIncludesCompressed = plainEntries.Length >= compressedEntries.Length &&
+            plainEntries.Take(compressedEntries.Length).Select(entry => JsonSerializer.Serialize(entry, JsonOptions))
+                .SequenceEqual(compressedEntries.Select(entry => JsonSerializer.Serialize(entry, JsonOptions)));
+        var entries = plainIncludesCompressed ? plainEntries : compressedEntries.Concat(plainEntries)
+            .OrderBy(entry => entry.At).ToArray();
+        if (includeArchive && File.Exists(archivePath))
+            entries = ReadEntries(archivePath, rejectMalformedEntries).Concat(entries)
                 .OrderBy(entry => entry.At).ToArray();
-        }
+        path = plainExists ? path : compressedExists ? compressedPath :
+            includeArchive && File.Exists(archivePath) ? archivePath : path;
         return BuildSummary(path, entries);
     }
 
