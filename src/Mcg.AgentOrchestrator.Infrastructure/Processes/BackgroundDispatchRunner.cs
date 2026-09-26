@@ -1339,6 +1339,7 @@ public sealed partial class BackgroundDispatchRunner
         }
 
         PlannerCandidateDivergenceReceipt? plannerCandidateDivergence = null;
+        var scoutResearchSourcePath = processRecord.StandardOutputPath;
         if (task.RequiredRole == AgentRole.Planner && (exitCode == 0 || successfulChildResultAvailable))
         {
             var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
@@ -1353,18 +1354,22 @@ public sealed partial class BackgroundDispatchRunner
             }
             else if (task.LastDispatch?.PlannerSampleCount > 1)
             {
-                var selection = PlannerCandidateSelector.Select(
-                    PlannerSampleDispatcher.CollectCandidates(
+                var candidates = PlannerSampleDispatcher.CollectCandidates(
                         processRecord.StandardOutputPath,
                         task.LastDispatch.PlannerSampleCount,
                         dispatchAttempt,
                         processRecord.CompletedAt is { } completedAt
                             ? Math.Max(0, (long)(completedAt - processRecord.StartedAt).TotalMilliseconds)
-                            : null),
+                            : null);
+                var selection = PlannerCandidateSelector.Select(
+                    candidates,
                     processRecord.WorkingDirectory,
                     acceptanceCriteria);
                 plannerContract = selection.SelectedContract;
                 plannerCandidateDivergence = selection.Receipt;
+                if (selection.Receipt.SelectedCandidateIndex is int selectedIndex)
+                    scoutResearchSourcePath = candidates[selectedIndex].SourcePath
+                        ?? throw new InvalidOperationException("Selected Planner candidate has no stdout source path.");
             }
             else
             {
@@ -1412,7 +1417,7 @@ public sealed partial class BackgroundDispatchRunner
                         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed));
                 }
                 else if (ScoutRoundPolicy.IsScoutPlanner(goal, task) &&
-                    !TryPersistScoutResearch(processRecord.StandardOutputPath, processRecord.StandardOutputPath, out var scoutDiagnostic))
+                    !TryPersistScoutResearch(scoutResearchSourcePath, processRecord.StandardOutputPath, out var scoutDiagnostic))
                 {
                     exitCode = 1;
                     completionContractSucceeded = false;

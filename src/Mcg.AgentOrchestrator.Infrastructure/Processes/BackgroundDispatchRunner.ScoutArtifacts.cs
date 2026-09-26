@@ -1,5 +1,4 @@
 using Mcg.AgentOrchestrator.Core;
-using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -22,8 +21,9 @@ public sealed partial class BackgroundDispatchRunner
     private static bool TryPersistScoutResearch(string selectedSourcePath, string standardOutputPath, out string diagnostic)
     {
         var captured = ResearcherOutputContract.ReadCapturedOutputTail(selectedSourcePath);
-        var planStart = Regex.Match(captured, @"(?im)^[ \t]{0,3}#{1,6}[ \t]+premise[ \t]+validity[ \t]*$");
-        var researchOutput = planStart.Success ? captured[..planStart.Index] : captured;
+        var normalized = MarkdownHeadingNormalizer.SeparateInlineAtxHeadings(captured);
+        var planStart = PlannerOutputContract.FindFirstRequiredHeadingIndex(normalized);
+        var researchOutput = planStart >= 0 ? normalized[..planStart] : normalized;
         var contract = ResearcherOutputContract.Resolve(researchOutput);
         if (!contract.Succeeded || contract.Research is null)
         {
