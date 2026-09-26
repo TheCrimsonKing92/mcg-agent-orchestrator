@@ -1912,19 +1912,8 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        if (candidateShaAvailable &&
-            PreTesterEvidenceIndexLines.Latest(
-                goal,
-                goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Tester)?.Id ?? requestingTask.Id,
-                candidateSha) is { Outcome: "green" or "red" } preTesterReceipt)
-        {
-            decision = BuildCappedFindingEvidenceDeliveryRetry(
-                goal, requestingTask, candidateSha!, requestingFindings,
-                [preTesterReceipt.ReceiptId],
-                "The once-per-candidate focused evidence run was already executed before Tester dispatch; " +
-                "its candidate-bound receipt and any not-run classes are in the evidence index.");
-            return true;
-        }
+        if (candidateShaAvailable && TryRouteCoveredPreTesterRequest(
+                goal, requestingTask, candidateSha!, requestingFindings, out decision)) return true;
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 

@@ -12,6 +12,30 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
     private const string BaseSha = "aaa1111";
 
     [Fact]
+    public void StartedBackgroundAttemptHoldsTesterAcrossTicks()
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        var roles = new List<AgentRole>();
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(scenario.Root, "background-attempts"),
+            isProcessAlive: processId => processId == 7103,
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103),
+            acquireStableSlotLease: (_, _) => null);
+        var driver = scenario.Driver(
+            _ => throw new Xunit.Sdk.XunitException("Background runner must not run inline."),
+            roles.Add, coordinator: coordinator);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Empty(roles);
+        Assert.Single(scenario.Goal.Timeline.Where(evt =>
+            evt.TaskId == scenario.Tester.Id &&
+            evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+            evt.Message.StartsWith("finding-evidence pre-tester outcome=started;", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void ChangedDeferredClassesRunBeforeTesterAndGreenReceiptIsIndexed()
     {
         using var scenario = new Scenario("deferred - DeferredAlphaTests, DeferredBetaTests", BaseSha,
@@ -63,6 +87,28 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         Assert.DoesNotContain(AgentRole.Tester, roles);
         Assert.StartsWith("ACTIONABLE_CANDIDATE_RED", Assert.Single(feedback), StringComparison.Ordinal);
         Assert.Contains("DeferredAlphaTests.FailsOnCandidate", feedback[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InheritedRedContinuesToTesterWithoutDeveloperRetry()
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        var roles = new List<AgentRole>();
+        var feedback = new List<string>();
+        var driver = scenario.Driver(request =>
+        {
+            var red = CandidateRedFindingEvidence(request, CandidateSha,
+                "DeferredAlphaTests.FailsOnBothArms");
+            var baseline = red.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Baseline);
+            return red with { Arms = red.Arms.Select(arm => arm.Arm == FindingEvidenceArm.Baseline
+                ? baseline with { Disposition = FindingEvidenceArmDisposition.Red, Passed = false }
+                : arm).ToArray() };
+        }, roles.Add, feedback.Add);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal([AgentRole.Tester], roles);
+        Assert.Empty(feedback);
     }
 
     [Fact]
@@ -174,12 +220,13 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         public ConductorDriver Driver(
             Func<string, FocusedEvidenceRunResult> run,
             Action<AgentRole> dispatched,
-            Action<string>? feedback = null)
+            Action<string>? feedback = null,
+            ConductorParallelAcceptanceAttemptCoordinator? coordinator = null)
         {
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
-                focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                focusedEvidenceAttemptCoordinator: coordinator ?? new ConductorParallelAcceptanceAttemptCoordinator(
                     Path.Combine(Root, "attempts"), runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) => run(request),
                 dispatchAndStart: goal =>
