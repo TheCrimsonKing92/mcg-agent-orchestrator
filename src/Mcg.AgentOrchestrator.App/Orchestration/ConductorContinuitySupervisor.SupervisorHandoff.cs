@@ -27,6 +27,10 @@ internal sealed partial class ConductorContinuitySupervisor
             record = seam.ReadRecord(inboundPath);
             if (!SameRunDirectory(record.AdoptedBuild.RunDirectory, supervisorHandoff.OwnBuild.RunDirectory))
                 throw new InvalidDataException("Inbound handoff targets a different run directory.");
+            if (record.ActiveChild is { } active &&
+                !seam.IsAlive(active.Process) &&
+                ConductorContinuityExitArtifact.TryRead(active.ExitArtifactPath) is null)
+                throw new InvalidDataException("Adopted child cannot be identified and has no exit artifact.");
             seam.WriteReady(record.ReadyPath,
                 new ConductorSupervisorReadyRecord(record.Token, seam.Self, supervisorHandoff.OwnBuild));
             var deadline = _timeProvider.GetUtcNow() + supervisorHandoff.Timeout;
@@ -59,7 +63,8 @@ internal sealed partial class ConductorContinuitySupervisor
     private async Task<bool> TryHandOffSupervisionAsync(
         IReadOnlyList<string> args, string workingDirectory, string outputDirectory,
         ConductorPreparedSuccessor? pendingSuccessor, int renewalsWithoutProgress,
-        string? blockedActivationCommit, CancellationToken cancellationToken)
+        string? blockedActivationCommit, CancellationToken cancellationToken,
+        ConductorSupervisorActiveChild? activeChild = null)
     {
         var target = _adoptedSupervisorTarget;
         _adoptedSupervisorTarget = null;
@@ -82,7 +87,7 @@ internal sealed partial class ConductorContinuitySupervisor
             var record = new ConductorSupervisorHandoffRecord(token, seam.Self, supervisorHandoff.OwnBuild,
                 new ConductorSupervisorBuildSnapshot(target.CommitSha, target.StagedBuildId, appDll),
                 pendingSnapshot, renewalsWithoutProgress, blockedActivationCommit,
-                0, readyPath);
+                0, readyPath, activeChild);
             var recordPath = seam.WriteRecord(record);
             var stamp = _timeProvider.GetUtcNow().ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture);
             var request = new ConductLoopLaunchRequest("supervisor", args,
@@ -163,6 +168,16 @@ internal sealed partial class ConductorContinuitySupervisor
             new { reason, commitSha = supervisorHandoff.OwnBuild.CommitSha,
                 runDir = supervisorHandoff.OwnBuild.RunDirectory,
                 pid = supervisorHandoff.Seam.Self.ProcessId });
+    }
+
+    private void RecordSupervisorHandoffPreparationFailure(ConductorActivationBuild target, Exception error)
+    {
+        if (supervisorHandoff is null) return;
+        RecordSupervisorEvent("supervisor-handoff", "failed", "SUPERVISOR_HANDOFF_FAILED",
+            new { reason = $"child-identity:{error.GetType().Name}:{error.Message}",
+                fromCommit = supervisorHandoff.OwnBuild.CommitSha,
+                fromRunDir = supervisorHandoff.OwnBuild.RunDirectory,
+                toCommit = target.CommitSha, toRunDir = target.StagedBuildId });
     }
 
     private void RecordSupervisorEvent(string operation, string status, string eventName, object payload)

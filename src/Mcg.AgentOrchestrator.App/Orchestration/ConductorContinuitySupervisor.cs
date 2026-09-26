@@ -170,6 +170,64 @@ internal sealed partial class ConductorContinuitySupervisor(
                     staged.AppDllPath, staged.RepositoryHead, staged.StagedSourceCommit,
                     staged.SelfCheckDetail, stagedLease);
             }
+            if (inherited.ActiveChild is { } activeChild)
+            {
+                attempt = activeChild.Attempt;
+                var outputDirectory = Path.GetFullPath(logDirectory ?? Path.Combine(artifactDirectory, "logs"));
+                var watched = await ObserveInheritedChildAsync(activeChild, currentBuild,
+                    outputDirectory, cancellationToken).ConfigureAwait(false);
+                if (watched.Stalled && !watched.TerminationConfirmed)
+                {
+                    EscalateUnconfirmedTickStall(attempt, watched,
+                        activeChild.StdoutPath, activeChild.StderrPath);
+                    return 1;
+                }
+                var activeExit = ConductorContinuityExitArtifact.TryRead(activeChild.ExitArtifactPath);
+                TryDeleteArtifact(activeChild.ExitArtifactPath);
+                if (watched.Failure is not null || watched.Result.ExitCode != 0 || activeExit is null)
+                {
+                    Record("restart", "escalated", attempt,
+                        watched.Failure ?? $"attached-child-exit={watched.Result.ExitCode}",
+                        activeChild.Process.ProcessId, activeChild.StdoutPath, activeChild.StderrPath);
+                    return 1;
+                }
+                if (!activeExit.RestartRequested)
+                {
+                    Record("stopped", "completed", attempt, activeExit.StopReason,
+                        activeChild.Process.ProcessId, activeChild.StdoutPath, activeChild.StderrPath);
+                    return 0;
+                }
+                renewalsWithoutProgress = activeExit.Done > 0 ? 0 : renewalsWithoutProgress + 1;
+                if (renewalsWithoutProgress > maxRenewalsWithoutProgress)
+                {
+                    Record("restart", "escalated", attempt, "renewal-cap after supervisor handoff",
+                        activeChild.Process.ProcessId, activeChild.StdoutPath, activeChild.StderrPath);
+                    return 1;
+                }
+                Record("restart", "planned", attempt, activeExit.StopReason,
+                    activeChild.Process.ProcessId, activeChild.StdoutPath, activeChild.StderrPath);
+                if (stageSuccessor is not null)
+                {
+                    try
+                    {
+                        pendingSuccessor = stageSuccessor(cancellationToken);
+                        if (pendingSuccessor is not null &&
+                            string.Equals(pendingSuccessor.RepositoryHead, blockedActivationCommit,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            pendingSuccessor.RunDirectoryLease?.Dispose();
+                            pendingSuccessor = null;
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        EmitHandoff("failed", attempt,
+                            $"LOOP_HANDOFF_FAILED attempt={attempt} phase=stage reason={Sanitize(ex.Message)}",
+                            activeChild.Process.ProcessId, activeChild.StdoutPath, activeChild.StderrPath);
+                    }
+                }
+            }
         }
         while (true)
         {
@@ -394,6 +452,36 @@ internal sealed partial class ConductorContinuitySupervisor(
                         {
                             RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
                             NoteAdoptedBuild(candidateBuild);
+                            ConductorSupervisorActiveChild? activeChild = null;
+                            if (!runTask.IsCompleted && supervisorHandoff is not null)
+                            {
+                                var childPid = Volatile.Read(ref liveProcessId);
+                                if (childPid > 0)
+                                {
+                                    try
+                                    {
+                                        activeChild = new ConductorSupervisorActiveChild(
+                                            supervisorHandoff.Seam.Identify(childPid), artifactPath,
+                                            stdoutPath, stderrPath, attempt);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        RecordSupervisorHandoffPreparationFailure(candidateBuild, ex);
+                                    }
+                                }
+                            }
+                            if (activeChild is not null)
+                            {
+                                if (await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
+                                    null, renewalsWithoutProgress, blockedActivationCommit,
+                                    cancellationToken, activeChild).ConfigureAwait(false))
+                                {
+                                    // Keep the stdout/stderr pipe owner alive until this child exits.
+                                    // The successor holds the supervisory lease during that interval.
+                                    await runTask.ConfigureAwait(false);
+                                    return 0;
+                                }
+                            }
                         }
                         if (activation.ProcessResult is not null)
                         {

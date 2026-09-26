@@ -18,7 +18,9 @@ public sealed class ConductorContinuitySupervisorHandoffTests
         Assert.Equal(fixture.Seam.Successor, fixture.Seam.Owner);
         Assert.Contains(fixture.Events.Events, evt => evt.Operation == "supervisor-handoff" &&
             evt.Status == "completed" && evt.Detail.Contains("SUPERVISOR_HANDOFF", StringComparison.Ordinal));
-        Assert.Contains(fixture.ConductEvents, evt => evt.StartsWith("SUPERVISOR_BUILD ", StringComparison.Ordinal));
+        Assert.Contains(fixture.ConductEvents, evt => evt.StartsWith("SUPERVISOR_BUILD ", StringComparison.Ordinal) &&
+            evt.Contains("\"commitSha\":\"commit-a\"", StringComparison.Ordinal) &&
+            evt.Contains("\"runDir\":\"C:\\\\run-a\"", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
@@ -32,6 +34,22 @@ public sealed class ConductorContinuitySupervisorHandoffTests
         Assert.Empty(fixture.Seam.Launches);
         Assert.Equal(3, fixture.Host.Requests.Count);
     }
+
+    [Xunit.Fact]
+    public async Task AdoptedChildRemainsRunningWhileSupervisorLeaseTransfers()
+    {
+        var fixture = new SupervisorHandoffFixture(holdAdoptedChild: true);
+        var run = fixture.RunAsync();
+
+        await fixture.Host.AdoptedChildStarted;
+        await fixture.Seam.TransferObserved;
+        Assert.Equal(fixture.Seam.Successor, fixture.Seam.Owner);
+        Assert.False(run.IsCompleted);
+        Assert.Equal(2, fixture.Host.Requests.Count);
+
+        fixture.Host.ReleaseAdoptedChild();
+        Assert.Equal(0, await run);
+    }
 }
 
 internal sealed class SupervisorHandoffFixture
@@ -43,11 +61,12 @@ internal sealed class SupervisorHandoffFixture
     private readonly string _ownRunDirectory;
     private int _stageCalls;
 
-    internal SupervisorHandoffFixture(string ownRunDirectory = "C:\\run-a", int stopAtIndex = 2)
+    internal SupervisorHandoffFixture(string ownRunDirectory = "C:\\run-a", int stopAtIndex = 2,
+        bool holdAdoptedChild = false)
     {
         _ownRunDirectory = ownRunDirectory;
         Seam = new FakeHandoffSeam(new ConductorSupervisorBuildIdentity("commit-a", ownRunDirectory));
-        Host = new ScriptedHost(stopAtIndex);
+        Host = new ScriptedHost(stopAtIndex, holdAdoptedChild);
     }
 
     internal FakeHandoffSeam Seam { get; }
@@ -80,16 +99,21 @@ internal sealed class SupervisorHandoffFixture
             $"commit-{letter}", $"commit-{letter}", "self-check=true");
     }
 
-    internal sealed class ScriptedHost(int stopAtIndex) : IConductorSupervisorProcessHost
+    internal sealed class ScriptedHost(int stopAtIndex, bool holdAdoptedChild) : IConductorSupervisorProcessHost
     {
         internal List<ConductorSupervisorProcessRequest> Requests { get; } = [];
+        private readonly TaskCompletionSource _adoptedChildStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseAdoptedChild = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task AdoptedChildStarted => _adoptedChildStarted.Task;
+        internal void ReleaseAdoptedChild() => _releaseAdoptedChild.TrySetResult();
 
-        public Task<ConductorSupervisorProcessResult> RunAsync(
+        public async Task<ConductorSupervisorProcessResult> RunAsync(
             ConductorSupervisorProcessRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var index = Requests.Count;
             Requests.Add(request);
+            request.OnProcessStarted?.Invoke(500 + index);
             if (index > 0)
             {
                 request.OnStandardOutputLine!("LOOP_READY lock=acquired");
@@ -97,10 +121,15 @@ internal sealed class SupervisorHandoffFixture
                 for (var tick = 1; tick <= 3; tick++)
                     request.OnStandardOutputLine($"TICK_END tick={tick} activation=true");
             }
+            if (holdAdoptedChild && index == 1)
+            {
+                _adoptedChildStarted.TrySetResult();
+                await _releaseAdoptedChild.Task.WaitAsync(cancellationToken);
+            }
             ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
                 new ConductorContinuityExitArtifact(index == stopAtIndex ? "stop-file" : "max-duration",
                     3, 1, RestartRequested: index != stopAtIndex));
-            return Task.FromResult(new ConductorSupervisorProcessResult(0, 500 + index));
+            return new ConductorSupervisorProcessResult(0, 500 + index);
         }
     }
 
@@ -116,6 +145,8 @@ internal sealed class SupervisorHandoffFixture
     {
         internal readonly ConductorSupervisorProcessIdentity Successor =
             new(900, new DateTimeOffset(2026, 9, 26, 0, 1, 0, TimeSpan.Zero));
+        private readonly TaskCompletionSource _transferObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task TransferObserved => _transferObserved.Task;
         private ConductorSupervisorHandoffRecord? _record;
         internal bool ThrowOnLaunch { get; set; }
         internal bool SuppressReadiness { get; set; }
@@ -137,6 +168,7 @@ internal sealed class SupervisorHandoffFixture
             Assert.Equal(Self, from);
             Assert.Equal(Successor, to);
             Owner = to;
+            _transferObserved.TrySetResult();
         }
         public string WriteRecord(ConductorSupervisorHandoffRecord record)
         {
@@ -159,6 +191,11 @@ internal sealed class SupervisorHandoffFixture
         }
         public bool IsAlive(ConductorSupervisorProcessIdentity process) => true;
         public bool IsRunning(int processId) => true;
+        public ConductorSupervisorProcessIdentity Identify(int processId) =>
+            new(processId, new DateTimeOffset(2026, 9, 26, 0, 0, 0, TimeSpan.Zero));
+        public Task<ConductorSupervisorProcessResult> ObserveChildAsync(
+            ConductorSupervisorActiveChild child, CancellationToken cancellationToken) =>
+            throw new NotSupportedException("No active child in this fixture.");
         public void StopPending(int processId) { }
     }
 

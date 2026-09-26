@@ -24,11 +24,16 @@ internal sealed record ConductorSupervisorHandoffRecord(
     int RenewalsWithoutProgress,
     string? BlockedActivationCommit,
     int ConsecutiveFailures,
-    string ReadyPath);
+    string ReadyPath,
+    ConductorSupervisorActiveChild? ActiveChild = null);
 
 internal sealed record ConductorSupervisorReadyRecord(
     string Token, ConductorSupervisorProcessIdentity Successor,
     ConductorSupervisorBuildIdentity Build);
+
+internal sealed record ConductorSupervisorActiveChild(
+    ConductorSupervisorProcessIdentity Process, string ExitArtifactPath,
+    string StdoutPath, string StderrPath, int Attempt);
 
 internal interface IConductorSupervisorHandoffSeam
 {
@@ -45,6 +50,9 @@ internal interface IConductorSupervisorHandoffSeam
     ConductLoopLaunchResult Launch(ConductLoopLaunchRequest request);
     bool IsAlive(ConductorSupervisorProcessIdentity process);
     bool IsRunning(int processId);
+    ConductorSupervisorProcessIdentity Identify(int processId);
+    Task<ConductorSupervisorProcessResult> ObserveChildAsync(
+        ConductorSupervisorActiveChild child, CancellationToken cancellationToken);
     void StopPending(int processId);
 }
 
@@ -153,6 +161,52 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
 
     public bool IsRunning(int processId) =>
         _launched.TryGetValue(processId, out var startedAt) && _probe.IsSameProcess(processId, startedAt);
+
+    public ConductorSupervisorProcessIdentity Identify(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return new ConductorSupervisorProcessIdentity(processId,
+            new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero));
+    }
+
+    public async Task<ConductorSupervisorProcessResult> ObserveChildAsync(
+        ConductorSupervisorActiveChild child, CancellationToken cancellationToken)
+    {
+        Process process;
+        try { process = Process.GetProcessById(child.Process.ProcessId); }
+        catch (ArgumentException) when (ConductorContinuityExitArtifact.TryRead(child.ExitArtifactPath) is not null)
+        {
+            return new ConductorSupervisorProcessResult(0, child.Process.ProcessId,
+                child.StdoutPath, child.StderrPath);
+        }
+        using (process)
+        {
+        if (!IsAlive(child.Process))
+        {
+            if (ConductorContinuityExitArtifact.TryRead(child.ExitArtifactPath) is not null)
+                return new ConductorSupervisorProcessResult(0, child.Process.ProcessId,
+                    child.StdoutPath, child.StderrPath);
+            throw new InvalidOperationException("Adopted child identity changed before attachment.");
+        }
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            var terminated = process.HasExited;
+            if (!terminated)
+            {
+                process.Kill(entireProcessTree: true);
+                terminated = process.WaitForExit(5000);
+            }
+            return new ConductorSupervisorProcessResult(-1, child.Process.ProcessId,
+                child.StdoutPath, child.StderrPath, terminated);
+        }
+        return new ConductorSupervisorProcessResult(process.ExitCode, child.Process.ProcessId,
+            child.StdoutPath, child.StderrPath);
+        }
+    }
 
     public void StopPending(int processId)
     {
