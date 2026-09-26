@@ -86,7 +86,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Action<string>? raiseActivationAttention = null,
     TimeSpan? tickStallBudget = null,
     Func<TimeSpan, CancellationToken, Task>? tickStallDelay = null,
-    IConductorDiagnosticDumpCapture? dumpCapture = null)
+    IConductorDiagnosticDumpCapture? dumpCapture = null,
+    ConductorSupervisorHandoffOptions? supervisorHandoff = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -144,6 +145,32 @@ internal sealed partial class ConductorContinuitySupervisor(
 
         try
         {
+        var inherited = await BeginSupervisionAsync(cancellationToken).ConfigureAwait(false);
+        if (supervisorHandoff is not null)
+        {
+            var own = supervisorHandoff.OwnBuild;
+            var ownDll = Path.Combine(own.RunDirectory, "Mcg.AgentOrchestrator.App.dll");
+            IDisposable? ownLease = File.Exists(ownDll)
+                ? File.Open(ownDll, FileMode.Open, FileAccess.Read, FileShare.Read)
+                : null;
+            currentBuild = new ConductorActivationBuild(own.CommitSha, own.RunDirectory,
+                [_dotnetPath, ownDll], ownLease);
+        }
+        if (inherited is not null)
+        {
+            renewalsWithoutProgress = inherited.RenewalsWithoutProgress;
+            blockedActivationCommit = inherited.BlockedActivationCommit;
+            _consecutiveSupervisorHandoffFailures = inherited.ConsecutiveFailures;
+            if (inherited.PendingSuccessor is { } staged)
+            {
+                IDisposable? stagedLease = File.Exists(staged.AppDllPath)
+                    ? File.Open(staged.AppDllPath, FileMode.Open, FileAccess.Read, FileShare.Read)
+                    : null;
+                pendingSuccessor = new ConductorPreparedSuccessor(staged.RunDirectory,
+                    staged.AppDllPath, staged.RepositoryHead, staged.StagedSourceCommit,
+                    staged.SelfCheckDetail, stagedLease);
+            }
+        }
         while (true)
         {
             attempt++;
@@ -366,6 +393,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         if (activation.Adopted)
                         {
                             RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
+                            NoteAdoptedBuild(candidateBuild);
                         }
                         if (activation.ProcessResult is not null)
                         {
@@ -530,6 +558,10 @@ internal sealed partial class ConductorContinuitySupervisor(
                         stdoutPath,
                         stderrPath);
                 }
+                if (await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
+                    pendingSuccessor, renewalsWithoutProgress, blockedActivationCommit,
+                    cancellationToken).ConfigureAwait(false))
+                    return 0;
                 continue;
             }
 
