@@ -82,9 +82,9 @@ public static partial class RepositoryChangeClassifier
                     changes.Add(new(child, "duplicate-key",
                         CanonicalDuplicates(left.Where(property => property.Name == name).Select(property => property.Value)),
                         CanonicalDuplicates(right.Where(property => property.Name == name).Select(property => property.Value))));
-                var old = left.LastOrDefault(property => property.Name == name);
-                var current = right.LastOrDefault(property => property.Name == name);
-                DescribeEntries(old.Name is null ? null : old.Value, current.Name is null ? null : current.Value, child, changes);
+                var hasOld = before.Value.TryGetProperty(name, out var old);
+                var hasCurrent = after.Value.TryGetProperty(name, out var current);
+                DescribeEntries(hasOld ? old : null, hasCurrent ? current : null, child, changes);
             }
             return;
         }
