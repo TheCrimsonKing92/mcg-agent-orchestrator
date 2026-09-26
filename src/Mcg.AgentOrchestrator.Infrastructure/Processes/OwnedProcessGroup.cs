@@ -794,7 +794,8 @@ internal sealed class OwnedProcessGroup : IDisposable
                 using var attributes = WindowsJobAttributeList.Create(job, inheritedHandles);
                 startupInfo.lpAttributeList = attributes.AttributeList;
                 inheritableWindowObserver?.Invoke();
-                if (!CreateProcessW(
+                var createStarted = Stopwatch.GetTimestamp();
+                var created = CreateProcessW(
                         null,
                         commandLine,
                         IntPtr.Zero,
@@ -804,9 +805,11 @@ internal sealed class OwnedProcessGroup : IDisposable
                         environment,
                         workingDirectory,
                         ref startupInfo,
-                        out processInformation))
+                        out processInformation);
+                var nativeErrorCode = created ? 0 : Marshal.GetLastWin32Error();
+                suppression.RecordChildCreateTicks(Stopwatch.GetTimestamp() - createStarted);
+                if (!created)
                 {
-                    var nativeErrorCode = Marshal.GetLastWin32Error();
                     throw new OwnedProcessLaunchException(
                         nativeErrorCode,
                         "Failed to start suspended process in owned job object.",

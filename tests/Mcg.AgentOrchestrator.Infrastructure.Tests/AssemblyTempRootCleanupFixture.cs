@@ -7,12 +7,27 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
 {
     private readonly StateDbOpenConnectionTracker connectionTracker = new();
+    private readonly Func<TempRootDeleteOutcome?> releaseOwnedRoot;
+    private readonly TextWriter? diagnostics;
+
+    public AssemblyTempRootCleanupFixture()
+        : this(() => AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture), null)
+    {
+    }
+
+    internal AssemblyTempRootCleanupFixture(Func<TempRootDeleteOutcome?> releaseOwnedRoot, TextWriter? diagnostics)
+    {
+        this.releaseOwnedRoot = releaseOwnedRoot;
+        this.diagnostics = diagnostics;
+    }
 
     public ValueTask DisposeAsync()
     {
         try
         {
-            var outcome = AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture);
+            (diagnostics ?? Console.Error).WriteLine(
+                LaunchLockTelemetry.FormatSummary(LaunchLockTelemetry.Process.Snapshot(), Environment.ProcessId));
+            var outcome = releaseOwnedRoot();
             if (outcome?.Status == TempRootDeleteStatus.Failed)
             {
                 var openConnections = connectionTracker.FindWithin(outcome.Path);
