@@ -17,7 +17,13 @@ internal static class AcceptanceCheckCommandBuilder
             ? ["dotnet", .. arguments]
             : [.. arguments];
 
-    internal static IEnumerable<string> TranslateMtpFilter(string filter)
+    internal static IEnumerable<string> TranslateMtpFilter(string filter) =>
+        TranslateMtpFilter(filter, allowExactClassSelectors: false);
+
+    internal static IEnumerable<string> TranslateResolvedLaneFilter(string filter) =>
+        TranslateMtpFilter(filter, allowExactClassSelectors: true);
+
+    private static IEnumerable<string> TranslateMtpFilter(string filter, bool allowExactClassSelectors)
     {
         foreach (var rawToken in Regex.Split(filter, @"[&|]"))
         {
@@ -35,14 +41,18 @@ internal static class AcceptanceCheckCommandBuilder
 
             var fullyQualifiedName = Regex.Match(
                 token,
-                @"^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
+                @"^FullyQualifiedName\s*(?<op>!~|~|!=|=)\s*(?<value>[A-Za-z_][A-Za-z0-9_.+]*)$",
                 RegexOptions.IgnoreCase);
             if (fullyQualifiedName.Success)
             {
-                yield return fullyQualifiedName.Groups["op"].Value == "!~"
+                var op = fullyQualifiedName.Groups["op"].Value;
+                if (!allowExactClassSelectors && op is "=" or "!=")
+                    throw new InvalidOperationException($"MTP test filter '{filter}' contains unsupported token '{token}'.");
+                yield return op is "!~" or "!="
                     ? "--filter-not-class"
                     : "--filter-class";
-                yield return $"*{fullyQualifiedName.Groups["value"].Value}*";
+                var value = fullyQualifiedName.Groups["value"].Value;
+                yield return op is "!~" or "~" ? $"*{value}*" : value;
                 continue;
             }
 

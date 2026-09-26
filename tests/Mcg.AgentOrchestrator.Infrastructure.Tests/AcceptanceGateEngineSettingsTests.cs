@@ -65,12 +65,12 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
             .Single(lane => lane.Name == "Goal worktree parallel")
             .ExclusiveResourceKeys);
-        var terminalSweepLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
-            .Where(lane => LaneIncludesClass(lane, typeof(CliCommandTestsTerminalSweepCommands))));
+        var terminalSweepLane = Xunit.Assert.Single(AcceptanceLaneMembership.LanesIncluding(
+            settings.InfrastructureTestLanes, typeof(CliCommandTestsTerminalSweepCommands).FullName!));
         Xunit.Assert.Equal("Cli", terminalSweepLane.Name);
         Xunit.Assert.Empty(terminalSweepLane.ExclusiveResourceKeys);
-        var gitFactIndexLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
-            .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
+        var gitFactIndexLane = Xunit.Assert.Single(AcceptanceLaneMembership.LanesIncluding(
+            settings.InfrastructureTestLanes, typeof(GoalGitFactIndexTests).FullName!));
         Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
         Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
@@ -387,6 +387,12 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Where(attribute => attribute is { DisableParallelization: true })
             .Select(attribute => attribute!.Name)
             .ToHashSet(StringComparer.Ordinal);
+        var resolvedLanes = AcceptanceLaneMembership.ResolveOwnedCollections(
+            settings.InfrastructureTestLanes, testAssembly.GetTypes()
+                .Where(IsRunnableTestClass)
+                .Select(type => new AcceptanceTestClassDescriptor(type.FullName ?? type.Name,
+                    type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name))
+                .ToArray());
         var mappedTestClasses = testAssembly
             .GetTypes()
             .Where(IsRunnableTestClass)
@@ -398,9 +404,8 @@ public sealed class AcceptanceGateEngineSettingsTests
                 disabledCollections.Contains(entry.Collection))
             .Select(entry =>
             {
-                var lanes = settings.InfrastructureTestLanes
-                    .Where(lane => LaneIncludesClass(lane, entry.Type))
-                    .ToArray();
+                var lanes = AcceptanceLaneMembership.LanesIncluding(
+                    resolvedLanes, entry.Type.FullName ?? entry.Type.Name).ToArray();
                 Xunit.Assert.True(
                     lanes.Length == 1,
                     $"Disabled-collection test class '{entry.Type.FullName}' mapped to " +
@@ -2530,15 +2535,18 @@ public sealed class AcceptanceGateEngineSettingsTests
             throw new InvalidDataException("Lane partition validation received no runnable test classes.");
         }
 
-        var classesByLane = settings.InfrastructureTestLanes.ToDictionary(
+        var resolvedLanes = AcceptanceLaneMembership.ResolveOwnedCollections(
+            settings.InfrastructureTestLanes, runnableClasses.Select(type =>
+                new AcceptanceTestClassDescriptor(type.FullName ?? type.Name,
+                    type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name)).ToArray());
+        var classesByLane = resolvedLanes.ToDictionary(
             lane => lane.Name,
             _ => new List<Type>(),
             StringComparer.OrdinalIgnoreCase);
         foreach (var type in runnableClasses.OrderBy(type => type.FullName, StringComparer.Ordinal))
         {
-            var matchingLanes = settings.InfrastructureTestLanes
-                .Where(lane => LaneIncludesClass(lane, type))
-                .ToArray();
+            var matchingLanes = AcceptanceLaneMembership.LanesIncluding(
+                resolvedLanes, type.FullName ?? type.Name).ToArray();
             var className = type.FullName ?? type.Name;
             if (matchingLanes.Length == 0)
             {
@@ -2634,44 +2642,6 @@ public sealed class AcceptanceGateEngineSettingsTests
         type is { IsClass: true, IsAbstract: false } &&
         type.GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Any(method => method.GetCustomAttributes(inherit: true).Any(attribute => attribute is Xunit.FactAttribute));
-
-    private static bool LaneIncludesClass(AcceptanceTestLane lane, Type type)
-    {
-        var className = type.FullName ?? type.Name;
-        var translated = GoalAcceptanceVerifier.TranslateMtpFilter(lane.Filter).ToArray();
-        var included = new List<string>();
-        var excluded = new List<string>();
-        for (var index = 0; index < translated.Length; index += 2)
-        {
-            Xunit.Assert.True(
-                index + 1 < translated.Length,
-                $"Lane '{lane.Name}' translated to an incomplete MTP filter.");
-            switch (translated[index])
-            {
-                case "--filter-class":
-                    included.Add(translated[index + 1]);
-                    break;
-                case "--filter-not-class":
-                    excluded.Add(translated[index + 1]);
-                    break;
-                case "--filter-not-trait":
-                    break;
-                default:
-                    throw new Xunit.Sdk.XunitException(
-                        $"Lane '{lane.Name}' translated to unsupported MTP argument '{translated[index]}'.");
-            }
-        }
-
-        return (included.Count == 0 || included.Any(pattern => ClassPatternMatches(className, pattern))) &&
-               excluded.All(pattern => !ClassPatternMatches(className, pattern));
-    }
-
-    private static bool ClassPatternMatches(string className, string pattern)
-    {
-        Xunit.Assert.StartsWith("*", pattern, StringComparison.Ordinal);
-        Xunit.Assert.EndsWith("*", pattern, StringComparison.Ordinal);
-        return className.Contains(pattern.Trim('*'), StringComparison.OrdinalIgnoreCase);
-    }
 
     private static string[] FilterClasses(string filter) =>
         filter.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
