@@ -127,5 +127,11 @@ public sealed class OwnerPolicyApprovalRebaseTests : IDisposable
         return result.Output;
     }
 
-    public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
+    public void Dispose()
+    {
+        // Git marks object files read-only on Windows; Directory.Delete cannot remove them.
+        foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, File.GetAttributes(file) & ~FileAttributes.ReadOnly);
+        SharedTestSupport.RemoveTempDirectory(_root);
+    }
 }
