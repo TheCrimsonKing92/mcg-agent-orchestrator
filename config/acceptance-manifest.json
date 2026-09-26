@@ -74,6 +74,7 @@
       {
         "name": "Process spawning",
         "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~OwnedProcessExitObservationTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~GitCliThreadPoolSaturationTests|FullyQualifiedName~PipeDrainThreadPoolSaturationTests|FullyQualifiedName~ChildOutputDrainAdoptionSaturationTests|FullyQualifiedName~HermesAcpTrialTests|FullyQualifiedName~HermesExecutableIdentityTests|FullyQualifiedName~IcaclsIntegrityLabelerTests|FullyQualifiedName~ConsoleIoPreservationTests|FullyQualifiedName~MtpNoBuildReceiptIdentityTests|FullyQualifiedName~RunGoalServiceProcessContractTests|FullyQualifiedName~PostLandingCanaryCaptureAvailabilityTests",
+        "ownedCollections": [ "ProcessSpawning" ],
         "estimatedSerialSeconds": 392.7,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
       },
@@ -97,6 +98,7 @@
       {
         "name": "Dotnet build slots",
         "filter": "FullyQualifiedName~GoalWorktreeAcceptanceContentionTests|FullyQualifiedName~WorkerDispatchAcceptanceAdmissionTests|FullyQualifiedName~ConductorCrossTickTests|FullyQualifiedName~DependencyOrderingRegressionTests|FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~OperatorIntentAdjudicationTests|FullyQualifiedName~DotnetBuildEnvironmentManagerTests|FullyQualifiedName~LocalProcessVerifierDotnetBuildSlotTests|FullyQualifiedName~LocalProcessVerifierStaticHookTests|FullyQualifiedName~StructuralCoveragePermitWaitTests",
+        "ownedCollections": [ "DotnetBuildSlots" ],
         "estimatedSerialSeconds": 225.1,
         "exclusiveResourceKeys": [ "xunit:DotnetBuildSlots" ]
       },
