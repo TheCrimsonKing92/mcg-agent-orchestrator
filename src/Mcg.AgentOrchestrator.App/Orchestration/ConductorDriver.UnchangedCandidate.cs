@@ -43,19 +43,21 @@ internal sealed partial class ConductorDriver
         GoalLifecycleState fromState, out ConductorAdvanceResult result)
     {
         result = null!;
-        if (fromState != GoalLifecycleState.WorkspaceReady) return false;
+        if (fromState != GoalLifecycleState.WorkspaceReady) { ResetUnchangedCandidateHold(goal.Id); return false; }
         var ready = ReadyCandidateTasks(goal);
-        if (ready.Length == 0) return false;
+        if (ready.Length == 0) { ResetUnchangedCandidateHold(goal.Id); return false; }
         var (identity, failure) = _resolveCandidateIdentity(goal);
         if (identity is null)
         {
             foreach (var task in ready.DistinctBy(candidate => candidate.RequiredRole))
                 TryRecordCandidateIdentityFailure(goal.Id, task.RequiredRole, failure);
+            ResetUnchangedCandidateHold(goal.Id);
             return false;
         }
         var reasons = ready.Select(task => UnchangedCandidateRule.Evaluate(goal, task, identity)).ToArray();
-        if (reasons.Any(reason => reason is null)) return false;
+        if (reasons.Any(reason => reason is null)) { ResetUnchangedCandidateHold(goal.Id); return false; }
         var typed = reasons[0]!;
+        TrackUnchangedCandidateHold(goal, ready[0], typed);
         var hold = new ConductorAdvanceOutcome.Held(fromState, typed.Render(), identity.Canonical)
         {
             TypedReason = typed
