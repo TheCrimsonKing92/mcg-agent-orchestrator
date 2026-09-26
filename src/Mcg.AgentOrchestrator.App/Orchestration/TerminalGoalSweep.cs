@@ -756,7 +756,6 @@ internal static partial class TerminalGoalSweep
             }
 
             if (hasTerminalTaskDesync &&
-                !branchFacts.BranchAlreadyLanded &&
                 AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status) &&
                 blockers.All(blocker => blocker.Kind is not ("terminal-live-dispatch" or "stale-terminal-excluded")))
             {

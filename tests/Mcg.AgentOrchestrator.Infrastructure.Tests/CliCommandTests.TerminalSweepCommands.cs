@@ -606,11 +606,11 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.True(result.Changed);
         Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "dispatch-exit-reconciled");
         Xunit.Assert.Empty(goalResult.Blockers);
-        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, kernel.GetGoal(goal.Id).Status);
-        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
         Xunit.Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
         Xunit.Assert.Equal(0, kernel.GetTask(goal.Id, task.Id).LastProcess!.ExitCode);
-        Xunit.Assert.Single(kernel.HumanInputRequests);
+        Xunit.Assert.Empty(kernel.HumanInputRequests);
     }
 
 

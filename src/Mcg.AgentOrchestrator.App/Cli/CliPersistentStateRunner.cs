@@ -1623,7 +1623,9 @@ internal static partial class CliPersistentStateRunner
         }
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
-        return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId, cleanupHooks);
+        return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId, cleanupHooks)
+            .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
+            .Distinct().ToArray();
     }
 
     private static IReadOnlyList<GoalId> ResolveTerminalSweepCandidateIds(
@@ -1663,6 +1665,7 @@ internal static partial class CliPersistentStateRunner
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId, cleanupHooks)
+            .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
             .Select(id => id.Value)
             .ToHashSet(StringComparer.Ordinal);
         return summaries
