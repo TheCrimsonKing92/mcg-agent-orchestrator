@@ -129,6 +129,19 @@ public sealed partial class AgentOrchestratorKernel
 
         if (IsReopenProtectedGoalStatus(goal.Status))
         {
+            var terminalOutcome = DispatchFailureClassifier.Classify(task, verification, providerFailureKind);
+            if (task.Status == WorkTaskStatus.Running &&
+                terminalOutcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
+            {
+                task.RecordCompletionVerdict(true, TaskOutcomeClassifier.TryExtractRule(terminalOutcome.ClassifierReceipt));
+                ReportWorkerTaskProgress(
+                    goalId,
+                    taskId,
+                    WorkTaskStatus.Completed,
+                    $"Reconciled completed dispatch on {goal.Status} goal: {task.LastDispatch.Command}");
+                return;
+            }
+
             Append(goal, taskId, ProgressKind.TaskNote,
                 $"Ignored dispatch outcome for {goal.Status} goal; terminal stale-goal sweep will close stale tasks.");
             return;
