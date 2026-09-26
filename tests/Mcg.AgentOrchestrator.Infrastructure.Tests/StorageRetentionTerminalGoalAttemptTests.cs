@@ -11,7 +11,7 @@ public sealed class StorageRetentionTerminalGoalAttemptTests
         var oldFinal = fixture.WriteAttempt(RetentionReclaimFixture.CompletedId, "old-final", 3, 30);
         var young = fixture.WriteAttempt(RetentionReclaimFixture.CompletedId, "young", 1, 2);
         var active = fixture.WriteAttempt(RetentionReclaimFixture.ActiveId, "active-old", 1, 30);
-        var failedGoal = fixture.WriteAttempt(RetentionReclaimFixture.FailedId, "failed-old", 1, 30);
+        fixture.WriteAttempt(RetentionReclaimFixture.FailedId, "failed-old", 1, 30);
 
         var result = fixture.Run(null,
             fixture.Goal(RetentionReclaimFixture.CompletedId, GoalStatus.Completed),
@@ -22,7 +22,8 @@ public sealed class StorageRetentionTerminalGoalAttemptTests
         Assert.False(File.Exists(oldFinal));
         Assert.True(File.Exists(young));
         Assert.True(File.Exists(active));
-        Assert.True(File.Exists(failedGoal));
+        Assert.DoesNotContain(result.Decisions, decision => decision.GoalId == RetentionReclaimFixture.FailedId &&
+            decision.Reason == "terminal-goal-attempt-past-age");
         Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
             Path.Combine(fixture.AttemptRoot(), RetentionReclaimFixture.CompletedId)),
             path => Path.GetFileName(path).StartsWith("old-", StringComparison.OrdinalIgnoreCase));

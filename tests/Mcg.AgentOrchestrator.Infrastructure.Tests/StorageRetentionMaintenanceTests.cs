@@ -265,8 +265,8 @@ public sealed class StorageRetentionMaintenanceTests
 
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
-        Assert.True(File.Exists(failingMetadata));
-        Assert.True(File.Exists(failingLog));
+        Assert.False(File.Exists(failingMetadata));
+        Assert.False(File.Exists(failingLog));
         Assert.False(File.Exists(successfulTrx));
         var receiptPath = successfulTrx + ".test-identities.json";
         Assert.True(File.Exists(receiptPath));
@@ -983,7 +983,7 @@ public sealed class StorageRetentionMaintenanceTests
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
         Assert.True(File.Exists(failingLog));
-        Assert.True(File.Exists(finalLog));
+        Assert.False(File.Exists(finalLog));
         Assert.False(File.Exists(oldLog));
     }
 
@@ -1294,7 +1294,9 @@ public sealed class StorageRetentionMaintenanceTests
 
         Assert.True(Directory.Exists(inaccessibleOwner));
         Assert.True(laterFamilyReached);
-        Assert.False(result.Failed, "An inaccessible live owner must not abort the retention sweep.");
+        Assert.True(result.Failed, "An empty goal store leaves goal-dependent retention rules unavailable.");
+        Assert.Contains(result.Decisions, decision =>
+            decision.Reason == "goal-store-unavailable-goal-rules-skipped");
         Assert.Contains(result.Decisions, decision =>
             decision.Path == inaccessibleOwner &&
             decision.Action == EvidenceRetentionAction.Preserved &&
@@ -1545,12 +1547,12 @@ public sealed class StorageRetentionMaintenanceTests
             mtpResultsRoot: fixture.MtpResultsRoot);
 
         Assert.True(Directory.Exists(runDirectory));
-        Assert.True(File.Exists(firstMetadata));
-        Assert.True(File.Exists(secondMetadata));
+        Assert.False(File.Exists(firstMetadata));
+        Assert.False(File.Exists(secondMetadata));
         Assert.Equal(2, result.Decisions.Count(decision =>
             (decision.Path == firstMetadata || decision.Path == secondMetadata) &&
-            decision.Action == EvidenceRetentionAction.Preserved &&
-            decision.Reason == "retained-test-artifact-owner-metadata"));
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "terminal-goal-attempt-past-age"));
     }
 
     [Xunit.Fact]
