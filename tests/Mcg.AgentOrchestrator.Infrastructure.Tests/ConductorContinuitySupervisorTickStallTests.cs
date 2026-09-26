@@ -18,7 +18,7 @@ public sealed class ConductorContinuitySupervisorTickStallTests
             e.Operation == "tick-stall" && e.Status == "detected"));
         using var payload = JsonDocument.Parse(stall.PayloadJson!);
         Assert.Equal(5, payload.RootElement.GetProperty("lastTick").GetInt32());
-        Assert.Equal("2026-09-26T06:00:00+00:00",
+        Assert.Equal("2026-09-26T06:00:00.0000000+00:00",
             payload.RootElement.GetProperty("lastTickEndAt").GetDateTimeOffset().ToString("O"));
         Assert.Equal(4242, payload.RootElement.GetProperty("processId").GetInt32());
         Assert.True(payload.RootElement.GetProperty("dump").GetProperty("captured").GetBoolean());
