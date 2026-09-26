@@ -986,10 +986,9 @@ public sealed partial class BackgroundDispatchRunner
             {
                 Action: DispatchRecoveryAction.Hold,
                 Blocker: { Length: > 0 } blocker
-            } apparatusHold)
+            } apparatusHold && !AgentOrchestratorKernel.IsReopenProtectedGoalStatus(kernel.GetGoal(goalId).Status))
         {
-            if (!AgentOrchestratorKernel.IsReopenProtectedGoalStatus(kernel.GetGoal(goalId).Status))
-                RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
+            RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
         }
     }
 

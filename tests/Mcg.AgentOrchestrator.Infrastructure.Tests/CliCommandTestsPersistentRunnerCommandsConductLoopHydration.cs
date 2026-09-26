@@ -814,5 +814,4 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
             CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
-
 }
