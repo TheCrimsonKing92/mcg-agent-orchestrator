@@ -118,7 +118,7 @@ public sealed class StorageRetentionMaintenanceTests
             GoalSnapshotFor("33333333333333333333333333333333", GoalStatus.Active, WorkTaskStatus.Running)
         ]);
 
-        var goals = StorageRetentionMaintenance.LoadPersistedGoals(repository);
+        var goals = StorageRetentionMaintenance.LoadPersistedGoals(repository).Goals;
 
         Assert.Equal(2, goals.Count);
         var terminal = Assert.Single(goals, goal => goal.IsTerminal);
@@ -245,8 +245,8 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.Equal("beforeafter", File.ReadAllText(path));
     }
 
-    [Xunit.Fact(DisplayName = "AcceptanceRetention_last_failing_attempt_and_summaries_are_preserved")]
-    public void LastFailingAttemptAndSummariesArePreserved()
+    [Xunit.Fact(DisplayName = "AcceptanceRetention_aged_last_failing_attempt_is_removed_and_summaries_are_preserved")]
+    public void AgedLastFailingAttemptIsRemovedAndSummariesArePreserved()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -265,8 +265,8 @@ public sealed class StorageRetentionMaintenanceTests
 
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
-        Assert.True(File.Exists(failingMetadata));
-        Assert.True(File.Exists(failingLog));
+        Assert.False(File.Exists(failingMetadata));
+        Assert.False(File.Exists(failingLog));
         Assert.False(File.Exists(successfulTrx));
         var receiptPath = successfulTrx + ".test-identities.json";
         Assert.True(File.Exists(receiptPath));
@@ -959,7 +959,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void AcceptanceRetention_OrdinalBeatsMtime_PreservesFinalAndLastFailure()
+    public void AcceptanceRetention_OrdinalBeatsMtime_PreservesFreshFailureAndRemovesAgedFinal()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -983,7 +983,7 @@ public sealed class StorageRetentionMaintenanceTests
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
         Assert.True(File.Exists(failingLog));
-        Assert.True(File.Exists(finalLog));
+        Assert.False(File.Exists(finalLog));
         Assert.False(File.Exists(oldLog));
     }
 
@@ -1294,7 +1294,9 @@ public sealed class StorageRetentionMaintenanceTests
 
         Assert.True(Directory.Exists(inaccessibleOwner));
         Assert.True(laterFamilyReached);
-        Assert.False(result.Failed, "An inaccessible live owner must not abort the retention sweep.");
+        Assert.False(result.Failed, "An empty goal store produces a partial retention receipt.");
+        Assert.Contains(result.Decisions, decision =>
+            decision.Reason == "goal-store-empty-goal-rules-skipped");
         Assert.Contains(result.Decisions, decision =>
             decision.Path == inaccessibleOwner &&
             decision.Action == EvidenceRetentionAction.Preserved &&
