@@ -15,6 +15,9 @@ public abstract class DotnetBuildEnvironmentManagerRootedTestBase : IDisposable
         _priorRegistrar = DotnetBuildEnvironmentManager.SetOwnedRunRootRegistrarForTests(
             StorageRoot,
             new OwnedRunRootRegistry(stateDbPath));
+        while (DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(25).Count == 25)
+        {
+        }
     }
 
     public void Dispose()

@@ -2028,6 +2028,8 @@ internal sealed partial class ConductorBatchLoop
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
             "SWEEP_REMEDY_RESULT" => "sweep-remedy-result", "SWEEP_OWNED_ROOT_OBSERVED" => "sweep-owned-root-observed",
+            "SWEEP_GOAL_ROOT_RECLAIMED" => "sweep-goal-root-reclaimed",
+            "SWEEP_GOAL_ROOT_RECLAIM_FAILED" => "sweep-goal-root-reclaim-failed",
             "SET_ASIDE_SELF_CLEARED" => "set-aside-self-cleared",
             "BLOCKED_RECHECK_HEARTBEAT" => "blocked-recheck-heartbeat",
             "TICK_WRITE_BUSY" => "lock-blocker",

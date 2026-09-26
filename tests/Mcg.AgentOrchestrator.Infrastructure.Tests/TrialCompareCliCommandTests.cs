@@ -507,6 +507,8 @@ public sealed class TrialCompareCliCommandTests
             CreateNoWindow = true
         };
         startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(workingDirectory, ".orchestrator", "test-dotnet");
         startInfo.Environment["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
