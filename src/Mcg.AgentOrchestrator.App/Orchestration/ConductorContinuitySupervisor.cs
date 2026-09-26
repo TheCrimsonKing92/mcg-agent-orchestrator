@@ -140,6 +140,7 @@ internal sealed partial class ConductorContinuitySupervisor(
         string? blockedActivationCommit = null;
         var restoring = false;
         var attempt = 0;
+        var activationTickGapTimeout = ResolveActivationTickGapTimeout(args);
 
         try
         {
@@ -223,7 +224,8 @@ internal sealed partial class ConductorContinuitySupervisor(
                             return 1;
                         }
                         var restore = await ObserveActivationAsync(
-                            restoreTask, activationMonitor, artifactPath, restoreCts, cancellationToken)
+                            restoreTask, activationMonitor, artifactPath, restoreCts,
+                            activationTickGapTimeout, cancellationToken)
                             .ConfigureAwait(false);
                         if (!restore.Adopted && !restore.DeliberateStop)
                         {
@@ -334,7 +336,8 @@ internal sealed partial class ConductorContinuitySupervisor(
                             stdoutPath,
                             stderrPath);
                         var activation = await ObserveActivationAsync(
-                            runTask, activationMonitor, artifactPath, processCts, cancellationToken)
+                            runTask, activationMonitor, artifactPath, processCts,
+                            activationTickGapTimeout, cancellationToken)
                             .ConfigureAwait(false);
                         var candidateBuild = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
                         if (!activation.Adopted && !activation.DeliberateStop)

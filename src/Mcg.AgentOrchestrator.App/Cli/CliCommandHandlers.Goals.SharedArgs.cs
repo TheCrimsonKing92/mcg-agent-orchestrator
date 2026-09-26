@@ -169,7 +169,7 @@ private static TimeSpan? ResolveWatchStallWarningThreshold(IReadOnlyList<string>
     return null;
 }
 
-private static int ResolveConductPollSeconds(IReadOnlyList<string> parts)
+internal static int ResolveConductPollSeconds(IReadOnlyList<string> parts)
 {
     if (GetFlagValue(parts, "--poll-seconds") is { } pollSeconds)
     {
