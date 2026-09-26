@@ -635,8 +635,9 @@ internal static partial class TerminalGoalSweep
                 continue;
             }
 
-            if (hasTerminalTaskDesync &&
-                TryBuildTerminalDirtyWorktreeBlocker(goal, executionDirectory, prefix, desyncEvidence, out var dirtyEvidence, out var dirtyCommand))
+            if ((hasTerminalTaskDesync || AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status)) &&
+                TryBuildTerminalDirtyWorktreeBlocker(goal, executionDirectory, prefix,
+                    hasTerminalTaskDesync ? desyncEvidence : $"goalState={goal.Status}", out var dirtyEvidence, out var dirtyCommand))
             {
                 blockedByDirtyWorktree = true;
                 blockers.Add(new TerminalGoalSweepBlocker(
