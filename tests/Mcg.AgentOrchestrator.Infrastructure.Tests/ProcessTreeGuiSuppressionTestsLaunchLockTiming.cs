@@ -75,7 +75,7 @@ public sealed class ProcessTreeGuiSuppressionTestsLaunchLockTiming
         var missingExecutable = Path.Combine(Path.GetTempPath(), $"mcg-missing-{Guid.NewGuid():N}.exe");
 
         Xunit.Assert.Throws<OwnedProcessLaunchException>(() => OwnedProcessGroup.StartSuspended(
-            new ProcessStartInfo(missingExecutable) { UseShellExecute = false }));
+            new ProcessStartInfo(missingExecutable) { UseShellExecute = false, CreateNoWindow = true }));
 
         var snapshot = capture.Snapshot();
         Xunit.Assert.Equal(1, snapshot.Launches);
