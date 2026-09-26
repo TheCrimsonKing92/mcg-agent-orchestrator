@@ -1,21 +1,44 @@
 using Microsoft.Data.Sqlite;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class OrchestratorAttemptRootLeakGuardTests
 {
     [Fact]
     public void NewNonGoalEntriesAreFlaggedAndExistingEntriesAreIgnored()
     {
-        var baseline = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "old-fixture" };
-        var current = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        var repository = Path.Combine(Path.GetTempPath(), $"mcg-attempt-root-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(repository, ".git"));
+        try
         {
-            "old-fixture", "new-fixture", "operator", "aabbccddaabbccddaabbccddaabbccdd"
-        };
-        var goals = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "aabbccddaabbccddaabbccddaabbccdd"
-        };
+            var createdByThisProcess = "feedfacefeedfacefeedfacefeedface";
+            GoalAcceptanceVerifier.ResolveOwnerResultsPrefix(repository, new GoalId(createdByThisProcess), "gate");
+            var root = Path.Combine(repository, ".orchestrator", "acceptance-gate-attempts");
+            var createdByAnotherProcess = Path.Combine(root, "other-process");
+            var unmarked = Path.Combine(root, "unmarked");
+            Directory.CreateDirectory(createdByAnotherProcess);
+            Directory.CreateDirectory(unmarked);
+            File.WriteAllText(
+                Path.Combine(createdByAnotherProcess, GoalAcceptanceVerifier.OwnerResultsCreatorFileName),
+                $"{Environment.ProcessId}:0");
 
-        Assert.Equal(["new-fixture"], OrchestratorAttemptRootLeakGuardFixture.FindLeaks(baseline, current, goals));
+            var baseline = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "old-fixture" };
+            var current = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "old-fixture", createdByThisProcess, "other-process", "unmarked", "operator",
+                "aabbccddaabbccddaabbccddaabbccdd"
+            };
+            var goals = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "aabbccddaabbccddaabbccddaabbccdd"
+            };
+
+            Assert.Equal([createdByThisProcess], OrchestratorAttemptRootLeakGuardFixture.FindLeaks(root, baseline, current, goals));
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
     }
 
     [Fact]
@@ -45,6 +68,7 @@ public sealed class OrchestratorAttemptRootLeakGuardTests
             Assert.True(OrchestratorAttemptRootLeakGuardFixture.TryReadGoalIds(database, out var goals));
             Assert.Contains("aabbccddaabbccddaabbccddaabbccdd", goals);
             Assert.Empty(OrchestratorAttemptRootLeakGuardFixture.FindLeaks(
+                root,
                 new HashSet<string>(),
                 new HashSet<string> { "aabbccddaabbccddaabbccddaabbccdd", "operator" },
                 goals));

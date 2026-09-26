@@ -56,7 +56,7 @@ public sealed class OrchestratorAttemptRootLeakGuardFixture : IAsyncDisposable
         foreach (var rootName in AttemptRootNames)
         {
             var root = AttemptRoot(repositoryRoot, rootName);
-            foreach (var name in FindLeaks(baseline[rootName], Snapshot(root), goalIds))
+            foreach (var name in FindLeaks(root, baseline[rootName], Snapshot(root), goalIds))
             {
                 var entry = Path.Combine(root, name);
                 var created = Directory.GetCreationTimeUtc(entry);
@@ -94,12 +94,15 @@ public sealed class OrchestratorAttemptRootLeakGuardFixture : IAsyncDisposable
     }
 
     internal static IReadOnlyList<string> FindLeaks(
+        string root,
         IReadOnlySet<string> baseline,
         IReadOnlySet<string> current,
         IReadOnlySet<string> goalIds) =>
         current.Where(name => !baseline.Contains(name) &&
                               !name.Equals("operator", StringComparison.OrdinalIgnoreCase) &&
-                              !goalIds.Contains(name))
+                              !goalIds.Contains(name) &&
+                              GoalAcceptanceVerifier.WasOwnerResultsDirectoryCreatedByCurrentProcess(
+                                  Path.Combine(root, name)))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
 
     internal static bool TryReadGoalIds(string stateDbPath, out HashSet<string> goalIds)

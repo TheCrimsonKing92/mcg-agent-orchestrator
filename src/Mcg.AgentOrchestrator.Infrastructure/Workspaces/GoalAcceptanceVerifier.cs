@@ -6955,7 +6955,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ".orchestrator",
             OwnerResultsAttemptRoot(ownerKind),
             owner);
-        Directory.CreateDirectory(directory);
+        CreateOwnerResultsDirectory(directory);
         return Path.Combine(
             directory,
             $"{owner[..Math.Min(8, owner.Length)]}-{ownerKind}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
