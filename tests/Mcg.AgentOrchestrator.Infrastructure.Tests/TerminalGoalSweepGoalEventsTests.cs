@@ -9,13 +9,14 @@ public sealed class TerminalGoalSweepGoalEventsTests : CliCommandTestBase
     [Xunit.Fact]
     public void StartupSweepPersistsFailedGoalReopenDecisionToGoalJsonl()
     {
-        var root = CreateTempDirectory();
+        var root = CreateAcceptanceRepository();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Stale assigned work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Failed stale task", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Failed);
+        CommitGoalWork(root, goal.Id, "src/failed-goal-work.txt", "unmerged goal work");
         var repository = new InMemoryTransactionalStateRepository(kernel);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);

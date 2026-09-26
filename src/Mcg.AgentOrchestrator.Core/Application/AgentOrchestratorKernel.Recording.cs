@@ -131,6 +131,8 @@ public sealed partial class AgentOrchestratorKernel
         {
             var terminalOutcome = DispatchFailureClassifier.Classify(task, verification, providerFailureKind);
             if (task.Status == WorkTaskStatus.Running &&
+                verification.HumanInputQuestion is null &&
+                AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput) is null &&
                 terminalOutcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
             {
                 task.RecordCompletionVerdict(true, TaskOutcomeClassifier.TryExtractRule(terminalOutcome.ClassifierReceipt));
