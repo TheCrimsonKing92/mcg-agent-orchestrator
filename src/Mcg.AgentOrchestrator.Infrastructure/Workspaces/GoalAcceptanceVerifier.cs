@@ -6948,16 +6948,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? goalId,
         string ownerKind)
     {
-        var repositoryRoot = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
-        repositoryRoot = ResolveOwnerResultsRepositoryRoot(
-            string.IsNullOrWhiteSpace(repositoryRoot) ? worktreePath : repositoryRoot);
+        var repositoryRoot = ResolveOwnerResultsRootForCandidate(worktreePath);
         var owner = goalId?.Value ?? "operator";
         var directory = Path.Combine(
             repositoryRoot,
             ".orchestrator",
             OwnerResultsAttemptRoot(ownerKind),
             owner);
-        Directory.CreateDirectory(directory);
+        CreateOwnerResultsDirectory(directory);
         return Path.Combine(
             directory,
             $"{owner[..Math.Min(8, owner.Length)]}-{ownerKind}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
@@ -6971,20 +6969,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string ResolveOwnerResultsRepositoryRoot(string worktreePath)
     {
         var fullPath = Path.GetFullPath(worktreePath);
-        var worktreeMarker =
-            $"{Path.DirectorySeparatorChar}.orchestrator-worktrees{Path.DirectorySeparatorChar}";
-        var markerIndex = fullPath.IndexOf(worktreeMarker, StringComparison.OrdinalIgnoreCase);
-        if (markerIndex > 0)
-        {
-            return fullPath[..markerIndex];
-        }
-
         var candidate = new DirectoryInfo(fullPath);
         while (candidate is not null)
         {
             if (Directory.Exists(Path.Combine(candidate.FullName, ".git")))
             {
                 return candidate.FullName;
+            }
+
+            if (candidate.Name.Equals(".orchestrator-worktrees", StringComparison.OrdinalIgnoreCase) &&
+                candidate.Parent is not null)
+            {
+                return candidate.Parent.FullName;
             }
 
             candidate = candidate.Parent;
