@@ -654,6 +654,20 @@ public sealed partial class AgentOrchestratorKernel
         return false;
     }
 
+    public bool NormalizePrematureCompletedGoalForAcceptance(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status != GoalStatus.Completed ||
+            !goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Verified);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
     public bool ReconcileGoalVerificationStatus(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);

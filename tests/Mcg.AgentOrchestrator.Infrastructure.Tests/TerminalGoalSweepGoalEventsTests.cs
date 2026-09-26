@@ -7,6 +7,35 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class TerminalGoalSweepGoalEventsTests : CliCommandTestBase
 {
     [Xunit.Fact]
+    public void FailedEventAppendWarnsWithoutUndoingTerminalTaskClosure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(workspace.GoalLifecycleEventsDirectory)!);
+        File.WriteAllText(workspace.GoalLifecycleEventsDirectory, "blocks directory creation");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Stale work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Superseded stale work", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["conduct", "--loop", "--max-iterations", "0"],
+            repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var persisted = repository.LoadGoalAsync(goal.Id).GetAwaiter().GetResult()!;
+
+        Xunit.Assert.Equal(GoalStatus.Superseded, persisted.Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, persisted.Tasks.Single().Status);
+        Xunit.Assert.Contains("SWEEP_WARNING kind=goal-events-append-failed", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"goal={goal.Id.Value[..8]}", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void StartupSweepPersistsFailedGoalReopenDecisionToGoalJsonl()
     {
         var root = CreateAcceptanceRepository();

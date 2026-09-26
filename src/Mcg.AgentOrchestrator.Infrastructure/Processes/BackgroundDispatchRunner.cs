@@ -969,7 +969,8 @@ public sealed partial class BackgroundDispatchRunner
                     taskId,
                     "InterruptedDispatchCheckpointRetryBudgetExhausted: checkpoint-retry-budget-exhausted; checkpoint retained in git for operator recovery.");
             }
-            else if (disposition.ShouldRequeue && !checkpointAlreadyApplied)
+            else if (disposition.ShouldRequeue && !checkpointAlreadyApplied &&
+                     !AgentOrchestratorKernel.IsReopenProtectedGoalStatus(kernel.GetGoal(goalId).Status))
             {
                 kernel.RequeueInterruptedDispatch(
                     goalId,
@@ -987,7 +988,8 @@ public sealed partial class BackgroundDispatchRunner
                 Blocker: { Length: > 0 } blocker
             } apparatusHold)
         {
-            RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
+            if (!AgentOrchestratorKernel.IsReopenProtectedGoalStatus(kernel.GetGoal(goalId).Status))
+                RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
         }
     }
 

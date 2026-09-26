@@ -91,4 +91,34 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         Xunit.Assert.Equal(status, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
     }
+
+    [Xunit.Fact]
+    public void ExitedRunningTaskOnSupersededGoalIsNotRequeuedBeforeClosure()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Interrupted work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Superseded interrupted work", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
+        var process = kernel.GetTask(goal.Id, task.Id).LastProcess! with
+        {
+            CompletedAt = DateTimeOffset.UtcNow,
+            ExitCode = 1
+        };
+        var outcome = new DispatchRefreshOutcome(
+            process,
+            null,
+            AutoRequeueDisposition: new DispatchAutoRequeueDisposition(
+                "DISPATCH_PROVIDER_INTERRUPTION", "Interrupted provider round"));
+
+        BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+        var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+        Xunit.Assert.Equal(GoalStatus.Superseded, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
+        Xunit.Assert.Contains(Xunit.Assert.Single(sweep.Goals).Repairs, repair => repair.Kind == "terminal-task-desync");
+    }
 }

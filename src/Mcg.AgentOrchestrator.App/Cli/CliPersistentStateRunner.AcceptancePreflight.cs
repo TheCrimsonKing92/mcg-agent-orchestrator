@@ -39,7 +39,7 @@ internal static partial class CliPersistentStateRunner
         }
         else if (initialGoal.Status == GoalStatus.Completed && proposedGoal.Status == GoalStatus.Verified)
         {
-            currentKernel.NormalizePrematureCompletedGoalToVerified(
+            currentKernel.NormalizePrematureCompletedGoalForAcceptance(
                 goalId,
                 "acceptance: persisted the Completed-to-Verified repair before verification.");
         }

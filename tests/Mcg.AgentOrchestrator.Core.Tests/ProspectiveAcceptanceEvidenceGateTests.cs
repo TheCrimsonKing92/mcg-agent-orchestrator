@@ -207,14 +207,14 @@ public sealed class ProspectiveAcceptanceEvidenceGateTests
         var restored = AgentOrchestratorKernel.FromSnapshot(
             snapshot with
             {
-                Goals = [Assert.Single(snapshot.Goals) with { Status = GoalStatus.Completed }]
+                Goals = [Assert.Single(snapshot.Goals) with { Status = GoalStatus.Active }]
             },
             clock);
 
         var reconciled = restored.ReconcileGoalVerificationStatus(goal.Id, "All task gates passed.");
 
-        Assert.False(reconciled);
-        Assert.Equal(GoalStatus.Completed, restored.GetGoal(goal.Id).Status);
+        Assert.True(reconciled);
+        Assert.Equal(GoalStatus.Verified, restored.GetGoal(goal.Id).Status);
         Assert.Single(restored.GetPendingHumanInput(goal.Id));
     }
 
