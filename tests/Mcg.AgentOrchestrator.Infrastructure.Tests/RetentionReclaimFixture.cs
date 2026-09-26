@@ -51,6 +51,24 @@ internal sealed class RetentionReclaimFixture : IDisposable
         return WriteAgedFile(payload, days);
     }
 
+    internal string WriteFlatAttempt(string goalId, string attemptId, int ordinal, int days, bool failed = false)
+    {
+        var goalDirectory = Path.Combine(AttemptRoot(), goalId);
+        Directory.CreateDirectory(goalDirectory);
+        var metadata = Path.Combine(goalDirectory, attemptId + ".attempt.json");
+        File.WriteAllText(metadata, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            attemptId,
+            goalId,
+            ordinal,
+            startedAt = Now.AddDays(-days),
+            outcome = failed ? 2 : 1,
+            reconciledAt = Now.AddDays(-days)
+        }));
+        File.SetLastWriteTimeUtc(metadata, Now.AddDays(-days).UtcDateTime);
+        return WriteAgedFile(Path.Combine(goalDirectory, attemptId + ".out.log"), days);
+    }
+
     internal StorageRetentionResult Run(StorageRetentionReclaimOptions? options = null, params StorageRetentionGoal[] goals) =>
         StorageRetentionMaintenance.Run(LogDirectory, OrchestratorDirectory, ExecutionDirectory, goals, Now,
             mtpResultsRoot: Path.Combine(_root, "empty-mtp"), reclaimOptions: options);

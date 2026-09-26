@@ -4,6 +4,33 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class StorageRetentionTerminalGoalAttemptTests
 {
     [Xunit.Fact]
+    public void CompletedFlatFinalAndFailureAttemptsAreRemovedAsUnits()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        var oldFailure = fixture.WriteFlatAttempt(RetentionReclaimFixture.CompletedId, "old-failure", 2, 30, failed: true);
+        var oldFinal = fixture.WriteFlatAttempt(RetentionReclaimFixture.CompletedId, "old-final", 3, 30);
+        var young = fixture.WriteFlatAttempt(RetentionReclaimFixture.CompletedId, "young", 1, 2);
+        var active = fixture.WriteFlatAttempt(RetentionReclaimFixture.ActiveId, "active-old", 1, 30);
+
+        var result = fixture.Run(null,
+            fixture.Goal(RetentionReclaimFixture.CompletedId, GoalStatus.Completed),
+            fixture.Goal(RetentionReclaimFixture.ActiveId, GoalStatus.Active));
+
+        Assert.False(File.Exists(oldFailure));
+        Assert.False(File.Exists(oldFinal));
+        Assert.False(File.Exists(oldFailure[..^".out.log".Length] + ".attempt.json"));
+        Assert.False(File.Exists(oldFinal[..^".out.log".Length] + ".attempt.json"));
+        Assert.True(File.Exists(young));
+        Assert.True(File.Exists(active));
+        Assert.Contains(result.Decisions, decision => decision.Path == oldFailure &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "terminal-goal-attempt-past-age");
+        Assert.Contains(result.Decisions, decision => decision.Path == oldFinal &&
+            decision.Action == EvidenceRetentionAction.Deleted &&
+            decision.Reason == "terminal-goal-attempt-past-age");
+    }
+
+    [Xunit.Fact]
     public void CompletedOldFinalAndFailureAttemptsAreRemovedAsUnits()
     {
         using var fixture = new RetentionReclaimFixture();

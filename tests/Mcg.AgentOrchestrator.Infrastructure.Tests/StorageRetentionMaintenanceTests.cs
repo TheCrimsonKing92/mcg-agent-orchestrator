@@ -245,8 +245,8 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.Equal("beforeafter", File.ReadAllText(path));
     }
 
-    [Xunit.Fact(DisplayName = "AcceptanceRetention_last_failing_attempt_and_summaries_are_preserved")]
-    public void LastFailingAttemptAndSummariesArePreserved()
+    [Xunit.Fact(DisplayName = "AcceptanceRetention_aged_last_failing_attempt_is_removed_and_summaries_are_preserved")]
+    public void AgedLastFailingAttemptIsRemovedAndSummariesArePreserved()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -265,8 +265,8 @@ public sealed class StorageRetentionMaintenanceTests
 
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
-        Assert.True(File.Exists(failingMetadata));
-        Assert.True(File.Exists(failingLog));
+        Assert.False(File.Exists(failingMetadata));
+        Assert.False(File.Exists(failingLog));
         Assert.False(File.Exists(successfulTrx));
         var receiptPath = successfulTrx + ".test-identities.json";
         Assert.True(File.Exists(receiptPath));
@@ -959,7 +959,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void AcceptanceRetention_OrdinalBeatsMtime_PreservesFinalAndLastFailure()
+    public void AcceptanceRetention_OrdinalBeatsMtime_PreservesFreshFailureAndRemovesAgedFinal()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -983,7 +983,7 @@ public sealed class StorageRetentionMaintenanceTests
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
         Assert.True(File.Exists(failingLog));
-        Assert.True(File.Exists(finalLog));
+        Assert.False(File.Exists(finalLog));
         Assert.False(File.Exists(oldLog));
     }
 

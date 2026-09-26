@@ -706,7 +706,7 @@ internal static partial class GoalOperationJournal
                 .SequenceEqual(compressedEntries.Select(entry => JsonSerializer.Serialize(entry, JsonOptions)));
         var entries = plainIncludesCompressed ? plainEntries : compressedEntries.Concat(plainEntries)
             .OrderBy(entry => entry.At).ToArray();
-        if (includeArchive && File.Exists(archivePath))
+        if (includeArchive && !plainExists && !compressedExists && File.Exists(archivePath))
             entries = ReadEntries(archivePath, rejectMalformedEntries).Concat(entries)
                 .OrderBy(entry => entry.At).ToArray();
         path = plainExists ? path : compressedExists ? compressedPath :
@@ -851,13 +851,13 @@ internal static partial class GoalOperationJournal
                 }
 
                 var goalId = new GoalId(fileName);
-                summaries[goalId] = Read(executionDirectory, goalId);
+                summaries[goalId] = ReadActive(executionDirectory, goalId);
             }
             foreach (var compressedPath in Directory.EnumerateFiles(root, "*.jsonl.gz", SearchOption.TopDirectoryOnly))
             {
                 var fileName = System.IO.Path.GetFileName(compressedPath);
                 var goalId = new GoalId(fileName[..^".jsonl.gz".Length]);
-                summaries.TryAdd(goalId, Read(executionDirectory, goalId));
+                summaries.TryAdd(goalId, ReadActive(executionDirectory, goalId));
             }
         }
 

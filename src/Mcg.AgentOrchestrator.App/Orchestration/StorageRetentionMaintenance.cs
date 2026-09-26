@@ -732,7 +732,7 @@ internal static partial class StorageRetentionMaintenance
             if (IsReclaimableTerminalStatus(goal.Status))
             {
                 deleted += ReclaimTerminalGoalAttempts(goalDirectory, family, goal, attempts, now,
-                    reclaim, decisions, retainedAttemptIds);
+                    reclaim, decisions, retainedAttemptIds, retainedMtpAttemptOwnerKeys);
                 if (!Directory.Exists(goalDirectory))
                 {
                     continue;

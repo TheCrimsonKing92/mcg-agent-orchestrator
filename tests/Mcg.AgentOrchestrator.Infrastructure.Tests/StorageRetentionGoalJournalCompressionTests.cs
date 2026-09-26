@@ -65,7 +65,7 @@ public sealed class StorageRetentionGoalJournalCompressionTests
     }
 
     [Xunit.Fact]
-    public void CompressedJournalReadIncludesEarlierArchive()
+    public void CompressedJournalReadUsesArchiveOnlyAsFallback()
     {
         using var fixture = new RetentionReclaimFixture();
         WriteJournal(fixture, RetentionReclaimFixture.CompletedId);
@@ -79,8 +79,29 @@ public sealed class StorageRetentionGoalJournalCompressionTests
             goalId.Value + ":archive", goalId, "archive", GoalOperationStatus.Completed,
             RetentionReclaimFixture.Now.AddDays(-40), "earlier"), options) + "\n");
 
-        Assert.Equal(2, GoalOperationJournal.Read(fixture.ExecutionDirectory, goalId).Entries.Count);
+        Assert.Single(GoalOperationJournal.Read(fixture.ExecutionDirectory, goalId).Entries);
         Assert.Single(GoalOperationJournal.ReadActive(fixture.ExecutionDirectory, goalId).Entries);
+        File.Delete(GoalOperationJournal.PathFor(fixture.ExecutionDirectory, goalId) + ".gz");
+        Assert.Single(GoalOperationJournal.Read(fixture.ExecutionDirectory, goalId).Entries);
+        Assert.False(GoalOperationJournal.ReadActive(fixture.ExecutionDirectory, goalId).HasEntries);
+    }
+
+    [Xunit.Fact]
+    public void PlainJournalTakesPrecedenceOverEarlierArchive()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        var goalId = new GoalId(RetentionReclaimFixture.CompletedId);
+        var plain = WriteJournal(fixture, goalId.Value);
+        var archive = GoalOperationJournal.ArchivePathFor(fixture.ExecutionDirectory, goalId);
+        Directory.CreateDirectory(Path.GetDirectoryName(archive)!);
+        File.Copy(plain, archive);
+
+        var direct = GoalOperationJournal.Read(fixture.ExecutionDirectory, goalId);
+        var all = GoalOperationJournal.ReadAll(fixture.ExecutionDirectory)[goalId];
+
+        Assert.Single(direct.Entries);
+        Assert.Single(all.Entries);
+        Assert.Equal(plain, direct.Path);
     }
 
     [Xunit.Fact]

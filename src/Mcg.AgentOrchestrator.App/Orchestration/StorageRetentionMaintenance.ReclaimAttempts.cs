@@ -63,12 +63,18 @@ internal static partial class StorageRetentionMaintenance
         string directory, EvidenceArtifactFamily family, StorageRetentionGoal goal,
         IReadOnlyCollection<RetentionAttemptIdentity> attempts, DateTimeOffset now,
         StorageRetentionReclaimOptions options, List<EvidenceRetentionDecision> decisions,
-        ISet<string> retainedAttemptIds)
+        ISet<string> retainedAttemptIds, IReadOnlySet<string> retainedMtpAttemptOwnerKeys)
     {
         if (options.TerminalGoalAttemptMaxAge is null) return 0;
         var deleted = 0;
+        var protectedAttemptIds = EvidenceRetentionPolicy.ProtectedAttemptIds(attempts);
         foreach (var attempt in attempts.OrderByDescending(item => item.AttemptId.Length))
         {
+            if (retainedMtpAttemptOwnerKeys.Contains(AttemptOwnerKey(goal.GoalId, attempt.AttemptId)))
+            {
+                retainedAttemptIds.Add(attempt.AttemptId);
+                continue;
+            }
             FileSystemInfo[] entries;
             try
             {
@@ -85,10 +91,9 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
             if (entries.Length == 0) continue;
-            // Legacy attempts have only flat files in the goal directory. Their
-            // per-file retention policy must still run, including receipt and
-            // byte-bound handling. This path reclaims directory-based attempts.
-            if (!entries.Any(entry => entry is DirectoryInfo)) continue;
+            // Other flat attempts retain the existing per-file TRX receipt policy.
+            if (!entries.Any(entry => entry is DirectoryInfo) &&
+                !protectedAttemptIds.Contains(attempt.AttemptId)) continue;
             // The attempt is one retention unit: a fresh member protects every member.
             var measurements = entries.Select(TryMeasureEntry).ToArray();
             if (measurements.Any(measurement => !measurement.Success))
