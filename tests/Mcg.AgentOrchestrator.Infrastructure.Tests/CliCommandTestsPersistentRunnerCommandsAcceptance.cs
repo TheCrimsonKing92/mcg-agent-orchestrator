@@ -572,8 +572,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
                 ref profiles,
                 ref currentGoal));
 
-            Xunit.Assert.Contains("kind=completed-branch-normalized", output, StringComparison.Ordinal);
-            Xunit.Assert.Contains("was normalized to Verified", output, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Acceptance repair: normalized raw Completed goal", output, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("result=aborted", output, StringComparison.OrdinalIgnoreCase);
             Xunit.Assert.Equal(GoalStatus.Completed, repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id).Status);
             Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "normalized.txt")));

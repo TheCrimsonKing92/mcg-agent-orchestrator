@@ -127,6 +127,28 @@ public sealed partial class AgentOrchestratorKernel
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
 
+        if (IsReopenProtectedGoalStatus(goal.Status))
+        {
+            var terminalOutcome = DispatchFailureClassifier.Classify(task, verification, providerFailureKind);
+            if (task.Status == WorkTaskStatus.Running &&
+                verification.HumanInputQuestion is null &&
+                AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput) is null &&
+                terminalOutcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
+            {
+                task.RecordCompletionVerdict(true, TaskOutcomeClassifier.TryExtractRule(terminalOutcome.ClassifierReceipt));
+                ReportWorkerTaskProgress(
+                    goalId,
+                    taskId,
+                    WorkTaskStatus.Completed,
+                    $"Reconciled completed dispatch on {goal.Status} goal: {task.LastDispatch.Command}");
+                return;
+            }
+
+            Append(goal, taskId, ProgressKind.TaskNote,
+                $"Ignored dispatch outcome for {goal.Status} goal; terminal stale-goal sweep will close stale tasks.");
+            return;
+        }
+
         if (!verification.WorkerResultPresent)
         {
             Append(
@@ -1547,6 +1569,7 @@ public sealed partial class AgentOrchestratorKernel
         bool allowPendingRecordedDispatchRefresh = false)
     {
         var goal = GetGoal(goalId);
+        EnsureGoalCanResumeWork(goal);
         var task = goal.FindTask(taskId);
 
         if (task.LastVerification?.Succeeded is true)
@@ -1881,7 +1904,8 @@ public sealed partial class AgentOrchestratorKernel
         if (ownerlessAdmission is not null)
             task.MarkRetryAdmissionStarted(task.LastDispatch.DispatchedAt, process.StartedAt);
         task.SetStatus(WorkTaskStatus.Running);
-        goal.SetStatus(GoalStatus.Active);
+        if (!IsReopenProtectedGoalStatus(goal.Status))
+            goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
     }
 

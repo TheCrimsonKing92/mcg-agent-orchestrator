@@ -133,6 +133,17 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
+        if (goal.Status == GoalStatus.Completed)
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    "Completed goal requires operator acceptance; background acceptance cannot reopen a landed goal."));
+        }
+
         ConductorParallelAcceptanceCandidate? candidate;
         try
         {

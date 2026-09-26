@@ -25,6 +25,16 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    async Task<IReadOnlyList<GoalId>> ListTerminalGoalIdsWithNonTerminalTasksAsync(CancellationToken cancellationToken = default)
+    {
+        var summaries = await ListConductLoopGoalMetadataAsync(cancellationToken);
+        var ids = summaries.Where(summary => summary.Status is nameof(GoalStatus.Superseded) or nameof(GoalStatus.Cancelled) or nameof(GoalStatus.Completed))
+            .Select(summary => new GoalId(summary.Id)).ToArray();
+        var kernel = await LoadGoalsAsync(ids, cancellationToken);
+        return kernel.Goals.Where(goal => goal.Tasks.Any(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)))
+            .Select(goal => goal.Id).ToArray();
+    }
+
     Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
         IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default);

@@ -715,7 +715,7 @@ private static bool TryNormalizePrematureCompletedGoalForAcceptance(
         return false;
     }
 
-    if (!context.Kernel.NormalizePrematureCompletedGoalToVerified(
+    if (!context.Kernel.NormalizePrematureCompletedGoalForAcceptance(
             goal.Id,
             "acceptance: normalized raw Completed goal with unmerged branch back to Verified before merge."))
     {

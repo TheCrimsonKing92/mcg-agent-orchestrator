@@ -9,7 +9,6 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
-
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration : CliCommandTestBase
 {
@@ -805,13 +804,13 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
             Xunit.Assert.Equal(0, repository.LoadCount);
             Xunit.Assert.True(repository.LoadGoalsCount >= 2);
             Xunit.Assert.Contains(goal.Id.Value, repository.LoadedGoalIds);
-            Xunit.Assert.Equal(GoalStatus.Verified, restored.Status);
-            Xunit.Assert.Contains("completed-branch-normalized", output, StringComparison.Ordinal);
+            Xunit.Assert.Equal(GoalStatus.Completed, restored.Status);
+            Xunit.Assert.Contains("completed-branch-unmerged", output, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("completed-branch-normalized", output, StringComparison.Ordinal);
         }
         finally
         {
             CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
-
 }

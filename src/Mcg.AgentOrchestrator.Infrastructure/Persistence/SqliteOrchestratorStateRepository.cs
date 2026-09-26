@@ -1587,6 +1587,26 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         return results;
     }
 
+    public async Task<IReadOnlyList<GoalId>> ListTerminalGoalIdsWithNonTerminalTasksAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT id FROM goals
+            WHERE status IN ('{GoalStatus.Superseded}', '{GoalStatus.Cancelled}', '{GoalStatus.Completed}')
+              AND EXISTS (
+                  SELECT 1 FROM json_each(goals.snapshot_json, '$.Tasks') AS task
+                  WHERE json_extract(task.value, '$.Status') NOT IN ('{WorkTaskStatus.Completed}', '{WorkTaskStatus.Cancelled}')
+              )
+            """;
+        var ids = new List<GoalId>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            ids.Add(new GoalId(reader.GetString(0)));
+        return ids;
+    }
+
     private TerminalGoalMetadataValues LoadTerminalMetadata(string id, string updatedAt)
     {
         var key = new TerminalMetadataCacheKey(id, updatedAt);

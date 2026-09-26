@@ -11,8 +11,8 @@ using System.Text.Json;
 
 public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
 {
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_reopens_goal_idempotently")]
-    public void TerminalGoalSweepCompletedWithAssignedTaskReopensGoalIdempotently()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_closes_task_idempotently")]
+    public void TerminalGoalSweepCompletedWithAssignedTaskClosesTaskIdempotently()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -29,14 +29,13 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.Contains("goalState=Completed", repair.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Equal($"conduct {goal.Id.Value[..8]} --loop", repair.Command);
-        Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
         Xunit.Assert.Empty(second.Goals);
     }
 
 
     [Xunit.Theory(DisplayName = "TerminalGoalSweep_global_stale_terminal_goal_with_assigned_task_is_excluded_once")]
-    [Xunit.InlineData(GoalStatus.Completed)]
-    [Xunit.InlineData(GoalStatus.Cancelled)]
     [Xunit.InlineData(GoalStatus.Failed)]
     public void TerminalGoalSweepGlobalStaleTerminalGoalWithAssignedTaskIsExcludedOnce(GoalStatus status)
     {
@@ -77,7 +76,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var task = new TaskSpec(TaskId.New(), $"Do work {i}", AgentRole.Developer);
             var goal = kernel.CreateGoal($"Stale {i}", [task]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Failed);
         }
 
         var result = RunSweep(kernel, CreateTempDirectory());
@@ -389,11 +388,11 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var result = RunSweep(kernel, root, goal.Id);
             var goalResult = Assert.Single(result.Goals);
 
-            Assert.Contains(goalResult.Repairs, repair => repair.Kind == "completed-branch-normalized");
+            Assert.DoesNotContain(goalResult.Repairs, repair => repair.Kind == "completed-branch-normalized");
             var blocker = Assert.Single(goalResult.Blockers);
             Assert.Equal("completed-branch-unmerged", blocker.Kind);
             Assert.Equal($"acceptance {goal.Id.Value[..8]}", blocker.Command);
-            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
         }
         finally
         {
@@ -533,7 +532,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
 
             Assert.Equal("completed-branch-unmerged", blocker.Kind);
             Assert.Equal($"acceptance {goal.Id.Value[..8]}", blocker.Command);
-            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             Assert.NotEqual(
                 string.Empty,
                 RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
@@ -576,7 +575,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Equal("completed-branch-unmerged", blocker.Kind);
             Assert.Contains("contentCheck=inconclusive", blocker.Evidence, StringComparison.Ordinal);
             Assert.Equal($"acceptance {goal.Id.Value[..8]}", blocker.Command);
-            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             Assert.NotEqual(
                 string.Empty,
                 RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
@@ -607,16 +606,16 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.True(result.Changed);
         Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "dispatch-exit-reconciled");
         Xunit.Assert.Empty(goalResult.Blockers);
-        Xunit.Assert.Equal(GoalStatus.WaitingForHuman, kernel.GetGoal(goal.Id).Status);
-        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
         Xunit.Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.IsRunning);
         Xunit.Assert.Equal(0, kernel.GetTask(goal.Id, task.Id).LastProcess!.ExitCode);
-        Xunit.Assert.Single(kernel.HumanInputRequests);
+        Xunit.Assert.Empty(kernel.HumanInputRequests);
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_reopens_goal")]
-    public void TerminalGoalSweepSupersededWithAssignedTaskReopensGoal()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_superseded_with_assigned_task_closes_task")]
+    public void TerminalGoalSweepSupersededWithAssignedTaskClosesTask()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -632,13 +631,14 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
         Xunit.Assert.Contains("goalState=Superseded", repair.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
-        Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(GoalStatus.Superseded, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
         Xunit.Assert.Empty(second.Goals);
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_after_retry_reopens_goal")]
-    public void TerminalGoalSweepCompletedWithAssignedTaskAfterRetryReopensGoal()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_after_retry_closes_task")]
+    public void TerminalGoalSweepCompletedWithAssignedTaskAfterRetryClosesTask()
     {
         var root = CreateTempDirectory();
         var kernel = new AgentOrchestratorKernel();
@@ -646,7 +646,6 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var goal = kernel.CreateGoal("Retry stale terminal", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed before retry");
-        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
         kernel.RetryTask(goal.Id, task.Id, "retry after stale terminal completion");
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
@@ -656,7 +655,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
         Xunit.Assert.Contains("goalState=Completed", repair.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", repair.Evidence, StringComparison.Ordinal);
-        Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
         Xunit.Assert.Empty(second.Goals);
     }
 
@@ -711,16 +711,16 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var first = RunSweep(kernel, root, goal.Id);
         var second = RunSweep(kernel, root, goal.Id);
 
-        Xunit.Assert.False(first.Changed);
+        Xunit.Assert.True(first.Changed);
         var blocker = first.Goals.Single().Blockers.Single(blocker => blocker.Kind == "terminal-dirty-worktree");
         Xunit.Assert.Contains("goalState=Completed", blocker.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", blocker.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Contains("worktreeDirty=true", blocker.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Contains(worktree, blocker.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Equal($"goal-recovery {goal.Id.Value[..8]}", blocker.Command);
-        Xunit.Assert.Empty(first.Goals.Single().Repairs);
+        Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
         Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
-        Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
         Xunit.Assert.False(second.Changed);
         Xunit.Assert.Contains(second.Goals.Single().Blockers, blocker => blocker.Kind == "terminal-dirty-worktree");
     }
@@ -749,8 +749,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_repairs_but_global_conduct_excludes_terminal_task_desync")]
-    public void TerminalGoalSweepNextRepairsButGlobalConductExcludesTerminalTaskDesync()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_and_global_conduct_close_terminal_task_desync")]
+    public void TerminalGoalSweepNextAndGlobalConductCloseTerminalTaskDesync()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -799,11 +799,10 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         Xunit.Assert.Contains($"{task.Id.Value[..8]}:Assigned", nextRepair, StringComparison.Ordinal);
         Xunit.Assert.Contains($"command=\"conduct {goal.Id.Value[..8]} --loop\"", nextRepair, StringComparison.Ordinal);
 
-        var conductExclusion = SingleLineContaining(conductOutput, "SWEEP_SUMMARY");
-        Xunit.Assert.Contains("kind=stale-terminal-excluded", conductExclusion, StringComparison.Ordinal);
-        Xunit.Assert.Contains("count=1", conductExclusion, StringComparison.Ordinal);
+        var conductRepair = SingleLineContaining(conductOutput, "SWEEP_REPAIR");
+        Xunit.Assert.Contains("kind=terminal-task-desync", conductRepair, StringComparison.Ordinal);
+        Xunit.Assert.Contains("action=cancel-stale-tasks", conductRepair, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("SWEEP_BLOCKER", conductOutput, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("SWEEP_REPAIR", conductOutput, StringComparison.Ordinal);
     }
 
 
@@ -985,8 +984,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_raw_completed_assigned_task_with_unmerged_branch_reopens_without_acceptance_blocker")]
-    public void TerminalGoalSweepRawCompletedAssignedTaskWithUnmergedBranchReopensWithoutAcceptanceBlocker()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_raw_completed_assigned_task_with_unmerged_branch_closes_task")]
+    public void TerminalGoalSweepRawCompletedAssignedTaskWithUnmergedBranchClosesTask()
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -1004,9 +1003,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var goalResult = Assert.Single(result.Goals);
 
             Assert.Contains(goalResult.Repairs, repair => repair.Kind == "terminal-task-desync");
-            Assert.DoesNotContain(goalResult.Blockers, blocker => blocker.Kind == "completed-branch-unmerged");
-            Assert.Empty(goalResult.Blockers);
-            Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+            Assert.Contains(goalResult.Blockers, blocker => blocker.Kind == "completed-branch-unmerged");
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
             Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
             Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
         }

@@ -107,7 +107,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
     {
         var (kernel, seededGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/ReapGate.cs");
         PassVerification(kernel, seededGoal, seededGoal.Tasks.Single());
-        kernel = WithGoalStatus(kernel, seededGoal.Id, GoalStatus.Completed);
+        kernel = WithGoalStatus(kernel, seededGoal.Id, GoalStatus.Verified);
         var goal = kernel.GetGoal(seededGoal.Id);
         var attemptRoot = CreateTempDirectory("mcg-conductor-fallback-reap");
         var dispatchRoot = CreateTempDirectory("mcg-conductor-dead-worker");
@@ -278,11 +278,47 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
     }
 
     [Xunit.Fact]
+    public void FallbackGate_CompletedGoalHoldsBeforeLaunchingAcceptance()
+    {
+        var (kernel, seededGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CompletedHold.cs");
+        PassVerification(kernel, seededGoal, seededGoal.Tasks.Single());
+        kernel = WithGoalStatus(kernel, seededGoal.Id, GoalStatus.Completed);
+        var goal = kernel.GetGoal(seededGoal.Id);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-completed-hold");
+        var launches = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: _ =>
+            {
+                launches++;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(9400);
+            });
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/CompletedHold.cs"],
+            parallelAcceptanceAttemptCoordinator: coordinator);
+        try
+        {
+            driver.BeginTick(kernel, 1);
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+            Assert.True(result.IsHeld);
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Equal(0, launches);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact]
     public void FallbackGate_FailedAttempt_EscalatesWithoutLanding()
     {
         var (kernel, seededGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/FailedFallback.cs");
         PassVerification(kernel, seededGoal, seededGoal.Tasks.Single());
-        kernel = WithGoalStatus(kernel, seededGoal.Id, GoalStatus.Completed);
+        kernel = WithGoalStatus(kernel, seededGoal.Id, GoalStatus.Verified);
         var goal = kernel.GetGoal(seededGoal.Id);
         var attemptRoot = CreateTempDirectory("mcg-conductor-fallback-failed");
         ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;

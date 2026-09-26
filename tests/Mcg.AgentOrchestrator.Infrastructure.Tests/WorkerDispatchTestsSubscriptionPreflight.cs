@@ -19,8 +19,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerSandboxOptions.DefaultCredentialTarget);
     private static readonly WorkerSandboxOptions EnabledSandbox = DisabledSandbox with { Enabled = OperatingSystem.IsWindows() };
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_swept_terminal_goal_without_starting_worker")]
-    public void WorkerProfileDispatcherPreflightAllowsSweptTerminalGoalWithoutStartingWorker()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_rejects_swept_terminal_goal_without_starting_worker")]
+    public void WorkerProfileDispatcherPreflightRejectsSweptTerminalGoalWithoutStartingWorker()
     {
         var root = CreateTempDirectory();
         WriteSkill(root, "criterion-ownership-planning");
@@ -35,10 +35,10 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
         var repairedGoal = kernel.GetGoal(goal.Id);
         var repairedTask = repairedGoal.Tasks.Single(candidate => candidate.Id == task.Id);
-        Assert.Equal(GoalStatus.Active, repairedGoal.Status);
-        Assert.Equal(WorkTaskStatus.Assigned, repairedTask.Status);
+        Assert.Equal(GoalStatus.Completed, repairedGoal.Status);
+        Assert.Equal(WorkTaskStatus.Cancelled, repairedTask.Status);
 
-        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
+        var refusal = Assert.Throws<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
             repairedGoal,
             repairedTask,
@@ -51,10 +51,10 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
                 HasAnthropicApiKey: true,
                 HasCliCredentialArtifact: false,
                 CredentialArtifactPath: null),
-            sandboxOptions: DisabledSandbox);
+            sandboxOptions: DisabledSandbox));
 
         Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
-        Assert.NotNull(prepared.PromptPath);
+        Assert.Contains("Cancelled", refusal.Message, StringComparison.Ordinal);
         Assert.Null(repairedTask.LastProcess);
     }
 

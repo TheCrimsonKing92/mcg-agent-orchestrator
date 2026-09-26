@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
-
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class BackgroundDispatchRunner
@@ -969,7 +968,8 @@ public sealed partial class BackgroundDispatchRunner
                     taskId,
                     "InterruptedDispatchCheckpointRetryBudgetExhausted: checkpoint-retry-budget-exhausted; checkpoint retained in git for operator recovery.");
             }
-            else if (disposition.ShouldRequeue && !checkpointAlreadyApplied)
+            else if (disposition.ShouldRequeue && !checkpointAlreadyApplied &&
+                     !AgentOrchestratorKernel.IsReopenProtectedGoalStatus(kernel.GetGoal(goalId).Status))
             {
                 kernel.RequeueInterruptedDispatch(
                     goalId,
@@ -985,7 +985,7 @@ public sealed partial class BackgroundDispatchRunner
             {
                 Action: DispatchRecoveryAction.Hold,
                 Blocker: { Length: > 0 } blocker
-            } apparatusHold)
+            } apparatusHold && !AgentOrchestratorKernel.IsReopenProtectedGoalStatus(kernel.GetGoal(goalId).Status))
         {
             RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
         }

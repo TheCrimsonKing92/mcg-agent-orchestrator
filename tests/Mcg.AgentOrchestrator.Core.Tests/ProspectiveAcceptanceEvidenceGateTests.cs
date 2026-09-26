@@ -207,7 +207,7 @@ public sealed class ProspectiveAcceptanceEvidenceGateTests
         var restored = AgentOrchestratorKernel.FromSnapshot(
             snapshot with
             {
-                Goals = [Assert.Single(snapshot.Goals) with { Status = GoalStatus.Completed }]
+                Goals = [Assert.Single(snapshot.Goals) with { Status = GoalStatus.Active }]
             },
             clock);
 

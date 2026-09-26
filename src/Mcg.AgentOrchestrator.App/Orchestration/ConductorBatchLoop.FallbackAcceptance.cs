@@ -10,18 +10,12 @@ internal sealed partial class ConductorBatchLoop
         ConductorParallelAcceptanceAttempt attempt,
         int tick)
     {
-        if (goal.Status == GoalStatus.Completed &&
-            !kernel.NormalizePrematureCompletedGoalToVerified(
-                goal.Id,
-                $"Batch loop tick {tick}: background acceptance gate {attempt.AttemptId} repaired premature Completed state before verification."))
-        {
+        if (goal.Status == GoalStatus.Verifying)
             return false;
-        }
 
         if (goal.Status != GoalStatus.Verified)
-        {
-            return false;
-        }
+            throw new InvalidOperationException(
+                $"Background acceptance attempt {attempt.AttemptId} cannot start for goal {goal.Id} in {goal.Status} state.");
 
         return kernel.BeginGoalAcceptanceVerification(
             goal.Id,

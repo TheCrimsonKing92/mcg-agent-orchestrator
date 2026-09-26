@@ -1551,8 +1551,8 @@ public sealed class GoalLifecycleTests
     Assert.NotNull(tester.LastProcess);
 }
 
-    [Xunit.Fact(DisplayName = "NormalizeGoalLifecycleState_reopens_terminal_goal_with_nonterminal_task")]
-    public void NormalizeGoalLifecycleStateReopensTerminalGoalWithNonterminalTask()
+    [Xunit.Fact(DisplayName = "NormalizeGoalLifecycleState_preserves_superseded_goal_with_nonterminal_task")]
+    public void NormalizeGoalLifecycleStatePreservesSupersededGoalWithNonterminalTask()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Normalize terminal desync", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
@@ -1561,9 +1561,9 @@ public sealed class GoalLifecycleTests
 
     var repaired = kernel.NormalizeGoalLifecycleState(goal.Id, "repair terminal/nonterminal desync");
 
-    Assert.True(repaired);
-    Assert.Equal(GoalStatus.Active, goal.Status);
-    Assert.Contains(goal.Timeline, evt =>
+    Assert.False(repaired);
+    Assert.Equal(GoalStatus.Superseded, goal.Status);
+    Assert.DoesNotContain(goal.Timeline, evt =>
         evt.Kind == ProgressKind.GoalPolicyDecision &&
         evt.Message.Contains("repair terminal/nonterminal desync", StringComparison.Ordinal));
 }
