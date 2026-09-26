@@ -44,7 +44,11 @@ public sealed class GoalLifecycleEventWriterTests
                     WorkerResultPresent: true));
             kernel.CompleteGoal(goal.Id, "verified");
             writer.AppendGoalLanded(goal.Id, LandingExecutor.IntegrationBranchName, GoalWorktrees.BranchName(goal.Id));
-            kernel.RequestHumanInput(goal.Id, task.Id, "Need operator decision.");
+            kernel.RequestHumanInput(
+                goal.Id,
+                task.Id,
+                "Record prospective acceptance evidence.",
+                kind: HumanWaitKind.ProspectiveAcceptanceEvidence);
 
             var path = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
             var lines = File.ReadAllLines(path);
