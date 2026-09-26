@@ -17,21 +17,30 @@ internal sealed partial class ConductorDriver
         var tester = goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Tester);
         var receipt = PreTesterEvidenceIndexLines.Latest(
             goal, tester?.Id ?? requestingTask.Id, candidateSha);
-        if (receipt is not { Outcome: "green" or "red" }) return false;
+        if (receipt is not { Outcome: "green" }) return false;
 
         var covered = receipt.Selections.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (requestingFindings.Any(finding =>
-                finding.EvidenceRequest?.Selections is not { Count: > 0 } selections ||
-                selections.Any(selection => !covered.Contains(FormatFindingEvidenceSelection(selection)))))
-            return false;
+        var settings = _getFindingEvidenceEngineSettings(goal);
+        var normalizedRequests = new List<FindingEvidenceRequest>();
+        foreach (var finding in requestingFindings)
+        {
+            if (finding.EvidenceRequest is null ||
+                !TryNormalizeFindingEvidenceRequest(
+                    finding.EvidenceRequest, settings,
+                    (project, name) => _resolveFindingEvidenceSiblingClasses(goal, project, name),
+                    out var normalized, out _, out _, out _) ||
+                normalized.Selections.Any(selection =>
+                    !covered.Contains(FormatFindingEvidenceSelection(selection))))
+                return false;
+            normalizedRequests.Add(normalized);
+        }
 
-        var request = new FindingEvidenceRequest(requestingFindings
-            .SelectMany(finding => finding.EvidenceRequest!.Selections)
+        var request = new FindingEvidenceRequest(normalizedRequests
+            .SelectMany(normalized => normalized.Selections)
             .DistinctBy(FormatFindingEvidenceSelection)
             .ToArray());
-        var passed = receipt.Outcome == "green";
         var attachedReceipt = new FindingEvidenceReceipt(
-            receipt.ReceiptId, candidateSha, request, Accepted: true, Passed: passed,
+            receipt.ReceiptId, candidateSha, request, Accepted: true, Passed: true,
             Summary: $"Pre-Tester focused evidence {receipt.Outcome}; result_path={receipt.ResultPath ?? "none"}",
             RequestDispositions: requestingFindings.Select(finding =>
                 new FindingEvidenceRequestDisposition(
@@ -45,7 +54,7 @@ internal sealed partial class ConductorDriver
                 goal.Id, requestingTask.Id, finding.StableId,
                 new FindingEvidenceOutcome(
                     Honoured: true, ReceiptId: receipt.ReceiptId,
-                    ResultReason: passed ? FindingEvidenceOutcomeReason.ValidEvidence : FindingEvidenceOutcomeReason.CandidateRed,
+                    ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
                     RequestedSelectionIdentity: requestIdentity,
                     DecisionReason: "pre-tester-covered"),
                 attachedReceipt);

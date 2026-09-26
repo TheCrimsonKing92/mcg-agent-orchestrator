@@ -13,12 +13,14 @@ public sealed record PreTesterEvidenceEntry(
 public static class PreTesterEvidenceIndexLines
 {
     private const string Prefix = "finding-evidence pre-tester ";
+    private static string EncodeList(IReadOnlyList<string> values) =>
+        string.Join(',', values.Select(Uri.EscapeDataString));
 
     public static string FormatMarker(PreTesterEvidenceEntry entry) =>
         Prefix + $"outcome={entry.Outcome}; candidate_sha={entry.CandidateSha}; " +
-        $"receipt_id={entry.ReceiptId}; selections={string.Join(',', entry.Selections)}; " +
-        $"not_run={string.Join(',', entry.NotRun)}; result_path={entry.ResultPath ?? "none"}; " +
-        $"failing_tests={string.Join(',', entry.FailingTests)}";
+        $"receipt_id={entry.ReceiptId}; selections={EncodeList(entry.Selections)}; " +
+        $"not_run={EncodeList(entry.NotRun)}; result_path={Uri.EscapeDataString(entry.ResultPath ?? "none")}; " +
+        $"failing_tests={EncodeList(entry.FailingTests)}";
 
     public static PreTesterEvidenceEntry? Latest(Goal goal, TaskId testerTaskId, string? candidateSha)
     {
@@ -38,12 +40,13 @@ public static class PreTesterEvidenceIndexLines
             static string[] Values(IReadOnlyDictionary<string, string> values, string key) =>
                 values.TryGetValue(key, out var value) && value.Length > 0
                     ? value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(Uri.UnescapeDataString).ToArray()
                     : [];
             fields.TryGetValue("receipt_id", out var receipt);
             fields.TryGetValue("result_path", out var path);
             return new PreTesterEvidenceEntry(
                 outcome, sha, receipt ?? "none", Values(fields, "selections"),
-                Values(fields, "not_run"), path == "none" ? null : path,
+                Values(fields, "not_run"), path == "none" ? null : Uri.UnescapeDataString(path ?? string.Empty),
                 Values(fields, "failing_tests"));
         }
         return null;

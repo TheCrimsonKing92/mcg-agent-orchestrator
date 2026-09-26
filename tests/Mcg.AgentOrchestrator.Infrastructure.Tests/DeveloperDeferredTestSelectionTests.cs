@@ -36,6 +36,12 @@ public sealed class DeveloperDeferredTestSelectionTests
                 "deferred - GeneratedTests");
             Assert.Empty(generatedSelection.Selections);
             Assert.Equal("GeneratedTests", Assert.Single(generatedSelection.NotRun));
+
+            var wrappedSelection = DeveloperDeferredTestSelections.Resolve(root,
+                "deferred - conductor to execute `DeclaredTests`, \"MixedCaseTests\", 'MissingTests'");
+            Assert.Equal(["DeclaredTests", "MixedCaseTests"],
+                wrappedSelection.Selections.Select(item => item.TestClass).ToArray());
+            Assert.Equal("MissingTests", Assert.Single(wrappedSelection.NotRun));
         }
         finally
         {

@@ -1912,9 +1912,6 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        if (candidateShaAvailable && TryRouteCoveredPreTesterRequest(
-                goal, requestingTask, candidateSha!, requestingFindings, out decision)) return true;
-
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 
         if (requestingTask.RequiredRole == AgentRole.Reviewer)
@@ -1950,6 +1947,9 @@ internal sealed partial class ConductorDriver
                 if (requestingFindings.Length == 0) return false;
             }
         }
+
+        if (candidateShaAvailable && TryRouteCoveredPreTesterRequest(
+                goal, requestingTask, candidateSha!, requestingFindings, out decision)) return true;
 
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;

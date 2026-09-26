@@ -89,6 +89,32 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         Assert.Contains("DeferredAlphaTests.FailsOnCandidate", feedback[0], StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CandidateOnlyRedUsesChangedTestSourceForAttribution(bool sourceChanged)
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        var roles = new List<AgentRole>();
+        var feedback = new List<string>();
+        var sourcePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DeferredAlphaTests.cs";
+        var driver = scenario.Driver(request =>
+        {
+            var red = CandidateRedFindingEvidence(request, CandidateSha,
+                "DeferredAlphaTests.FailsOnCandidate");
+            return red with { Arms = red.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray() };
+        }, roles.Add, feedback.Add,
+            changedPaths: sourceChanged ? [sourcePath] : ["tests/OtherTests.cs"]);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal([sourceChanged ? AgentRole.Developer : AgentRole.Tester], roles);
+        if (sourceChanged)
+            Assert.Contains("DeferredAlphaTests.FailsOnCandidate", Assert.Single(feedback), StringComparison.Ordinal);
+        else
+            Assert.Empty(feedback);
+    }
+
     [Fact]
     public void InheritedRedContinuesToTesterWithoutDeveloperRetry()
     {
@@ -209,6 +235,8 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                 "test.exe", "C:\\tmp", 0, output, "", DateTimeOffset.UtcNow,
                 WorkerResultPresent: true, HasCommittedChanges: true));
             var worktree = GoalWorktrees.WorktreePath(Root, Goal.Id);
+            Directory.CreateDirectory(worktree);
+            File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: fixture");
             var project = Path.Combine(worktree, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
             Directory.CreateDirectory(project);
             File.WriteAllText(Path.Combine(project, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
@@ -221,11 +249,13 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
             Func<string, FocusedEvidenceRunResult> run,
             Action<AgentRole> dispatched,
             Action<string>? feedback = null,
-            ConductorParallelAcceptanceAttemptCoordinator? coordinator = null)
+            ConductorParallelAcceptanceAttemptCoordinator? coordinator = null,
+            IReadOnlyList<string>? changedPaths = null)
         {
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
+                getLandingFileScopes: _ => changedPaths ?? [],
                 focusedEvidenceAttemptCoordinator: coordinator ?? new ConductorParallelAcceptanceAttemptCoordinator(
                     Path.Combine(Root, "attempts"), runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) => run(request),
