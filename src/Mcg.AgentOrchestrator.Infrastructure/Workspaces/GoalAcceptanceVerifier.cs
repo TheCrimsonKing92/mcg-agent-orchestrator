@@ -3364,7 +3364,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
-            engineSettings.InfrastructureTestLanes,
+            ResolveOwnedCollectionLanes(engineSettings, worktreePath),
             changedFiles,
             policyShardPlan);
 
@@ -3518,25 +3518,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             yield return BuildInfrastructureShardCheck(check, lane);
         }
     }
-
-    private static AcceptanceManifestCheck BuildInfrastructureShardCheck(
-        AcceptanceManifestCheck check,
-        AcceptanceTestLane lane) =>
-        new()
-        {
-            Name = $"{check.Name}: {lane.Name}",
-            Type = check.Type,
-            Command = check.Command,
-            Project = check.Project,
-            Arguments = [.. check.Arguments, "--filter", lane.Filter],
-            Pattern = check.Pattern,
-            FilePath = check.FilePath,
-            TimeoutMinutes = check.TimeoutMinutes,
-            Advisory = check.Advisory,
-            Runner = check.Runner,
-            EstimatedSerialSeconds = lane.EstimatedSerialSeconds,
-            ExclusiveResourceKeys = lane.ExclusiveResourceKeys
-        };
 
     private static string ManifestCheckKey(AcceptanceManifestCheck check) =>
         $"{check.Type}:{check.Command}:{NormalizePath(check.Project)}:{string.Join('\u001f', check.Arguments)}";
@@ -7114,7 +7095,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             args.AddRange(check.FocusedEvidenceTokens.Count > 0
                 ? TranslateFocusedEvidenceTokens(check.FocusedEvidenceTokens)
-                : TranslateMtpFilter(filter));
+                : TranslateCheckMtpFilter(check, filter));
         }
 
         // MTP execution does not go through BuildDotnetTestArguments. Unattended dashboard /
@@ -9324,7 +9305,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    internal sealed class AcceptanceManifestCheck
+    internal sealed partial class AcceptanceManifestCheck
     {
         public static AcceptanceManifestCheck DefaultDotnetTest { get; } = new()
         {
