@@ -196,7 +196,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         var snapshot = kernel.ExportSnapshot();
         var badGoalSnapshot = snapshot.Goals.Single() with
         {
-            Status = GoalStatus.Completed,
+            Status = GoalStatus.Failed,
             Tasks = snapshot.Goals.Single().Tasks
                 .Select(task => task with { Status = WorkTaskStatus.Assigned, LastVerification = null })
                 .ToArray()

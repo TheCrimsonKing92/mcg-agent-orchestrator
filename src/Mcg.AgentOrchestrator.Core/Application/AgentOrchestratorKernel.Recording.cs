@@ -1547,6 +1547,7 @@ public sealed partial class AgentOrchestratorKernel
         bool allowPendingRecordedDispatchRefresh = false)
     {
         var goal = GetGoal(goalId);
+        EnsureGoalCanResumeWork(goal);
         var task = goal.FindTask(taskId);
 
         if (task.LastVerification?.Succeeded is true)
@@ -1853,7 +1854,8 @@ public sealed partial class AgentOrchestratorKernel
         if (ownerlessAdmission is not null)
             task.MarkRetryAdmissionStarted(task.LastDispatch.DispatchedAt, process.StartedAt);
         task.SetStatus(WorkTaskStatus.Running);
-        goal.SetStatus(GoalStatus.Active);
+        if (!IsReopenProtectedGoalStatus(goal.Status))
+            goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
     }
 

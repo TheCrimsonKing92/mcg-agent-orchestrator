@@ -62,6 +62,7 @@ public sealed partial class AgentOrchestratorKernel
     public DelegationPlan ActivateGoal(GoalId goalId, IReadOnlyList<AgentDefinition> availableAgents)
     {
         var goal = GetGoal(goalId);
+        EnsureGoalCanResumeWork(goal);
         var assignments = new List<TaskAssignment>();
 
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Pending))
@@ -198,6 +199,7 @@ public sealed partial class AgentOrchestratorKernel
         AgentRole? beforeRole = null)
     {
         var goal = GetGoal(goalId);
+        EnsureGoalCanResumeWork(goal);
         var task = new TaskSpec(TaskId.New(), description, requiredRole, verificationPlan);
         if (beforeRole is { } targetRole)
         {
@@ -543,6 +545,7 @@ public sealed partial class AgentOrchestratorKernel
         CriteriaCorrectionSource correctionSource = CriteriaCorrectionSource.Operator)
     {
         var goal = GetGoal(goalId);
+        EnsureGoalCanResumeWork(goal);
         var task = goal.FindTask(taskId);
         var retryMessage = message.Trim();
         if (string.IsNullOrWhiteSpace(retryMessage))
@@ -611,6 +614,8 @@ public sealed partial class AgentOrchestratorKernel
     public bool NormalizeGoalLifecycleState(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
+        if (IsReopenProtectedGoalStatus(goal.Status))
+            return false;
         var reconciled = ReconcileSupersededFailedDownstreamTasks(goal, _clock.UtcNow);
 
         if (reconciled)
@@ -643,20 +648,10 @@ public sealed partial class AgentOrchestratorKernel
 
     public bool NormalizePrematureCompletedGoalToVerified(GoalId goalId, string reason)
     {
-        var goal = GetGoal(goalId);
-        if (goal.Status != GoalStatus.Completed)
-        {
-            return false;
-        }
-
-        if (!goal.Tasks.All(task => BuildTaskVerificationGate(goal, task).GateStatus == VerificationGateStatus.Passed))
-        {
-            return false;
-        }
-
-        goal.SetStatus(GoalStatus.Verified);
-        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
-        return true;
+        // Completed records a final landing decision, including on historical raw snapshots.
+        // Keep the compatibility entry point for callers that use its false result to hold.
+        GetGoal(goalId);
+        return false;
     }
 
     public bool ReconcileGoalVerificationStatus(GoalId goalId, string reason)
@@ -667,7 +662,7 @@ public sealed partial class AgentOrchestratorKernel
             return false;
         }
 
-        if (IsTerminalGoalStatus(goal.Status) && goal.Status != GoalStatus.Completed)
+        if (IsTerminalGoalStatus(goal.Status))
         {
             return false;
         }
@@ -769,6 +764,7 @@ public sealed partial class AgentOrchestratorKernel
         InterruptedWorkCheckpoint? checkpoint = null)
     {
         var goal = GetGoal(goalId);
+        EnsureGoalCanResumeWork(goal);
         var task = goal.FindTask(taskId);
         var retryMessage = message.Trim();
         if (string.IsNullOrWhiteSpace(retryMessage))
@@ -1505,7 +1501,8 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool ReopenTerminalGoalWithNonTerminalTasks(Goal goal, string reason)
     {
-        if (!IsTerminalGoalStatus(goal.Status) ||
+        if (IsReopenProtectedGoalStatus(goal.Status) ||
+            !IsTerminalGoalStatus(goal.Status) ||
             goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
         {
             return false;
@@ -1735,6 +1732,8 @@ public sealed partial class AgentOrchestratorKernel
         string? evidenceOwner = null)
     {
         var goal = GetGoal(goalId);
+        if (HumanWaitPolicyDefaults.BlocksActiveWork(kind))
+            EnsureGoalCanResumeWork(goal);
         if (taskId is not null)
         {
             goal.FindTask(taskId);

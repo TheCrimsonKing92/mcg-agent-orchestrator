@@ -40,6 +40,15 @@ public sealed partial class AgentOrchestratorKernel
     private static bool IsTerminalGoalStatus(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
+    public static bool IsReopenProtectedGoalStatus(GoalStatus status) =>
+        status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+    private static void EnsureGoalCanResumeWork(Goal goal)
+    {
+        if (IsReopenProtectedGoalStatus(goal.Status))
+            throw new InvalidOperationException($"Goal '{goal.Id.Value}' is {goal.Status} and cannot resume work.");
+    }
+
     private static TaskVerificationGate BuildTaskVerificationGate(Goal goal, TaskSpec task)
     {
         if (task.Status == WorkTaskStatus.Cancelled)

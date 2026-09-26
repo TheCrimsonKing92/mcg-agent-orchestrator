@@ -635,7 +635,7 @@ internal static partial class TerminalGoalSweep
                 continue;
             }
 
-            if (hasTerminalTaskDesync &&
+            if (IsTerminalSweepStatus(goal.Status) &&
                 TryBuildTerminalDirtyWorktreeBlocker(goal, executionDirectory, prefix, desyncEvidence, out var dirtyEvidence, out var dirtyCommand))
             {
                 blockedByDirtyWorktree = true;
@@ -697,7 +697,7 @@ internal static partial class TerminalGoalSweep
                 }
             }
 
-            if (!blockedByDirtyWorktree &&
+            if ((!blockedByDirtyWorktree || AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status)) &&
                 !branchFacts.BranchAlreadyLanded &&
                 TryBuildTerminalLiveDispatchBlocker(goal, prefix, out var liveDispatchEvidence, out var liveDispatchCommand))
             {
@@ -755,15 +755,22 @@ internal static partial class TerminalGoalSweep
                 AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
             }
 
-            if (!blockedByDirtyWorktree &&
-                blockers.Count == 0 &&
+            if (hasTerminalTaskDesync &&
                 !branchFacts.BranchAlreadyLanded &&
-                hasTerminalTaskDesync &&
-                kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
+                AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status) &&
+                blockers.All(blocker => blocker.Kind is not ("terminal-live-dispatch" or "stale-terminal-excluded")))
+            {
+                CloseStaleTasksOnTerminalGoal(kernel, goal, prefix, desyncEvidence, repairs);
+            }
+            else if (!blockedByDirtyWorktree &&
+                     blockers.Count == 0 &&
+                     !branchFacts.BranchAlreadyLanded &&
+                     hasTerminalTaskDesync &&
+                     kernel.NormalizeGoalLifecycleState(goal.Id, "terminal stale-goal sweep: reopened terminal goal with non-terminal task(s)."))
             {
                 repairs.Add(new TerminalGoalSweepRepair(
                     "terminal-task-desync",
-                    desyncEvidence,
+                    $"{desyncEvidence}; action=reopen",
                     $"conduct {prefix} --loop"));
                 goal = kernel.GetGoal(originalGoal.Id);
                 branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
@@ -821,6 +828,7 @@ internal static partial class TerminalGoalSweep
                 !branchFacts.BranchAlreadyLanded)
             {
                 if (goal.Status == GoalStatus.Completed &&
+                    !hasTerminalTaskDesync &&
                     kernel.NormalizePrematureCompletedGoalToVerified(
                         goal.Id,
                         "terminal stale-goal sweep: normalized raw Completed goal with unmerged branch back to Verified for acceptance."))
@@ -1492,12 +1500,17 @@ internal static partial class TerminalGoalSweep
             .Where(task => IsStaleTerminalAssignedTaskStatus(task.Status))
             .Select(task => $"{task.Id.Value[..8]}:{task.Status}")
             .ToArray();
-        if (dispatchableTasks.Length == 0)
+        var nonTerminalTasks = goal.Tasks
+            .Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
+            .Select(task => $"{task.Id.Value[..8]}:{task.Status}")
+            .ToArray();
+        if (dispatchableTasks.Length == 0 &&
+            (!AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status) || nonTerminalTasks.Length == 0))
         {
             return false;
         }
 
-        evidence = $"goalState={goal.Status}; dispatchableTasks={string.Join(",", dispatchableTasks)}";
+        evidence = $"goalState={goal.Status}; dispatchableTasks={string.Join(",", dispatchableTasks)}; nonTerminalTasks={string.Join(",", nonTerminalTasks)}";
         return true;
     }
 
@@ -1574,7 +1587,7 @@ internal static partial class TerminalGoalSweep
         status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed or GoalStatus.Superseded;
 
     private static bool IsGlobalStaleTerminalStatus(GoalStatus status) =>
-        status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed;
+        status == GoalStatus.Failed;
 
     internal static bool IsStaleTerminalAssignedTaskStatus(WorkTaskStatus status) =>
         status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman;

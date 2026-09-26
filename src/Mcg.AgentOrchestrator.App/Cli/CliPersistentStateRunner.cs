@@ -981,6 +981,7 @@ internal static partial class CliPersistentStateRunner
                 // Startup and loop share the operation scheduler and its cadence.
                 var sweepKernel = LoadConductLoopSweepKernel(
                     stateRepository, startupKernel, workspace.ExecutionDirectory, watchGoalId, cleanupContext.Hooks);
+                var sweepTimelineBaseline = TerminalGoalSweepLifecycleEvents.Capture(sweepKernel);
                 var sweep = TerminalGoalSweep.Run(
                     sweepKernel,
                     workspace.ExecutionDirectory,
@@ -999,6 +1000,9 @@ internal static partial class CliPersistentStateRunner
                 if (sweep.Changed)
                 {
                     PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
+                    TerminalGoalSweepLifecycleEvents.Publish(
+                        sweepKernel, sweepTimelineBaseline, sweep.Goals.Select(goal => goal.GoalId),
+                        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory), Console.WriteLine);
                     startupKernel = LoadLoopKernel();
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 }
@@ -3966,12 +3970,14 @@ internal static partial class CliPersistentStateRunner
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
         cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
+        var targetSweepBaseline = TerminalGoalSweepLifecycleEvents.Capture(kernel);
         var targetSweep = TerminalGoalSweep.Run(
             kernel,
             workspace.ExecutionDirectory,
             goalId,
             cleanupHooks: cleanupContext.Hooks,
             orchestratorDirectory: workspace.OrchestratorDirectory);
+        var targetSweepTimelineEnd = TerminalGoalSweepLifecycleEvents.Capture(kernel);
         reconcileStarted.Stop();
         ConsoleViews.PrintTerminalGoalSweep(targetSweep);
         TerminalGoalSweepAttention.Surface(kernel, targetSweep, workspace.OrchestratorDirectory, goalId);
@@ -3990,6 +3996,9 @@ internal static partial class CliPersistentStateRunner
         var acceptanceFinalStatePersisted = false;
         var acceptanceGuardAborted = false;
         var criticalCheckpointRejected = false;
+        void PublishSweepEvents() => TerminalGoalSweepLifecycleEvents.Publish(
+            kernel, targetSweepBaseline, targetSweep.Goals.Select(goal => goal.GoalId),
+            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory), Console.WriteLine, targetSweepTimelineEnd);
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
@@ -4140,6 +4149,7 @@ internal static partial class CliPersistentStateRunner
             if (!acceptanceGuardAborted)
             {
                 PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
+                PublishSweepEvents();
             }
             return shouldSave;
         }
@@ -4165,6 +4175,8 @@ internal static partial class CliPersistentStateRunner
         {
             PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
         }
+        if (!criticalCheckpointRejected)
+            PublishSweepEvents();
 
         return shouldSave;
 

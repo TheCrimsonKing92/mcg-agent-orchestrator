@@ -213,8 +213,8 @@ public sealed class ProspectiveAcceptanceEvidenceGateTests
 
         var reconciled = restored.ReconcileGoalVerificationStatus(goal.Id, "All task gates passed.");
 
-        Assert.True(reconciled);
-        Assert.Equal(GoalStatus.Verified, restored.GetGoal(goal.Id).Status);
+        Assert.False(reconciled);
+        Assert.Equal(GoalStatus.Completed, restored.GetGoal(goal.Id).Status);
         Assert.Single(restored.GetPendingHumanInput(goal.Id));
     }
 
