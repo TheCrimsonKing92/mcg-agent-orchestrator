@@ -36,7 +36,8 @@ internal sealed class OperatorIntentCoordinator
         Func<DateTimeOffset>? utcNow = null,
         Func<GoalId, string?>? goalHeadResolver = null,
         ICollaborationItemStore? decisions = null,
-        Func<GoalId, long?>? goalStateVersionResolver = null)
+        Func<GoalId, long?>? goalStateVersionResolver = null,
+        AdjudicationEvidenceResolver? evidenceResolver = null)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -44,7 +45,8 @@ internal sealed class OperatorIntentCoordinator
         _decisions = decisions;
         if ((decisions is null) != (goalStateVersionResolver is null))
             throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
-        _adjudication = decisions is null ? null : new OperatorIntentAdjudication(decisions, goalStateVersionResolver!);
+        _adjudication = decisions is null ? null : new OperatorIntentAdjudication(
+            decisions, goalStateVersionResolver!, evidenceResolver ?? new AdjudicationEvidenceResolver());
     }
 
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace)
@@ -54,7 +56,8 @@ internal sealed class OperatorIntentCoordinator
             SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
             goalHeadResolver: goalId => ResolveGoalHead(workspace.ExecutionDirectory, goalId),
             decisions: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-            goalStateVersionResolver: goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult());
+            goalStateVersionResolver: goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult(),
+            evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory));
     }
 
     public IReadOnlyList<string> ListActionableGoalIds() =>

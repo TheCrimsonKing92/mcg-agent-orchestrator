@@ -25,7 +25,8 @@ public sealed partial class CollaborationItemStore
             reader.IsDBNull(5) ? null : reader.GetInt64(5),
             reader.IsDBNull(6) ? null : reader.GetInt64(6),
             reader.GetString(7),
-            DateTimeOffset.Parse(reader.GetString(8)));
+            DateTimeOffset.Parse(reader.GetString(8)),
+            reader.IsDBNull(9) ? null : reader.GetString(9));
 
     private static string Serialize<T>(T value) =>
         JsonSerializer.Serialize(value, JsonOptions);

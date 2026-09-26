@@ -18,7 +18,7 @@ internal static class CliCommandHelp
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
     public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>]";
     public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
-    public const string AdjudicateUsage = "Usage: adjudicate [--goal <goal-prefix>] <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>... [--cause <cause>] [--actor-kind <human|agent>]";
+    public const string AdjudicateUsage = "Usage: adjudicate [--goal <goal-prefix>] <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>... [--cause <cause>] [--reversibility <reversible|reversible-with-cost|irreversible>] [--precedent <decision-id|rule>] [--actor-kind <human|agent>]";
     public const string ApprovePolicyChangeUsage = "Usage: approve-policy-change <goal-prefix> <full-candidate-sha> --text-file <reason-path> [--idempotency-key <key>]";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
@@ -215,7 +215,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Adjudicate = new(
         AdjudicateUsage,
         "Atomically close, reopen for a gate, or route a task with decision evidence. Evidence may be ref or id=hash.",
-        ["--goal", "--text-file", "--evidence", "--cause", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
+        ["--goal", "--text-file", "--evidence", "--cause", "--reversibility", "--precedent", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
 
     private static readonly CommandHelpEntry ApprovePolicyChange = new(
         ApprovePolicyChangeUsage,

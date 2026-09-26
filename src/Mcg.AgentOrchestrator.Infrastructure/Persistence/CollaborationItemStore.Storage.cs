@@ -194,6 +194,9 @@ public sealed partial class CollaborationItemStore
                 UNIQUE (request_id, decision_receipt_id, action_ref)
             )
             """);
+        AddColumnIfMissing(conn, "collaboration_decision_receipts", "reversibility", "TEXT");
+        AddColumnIfMissing(conn, "collaboration_decision_receipts", "precedent_ref", "TEXT");
+        AddColumnIfMissing(conn, "collaboration_effect_receipts", "outcome", "TEXT");
     }
 
     private static void RunNonQuery(SqliteConnection conn, string sql)
