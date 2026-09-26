@@ -72,6 +72,13 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
+        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        if (PreTesterEvidenceIndexLines.Latest(goal, testerTask!.Id, candidateSha)?.Outcome == "started")
+        {
+            return TryRunPreTesterDeferredEvidence(
+                goal, developerTask, testerTask, worktreePath, candidateSha!, goalPrefix, policy, fromState, out result);
+        }
+
         var work = Task.Run(() => _runDeveloperCompletionStructuralPreflight(worktreePath));
         DeveloperCompletionStructuralFindings findings;
         try
@@ -105,7 +112,9 @@ internal sealed partial class ConductorDriver
         _recordTaskNote(goal.Id, developerTask.Id, note);
         if (!findings.HasViolation)
         {
-            return false;
+            return TryRunPreTesterDeferredEvidence(
+                goal, developerTask, testerTask!, worktreePath, candidateSha,
+                goalPrefix, policy, fromState, out result);
         }
 
         (_retryDeveloperAfterStructuralPreflight ?? _retryTask)(
