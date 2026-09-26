@@ -127,6 +127,13 @@ public sealed partial class AgentOrchestratorKernel
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
 
+        if (IsReopenProtectedGoalStatus(goal.Status))
+        {
+            Append(goal, taskId, ProgressKind.TaskNote,
+                $"Ignored dispatch outcome for {goal.Status} goal; terminal stale-goal sweep will close stale tasks.");
+            return;
+        }
+
         if (!verification.WorkerResultPresent)
         {
             Append(
