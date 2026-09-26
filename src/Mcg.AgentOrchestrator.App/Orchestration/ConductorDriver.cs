@@ -1948,6 +1948,9 @@ internal sealed partial class ConductorDriver
             }
         }
 
+        if (candidateShaAvailable && TryRouteCoveredPreTesterRequest(
+                goal, requestingTask, candidateSha!, requestingFindings, out decision)) return true;
+
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
