@@ -8,90 +8,63 @@ public sealed class DotnetBuildEnvironmentManagerTestsWriteFailureScope : Dotnet
     public void Scoped_read_returns_only_own_root_entries_and_preserves_foreign_order()
     {
         var foreignRoot = ForeignRoot();
+        var buffer = new OwnedRunRootWriteFailureBuffer();
         var prefix = Guid.NewGuid().ToString("N");
-        try
-        {
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(foreignRoot, $"{prefix}-foreign-1");
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(foreignRoot, $"{prefix}-foreign-2");
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(StorageRoot, $"{prefix}-own-1");
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(foreignRoot, $"{prefix}-foreign-3");
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(StorageRoot, $"{prefix}-own-2");
+        buffer.Enqueue(foreignRoot.RootPath, $"{prefix}-foreign-1");
+        buffer.Enqueue(foreignRoot.RootPath, $"{prefix}-foreign-2");
+        buffer.Enqueue(StorageRoot.RootPath, $"{prefix}-own-1");
+        buffer.Enqueue(foreignRoot.RootPath, $"{prefix}-foreign-3");
+        buffer.Enqueue(StorageRoot.RootPath, $"{prefix}-own-2");
 
-            Assert.Equal(
-                [$"{prefix}-own-1", $"{prefix}-own-2"],
-                DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(StorageRoot, 10));
-            Assert.Equal(
-                [$"{prefix}-foreign-1", $"{prefix}-foreign-2", $"{prefix}-foreign-3"],
-                DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(foreignRoot, 10));
-            Assert.Empty(DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(StorageRoot, 10));
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(StorageRoot, 10);
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(foreignRoot, 10);
-        }
+        Assert.Equal([$"{prefix}-own-1", $"{prefix}-own-2"], buffer.Drain(10, StorageRoot.RootPath));
+        Assert.Equal(
+            [$"{prefix}-foreign-1", $"{prefix}-foreign-2", $"{prefix}-foreign-3"],
+            buffer.Drain(10, foreignRoot.RootPath));
+        Assert.Empty(buffer.Drain(10, StorageRoot.RootPath));
     }
 
     [Xunit.Fact]
     public void Scoped_read_caps_matching_entries_and_normalizes_root_paths()
     {
         var foreignRoot = ForeignRoot();
+        var buffer = new OwnedRunRootWriteFailureBuffer();
         var prefix = Guid.NewGuid().ToString("N");
-        try
-        {
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(foreignRoot, $"{prefix}-foreign");
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(StorageRoot, $"{prefix}-own-1");
-            DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(StorageRoot, $"{prefix}-own-2");
-            var alternateSpelling = new DotnetBuildStorageRoot(
-                StorageRoot.RootPath.ToUpperInvariant() + Path.DirectorySeparatorChar);
+        buffer.Enqueue(foreignRoot.RootPath, $"{prefix}-foreign");
+        buffer.Enqueue(StorageRoot.RootPath, $"{prefix}-own-1");
+        buffer.Enqueue(StorageRoot.RootPath, $"{prefix}-own-2");
+        var alternateSpelling = StorageRoot.RootPath.ToUpperInvariant() + Path.DirectorySeparatorChar;
 
-            Assert.Equal(
-                [$"{prefix}-own-1"],
-                DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(alternateSpelling, 1));
-            Assert.Equal(
-                [$"{prefix}-own-2"],
-                DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(StorageRoot, 1));
-            Assert.Equal(
-                [$"{prefix}-foreign"],
-                DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(foreignRoot, 1));
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(StorageRoot, 10);
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(foreignRoot, 10);
-        }
+        Assert.Equal([$"{prefix}-own-1"], buffer.Drain(1, alternateSpelling));
+        Assert.Equal([$"{prefix}-own-2"], buffer.Drain(1, StorageRoot.RootPath));
+        Assert.Equal([$"{prefix}-foreign"], buffer.Drain(1, foreignRoot.RootPath));
     }
 
     [Xunit.Fact]
     public void Unscoped_read_returns_all_scopes_in_fifo_order()
     {
         var foreignRoot = ForeignRoot();
+        var buffer = new OwnedRunRootWriteFailureBuffer();
         var prefix = Guid.NewGuid().ToString("N");
-        DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(null, $"{prefix}-unattributed");
-        DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(StorageRoot, $"{prefix}-own");
-        DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(foreignRoot, $"{prefix}-foreign");
+        buffer.Enqueue(null, $"{prefix}-unattributed");
+        buffer.Enqueue(StorageRoot.RootPath, $"{prefix}-own");
+        buffer.Enqueue(foreignRoot.RootPath, $"{prefix}-foreign");
 
-        Assert.Equal(
-            [$"{prefix}-own"],
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(StorageRoot, 10));
-        Assert.Equal(
-            [$"{prefix}-foreign"],
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(foreignRoot, 10));
+        Assert.Equal([$"{prefix}-own"], buffer.Drain(10, StorageRoot.RootPath));
+        Assert.Equal([$"{prefix}-foreign"], buffer.Drain(10, foreignRoot.RootPath));
 
-        DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(StorageRoot, $"{prefix}-own-2");
-        DotnetBuildEnvironmentManager.RecordOwnedRunRootWriteFailure(foreignRoot, $"{prefix}-foreign-2");
+        buffer.Enqueue(StorageRoot.RootPath, $"{prefix}-own-2");
+        buffer.Enqueue(foreignRoot.RootPath, $"{prefix}-foreign-2");
         var all = new List<string>();
         IReadOnlyList<string> batch;
         do
         {
-            batch = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
-                TerminalGoalSweep.MaxOwnedBuildRootsPerSweep);
+            batch = buffer.Drain(TerminalGoalSweep.MaxOwnedBuildRootsPerSweep, null);
             all.AddRange(batch);
         } while (batch.Count != 0);
 
         Assert.Equal(
             [$"{prefix}-unattributed", $"{prefix}-own-2", $"{prefix}-foreign-2"],
-            all.Where(message => message.StartsWith(prefix, StringComparison.Ordinal)));
+            all);
     }
 
     [Xunit.Fact]
@@ -138,7 +111,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsWriteFailureScope : Dotnet
                 StringComparison.Ordinal);
 
             var foreignFailures = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
-                foreignRoot, TerminalGoalSweep.MaxOwnedBuildRootsPerSweep);
+                TerminalGoalSweep.MaxOwnedBuildRootsPerSweep, foreignRoot);
             Assert.Equal(TerminalGoalSweep.MaxOwnedBuildRootsPerSweep, foreignFailures.Count);
             Assert.All(foreignFailures, failure =>
                 Assert.Contains("owned-root registration unavailable", failure, StringComparison.Ordinal));
@@ -146,9 +119,9 @@ public sealed class DotnetBuildEnvironmentManagerTestsWriteFailureScope : Dotnet
         finally
         {
             DotnetBuildEnvironmentManager.OwnedRunRootRegistrarFactory = priorFactory;
-            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(StorageRoot, 10);
+            DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(10, StorageRoot);
             DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
-                foreignRoot, TerminalGoalSweep.MaxOwnedBuildRootsPerSweep);
+                TerminalGoalSweep.MaxOwnedBuildRootsPerSweep, foreignRoot);
         }
     }
 

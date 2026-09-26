@@ -2,20 +2,26 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class OwnedRunRootWriteFailureBuffer
 {
-    private sealed record Failure(string StorageRootPath, string Message);
+    private sealed record Failure(string? StorageRootPath, string Message);
 
     private readonly object _gate = new();
     private readonly LinkedList<Failure> _pending = new();
     private readonly Dictionary<string, Queue<LinkedListNode<Failure>>> _byStorageRoot = new(
-        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        StringComparer.OrdinalIgnoreCase);
 
-    public void Enqueue(string storageRootPath, string message)
+    public void Enqueue(string? storageRootPath, string message)
     {
+        var root = storageRootPath is null ? null : NormalizeRoot(storageRootPath);
         lock (_gate)
         {
-            if (!_byStorageRoot.TryGetValue(storageRootPath, out var queue))
-                _byStorageRoot[storageRootPath] = queue = new Queue<LinkedListNode<Failure>>();
-            queue.Enqueue(_pending.AddLast(new Failure(storageRootPath, message)));
+            if (root is null)
+            {
+                _pending.AddLast(new Failure(null, message));
+                return;
+            }
+            if (!_byStorageRoot.TryGetValue(root, out var queue))
+                _byStorageRoot[root] = queue = new Queue<LinkedListNode<Failure>>();
+            queue.Enqueue(_pending.AddLast(new Failure(root, message)));
         }
     }
 
@@ -27,19 +33,22 @@ internal sealed class OwnedRunRootWriteFailureBuffer
         {
             if (storageRootPath is not null)
             {
-                DrainRoot(storageRootPath, failures, maxCount);
+                DrainRoot(NormalizeRoot(storageRootPath), failures, maxCount);
             }
             else
             {
                 while (failures.Count < maxCount && _pending.First is { } first)
                 {
-                    var queue = _byStorageRoot[first.Value.StorageRootPath];
-                    if (!ReferenceEquals(queue.Dequeue(), first))
-                        throw new InvalidOperationException("Owned-root write-failure queues are inconsistent.");
+                    if (first.Value.StorageRootPath is { } root)
+                    {
+                        var queue = _byStorageRoot[root];
+                        if (!ReferenceEquals(queue.Dequeue(), first))
+                            throw new InvalidOperationException("Owned-root write-failure queues are inconsistent.");
+                        if (queue.Count == 0)
+                            _byStorageRoot.Remove(root);
+                    }
                     failures.Add(first.Value.Message);
                     _pending.RemoveFirst();
-                    if (queue.Count == 0)
-                        _byStorageRoot.Remove(first.Value.StorageRootPath);
                 }
             }
         }
@@ -58,4 +67,7 @@ internal sealed class OwnedRunRootWriteFailureBuffer
         if (queue.Count == 0)
             _byStorageRoot.Remove(root);
     }
+
+    private static string NormalizeRoot(string root) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
 }
