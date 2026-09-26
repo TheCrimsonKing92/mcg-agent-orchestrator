@@ -13,11 +13,15 @@ internal static partial class TerminalGoalSweep
     {
         var staleTasks = goal.Tasks
             .Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
+            .Where(task => task.LastProcess is not { IsRunning: true } process ||
+                           !process.TrackedProcessIds.Any(IsProcessAlive))
             .Select(task => (task.Id, task.Status))
             .ToArray();
         if (staleTasks.Length == 0)
             return;
 
+        kernel.CompleteTerminalGoalHumanInputRequests(goal.Id, staleTasks.Select(task => task.Id).ToHashSet(),
+            $"terminal stale-goal sweep: goal is {goal.Status}; human input closed with stale task.");
         foreach (var (taskId, _) in staleTasks.Reverse())
         {
             kernel.ReportTaskProgress(

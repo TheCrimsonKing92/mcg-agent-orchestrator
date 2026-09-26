@@ -121,4 +121,22 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         Xunit.Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
         Xunit.Assert.Contains(Xunit.Assert.Single(sweep.Goals).Repairs, repair => repair.Kind == "terminal-task-desync");
     }
+
+    [Xunit.Fact]
+    public void SupersededGoalClosesPendingHumanInputWithItsTask()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Await operator", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Superseded human wait", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Continue?", HumanWaitKind.SpecClarification);
+        kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
+
+        TerminalGoalSweep.Run(kernel, CreateTempDirectory(), goal.Id);
+
+        Xunit.Assert.Equal(GoalStatus.Superseded, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+        Xunit.Assert.True(kernel.HumanInputRequests.Single(item => item.Id == request.Id).IsCompleted);
+    }
 }

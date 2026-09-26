@@ -82,7 +82,8 @@ public sealed class CliCommandTestsPersistentRunnerCommandsDispatchRecovery : Cl
 
         var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
         Xunit.Assert.True(changed);
-        Xunit.Assert.Equal(GoalStatus.Active, restored.Status);
+        Xunit.Assert.Equal(GoalStatus.Completed, restored.Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Cancelled, restored.Tasks.Single(item => item.Id == task.Id).Status);
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);

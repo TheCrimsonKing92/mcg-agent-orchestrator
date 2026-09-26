@@ -3298,6 +3298,18 @@ internal sealed partial class ConductorBatchLoop
             }
             try
             {
+            if (goal.Status == GoalStatus.Completed)
+            {
+                const string reason = "Completed goal requires operator acceptance; background acceptance cannot reopen a landed goal.";
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=held reason=completed-goal-operator-acceptance goal={goal.Id.Value[..8]}",
+                    changedGoalLines);
+                continue;
+            }
+
             var verificationGate = kernel.BuildVerificationGate(goal.Id);
             if (!verificationGate.IsSatisfied)
             {

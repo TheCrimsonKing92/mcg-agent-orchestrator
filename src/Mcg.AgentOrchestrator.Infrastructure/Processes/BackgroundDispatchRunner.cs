@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
-
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class BackgroundDispatchRunner

@@ -646,14 +646,6 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
-    public bool NormalizePrematureCompletedGoalToVerified(GoalId goalId, string reason)
-    {
-        // Completed records a final landing decision, including on historical raw snapshots.
-        // Keep the compatibility entry point for callers that use its false result to hold.
-        GetGoal(goalId);
-        return false;
-    }
-
     public bool NormalizePrematureCompletedGoalForAcceptance(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
