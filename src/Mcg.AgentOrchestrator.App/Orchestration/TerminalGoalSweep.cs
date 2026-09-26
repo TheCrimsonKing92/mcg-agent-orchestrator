@@ -635,7 +635,7 @@ internal static partial class TerminalGoalSweep
                 continue;
             }
 
-            if (hasTerminalTaskDesync &&
+            if ((hasTerminalTaskDesync || AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status)) &&
                 TryBuildTerminalDirtyWorktreeBlocker(goal, executionDirectory, prefix,
                     desyncEvidence, out var dirtyEvidence, out var dirtyCommand))
             {
@@ -1524,7 +1524,7 @@ internal static partial class TerminalGoalSweep
             return false;
         }
 
-        evidence = $"{desyncEvidence}; worktreeDirty=true; worktree={worktree}";
+        evidence = $"{desyncEvidence}{(desyncEvidence.Length > 0 ? "; " : string.Empty)}worktreeDirty=true; worktree={worktree}";
         command = $"goal-recovery {goalPrefix}";
         return true;
     }
