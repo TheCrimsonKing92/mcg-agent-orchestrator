@@ -34,6 +34,16 @@ public sealed class OrchestratorAttemptRootLeakGuardTests
             };
 
             Assert.Equal([createdByThisProcess], OrchestratorAttemptRootLeakGuardFixture.FindLeaks(root, baseline, current, goals));
+            Assert.Equal(
+                ["other-process", "unmarked"],
+                OrchestratorAttemptRootLeakGuardFixture.FindIgnoredEntries(root, baseline, current, goals));
+            using var diagnostics = new StringWriter();
+            OrchestratorAttemptRootLeakGuardFixture.WriteIgnoredEntries(
+                diagnostics, "acceptance-gate-attempts", root, baseline, current, goals);
+            Assert.Equal(
+                $"attempt-root-leak-guard ignored root=acceptance-gate-attempts entry=other-process reason=creator-not-current-process{Environment.NewLine}" +
+                $"attempt-root-leak-guard ignored root=acceptance-gate-attempts entry=unmarked reason=creator-not-current-process{Environment.NewLine}",
+                diagnostics.ToString());
         }
         finally
         {

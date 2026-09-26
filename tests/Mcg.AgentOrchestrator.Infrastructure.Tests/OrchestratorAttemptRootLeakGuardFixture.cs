@@ -56,7 +56,10 @@ public sealed class OrchestratorAttemptRootLeakGuardFixture : IAsyncDisposable
         foreach (var rootName in AttemptRootNames)
         {
             var root = AttemptRoot(repositoryRoot, rootName);
-            foreach (var name in FindLeaks(root, baseline[rootName], Snapshot(root), goalIds))
+            var current = Snapshot(root);
+            WriteIgnoredEntries(Console.Error, rootName, root, baseline[rootName], current, goalIds);
+
+            foreach (var name in FindLeaks(root, baseline[rootName], current, goalIds))
             {
                 var entry = Path.Combine(root, name);
                 var created = Directory.GetCreationTimeUtc(entry);
@@ -104,6 +107,32 @@ public sealed class OrchestratorAttemptRootLeakGuardFixture : IAsyncDisposable
                               GoalAcceptanceVerifier.WasOwnerResultsDirectoryCreatedByCurrentProcess(
                                   Path.Combine(root, name)))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+
+    internal static IReadOnlyList<string> FindIgnoredEntries(
+        string root,
+        IReadOnlySet<string> baseline,
+        IReadOnlySet<string> current,
+        IReadOnlySet<string> goalIds) =>
+        current.Where(name => !baseline.Contains(name) &&
+                              !name.Equals("operator", StringComparison.OrdinalIgnoreCase) &&
+                              !goalIds.Contains(name) &&
+                              !GoalAcceptanceVerifier.WasOwnerResultsDirectoryCreatedByCurrentProcess(
+                                  Path.Combine(root, name)))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+
+    internal static void WriteIgnoredEntries(
+        TextWriter output,
+        string rootName,
+        string root,
+        IReadOnlySet<string> baseline,
+        IReadOnlySet<string> current,
+        IReadOnlySet<string> goalIds)
+    {
+        foreach (var name in FindIgnoredEntries(root, baseline, current, goalIds))
+        {
+            output.WriteLine($"attempt-root-leak-guard ignored root={rootName} entry={name} reason=creator-not-current-process");
+        }
+    }
 
     internal static bool TryReadGoalIds(string stateDbPath, out HashSet<string> goalIds)
     {
