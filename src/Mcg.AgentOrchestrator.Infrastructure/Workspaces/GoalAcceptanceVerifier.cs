@@ -6969,20 +6969,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string ResolveOwnerResultsRepositoryRoot(string worktreePath)
     {
         var fullPath = Path.GetFullPath(worktreePath);
-        var worktreeMarker =
-            $"{Path.DirectorySeparatorChar}.orchestrator-worktrees{Path.DirectorySeparatorChar}";
-        var markerIndex = fullPath.IndexOf(worktreeMarker, StringComparison.OrdinalIgnoreCase);
-        if (markerIndex > 0)
-        {
-            return fullPath[..markerIndex];
-        }
-
         var candidate = new DirectoryInfo(fullPath);
         while (candidate is not null)
         {
             if (Directory.Exists(Path.Combine(candidate.FullName, ".git")))
             {
                 return candidate.FullName;
+            }
+
+            if (candidate.Name.Equals(".orchestrator-worktrees", StringComparison.OrdinalIgnoreCase) &&
+                candidate.Parent is not null)
+            {
+                return candidate.Parent.FullName;
             }
 
             candidate = candidate.Parent;

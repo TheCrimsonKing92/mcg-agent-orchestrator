@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.GoalAcceptanceVerifier)]
-public sealed class GoalAcceptanceVerifierOwnerResultsRootTests
+public sealed class GoalAcceptanceVerifierTestsOwnerResultsRoot
 {
     [Fact]
     public async Task AttemptsUseTheCandidateRepository()
@@ -22,6 +22,31 @@ public sealed class GoalAcceptanceVerifierOwnerResultsRootTests
             Assert.True(Directory.Exists(Path.Combine(owned, ".orchestrator", "pre-review-evidence-attempts", "feedfacefeedfacefeedfacefeedface")));
             Assert.False(Directory.Exists(Path.Combine(unrelated, ".orchestrator", "acceptance-gate-attempts")));
             Assert.False(Directory.Exists(Path.Combine(unrelated, ".orchestrator", "pre-review-evidence-attempts")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT", original);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NestedTemporaryRepositoryDoesNotResolveToContainingGoalWorktree()
+    {
+        var root = NewRoot();
+        var goalWorktree = Path.Combine(root, ".orchestrator-worktrees", "goal");
+        var owned = Path.Combine(goalWorktree, ".scratch", "fixture", "repo");
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        Directory.CreateDirectory(Path.Combine(owned, ".git"));
+        var original = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT", root);
+            await CreateBothOwners(owned, "12341234123412341234123412341234");
+
+            Assert.True(Directory.Exists(Path.Combine(owned, ".orchestrator", "acceptance-gate-attempts", "12341234123412341234123412341234")));
+            Assert.True(Directory.Exists(Path.Combine(owned, ".orchestrator", "pre-review-evidence-attempts", "12341234123412341234123412341234")));
+            Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
         }
         finally
         {
