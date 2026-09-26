@@ -35,6 +35,12 @@ internal sealed class AsyncLocalConsoleRouter : TextWriter
     internal string CaptureLocal(Action action)
     {
         var writer = new StringWriter();
+        CaptureLocal(action, writer);
+        return writer.ToString();
+    }
+
+    internal void CaptureLocal(Action action, TextWriter writer)
+    {
         var previous = _current.Value;
         _current.Value = writer;
         try
@@ -45,7 +51,6 @@ internal sealed class AsyncLocalConsoleRouter : TextWriter
         {
             _current.Value = previous;
         }
-        return writer.ToString();
     }
 
     internal async Task<string> CaptureLocalAsync(Func<Task> action)
@@ -65,6 +70,8 @@ internal sealed class AsyncLocalConsoleRouter : TextWriter
     }
 
     internal static string Capture(Action action) => Out.CaptureLocal(action);
+
+    internal static void CaptureTo(Action action, TextWriter writer) => Out.CaptureLocal(action, writer);
 
     internal static string CaptureError(Action action) => Error.CaptureLocal(action);
 

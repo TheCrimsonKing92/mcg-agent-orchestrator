@@ -226,11 +226,7 @@ internal sealed partial class ConductorBatchLoop
                          (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
         }
 
-        void CompleteActivationTick(int tick)
-        {
-            if (emitActivationHeartbeat)
-                EmitProgress($"TICK_END tick={tick} activation=true");
-        }
+        void CompleteActivationTick(int tick) => EmitActivationTickEnd(emitActivationHeartbeat, tick);
 
         driver.DispatchRecordWriteSucceededSink = goalId =>
         {
@@ -906,9 +902,9 @@ internal sealed partial class ConductorBatchLoop
                         break;
                     }
 
+                    CompleteActivationTick(totalTicks);
                     if (!(keepAliveWhenIdle && watchInterval is not null))
                     {
-                        CompleteActivationTick(totalTicks);
                         continue;
                     }
                 }
@@ -1012,7 +1008,8 @@ internal sealed partial class ConductorBatchLoop
                         break;
                     }
 
-                    CompleteActivationTick(nextTick);
+                    if (totalTicks < nextTick)
+                        CompleteActivationTick(nextTick);
                     continue;
                 }
 
@@ -1602,6 +1599,7 @@ internal sealed partial class ConductorBatchLoop
                         lastBlockedRecheckHeartbeatAt = now;
                     }
                 }
+                CompleteActivationTick(totalTicks);
                 if (emitTickSummary)
                 {
                     EmitProgress($"WATCH_SLEEP tick={totalTicks} seconds={sleepSeconds}");
@@ -1640,7 +1638,6 @@ internal sealed partial class ConductorBatchLoop
                     break;
                 }
 
-                CompleteActivationTick(totalTicks);
                 continue;
             }
 
