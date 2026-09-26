@@ -6,8 +6,9 @@ public sealed class TerminalGoalTaskDesyncCandidateTests : CliCommandTestBase
     [Xunit.Fact]
     public async Task SqliteSelectionFindsProtectedTerminalGoalsWithoutWorktreeArtifacts()
     {
-        var repository = new SqliteOrchestratorStateRepository(
-            Path.Combine(CreateTempDirectory(), "state.db"));
+        var databasePath = Path.Combine(CreateTempDirectory(), "state.db");
+        StateDbMigrations.EnsureUpToDate(databasePath);
+        var repository = new SqliteOrchestratorStateRepository(databasePath);
         var kernel = new AgentOrchestratorKernel();
         var expected = new List<GoalId>();
 

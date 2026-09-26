@@ -127,10 +127,6 @@ public sealed partial class AgentOrchestratorKernel
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
 
-        // A terminal disposition owns the task outcome; the sweep closes any stale task.
-        if (IsReopenProtectedGoalStatus(goal.Status))
-            return;
-
         if (!verification.WorkerResultPresent)
         {
             Append(
