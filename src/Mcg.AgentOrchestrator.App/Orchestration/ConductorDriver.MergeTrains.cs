@@ -31,7 +31,8 @@ internal sealed partial class ConductorDriver
         CancellationToken cancellationToken = default,
         Action? onGateAdmitted = null,
         bool runGateInBackground = false,
-        bool gateOnly = false)
+        bool gateOnly = false,
+        bool landFromReceiptOnly = false)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
@@ -132,6 +133,10 @@ internal sealed partial class ConductorDriver
                 workspace.TreeRevision,
                 manifest);
             var receipt = _mergeTrainAcceptanceStore.TryReadReceipt(identity.Value);
+            if (receipt is null && landFromReceiptOnly)
+            {
+                return Fallback("outcome=replay-miss receipt=none");
+            }
             receipt ??= RunMergeTrainSourceSizePreflight(workspace.Path, identity, _mergeTrainAcceptanceStore);
             if (receipt is null)
             {
@@ -345,6 +350,106 @@ internal sealed partial class ConductorDriver
             return new ConductorMergeTrainRunResult(null,
                 Hold(selection.Members.Select(member => goalsById[member.GoalId]).ToArray(), detail),
                 allEjections, detail);
+        }
+    }
+
+    internal IReadOnlyList<(ConductorMergeTrainSelection Selection, MergeTrainReceipt Receipt)>
+        FindLandablePassedMergeTrainSelections(
+            IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
+            IReadOnlySet<string> ineligibleGoalIds,
+            Action<MergeTrainReceipt, string> onStale)
+    {
+        if (_runMergeTrainOverride is not null || _mergeTrainAcceptanceStore is null ||
+            _cohortWorkspace is null || _cohortAcceptanceVerifier is null)
+        {
+            return [];
+        }
+
+        var ready = candidates
+            .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready)
+            .ToDictionary(candidate => candidate.GoalId,
+                candidate => ((GateReadyCandidateProjectionResult.Ready)candidate.ProjectionResult).Projection);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var suppressed = ReadSuppressedCohortPairs();
+        var selections = new List<(ConductorMergeTrainSelection, MergeTrainReceipt)>();
+        foreach (var candidate in candidates)
+        {
+            if (!ready.TryGetValue(candidate.GoalId, out var first))
+            {
+                continue;
+            }
+            foreach (var receipt in _mergeTrainAcceptanceStore.ReadPassedReceiptsForGoal(candidate.GoalId))
+            {
+                if (!seen.Add(receipt.ReceiptId) ||
+                    receipt.Identity.Members.Count < ConductorMergeTrainSelector.MinimumCompositionMembers ||
+                    receipt.Identity.Members.Any(member =>
+                        ineligibleGoalIds.Contains(member.GoalId.Value) || !ready.ContainsKey(member.GoalId)))
+                {
+                    continue;
+                }
+                if (!string.Equals(receipt.Identity.ObservedMainRevision, first.MainRevision,
+                        StringComparison.Ordinal))
+                {
+                    onStale(receipt, "main");
+                    continue;
+                }
+                var movedMember = receipt.Identity.Members.FirstOrDefault(member =>
+                    !string.Equals(member.CandidateRevision, ready[member.GoalId].CandidateRevision,
+                        StringComparison.Ordinal));
+                if (movedMember is not null)
+                {
+                    onStale(receipt, $"member:{movedMember.GoalId.Value[..8]}");
+                    continue;
+                }
+                var members = receipt.Identity.Members.Select(member => ready[member.GoalId]).ToArray();
+                if (members.SelectMany((member, index) => members.Skip(index + 1).Select(peer =>
+                        ConductorAcceptanceCohortSelector.PairFingerprint(member, peer)))
+                    .Any(suppressed.Contains))
+                {
+                    continue;
+                }
+                var selection = new ConductorMergeTrainSelection(members);
+                if (!HasCurrentPassedMergeTrainIdentity(selection, receipt))
+                {
+                    continue;
+                }
+                selections.Add((selection, receipt));
+                // Landing this train moves main; every other receipt must be checked next tick.
+                return selections;
+            }
+        }
+        return selections;
+    }
+
+    private bool HasCurrentPassedMergeTrainIdentity(
+        ConductorMergeTrainSelection selection,
+        MergeTrainReceipt receipt)
+    {
+        if (_cohortWorkspace is null || _cohortAcceptanceVerifier is null)
+        {
+            return false;
+        }
+        try
+        {
+            using var workspace = GoalWorktrees.CreateMergeTrainWorkspace(
+                _cohortWorkspace.ExecutionDirectory,
+                selection.Members[0].MainRevision,
+                selection.BindMembers(),
+                _cohortCleanupHooks);
+            if (workspace.Members.Count != receipt.Identity.Members.Count)
+            {
+                return false;
+            }
+            var changedFiles = workspace.Members.SelectMany(member => member.LandingPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var manifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(workspace.Path, changedFiles);
+            return string.Equals(MergeTrainIdentity.Create(workspace.Members,
+                    selection.Members[0].MainRevision, workspace.TreeRevision, manifest).Value,
+                receipt.Identity.Value, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return false;
         }
     }
 

@@ -2025,6 +2025,8 @@ public sealed partial class AgentOrchestratorKernel
                 answeredAt,
                 gatedDeliverableIds,
                 briefVersion: goal.AuthoritativeBrief.Version);
+            if (request.TaskId is not null)
+                RecordRetryAdmissionRecoveryEvidence(goal, goal.FindTask(request.TaskId), request, answeredAt);
             var siblings = _humanInputRequests.Values
                 .Where(candidate =>
                     candidate.Id != request.Id &&
@@ -2266,8 +2268,9 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
+        var refusedDispatch = GetRefusedUnstartedDispatch(task);
         var restoredStatus = task.LastProcess is { IsRunning: true } ||
-            (task.LastDispatch is not null && task.LastProcess is null)
+            (task.LastDispatch is not null && task.LastProcess is null && refusedDispatch is null)
             ? WorkTaskStatus.Running
             : WorkTaskStatus.Assigned;
         if (restoredStatus == WorkTaskStatus.Assigned) ClearStaleVerificationForAnsweredRestore(task);
@@ -2277,7 +2280,10 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         task.SetStatus(restoredStatus);
-        Append(goal, task.Id, ProgressKind.TaskUpdated, $"Human input resolved; restored task status to {restoredStatus}.");
+        var message = refusedDispatch is not null
+            ? $"Human input resolved; returned task to Assigned for redispatch; abandoned unstarted dispatch {refusedDispatch.LinkedDispatchAt:O} whose start retry admission refused."
+            : $"Human input resolved; restored task status to {restoredStatus}.";
+        Append(goal, task.Id, ProgressKind.TaskUpdated, message);
     }
 
     public void DismissHumanInput(HumanInputRequestId requestId)

@@ -1735,7 +1735,7 @@ public sealed partial class AgentOrchestratorKernel
                     isAutoDefaultable: false,
                     isDismissible: false,
                     isExternallyBlocked: true,
-                    questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:environment",
+                    questionFingerprint: $"retry-admission:{receipt.Fingerprint.Value}:environment:{receipt.PriorAttemptAt:O}",
                     blockerFingerprint: receipt.Fingerprint.Value,
                     recordDuplicateSuppression: false);
                 break;
@@ -1755,6 +1755,34 @@ public sealed partial class AgentOrchestratorKernel
             default:
                 throw new InvalidOperationException($"Unsupported retry-admission route '{receipt.Route}'.");
         }
+    }
+
+    private void RecordRetryAdmissionRecoveryEvidence(
+        Goal goal,
+        TaskSpec task,
+        HumanInputRequest request,
+        DateTimeOffset answeredAt)
+    {
+        if (request.Kind != HumanWaitKind.RecoveryChoice ||
+            string.IsNullOrWhiteSpace(request.BlockerFingerprint)) return;
+
+        var prevented = GetRefusedUnstartedDispatch(task);
+        if (prevented is null ||
+            prevented.Route != RetryAdmissionRoute.EnvironmentalHold ||
+            prevented.Fingerprint.Value != request.BlockerFingerprint) return;
+
+        var identity = $"{prevented.ReceiptId}:recovery-evidence:{request.Id.Value}";
+        var receiptId = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+        task.SetRetryAdmissionHold(null);
+        task.RecordRetryAdmission(prevented with
+        {
+            ReceiptId = receiptId,
+            Decision = RetryAdmissionDecision.RecoveryEvidence,
+            RecordedAt = answeredAt
+        });
+        Append(goal, task.Id, ProgressKind.GoalPolicyDecision,
+            $"retry-admission-recovery-evidence fingerprint={prevented.Fingerprint.Value} request={request.Id.Value}; next admission of this fingerprint is granted once.");
     }
 
     private static string FormatNoProgressRedispatchDisposition(RetryAdmissionReceipt receipt) =>

@@ -17,6 +17,7 @@ internal sealed class OperatorIntentCoordinator
     private readonly IOperatorIntentStore _store;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<GoalId, string?>? _goalHeadResolver;
+    private readonly Func<GoalId, string, string?>? _policyChangeFingerprintResolver;
     private readonly OperatorIntentAdjudication? _adjudication;
     private readonly ICollaborationItemStore? _decisions;
     private readonly Dictionary<string, List<(string IntentId, string Outcome)>> _pendingCompletions =
@@ -37,11 +38,13 @@ internal sealed class OperatorIntentCoordinator
         Func<GoalId, string?>? goalHeadResolver = null,
         ICollaborationItemStore? decisions = null,
         Func<GoalId, long?>? goalStateVersionResolver = null,
-        AdjudicationEvidenceResolver? evidenceResolver = null)
+        AdjudicationEvidenceResolver? evidenceResolver = null,
+        Func<GoalId, string, string?>? policyChangeFingerprintResolver = null)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _goalHeadResolver = goalHeadResolver;
+        _policyChangeFingerprintResolver = policyChangeFingerprintResolver;
         _decisions = decisions;
         if ((decisions is null) != (goalStateVersionResolver is null))
             throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
@@ -57,7 +60,19 @@ internal sealed class OperatorIntentCoordinator
             goalHeadResolver: goalId => ResolveGoalHead(workspace.ExecutionDirectory, goalId),
             decisions: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             goalStateVersionResolver: goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult(),
-            evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory));
+            evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
+            policyChangeFingerprintResolver: (goalId, sha) =>
+            {
+                try
+                {
+                    var path = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goalId);
+                    return path is null ? null : GoalAcceptanceVerifier.ComputeOwnerProtectedChangeFingerprintForCandidate(path, sha);
+                }
+                catch
+                {
+                    return null;
+                }
+            });
     }
 
     public IReadOnlyList<string> ListActionableGoalIds() =>
@@ -229,9 +244,11 @@ internal sealed class OperatorIntentCoordinator
         switch (intent.Verb)
         {
             case OperatorIntentVerbs.ApprovePolicyChange:
+                var policyApproval = Deserialize<ApprovePolicyChangeOperatorIntentPayload>(intent);
                 OperatorIntentPolicyApproval.Apply(
                     _decisions ?? throw new InvalidOperationException("Policy approval decision store is not configured."),
-                    goal, intent, Deserialize<ApprovePolicyChangeOperatorIntentPayload>(intent), _utcNow());
+                    goal, intent, policyApproval, _utcNow(),
+                    _policyChangeFingerprintResolver?.Invoke(goal.Id, policyApproval.CandidateSha));
                 return;
             case OperatorIntentVerbs.CriterionEvidenceMap:
                 var mapping = Deserialize<CriterionEvidenceMappingOperatorIntentPayload>(intent);

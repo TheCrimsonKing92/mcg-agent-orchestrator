@@ -728,7 +728,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "Acceptance execution context was not supplied."));
         var engineSettings = executionOwner.Settings;
         using var laneDurationScope = AcceptanceLaneDurationStore.PushRecordingScope(worktreePath);
-        if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure && !HasOwnerPolicyApproval(worktreePath, goalId))
+        if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure && !HasOwnerPolicyApproval(worktreePath, goalId, changedFiles))
         {
             phaseAccountant.MarkCompleted(passed: false);
             return new AcceptanceVerificationResult(
