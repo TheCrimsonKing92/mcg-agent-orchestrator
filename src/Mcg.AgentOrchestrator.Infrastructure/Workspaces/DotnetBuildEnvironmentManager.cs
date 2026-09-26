@@ -134,7 +134,7 @@ public static class DotnetBuildEnvironmentManager
         CreateDefaultOwnedRunRootRegistrar;
     private static readonly ConcurrentDictionary<string, IOwnedRunRootRegistrar> OwnedRunRootRegistrarsForTests =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-    private static readonly ConcurrentQueue<string> OwnedRunRootWriteFailures = new();
+    private static readonly OwnedRunRootWriteFailureBuffer OwnedRunRootWriteFailures = new();
     private static int s_nextStableSlotScanStart = -1;
     private static int s_heldExecutionLeaseCount;
     private static int s_compilerLockRecoveryRequested;
@@ -165,13 +165,14 @@ public static class DotnetBuildEnvironmentManager
         GoalId? goalId,
         string attemptName,
         int slotCount = StableSlotCount,
-        DotnetBuildStorageRoot? storageRoot = null)
+        DotnetBuildStorageRoot? storageRoot = null,
+        string? repositoryRoot = null)
     {
         storageRoot ??= CaptureStorageRoot();
         ValidateRequestedSlotCount(slotCount);
         if (goalId is not null)
         {
-            return CreateGoalLease(goalId, attemptName, slotCount, storageRoot);
+            return CreateGoalLease(goalId, attemptName, slotCount, storageRoot, repositoryRoot);
         }
 
         var owner = $"{Environment.ProcessId}-{Sanitize(attemptName)}-{Guid.NewGuid():N}";
@@ -1077,7 +1078,8 @@ public static class DotnetBuildEnvironmentManager
         GoalId goalId,
         string attemptName,
         int slotCount,
-        DotnetBuildStorageRoot storageRoot)
+        DotnetBuildStorageRoot storageRoot,
+        string? repositoryRoot)
     {
         var root = GoalRoot(goalId, storageRoot);
         var leaseId = $"goal-{Prefix(goalId)}";
@@ -1115,7 +1117,10 @@ public static class DotnetBuildEnvironmentManager
                 DateTimeOffset.UtcNow,
                 attemptName,
                 staleLockCleared,
-                staleLockCleared ? reclaimedProcessId : null),
+                staleLockCleared ? reclaimedProcessId : null,
+                Path.GetFullPath(repositoryRoot ??
+                    Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT") ??
+                    Environment.CurrentDirectory)),
             JsonOptions));
 
         var environment = new DotnetBuildEnvironment(
@@ -1216,7 +1221,7 @@ public static class DotnetBuildEnvironmentManager
             var registrar = ResolveOwnedRunRootRegistrar(storageRoot);
             if (registrar is null)
             {
-                OwnedRunRootWriteFailures.Enqueue(
+                EnqueueOwnedRunRootWriteFailure(canonicalRoot,
                     $"owned-root registration unavailable; created as unregistered path={canonicalRoot}");
                 return null;
             }
@@ -1239,7 +1244,7 @@ public static class DotnetBuildEnvironmentManager
         }
         catch (Exception ex)
         {
-            OwnedRunRootWriteFailures.Enqueue(
+            EnqueueOwnedRunRootWriteFailure(canonicalRoot,
                 $"owned-root registration failed; created as unregistered path={canonicalRoot} error={ex.GetType().Name}: {ex.Message}");
             return null;
         }
@@ -1295,18 +1300,21 @@ public static class DotnetBuildEnvironmentManager
         }
         catch (Exception ex)
         {
-            OwnedRunRootWriteFailures.Enqueue(
+            EnqueueOwnedRunRootWriteFailure(environment.RootPath,
                 $"owned-root release persistence failed path={environment.RootPath} outcome={outcome} error={ex.GetType().Name}: {ex.Message}");
         }
     }
 
-    internal static IReadOnlyList<string> DrainOwnedRunRootWriteFailures(int maxCount)
+    private static void EnqueueOwnedRunRootWriteFailure(string runRootPath, string message)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
-        var failures = new List<string>(maxCount);
-        while (failures.Count < maxCount && OwnedRunRootWriteFailures.TryDequeue(out var failure))
-            failures.Add(failure);
-        return failures;
+        var storageRootPath = Path.GetDirectoryName(Path.GetDirectoryName(runRootPath)!)!;
+        OwnedRunRootWriteFailures.Enqueue(storageRootPath, message);
+    }
+
+    internal static IReadOnlyList<string> DrainOwnedRunRootWriteFailures(
+        int maxCount, DotnetBuildStorageRoot? storageRoot = null)
+    {
+        return OwnedRunRootWriteFailures.Drain(maxCount, storageRoot?.RootPath);
     }
 
     private static IOwnedRunRootRegistrar? CreateDefaultOwnedRunRootRegistrar(DotnetBuildStorageRoot _)
@@ -1337,7 +1345,7 @@ public static class DotnetBuildEnvironmentManager
         }
         catch (Exception ex)
         {
-            OwnedRunRootWriteFailures.Enqueue(
+            EnqueueOwnedRunRootWriteFailure(canonicalPath,
                 $"owned-root cleanup persistence failed path={canonicalPath} operation={operation} error={ex.GetType().Name}: {ex.Message}");
         }
     }
@@ -2870,7 +2878,8 @@ public static class DotnetBuildEnvironmentManager
         DateTimeOffset LastUsedAt,
         string LastAttemptName,
         bool StaleLockCleared,
-        int? ReclaimedProcessId = null);
+        int? ReclaimedProcessId = null,
+        string? RepositoryRoot = null);
 
     private sealed record ArtifactsOwnerMarker(
         int Version,

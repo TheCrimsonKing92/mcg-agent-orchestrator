@@ -16,7 +16,14 @@ public sealed class ApparatusRedClassifierCandidateRerunTests
         var result = ApparatusRedClassifier.Classify(new ApparatusRedEvidence(
             ["src/Changed.cs"], [failingTest], true, 0, 2));
 
-        Assert.Equal(expectedKind, Assert.IsType<ApparatusRedDisposition.Regate>(result).EvidenceKind);
+        if (crossGoal)
+        {
+            Assert.IsType<ApparatusRedDisposition.Genuine>(result);
+        }
+        else
+        {
+            Assert.Equal(expectedKind, Assert.IsType<ApparatusRedDisposition.Regate>(result).EvidenceKind);
+        }
         var passedResult = ApparatusRedClassifier.Classify(new ApparatusRedEvidence(
             ["src/Changed.cs"],
             [failingTest with { CandidateRerunFailed = false, CandidateRerunPassed = true }],

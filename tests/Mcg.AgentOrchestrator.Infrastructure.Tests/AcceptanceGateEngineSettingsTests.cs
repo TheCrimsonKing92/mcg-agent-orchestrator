@@ -2096,6 +2096,10 @@ public sealed class AcceptanceGateEngineSettingsTests
             }
             """);
         var goalId = new Mcg.AgentOrchestrator.Core.GoalId("87654321876543218765432187654321");
+        var storage = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
+        var leakProbe = new PerUserGoalRootLeakProbe(goalId);
+        string? observedRoot = null;
+        TestOverrides.BuildStorageRootForTests = storage;
         var previousPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var attemptPrefix = Path.Combine(root, ".orchestrator", "heartbeat-rerun-attempt");
@@ -2128,7 +2132,8 @@ public sealed class AcceptanceGateEngineSettingsTests
                 var currentInvocation = invocation++;
                 if (currentInvocation == 0)
                 {
-                    var environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId);
+                    var environment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId, storage);
+                    observedRoot = environment.RootPath;
                     var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(
                         checkName,
                         environment,
@@ -2178,6 +2183,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             Xunit.Assert.False(result.Passed);
             Xunit.Assert.True(result.Retried);
             Xunit.Assert.Equal(2, invocation);
+            leakProbe.AssertScopedTo(Xunit.Assert.IsType<string>(observedRoot), root);
         }
         finally
         {
@@ -2192,6 +2198,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = null;
             TestOverrides.ResolvePartitionVerdictMainShaForTests = null;
             TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
             Directory.Delete(root, recursive: true);
         }
     }

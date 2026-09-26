@@ -9,7 +9,9 @@ internal sealed record ApparatusRedFailingTest(
     bool InsideChangedPaths,
     bool HasCrossGoalOccurrence,
     bool CandidateRerunPassed = false,
-    bool CandidateRerunFailed = false);
+    bool CandidateRerunFailed = false,
+    string? FailureMessage = null,
+    string? MessageFingerprint = null);
 
 /// <summary>Materialized classification inputs. No I/O happens below this record.</summary>
 internal sealed record ApparatusRedEvidence(
@@ -86,15 +88,15 @@ internal static class ApparatusRedClassifier
                     $"failing test {failingTest.TestIdentity} lives inside the candidate's changed paths");
             }
 
+            if (MessageNamesCandidatePath(failingTest.FailureMessage, evidence.ChangedPaths))
+            {
+                return new ApparatusRedDisposition.Genuine(
+                    $"failing test {failingTest.TestIdentity} names a candidate changed path or type");
+            }
+
             if (!string.IsNullOrWhiteSpace(failingTest.ExceptionSignature))
             {
                 evidenceKinds.Add(ApparatusInfrastructureSignatures.EvidenceKind);
-                continue;
-            }
-
-            if (failingTest.HasCrossGoalOccurrence)
-            {
-                evidenceKinds.Add(CrossGoalEvidenceKind);
                 continue;
             }
 
@@ -102,6 +104,12 @@ internal static class ApparatusRedClassifier
             {
                 return new ApparatusRedDisposition.Genuine(
                     $"failing test {failingTest.TestIdentity} failed again on the candidate");
+            }
+
+            if (failingTest.HasCrossGoalOccurrence)
+            {
+                evidenceKinds.Add(CrossGoalEvidenceKind);
+                continue;
             }
 
             if (failingTest.CandidateRerunPassed)
@@ -136,4 +144,56 @@ internal static class ApparatusRedClassifier
                 evidence.RegateCount + 1,
                 evidence.RegateCap);
     }
+
+    private static bool MessageNamesCandidatePath(string? message, IReadOnlyList<string> changedPaths)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        foreach (var changedPath in changedPaths)
+        {
+            var normalized = changedPath.Replace('\\', '/').TrimStart('.', '/');
+            if (ContainsBounded(message, normalized) ||
+                ContainsBounded(message, normalized.Replace('/', '\\')))
+            {
+                return true;
+            }
+
+            var fileName = normalized[(normalized.LastIndexOf('/') + 1)..];
+            var stem = fileName.Split('.')[0];
+            if (stem.Length >= 8 && ContainsBounded(message, stem))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsBounded(string message, string token)
+    {
+        if (token.Length == 0)
+        {
+            return false;
+        }
+
+        var start = 0;
+        while ((start = message.IndexOf(token, start, StringComparison.Ordinal)) >= 0)
+        {
+            var end = start + token.Length;
+            if ((start == 0 || !IsIdentifierCharacter(message[start - 1])) &&
+                (end == message.Length || !IsIdentifierCharacter(message[end])))
+            {
+                return true;
+            }
+
+            start++;
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentifierCharacter(char value) => char.IsLetterOrDigit(value) || value == '_';
 }

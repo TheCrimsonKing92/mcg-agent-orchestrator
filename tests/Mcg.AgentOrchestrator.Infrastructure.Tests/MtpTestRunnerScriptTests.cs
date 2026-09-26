@@ -2468,7 +2468,11 @@ file static class MtpTestRunnerScriptTestSupport
     {
         var root = MtpTestRunnerScriptTests.RepositoryRoot();
         var goalId = new GoalId(Guid.NewGuid().ToString("N"));
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goalId, "mtp-managed-runner-contract");
+        var testRoot = Path.Combine(Path.GetTempPath(), $"mtp-{Guid.NewGuid():N}"[..13]);
+        var storage = new DotnetBuildStorageRoot(Path.Combine(testRoot, "isolated"));
+        var leakProbe = new PerUserGoalRootLeakProbe(goalId);
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+            goalId, "mtp-managed-runner-contract", storageRoot: storage);
         var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
             environment,
             timeout: TimeSpan.FromMinutes(5));
@@ -2556,11 +2560,15 @@ file static class MtpTestRunnerScriptTestSupport
                 $"dotnet {managedAssembly} exited {result.ExitCode}.{Environment.NewLine}" +
                 $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
                 $"stderr:{Environment.NewLine}{result.Stderr}");
+            leakProbe.AssertScopedTo(environment.RootPath, testRoot);
         }
         finally
         {
             lease.Dispose();
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            PerUserGoalRootLeakProbe.DrainRegistrationReports(storage);
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId, storage);
+            if (Directory.Exists(testRoot))
+                Directory.Delete(testRoot, recursive: true);
         }
     }
 }

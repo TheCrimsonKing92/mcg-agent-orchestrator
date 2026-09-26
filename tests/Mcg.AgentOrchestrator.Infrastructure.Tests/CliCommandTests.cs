@@ -185,11 +185,14 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
             FileName = "dotnet",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
         };
         startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(workingDirectory, ".orchestrator", "test-dotnet");
         startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
         startInfo.ArgumentList.Add(appAssembly);
         foreach (var argument in arguments)
@@ -199,15 +202,17 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start app process.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        process.StandardInput.Close();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
         if (!process.WaitForExit(60000))
         {
             process.Kill(entireProcessTree: true);
             throw new TimeoutException("App command did not exit within 60 seconds.");
         }
 
-        return new CliProcessResult(process.ExitCode, stdout, stderr);
+        return new CliProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(),
+            stderr.GetAwaiter().GetResult());
     }
 
     private protected sealed record CliProcessResult(int ExitCode, string Stdout, string Stderr);
@@ -498,6 +503,8 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         };
 
         startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(workingDirectory, ".orchestrator", "test-dotnet");
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
         foreach (var arg in args)
@@ -534,6 +541,8 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         };
 
         startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(workingDirectory, ".orchestrator", "test-dotnet");
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
         foreach (var arg in args)

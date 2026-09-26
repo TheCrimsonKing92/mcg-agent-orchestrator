@@ -583,7 +583,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildStorageRoot? storageRoot = null)
     {
         _runner = runner;
-        _storageRoot = storageRoot is null ? DotnetBuildEnvironmentManager.CaptureStorageRoot() : storageRoot;
+        _storageRoot = storageRoot ?? testOverrides?.BuildStorageRootForTests ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
         _structuralCoverageEvaluator = new AcceptanceStructuralCoverageEvaluator(discoveryRunner, IsBuildArtifactIoException);
         _timeProvider = timeProvider;
         _leaseSleep = leaseSleep ?? Thread.Sleep;
@@ -1543,7 +1543,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 executionOwner.CancellationToken,
-                executionOwner: executionOwner).ConfigureAwait(false);
+                executionOwner: executionOwner,
+                partitionCandidateOnlySelections: true).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1667,7 +1668,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         CancellationToken cancellationToken,
         bool classifyMissingSelectionsAsAbsent = false,
-        IAcceptanceRunExecutionContext? executionOwner = null)
+        IAcceptanceRunExecutionContext? executionOwner = null,
+        bool partitionCandidateOnlySelections = false)
     {
         if (string.IsNullOrWhiteSpace(baselineSha))
         {
@@ -1694,18 +1696,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? baselineEnvironmentId = null;
         try
         {
-            var sourcePlan = new AcceptanceFailureAttributionPlanner.BaselineSourceSelectionPlan(
-                focusedChecks,
-                []);
-            if (classifyMissingSelectionsAsAbsent)
-            {
-                sourcePlan = AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
-                    baselineSha,
-                    focusedChecks,
-                    ProjectLabel,
-                    EngineSettings,
-                    baselinePath);
-            }
+            var sourcePlan = SelectBaselineFocusedChecks(
+                focusedChecks, baselineSha, baselinePath,
+                classifyMissingSelectionsAsAbsent, partitionCandidateOnlySelections);
 
             // The baseline owns a fresh artifact environment. Sharing candidate artifacts could make
             // a structurally broken baseline look like a meaningful RED arm.
@@ -1744,11 +1737,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     executionOwner: executionOwner).ConfigureAwait(false);
             }
 
-            return AcceptanceFailureAttributionPlanner.CombineBaselineArm(
-                focusedChecks,
-                executedArm,
-                sourcePlan.SourceClassificationChecks,
-                ClassifyFocusedEvidenceArm);
+            return partitionCandidateOnlySelections
+                ? CombineFindingBaselineArm(executedArm, sourcePlan.SourceClassificationChecks)
+                : AcceptanceFailureAttributionPlanner.CombineBaselineArm(
+                    focusedChecks, executedArm, sourcePlan.SourceClassificationChecks,
+                    ClassifyFocusedEvidenceArm);
         }
         finally
         {
@@ -7909,7 +7902,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             heartbeatPath,
             ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath, _storageRoot),
             string.Join(' ', arguments.Select(QuoteForDisplay)),
-            environment?.RootPath);
+            environment?.RootPath) { RunClass = GateHeartbeatRunClass.Classify(_executionContext) };
     }
 
     // An attempt can run several checks after releasing its build permit, and unrelated goals can hash to
@@ -8031,7 +8024,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string stdoutPath,
         string stderrPath,
         string? finalState = null,
-        string? attemptResultsPrefix = null)
+        string? attemptResultsPrefix = null, string? runClass = null)
     {
         var check = new AcceptanceManifestCheck { Name = checkName };
         var heartbeatPath = ResolveGateHeartbeatPathCore(
@@ -8053,7 +8046,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 heartbeatPath,
                 DotnetBuildEnvironmentManager.CaptureStorageRoot()),
             "dotnet test",
-            environment.RootPath);
+            environment.RootPath) { RunClass = runClass };
         var runtime = new GateHeartbeatRuntime(
             context,
             processId,
@@ -9457,7 +9450,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal readonly record struct CaptureLimitResult(string Path, long WrittenBytes, bool LimitReached);
 
-    private sealed record GateHeartbeatContext(
+    private sealed partial record GateHeartbeatContext(
         string? GoalId,
         string Phase,
         string CurrentTarget,
@@ -9561,7 +9554,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _context.CommandLine,
                 exitCode,
                 _stdoutPath,
-                _stderrPath);
+                _stderrPath, RunClass: _context.RunClass);
         }
 
         private AcceptanceGateProgress ToProgress(GateHeartbeatSnapshot snapshot) =>

@@ -445,6 +445,7 @@ internal sealed class AcceptanceRunExecutionContextView(
     IAcceptanceRunExecutionContext owner,
     string resultsPrefix) : IAcceptanceRunExecutionContext
 {
+    internal IAcceptanceRunExecutionContext Owner => owner;
     public string RunId => owner.RunId;
     public string ResultsPrefix { get; } = Path.GetFullPath(resultsPrefix);
     public string ApparatusReceiptPath { get; } =

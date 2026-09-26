@@ -983,6 +983,8 @@ public sealed class CliHelpTests
         };
 
         startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+        startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(workingDirectory, ".orchestrator", "test-dotnet");
         if (environment is not null)
         {
             foreach (var (key, value) in environment)

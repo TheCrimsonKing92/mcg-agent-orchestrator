@@ -135,6 +135,7 @@ internal sealed class ApparatusRedGate
                     records,
                     goal.Id.Value,
                     failingTest.TestIdentity,
+                    failingTest.MessageFingerprint,
                     now,
                     _crossGoalWindow)
             })
@@ -208,6 +209,8 @@ internal sealed class ApparatusRedGate
                 var signature = failure is null
                     ? ApparatusInfrastructureSignatures.Match(check.OutputTail)
                     : ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace);
+                var message = failure is null ? check.OutputTail : failure.Message;
+                var messageFingerprint = AcceptanceFailingTestIndex.ComputeMessageFingerprint(message);
                 var sourcePaths = AcceptanceTestSourceResolver.ResolveSourcePaths(
                     sourceRoot,
                     check.TestProjectPath,
@@ -231,7 +234,9 @@ internal sealed class ApparatusRedGate
                         StringComparer.OrdinalIgnoreCase)),
                     HasCrossGoalOccurrence: false,
                     CandidateRerunPassed: rerunPassed,
-                    CandidateRerunFailed: rerunFailed));
+                    CandidateRerunFailed: rerunFailed,
+                    FailureMessage: message,
+                    MessageFingerprint: messageFingerprint));
             }
         }
 
@@ -251,7 +256,8 @@ internal sealed class ApparatusRedGate
                     InsideChangedPaths: failingTest.InsideChangedPaths,
                     EvidenceKind: failingTest.CandidateRerunPassed
                         ? ApparatusRedClassifier.CandidateRerunEvidenceKind
-                        : null))
+                        : null,
+                    MessageFingerprint: failingTest.MessageFingerprint))
                 .ToArray(),
             recordedAt);
 

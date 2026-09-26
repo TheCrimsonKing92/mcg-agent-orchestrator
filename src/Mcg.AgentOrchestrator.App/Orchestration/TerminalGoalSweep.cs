@@ -411,7 +411,8 @@ internal static partial class TerminalGoalSweep
         GoalWorktreeCleanupHooks? cleanupHooks = null,
         string? orchestratorDirectory = null,
         MergeTrainAcceptanceStore? mergeTrainAcceptanceStore = null,
-        CohortAcceptanceStore? cohortAcceptanceStore = null)
+        CohortAcceptanceStore? cohortAcceptanceStore = null,
+        bool reclaimGoalRoots = false)
     {
         gitRunner ??= GitRunner;
         var gitRunnerIdentity = gitRunner;
@@ -435,7 +436,7 @@ internal static partial class TerminalGoalSweep
             Path.Combine(orchestratorDirectory, "cohort-acceptance.db"));
         var dispatchRunner = new BackgroundDispatchRunner();
         var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
-        var ownedRoots = ReapOwnedBuildRoots(workspace.SqliteStatePath);
+        var ownedRoots = ReapOwnedBuildRoots(workspace.SqliteStatePath, reclaimGoalRoots);
         ownedRootTiming.Stop();
         var gitIndexTiming = System.Diagnostics.Stopwatch.StartNew();
         var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);

@@ -28,6 +28,8 @@ public sealed class GoalRefinementStartupValidationTests
             startInfo.ArgumentList.Add(invalidGoalId);
             startInfo.ArgumentList.Add("stamp");
             startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = root;
+            startInfo.Environment[Mcg.AgentOrchestrator.Infrastructure.DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+                Path.Combine(root, ".orchestrator", "test-dotnet");
 
             using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start refinement child.");
             process.StandardInput.Close();

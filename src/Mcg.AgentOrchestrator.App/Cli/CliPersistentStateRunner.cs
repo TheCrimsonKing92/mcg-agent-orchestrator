@@ -986,7 +986,7 @@ internal static partial class CliPersistentStateRunner
                     workspace.ExecutionDirectory,
                     watchGoalId,
                     cleanupHooks: cleanupContext.Hooks,
-                    orchestratorDirectory: workspace.OrchestratorDirectory);
+                    orchestratorDirectory: workspace.OrchestratorDirectory, reclaimGoalRoots: true);
                 var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
                     stateRepository, workspace.ExecutionDirectory, watchGoalId, cleanupContext.Hooks);
                 if (metadataOnlyExcludedGoalCount > 0)
