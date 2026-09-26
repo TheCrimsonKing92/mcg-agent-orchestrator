@@ -85,6 +85,10 @@ internal static partial class StorageRetentionMaintenance
                 continue;
             }
             if (entries.Length == 0) continue;
+            // Legacy attempts have only flat files in the goal directory. Their
+            // per-file retention policy must still run, including receipt and
+            // byte-bound handling. This path reclaims directory-based attempts.
+            if (!entries.Any(entry => entry is DirectoryInfo)) continue;
             // The attempt is one retention unit: a fresh member protects every member.
             var measurements = entries.Select(TryMeasureEntry).ToArray();
             if (measurements.Any(measurement => !measurement.Success))

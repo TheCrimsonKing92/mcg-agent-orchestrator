@@ -245,8 +245,8 @@ public sealed class StorageRetentionMaintenanceTests
         Assert.Equal("beforeafter", File.ReadAllText(path));
     }
 
-    [Xunit.Fact(DisplayName = "AcceptanceRetention_aged_last_failing_attempt_is_deleted_and_summary_is_preserved")]
-    public void AgedLastFailingAttemptIsDeletedAndSummaryIsPreserved()
+    [Xunit.Fact(DisplayName = "AcceptanceRetention_last_failing_attempt_and_summaries_are_preserved")]
+    public void LastFailingAttemptAndSummariesArePreserved()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -265,8 +265,8 @@ public sealed class StorageRetentionMaintenanceTests
 
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
-        Assert.False(File.Exists(failingMetadata));
-        Assert.False(File.Exists(failingLog));
+        Assert.True(File.Exists(failingMetadata));
+        Assert.True(File.Exists(failingLog));
         Assert.False(File.Exists(successfulTrx));
         var receiptPath = successfulTrx + ".test-identities.json";
         Assert.True(File.Exists(receiptPath));
@@ -959,7 +959,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void AcceptanceRetention_OrdinalBeatsMtime_DeletesOldFinalAndKeepsYoungFailure()
+    public void AcceptanceRetention_OrdinalBeatsMtime_PreservesFinalAndLastFailure()
     {
         using var fixture = new RetentionFixture();
         var goalDirectory = Path.Combine(fixture.OrchestratorDirectory, "acceptance-gate-attempts", GoalId);
@@ -983,7 +983,7 @@ public sealed class StorageRetentionMaintenanceTests
         fixture.Run(TerminalGoal(WorkTaskStatus.Completed));
 
         Assert.True(File.Exists(failingLog));
-        Assert.False(File.Exists(finalLog));
+        Assert.True(File.Exists(finalLog));
         Assert.False(File.Exists(oldLog));
     }
 
@@ -1501,7 +1501,7 @@ public sealed class StorageRetentionMaintenanceTests
     }
 
     [Xunit.Fact]
-    public void MtpRetention_AmbiguousRunKeepsMtpRunButDeletesAgedTerminalMetadata()
+    public void MtpRetention_AmbiguousRunRetainsEveryCandidateOwnerMetadata()
     {
         const string secondGoalId = "33333333333333333333333333333333";
         using var fixture = new RetentionFixture();
@@ -1547,12 +1547,12 @@ public sealed class StorageRetentionMaintenanceTests
             mtpResultsRoot: fixture.MtpResultsRoot);
 
         Assert.True(Directory.Exists(runDirectory));
-        Assert.False(File.Exists(firstMetadata));
-        Assert.False(File.Exists(secondMetadata));
+        Assert.True(File.Exists(firstMetadata));
+        Assert.True(File.Exists(secondMetadata));
         Assert.Equal(2, result.Decisions.Count(decision =>
             (decision.Path == firstMetadata || decision.Path == secondMetadata) &&
-            decision.Action == EvidenceRetentionAction.Deleted &&
-            decision.Reason == "terminal-goal-attempt-past-age"));
+            decision.Action == EvidenceRetentionAction.Preserved &&
+            decision.Reason == "retained-test-artifact-owner-metadata"));
     }
 
     [Xunit.Fact]
