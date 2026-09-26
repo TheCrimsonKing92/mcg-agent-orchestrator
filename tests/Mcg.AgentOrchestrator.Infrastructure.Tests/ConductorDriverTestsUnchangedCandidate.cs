@@ -56,7 +56,7 @@ public sealed class ConductorDriverTestsUnchangedCandidate
             "test-worker", "test.exe", "C:\\tmp", DateTimeOffset.UtcNow.AddMinutes(-2),
             CandidateIdentity: identity));
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "test.exe", "C:\\tmp", 0, "ok", "", DateTimeOffset.UtcNow.AddMinutes(-1),
+            "test.exe", "C:\\tmp", 0, "WORKER_RESULT:\nblockers: none\nfindings: []\ntouched_anchors: []\nverdict: pass\nEND_WORKER_RESULT", "", DateTimeOffset.UtcNow.AddMinutes(-1),
             WorkerResultPresent: true, CandidateIdentity: identity));
         kernel.RetryTask(goal.Id, reviewer.Id, "repeat without new input", RetryCause.UnchangedContextRepeat);
 
