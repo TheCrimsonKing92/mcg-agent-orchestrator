@@ -3120,6 +3120,8 @@ internal sealed partial class ConductorBatchLoop
             (cohortEligible, productionCandidates) = LandPassedAcceptanceCohortsBeforeTrainSelection(
                 driver, policy, cohortEligible, productionCandidates, results, tick, changedGoalLines);
         }
+        (cohortEligible, productionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
+            driver, policy, cohortEligible, productionCandidates, results, tick, changedGoalLines);
         var groupedAdmissionOpen = !suppressNewAcceptanceAdmission &&
             trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
