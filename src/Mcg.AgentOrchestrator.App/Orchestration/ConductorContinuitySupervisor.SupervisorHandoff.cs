@@ -27,10 +27,6 @@ internal sealed partial class ConductorContinuitySupervisor
             record = seam.ReadRecord(inboundPath);
             if (!SameRunDirectory(record.AdoptedBuild.RunDirectory, supervisorHandoff.OwnBuild.RunDirectory))
                 throw new InvalidDataException("Inbound handoff targets a different run directory.");
-            if (record.ActiveChild is { } active &&
-                !seam.IsAlive(active.Process) &&
-                ConductorContinuityExitArtifact.TryRead(active.ExitArtifactPath) is null)
-                throw new InvalidDataException("Adopted child cannot be identified and has no exit artifact.");
             seam.WriteReady(record.ReadyPath,
                 new ConductorSupervisorReadyRecord(record.Token, seam.Self, supervisorHandoff.OwnBuild));
             var deadline = _timeProvider.GetUtcNow() + supervisorHandoff.Timeout;
@@ -173,11 +169,19 @@ internal sealed partial class ConductorContinuitySupervisor
     private void RecordSupervisorHandoffPreparationFailure(ConductorActivationBuild target, Exception error)
     {
         if (supervisorHandoff is null) return;
+        _adoptedSupervisorTarget = null;
+        _consecutiveSupervisorHandoffFailures++;
         RecordSupervisorEvent("supervisor-handoff", "failed", "SUPERVISOR_HANDOFF_FAILED",
             new { reason = $"child-identity:{error.GetType().Name}:{error.Message}",
                 fromCommit = supervisorHandoff.OwnBuild.CommitSha,
                 fromRunDir = supervisorHandoff.OwnBuild.RunDirectory,
-                toCommit = target.CommitSha, toRunDir = target.StagedBuildId });
+                toCommit = target.CommitSha, toRunDir = target.StagedBuildId,
+                consecutiveFailures = _consecutiveSupervisorHandoffFailures });
+        if (_consecutiveSupervisorHandoffFailures == 3)
+            RecordSupervisorEvent("supervisor-handoff", "escalated", "SUPERVISOR_HANDOFF_ESCALATED",
+                new { consecutiveFailures = _consecutiveSupervisorHandoffFailures,
+                    fromCommit = supervisorHandoff.OwnBuild.CommitSha,
+                    toCommit = target.CommitSha });
     }
 
     private void RecordSupervisorEvent(string operation, string status, string eventName, object payload)

@@ -150,6 +150,10 @@ internal sealed class SupervisorHandoffFixture
         private ConductorSupervisorHandoffRecord? _record;
         internal bool ThrowOnLaunch { get; set; }
         internal bool SuppressReadiness { get; set; }
+        internal ConductorSupervisorProcessResult? InheritedChildResult { get; set; }
+        internal bool InheritedChildMissingBeforeAttach { get; set; }
+        internal bool InheritedChildWaitForCancellation { get; set; }
+        internal int InheritedChildObservations { get; private set; }
         internal List<ConductLoopLaunchRequest> Launches { get; } = [];
         internal ConductorSupervisorProcessIdentity? Owner { get; private set; }
         public string? IncomingRecordPath { get; set; }
@@ -189,13 +193,29 @@ internal sealed class SupervisorHandoffFixture
             if (ThrowOnLaunch) throw new InvalidOperationException("launch failed");
             return new ConductLoopLaunchResult(Successor.ProcessId, request.StdoutPath, request.StderrPath);
         }
-        public bool IsAlive(ConductorSupervisorProcessIdentity process) => true;
+        public bool IsAlive(ConductorSupervisorProcessIdentity process) =>
+            !(InheritedChildMissingBeforeAttach && process.ProcessId == 901);
         public bool IsRunning(int processId) => true;
         public ConductorSupervisorProcessIdentity Identify(int processId) =>
             new(processId, new DateTimeOffset(2026, 9, 26, 0, 0, 0, TimeSpan.Zero));
-        public Task<ConductorSupervisorProcessResult> ObserveChildAsync(
-            ConductorSupervisorActiveChild child, CancellationToken cancellationToken) =>
-            throw new NotSupportedException("No active child in this fixture.");
+        public async Task<ConductorSupervisorProcessResult> ObserveChildAsync(
+            ConductorSupervisorActiveChild child, CancellationToken cancellationToken)
+        {
+            InheritedChildObservations++;
+            if (InheritedChildMissingBeforeAttach)
+                throw new InvalidOperationException("Adopted child identity changed before attachment.");
+            if (InheritedChildWaitForCancellation)
+            {
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return new ConductorSupervisorProcessResult(-1, child.Process.ProcessId,
+                        TerminationConfirmed: true);
+                }
+            }
+            return InheritedChildResult ??
+                throw new NotSupportedException("No active child in this fixture.");
+        }
         public void StopPending(int processId) { }
     }
 
