@@ -372,13 +372,25 @@ protected static void CompleteResearcherAndPlannerArtifacts(
 {
     var kernel = new AgentOrchestratorKernel();
     var taskSpec = new TaskSpec(TaskId.New(), taskDescription ?? $"{role} task.", role, verificationPlan);
-    var goal = kernel.CreateGoal("Dispatch evidence goal", [taskSpec]);
+    var priorResearcher = role == AgentRole.Planner
+        ? new TaskSpec(TaskId.New(), "Research the dispatch fixture.", AgentRole.Researcher)
+        : null;
+    var goal = kernel.CreateGoal("Dispatch evidence goal",
+        priorResearcher is null ? [taskSpec] : [priorResearcher, taskSpec]);
     var agent = new AgentDefinition(
         new AgentId(role.ToString().ToLowerInvariant()),
         role.ToString(),
         role,
         new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
-    kernel.ActivateGoal(goal.Id, [agent]);
+    var agents = priorResearcher is null
+        ? new[] { agent }
+        : new[] { agent, new AgentDefinition(new AgentId("researcher-fixture"), "Researcher fixture",
+            AgentRole.Researcher, agent.Model) };
+    kernel.ActivateGoal(goal.Id, agents);
+    if (priorResearcher is not null)
+    {
+        kernel.ReportTaskProgress(goal.Id, priorResearcher.Id, WorkTaskStatus.Completed, "Fixture research complete.");
+    }
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     mutateWorktree?.Invoke(worktree);

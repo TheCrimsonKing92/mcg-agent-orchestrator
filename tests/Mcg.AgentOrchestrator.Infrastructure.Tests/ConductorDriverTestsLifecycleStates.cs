@@ -889,7 +889,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Xunit.Assert.Equal(1, escalationWrites);
         Xunit.Assert.True(goal.LatestAcceptanceFailure?.IsEnvironmentalApparatus);
         Xunit.Assert.False(retryCalled);
-        Xunit.Assert.Equal(5, goal.Tasks.Count);
+        Xunit.Assert.Equal(4, goal.Tasks.Count);
         Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status));
         Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(0, task.CriterionRetryCount));
 

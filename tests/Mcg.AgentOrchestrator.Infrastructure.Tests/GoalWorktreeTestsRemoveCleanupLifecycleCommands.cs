@@ -287,8 +287,8 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
         }
     }
 
-    [Xunit.Fact(DisplayName = "Cli_lifecycle_goal_runs_five_role_goal_accepts_and_defers_workspace_cleanup")]
-    public void CliLifecycleGoalRunsFiveRoleGoalAcceptsAndDefersWorkspaceCleanup()
+    [Xunit.Fact(DisplayName = "Cli_lifecycle_goal_runs_scout_goal_accepts_and_defers_workspace_cleanup")]
+    public void CliLifecycleGoalRunsScoutGoalAcceptsAndDefersWorkspaceCleanup()
     {
         var repo = CreateSeededRepository();
         try
@@ -312,14 +312,16 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
             var output = CaptureConsole(() =>
             {
                 invocationError = Record.Exception(() => CliCommandHandlers.Execute(
-                    ["lifecycle-goal", "Ship a five-role echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
+                    ["lifecycle-goal", "Ship a scout echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                     context));
             });
             Assert.True(invocationError is null, $"{invocationError}{Environment.NewLine}{output}");
 
             var goal = context.CurrentGoal!;
             Assert.Equal(GoalStatus.Completed, goal.Status);
-            Assert.Equal(5, goal.Tasks.Count);
+            Assert.Equal(
+                [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+                goal.Tasks.Select(task => task.RequiredRole));
             Assert.True(goal.Tasks.All(task => task.Status == WorkTaskStatus.Completed));
             Assert.NotNull(GoalWorktrees.TryResolve(repo, goal.Id));
             Assert.NotNull(TryGetCleanupBackoff(repo, goal.Id));

@@ -232,6 +232,7 @@ public sealed partial class AgentOrchestratorKernel
             task.RequiredRole == AgentRole.Planner &&
             File.Exists(Path.Combine(contextDirectory!, "research-notes.md")) &&
             new FileInfo(Path.Combine(contextDirectory!, "research-notes.md")).Length > 0;
+        var isScoutPlanner = ScoutRoundPolicy.IsScoutPlanner(goal, task);
         var hasAuthoritativePlannerCriteria =
             task.RequiredRole == AgentRole.Planner &&
             goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 };
@@ -392,11 +393,15 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var roleLines = new List<string>();
-        roleLines.AddRange(SdlcRolePromptRequirements.Build(
-            task.RequiredRole,
-            complexity,
-            SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
-            hasDurableResearch));
+        roleLines.AddRange(isScoutPlanner
+            ? SdlcRolePromptRequirements.BuildScout(
+                complexity,
+                SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal))
+            : SdlcRolePromptRequirements.Build(
+                task.RequiredRole,
+                complexity,
+                SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
+                hasDurableResearch));
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
 

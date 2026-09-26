@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class BackgroundDispatchRunner
+public sealed partial class BackgroundDispatchRunner
 {
     private const int ApparatusHoldObservationsBeforeEscalation = 2;
     private const int AnsweredApparatusHoldObservationsBeforeFailure = 3;
@@ -1339,6 +1339,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         PlannerCandidateDivergenceReceipt? plannerCandidateDivergence = null;
+        var scoutResearchSourcePath = processRecord.StandardOutputPath;
         if (task.RequiredRole == AgentRole.Planner && (exitCode == 0 || successfulChildResultAvailable))
         {
             var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
@@ -1353,18 +1354,22 @@ public sealed class BackgroundDispatchRunner
             }
             else if (task.LastDispatch?.PlannerSampleCount > 1)
             {
-                var selection = PlannerCandidateSelector.Select(
-                    PlannerSampleDispatcher.CollectCandidates(
+                var candidates = PlannerSampleDispatcher.CollectCandidates(
                         processRecord.StandardOutputPath,
                         task.LastDispatch.PlannerSampleCount,
                         dispatchAttempt,
                         processRecord.CompletedAt is { } completedAt
                             ? Math.Max(0, (long)(completedAt - processRecord.StartedAt).TotalMilliseconds)
-                            : null),
+                            : null);
+                var selection = PlannerCandidateSelector.Select(
+                    candidates,
                     processRecord.WorkingDirectory,
                     acceptanceCriteria);
                 plannerContract = selection.SelectedContract;
                 plannerCandidateDivergence = selection.Receipt;
+                if (selection.Receipt.SelectedCandidateIndex is int selectedIndex)
+                    scoutResearchSourcePath = candidates[selectedIndex].SourcePath
+                        ?? throw new InvalidOperationException("Selected Planner candidate has no stdout source path.");
             }
             else
             {
@@ -1410,6 +1415,15 @@ public sealed class BackgroundDispatchRunner
                             standardErrorDiagnostic ?? string.Empty,
                             $"Planner output contract could not persist the accepted plan: {appendDiagnostic}. Retry Planner for contract repair."),
                         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed));
+                }
+                else if (RequiresDurableScoutResearchArtifact(goal, task) &&
+                    !TryPersistScoutResearch(scoutResearchSourcePath, processRecord.StandardOutputPath, out var scoutDiagnostic))
+                {
+                    exitCode = 1;
+                    completionContractSucceeded = false;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        scoutDiagnostic);
                 }
             }
         }
@@ -1862,20 +1876,6 @@ public sealed class BackgroundDispatchRunner
 
     internal static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
         WorkerDispatchCompletionClassifier.ShouldReconcileWrapperExit(evidence);
-
-    private static bool RequiresDurableResearchArtifact(Goal goal, TaskSpec researcher)
-    {
-        var researcherIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == researcher.Id);
-        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Planner);
-        return researcherIndex >= 0 && plannerIndex > researcherIndex;
-    }
-
-    private static bool RequiresDurablePlanArtifact(Goal goal, TaskSpec planner)
-    {
-        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == planner.Id);
-        return plannerIndex > 0 &&
-            goal.Tasks.Take(plannerIndex).Any(candidate => candidate.RequiredRole == AgentRole.Researcher);
-    }
 
     private static string? TryGetWorktreeHead(string workingDirectory)
     {

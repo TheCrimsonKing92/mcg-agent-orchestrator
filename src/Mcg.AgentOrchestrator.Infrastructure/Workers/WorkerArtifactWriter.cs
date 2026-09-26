@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class WorkerArtifactWriter
+internal sealed partial class WorkerArtifactWriter
 {
     private const int PriorVerificationMaxChars = 40000;
     private const int CurrentEvidenceMaxChars = 20000;
@@ -195,7 +195,7 @@ internal sealed class WorkerArtifactWriter
 
         lines.Add(string.Empty);
         lines.Add("## Role Artifact Priorities");
-        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole, plannerUsesDurableResearch));
+        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole, plannerUsesDurableResearch, ScoutRoundPolicy.IsScoutPlanner(goal, task)));
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
@@ -803,7 +803,8 @@ internal sealed class WorkerArtifactWriter
     {
         foreach (var researchTask in goalTasks
                      .TakeWhile(candidate => candidate.Id != taskId)
-                     .Where(candidate => candidate.RequiredRole == AgentRole.Researcher)
+                     .Where(candidate => candidate.RequiredRole == AgentRole.Researcher ||
+                         ScoutRoundPolicy.IsScoutPlannerForOrderedTasks(goalTasks, candidate))
                      .Reverse())
         {
             foreach (var verification in researchTask.VerificationHistory.Reverse())
@@ -818,7 +819,7 @@ internal sealed class WorkerArtifactWriter
         return new DurableResearchResolution(
             false,
             string.Empty,
-            "no complete Researcher artifact exists before this task");
+            "no complete research artifact exists before this task");
     }
 
     internal static bool TryResolveDurableResearch(
@@ -1018,7 +1019,7 @@ internal sealed class WorkerArtifactWriter
 
         lines.Add(string.Empty);
         lines.Add("## Role Artifact Priorities");
-        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole, plannerUsesDurableResearch));
+        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole, plannerUsesDurableResearch, ScoutRoundPolicy.IsScoutPlanner(goal, task)));
         lines.Add(string.Empty);
         lines.Add("## Missing Artifact Fallback");
         lines.Add("If an artifact listed here is missing or has a failed hash in artifact-registry.json, read digest.md first, then current-task.md, prior-task-summaries.md, and diff-summary.md. Treat missing prior-task-evidence.md as a verification gap and report it in WORKER_RESULT blockers instead of guessing.");
@@ -1232,8 +1233,13 @@ internal sealed class WorkerArtifactWriter
 
     private static IReadOnlyList<string> BuildRoleArtifactPriorities(
         AgentRole role,
-        bool plannerUsesDurableResearch = false)
+        bool plannerUsesDurableResearch = false,
+        bool isScoutPlanner = false)
     {
+        if (isScoutPlanner)
+        {
+            return BuildScoutArtifactPriorities();
+        }
         if (role == AgentRole.Planner && !plannerUsesDurableResearch)
         {
             return

@@ -1458,7 +1458,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
         Xunit.Assert.NotEqual(first, second);
     }
 
-    private static string ReadPlannerFixture() => File.ReadAllText(Path.Combine(
+    private static string ReadPlannerFixture() => ResearcherContractFixture() + Environment.NewLine + File.ReadAllText(Path.Combine(
         InfrastructureTestSupport.FindRepositoryRoot(),
         "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
         "658501ce-f6708f44-20260805012800.out.txt"));

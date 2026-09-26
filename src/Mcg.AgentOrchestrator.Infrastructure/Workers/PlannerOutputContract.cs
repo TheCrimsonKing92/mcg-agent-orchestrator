@@ -114,6 +114,15 @@ internal static partial class PlannerOutputContract
         return sections;
     }
 
+    internal static int FindFirstRequiredHeadingIndex(string text)
+    {
+        var starts = RequiredSections
+            .Select(section => section.Heading.Match(text))
+            .Where(match => match.Success)
+            .Select(match => match.Index);
+        return starts.DefaultIfEmpty(-1).Min();
+    }
+
     internal static PlannerStructuralQualityVector EvaluateStructuralQuality(
         string plan,
         int? criterionCount = null)

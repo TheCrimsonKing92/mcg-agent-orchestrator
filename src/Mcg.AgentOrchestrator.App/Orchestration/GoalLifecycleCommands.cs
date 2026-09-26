@@ -64,7 +64,7 @@ internal static class GoalLifecycleCommands
         IReadOnlyList<AgentDefinition> agents)
     {
         if (!plan.PipelineDecision.IsOverride ||
-            plan.PipelineDecision.Pipeline != GoalIntakePipeline.FiveRole)
+            plan.PipelineDecision.Pipeline is not (GoalIntakePipeline.FiveRole or GoalIntakePipeline.Scout))
         {
             return;
         }
@@ -82,7 +82,7 @@ internal static class GoalLifecycleCommands
         }
 
         throw new InvalidOperationException(
-            $"Requested intake pipeline 'five-role' cannot be satisfied; missing available agent role(s): {string.Join(", ", missingRoles)}. No goal was created.");
+            $"Requested intake pipeline '{plan.PipelineDecision.Workflow}' cannot be satisfied; missing available agent role(s): {string.Join(", ", missingRoles)}. No goal was created.");
     }
 
     public static void EnsureRequestedPipelineMatchesPersistedGoal(
@@ -269,6 +269,11 @@ internal static class GoalLifecycleCommands
             [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]))
         {
             return "five-role";
+        }
+
+        if (roles.SequenceEqual([AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]))
+        {
+            return "scout";
         }
 
         return "custom";

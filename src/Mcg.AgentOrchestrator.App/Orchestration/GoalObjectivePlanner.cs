@@ -20,20 +20,22 @@ internal enum GoalIntakePipeline
 {
     DeveloperOnly,
     DeveloperReviewer,
-    FiveRole
+    FiveRole,
+    Scout
 }
 
 internal enum GoalIntakePipelineRequest
 {
     Auto,
     FiveRole,
+    Scout,
     DeveloperReviewer,
     DeveloperOnly
 }
 
 internal static class GoalIntakePipelineRequestParser
 {
-    public const string AllowedValues = "auto, five-role, developer-reviewer, developer-only";
+    public const string AllowedValues = "auto, scout, five-role, developer-reviewer, developer-only";
 
     public static GoalIntakePipelineRequest Parse(string value)
     {
@@ -45,6 +47,11 @@ internal static class GoalIntakePipelineRequestParser
         if (value.Equals("five-role", StringComparison.OrdinalIgnoreCase))
         {
             return GoalIntakePipelineRequest.FiveRole;
+        }
+
+        if (value.Equals("scout", StringComparison.OrdinalIgnoreCase))
+        {
+            return GoalIntakePipelineRequest.Scout;
         }
 
         if (value.Equals("developer-reviewer", StringComparison.OrdinalIgnoreCase))
@@ -65,6 +72,7 @@ internal static class GoalIntakePipelineRequestParser
         {
             GoalIntakePipelineRequest.Auto => null,
             GoalIntakePipelineRequest.FiveRole => GoalIntakePipeline.FiveRole,
+            GoalIntakePipelineRequest.Scout => GoalIntakePipeline.Scout,
             GoalIntakePipelineRequest.DeveloperReviewer => GoalIntakePipeline.DeveloperReviewer,
             GoalIntakePipelineRequest.DeveloperOnly => GoalIntakePipeline.DeveloperOnly,
             _ => throw new ArgumentOutOfRangeException(nameof(request), request, "Unknown goal intake pipeline request.")
@@ -75,6 +83,7 @@ internal static class GoalIntakePipelineRequestParser
         {
             GoalIntakePipelineRequest.Auto => "auto",
             GoalIntakePipelineRequest.FiveRole => "five-role",
+            GoalIntakePipelineRequest.Scout => "scout",
             GoalIntakePipelineRequest.DeveloperReviewer => "developer-reviewer",
             GoalIntakePipelineRequest.DeveloperOnly => "developer-only",
             _ => throw new ArgumentOutOfRangeException(nameof(request), request, "Unknown goal intake pipeline request.")
@@ -91,6 +100,7 @@ internal sealed record GoalIntakePipelineDecision(
         GoalIntakePipeline.DeveloperOnly => "developer-only",
         GoalIntakePipeline.DeveloperReviewer => "developer-reviewer",
         GoalIntakePipeline.FiveRole => "five-role",
+        GoalIntakePipeline.Scout => "scout",
         _ => Pipeline.ToString()
     };
 
@@ -375,6 +385,7 @@ internal static class GoalObjectivePlanner
         string[] fileScopes,
         GoalIntakePipeline? pipelineOverride)
     {
+        const GoalIntakePipeline automaticDefaultPipeline = GoalIntakePipeline.Scout;
         if (pipelineOverride is { } forced)
         {
             return new GoalIntakePipelineDecision(
@@ -384,7 +395,9 @@ internal static class GoalObjectivePlanner
         }
 
         var reviewReasons = new List<string>();
-        AddReason("scope-implicit", "scope-implicit objective needs Planner and Researcher to define the work before implementation");
+        AddReason("scope-implicit", automaticDefaultPipeline == GoalIntakePipeline.FiveRole
+            ? "scope-implicit objective needs Planner and Researcher to define the work before implementation"
+            : "scope-implicit objective needs the Scout to define the work before implementation");
         AddReason("high-risk", "high-risk objective needs pre-acceptance review");
         AddReason("security-risk", "security-risk objective needs pre-acceptance review");
         AddReason("multi-scope", "multi-scope objective needs reviewer coverage across touched areas");
@@ -394,14 +407,14 @@ internal static class GoalObjectivePlanner
         if (reviewReasons.Count == 0)
         {
             reviewReasons.Add(fileScopes.Length == 0
-                ? "no routed risk labels found; automatic intake defaults to five-role"
-                : "scoped low-risk objective defaults to five-role intake");
+                ? $"no routed risk labels found; automatic intake defaults to {FormatPipeline(automaticDefaultPipeline)}"
+                : $"scoped low-risk objective defaults to {FormatPipeline(automaticDefaultPipeline)} intake");
         }
 
         reviewReasons.Add("two-role and developer-only pipelines require an explicit --pipeline value");
 
         return new GoalIntakePipelineDecision(
-            GoalIntakePipeline.FiveRole,
+            automaticDefaultPipeline,
             IsOverride: false,
             reviewReasons);
 
@@ -527,6 +540,17 @@ internal static class GoalObjectivePlanner
             ];
         }
 
+        if (pipeline == GoalIntakePipeline.Scout)
+        {
+            return
+            [
+                new GoalObjectiveTaskBoundary(1, AgentRole.Planner, "Inspect current source and synthesize a criterion-mapped Scout plan.", "read-only", "Scout plan and research findings must cite repository evidence."),
+                new GoalObjectiveTaskBoundary(2, AgentRole.Developer, complexity == TaskComplexity.Complex ? "Implement the scoped slice and keep changes narrow." : "Implement the focused change.", "workspace-write", verification[0]),
+                new GoalObjectiveTaskBoundary(3, AgentRole.Tester, "Run focused verification and capture failures as evidence.", "workspace-write", verification[0]),
+                new GoalObjectiveTaskBoundary(4, AgentRole.Reviewer, "Review diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")
+            ];
+        }
+
         return
         [
             new GoalObjectiveTaskBoundary(1, AgentRole.Researcher, "Inspect current source and prior evidence before implementation.", "read-only", "Research notes must cite exact files or state that no source change is needed."),
@@ -562,6 +586,11 @@ internal static class GoalObjectivePlanner
             return "Route through the five-role pipeline so planning and research define the open scope." + suffix;
         }
 
+        if (pipelineDecision.Pipeline == GoalIntakePipeline.Scout)
+        {
+            return "Route through the Scout pipeline for source research and planning before implementation." + suffix;
+        }
+
         return "Proceed with the selected workflow and focused verification." + suffix;
     }
 
@@ -571,6 +600,7 @@ internal static class GoalObjectivePlanner
             GoalIntakePipeline.DeveloperOnly => "Developer-only",
             GoalIntakePipeline.DeveloperReviewer => "Developer+Reviewer",
             GoalIntakePipeline.FiveRole => "five-role",
+            GoalIntakePipeline.Scout => "scout",
             _ => pipeline.ToString()
         };
 
