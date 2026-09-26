@@ -10,7 +10,8 @@ internal static class OperatorIntentPolicyApproval
         Goal goal,
         OperatorIntentRecord intent,
         ApprovePolicyChangeOperatorIntentPayload payload,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? protectedChangeFingerprint = null)
     {
         if (intent.ActorKind != OperatorActorKind.Human)
             throw new InvalidOperationException("Acceptance policy approval requires a human actor kind.");
@@ -28,7 +29,9 @@ internal static class OperatorIntentPolicyApproval
         var request = new DecisionRequest(
             requestId, DecisionRequestKind.RiskApproval, goalId,
             AcceptancePolicyChangeDecision.Subject(goalId, sha), payload.Reason.Trim(),
-            "acceptance-policy-change-v1", EvidenceManifest.Create([]), now.AddHours(24),
+            "acceptance-policy-change-v1", EvidenceManifest.Create(
+                protectedChangeFingerprint is null ? [] :
+                [new EvidenceManifestEntry(AcceptancePolicyChangeDecision.FingerprintEvidenceId, protectedChangeFingerprint)]), now.AddHours(24),
             DecisionDefaultDisposition.Deny,
             new DecisionBlockingImpact("Acceptance policy change remains blocked without human approval.", []),
             [DecisionReuseScope.ThisOccurrence],

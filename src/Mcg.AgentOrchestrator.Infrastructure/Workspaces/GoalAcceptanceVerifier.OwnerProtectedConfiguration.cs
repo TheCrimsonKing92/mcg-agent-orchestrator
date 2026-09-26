@@ -8,10 +8,18 @@ public sealed partial class GoalAcceptanceVerifier
 {
     private string? _ownerPolicyDecisionStoreDirectory;
 
-    private bool HasOwnerPolicyApproval(string worktreePath, GoalId? goalId)
+    private bool HasOwnerPolicyApproval(string worktreePath, GoalId? goalId, IReadOnlyList<string>? changedFiles)
     {
         var candidateSha = ResolveGitScalar(worktreePath, "rev-parse", "HEAD");
-        return HasOwnerPolicyApprovalForCandidate(goalId, candidateSha);
+        if (candidateSha is null) return false;
+        if (HasOwnerPolicyApprovalForCandidate(goalId, candidateSha)) return true;
+        if (goalId is null || _ownerPolicyDecisionStoreDirectory is null ||
+            !Directory.Exists(_ownerPolicyDecisionStoreDirectory)) return false;
+        var fingerprint = ComputeOwnerProtectedChangeFingerprint(worktreePath, changedFiles,
+            AcceptanceGitTextResolver.Resolve, "HEAD", readCommittedCandidate: false);
+        return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
+            CollaborationItemStore.ForDirectory(_ownerPolicyDecisionStoreDirectory), goalId.Value, fingerprint)
+            .GetAwaiter().GetResult();
     }
 
     internal bool HasOwnerPolicyApprovalForCandidateTests(GoalId goalId, string candidateSha) =>
@@ -52,8 +60,12 @@ public sealed partial class GoalAcceptanceVerifier
         string candidateSha)
     {
         var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText);
-        return failure is not null && HasOwnerPolicyApprovalForTests(decisions, goalId, candidateSha)
-            ? null : failure;
+        if (failure is null || HasOwnerPolicyApprovalForTests(decisions, goalId, candidateSha))
+            return null;
+        var fingerprint = ComputeOwnerProtectedChangeFingerprint(
+            worktreePath, changedFiles, resolveGitText, "HEAD", readCommittedCandidate: false);
+        return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
+            decisions, goalId.Value, fingerprint).GetAwaiter().GetResult() ? null : failure;
     }
 
     private static AcceptanceCheckResult? TryClassifyManifestTrustCore(
@@ -73,16 +85,7 @@ public sealed partial class GoalAcceptanceVerifier
             !File.Exists(candidateManifestPath);
         var details = new List<string>();
 
-        string[] noRenamePaths = changedFiles.Any(path =>
-            !RepositoryChangeClassifier.IsOwnerProtectedPolicyPath(path) &&
-            !NormalizePath(path).Equals(manifestPath, StringComparison.OrdinalIgnoreCase))
-            ? resolveGitText(worktreePath,
-                ["diff", "--name-only", "--no-renames", "main...HEAD", "--"])?
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? []
-            : [];
-        foreach (var rawPath in changedFiles.Concat(noRenamePaths)
-                     .Where(RepositoryChangeClassifier.IsOwnerProtectedPolicyPath)
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var rawPath in SelectOwnerProtectedPolicyPaths(worktreePath, changedFiles, resolveGitText, "HEAD"))
         {
             var path = NormalizePath(rawPath);
             var fullPath = Path.GetFullPath(Path.Combine(worktreePath, path.Replace('/', Path.DirectorySeparatorChar)));
