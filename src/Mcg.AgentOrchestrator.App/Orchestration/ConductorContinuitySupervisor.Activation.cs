@@ -37,10 +37,15 @@ internal sealed partial class ConductorContinuitySupervisor
 
     private sealed class ActivationMonitor
     {
+        private readonly Func<DateTimeOffset> _utcNow;
         private readonly object _gate = new();
         private bool _started;
         private int _ticks;
+        private int? _lastTick;
+        private DateTimeOffset? _lastTickEndAt;
         private TaskCompletionSource _changed = NewSignal();
+
+        internal ActivationMonitor(Func<DateTimeOffset> utcNow) => _utcNow = utcNow;
 
         internal void OnLine(string line)
         {
@@ -54,6 +59,11 @@ internal sealed partial class ConductorContinuitySupervisor
                     line.Contains(" activation=true", StringComparison.Ordinal) && _started)
                 {
                     _ticks++;
+                    var tickStart = line.IndexOf("tick=", StringComparison.Ordinal);
+                    var tickText = tickStart < 0 ? string.Empty : line[(tickStart + 5)..].Split(' ')[0];
+                    _lastTick = int.TryParse(tickText, NumberStyles.Integer,
+                        CultureInfo.InvariantCulture, out var tick) ? tick : null;
+                    _lastTickEndAt = _utcNow();
                 }
                 else
                 {
@@ -71,6 +81,14 @@ internal sealed partial class ConductorContinuitySupervisor
             lock (_gate)
             {
                 return (_started, _ticks, _changed.Task);
+            }
+        }
+
+        internal (int? Tick, DateTimeOffset? EndedAt) LastTickEnd()
+        {
+            lock (_gate)
+            {
+                return (_lastTick, _lastTickEndAt);
             }
         }
 
