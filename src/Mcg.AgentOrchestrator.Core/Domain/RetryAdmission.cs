@@ -31,7 +31,8 @@ public enum RetryAdmissionDecision
 {
     Allowed,
     Prevented,
-    ResumedReservation
+    ResumedReservation,
+    RecoveryEvidence
 }
 
 public enum RetryAdmissionRoute
@@ -554,7 +555,16 @@ public static class RetryAdmissionPolicy
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
                 HasKnownUnsuccessfulOutcome(task, receipt))
             : null;
-        if (priorSameContext is not null)
+        var recoveryEvidence = task.RetryAdmissionHistory.LastOrDefault(receipt =>
+            receipt.Fingerprint == fingerprint &&
+            receipt.Decision == RetryAdmissionDecision.RecoveryEvidence &&
+            receipt.LinkedDispatchAt < linkedDispatchAt);
+        var recoveryCreditAvailable = recoveryEvidence is not null &&
+            !task.RetryAdmissionHistory.Any(receipt =>
+                receipt.Fingerprint == fingerprint &&
+                receipt.LinkedDispatchAt > recoveryEvidence.LinkedDispatchAt &&
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        if (priorSameContext is not null && !recoveryCreditAvailable)
         {
             return Create(
                 task,
