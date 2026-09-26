@@ -125,7 +125,7 @@ internal sealed record GoalLifecycleJournalEntry(
     string Objective,
     DateTimeOffset At);
 
-internal static class GoalOperationJournal
+internal static partial class GoalOperationJournal
 {
     internal const string AcceptanceRetryAuditOutboxKind = "acceptance-retry-audit";
     public const string TerminalDispositionOperation = "conductor:terminal-disposition";
@@ -700,16 +700,23 @@ internal static class GoalOperationJournal
                 return new GoalOperationJournalSummary(path, [], [], []);
             }
 
+            var compressedPath = path + ".gz";
             var archivePath = ArchivePathFor(executionDirectory, goalId);
-            if (!File.Exists(archivePath))
+            if (!File.Exists(compressedPath) && !File.Exists(archivePath))
             {
                 return new GoalOperationJournalSummary(path, [], [], []);
             }
 
-            path = archivePath;
+            path = File.Exists(compressedPath) ? compressedPath : archivePath;
         }
 
         var entries = ReadEntries(path, rejectMalformedEntries);
+        if (includeArchive && !path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(path + ".gz"))
+        {
+            entries = ReadEntries(path + ".gz", rejectMalformedEntries).Concat(entries)
+                .OrderBy(entry => entry.At).ToArray();
+        }
         return BuildSummary(path, entries);
     }
 
@@ -719,6 +726,11 @@ internal static class GoalOperationJournal
         if (File.Exists(path))
         {
             return path;
+        }
+
+        if (File.Exists(path + ".gz"))
+        {
+            return path + ".gz";
         }
 
         var archivePath = ArchivePathFor(executionDirectory, goalId);
@@ -845,7 +857,13 @@ internal static class GoalOperationJournal
                 }
 
                 var goalId = new GoalId(fileName);
-                summaries[goalId] = BuildSummary(path, ReadEntries(path));
+                summaries[goalId] = Read(executionDirectory, goalId);
+            }
+            foreach (var compressedPath in Directory.EnumerateFiles(root, "*.jsonl.gz", SearchOption.TopDirectoryOnly))
+            {
+                var fileName = System.IO.Path.GetFileName(compressedPath);
+                var goalId = new GoalId(fileName[..^".jsonl.gz".Length]);
+                summaries.TryAdd(goalId, Read(executionDirectory, goalId));
             }
         }
 
@@ -940,7 +958,7 @@ internal static class GoalOperationJournal
         bool rejectMalformedEntries = false)
     {
         var entries = new List<GoalOperationJournalEntry>();
-        foreach (var line in SharedJsonlFile.ReadAllLines(path))
+        foreach (var line in ReadJournalLines(path))
         {
             var entry = TryDeserialize(line);
             if (entry is null)
