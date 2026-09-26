@@ -2018,6 +2018,7 @@ internal sealed partial class ConductorBatchLoop
             "POLICY_RELOAD_FAILED" => "policy-reload-failed",
             "POLICY_WARNING" => "policy-warning",
             "SPECULATIVE_COHORT_PLAN" => "speculative-cohort-plan",
+            "TRAIN_RECEIPT_STALE" => "train-receipt-stale",
             "ACCEPTANCE_COHORT" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_ENTRY" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_EXIT" => "acceptance-cohort",
