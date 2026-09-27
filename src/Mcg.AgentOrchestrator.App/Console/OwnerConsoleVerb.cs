@@ -24,7 +24,9 @@ internal static class OwnerConsoleVerb
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory),
                 new OwnerDigestSummaryAdapter(workspace),
                 new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
-                new SystemConsoleOutput(), clock);
+                new SystemConsoleOutput(), clock,
+                new CliConductorConsoleAdapter(workspace),
+                new CliOwnerDigestConsoleAdapter(workspace));
             await new OwnerConsoleLoop(session, new SystemConsoleInput(), source, clock)
                 .RunAsync(cancellationToken);
             return 0;

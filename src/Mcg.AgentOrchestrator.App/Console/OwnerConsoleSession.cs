@@ -11,8 +11,11 @@ internal sealed class OwnerConsoleSession(
     IOwnerDigestSummary digest,
     IGoalEventTail eventTail,
     IOwnerConsoleOutput output,
-    TimeProvider clock)
+    TimeProvider clock,
+    IOwnerConsoleConductor? conductor = null,
+    IOwnerConsoleDigestReport? digestReport = null)
 {
+    private readonly OwnerConsoleControlCommands _control = new(conductor, digestReport, output);
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, OwnerQuestion> _open = [];
     private readonly HashSet<int> _retired = [];
@@ -50,8 +53,12 @@ internal sealed class OwnerConsoleSession(
             case "quit": return false;
             case "help":
                 output.WriteLine("board | goal <id-prefix> | answer <n> <text> | accept <n> | bell on|off | help | quit");
+                output.WriteLine("conductor start [--clear-stop] | conductor stop [--yes] | conductor status");
+                output.WriteLine("digest");
                 break;
             case "board": await PrintBoardAsync(cancellationToken); break;
+            case "conductor": _control.HandleConductor(line); break;
+            case "digest": _control.HandleDigest(line); break;
             case "goal":
                 if (parts.Length < 2) output.WriteLine("usage: goal <id-prefix>");
                 else await PrintGoalAsync(parts[1], cancellationToken);
@@ -152,7 +159,7 @@ internal sealed class OwnerConsoleSession(
         var kernel = await state.LoadGoalsAsync([new GoalId(matches[0].Id)], cancellationToken);
         var goal = kernel.Goals.SingleOrDefault();
         if (goal is null) { output.WriteLine("goal state unavailable"); return; }
-        output.WriteLine($"{goal.Id.Value} | {goal.Objective} | {goal.Status}");
+        output.WriteLine($"{goal.Id.Value} | {OwnerGoalTitle.From(goal.Objective)} | {goal.Status}");
         foreach (var line in eventTail.ReadLast(goal.Id.Value, 15)) output.WriteLine(line);
     }
 
@@ -166,7 +173,7 @@ internal sealed class OwnerConsoleSession(
         return kernel.Goals.Where(goal => IsActive(goal.Status)).Select(goal =>
         {
             var task = goal.Tasks.FirstOrDefault(item => item.Status != WorkTaskStatus.Completed) ?? goal.Tasks.LastOrDefault();
-            return new OwnerGoalCard(goal.Id.Value, goal.Objective, goal.Status, task?.RequiredRole,
+            return new OwnerGoalCard(goal.Id.Value, OwnerGoalTitle.From(goal.Objective), goal.Status, task?.RequiredRole,
                 goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt);
         }).ToArray();
     }

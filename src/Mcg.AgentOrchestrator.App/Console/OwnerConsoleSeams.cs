@@ -40,6 +40,16 @@ internal interface IOwnerDigestSummary
     IReadOnlyList<string> ReadSummaryLines();
 }
 
+internal interface IOwnerConsoleConductor
+{
+    int Run(IReadOnlyList<string> args, TextWriter output, TextWriter error);
+}
+
+internal interface IOwnerConsoleDigestReport
+{
+    int Run(TextWriter output);
+}
+
 internal interface IGoalEventTail
 {
     IReadOnlyList<string> ReadLast(string goalId, int count);
