@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed class ConductorStewardHost
+internal sealed partial class ConductorStewardHost
 {
     internal const string EnabledEnvironmentVariable = "MCG_ORCHESTRATOR_STEWARD_ENABLED";
     private readonly ConductorStewardTriggerStore _triggers;
@@ -225,20 +225,20 @@ internal sealed class ConductorStewardHost
             Record(trigger, "no-action", "goal-unavailable", null);
             return;
         }
-        var current = _detector.Detect(goal).Any(item =>
-            item.Identity == trigger.Identity && item.OccurredAt == trigger.OccurredAt);
-        if (!current || _claimedGoalVersion != _version(goal.Id))
+        if (HarvestTriggerSuperseded(goal, trigger))
         {
             _triggers.MarkServiced(stored.Key, "no-action", null);
             Record(trigger, "no-action", "trigger-superseded", null);
             return;
         }
+        var harvestVersion = _version(goal.Id);
+        var versionDetail = HarvestVersionDetail(_claimedGoalVersion, harvestVersion);
         if (round.IsFaulted || round.IsCanceled)
         {
             var reason = round.IsCanceled || round.Exception?.GetBaseException() is OperationCanceledException
                 ? "timeout" : "model-failure";
             _triggers.MarkServiced(stored.Key, "model-failure", null);
-            Record(trigger, "model-failure", reason, null);
+            Record(trigger, "model-failure", reason, null, versionDetail);
             return;
         }
         var adjudication = ConductorStewardAdjudicationParser.Parse(round.Result);
@@ -246,12 +246,13 @@ internal sealed class ConductorStewardHost
         {
             var reason = adjudication.Text == "unparseable-output" ? "unparseable-output" : adjudication.Text;
             _triggers.MarkServiced(stored.Key, "no-action", null);
-            Record(trigger, "no-action", reason, null);
+            Record(trigger, "no-action", reason, null, versionDetail);
             return;
         }
         if (adjudication.Kind == "ask-owner")
         {
-            Question(kernel, goal, trigger, adjudication.Text, adjudication.EvidenceReferences ?? [], changed);
+            Question(kernel, goal, trigger, adjudication.Text, adjudication.EvidenceReferences ?? [], changed,
+                versionDetail);
             _triggers.MarkServiced(stored.Key, "ask-owner", null);
             return;
         }
@@ -261,7 +262,7 @@ internal sealed class ConductorStewardHost
         if (adjudication.Kind == "route" && feedback is null)
         {
             _triggers.MarkServiced(stored.Key, "no-action", null);
-            Record(trigger, "no-action", "incomplete-template", null);
+            Record(trigger, "no-action", "incomplete-template", null, versionDetail);
             return;
         }
         var rejection = ConductorStewardRoutePolicy.RejectionReason(trigger, adjudication, goal, worktree, _evidence);
@@ -270,15 +271,15 @@ internal sealed class ConductorStewardHost
         {
             Question(kernel, goal, trigger,
                 $"Steward proposal needs owner decision ({rejection}): {adjudication.Text}",
-                adjudication.EvidenceReferences ?? [], changed);
+                adjudication.EvidenceReferences ?? [], changed, versionDetail);
             _triggers.MarkServiced(stored.Key, "owner-question", null);
             return;
         }
-        var version = _claimedGoalVersion;
+        var version = harvestVersion ?? _claimedGoalVersion;
         if (version is null)
         {
             _triggers.MarkServiced(stored.Key, "no-action", null);
-            Record(trigger, "no-action", "goal-version-unavailable", null);
+            Record(trigger, "no-action", "goal-version-unavailable", null, versionDetail);
             return;
         }
         var references = trigger.EvidenceReferences.Concat(adjudication.EvidenceReferences ?? [])
@@ -291,7 +292,7 @@ internal sealed class ConductorStewardHost
         if (resolvedReferences.Any(reference => !_evidence.TryResolve(reference, goal, evidencePayload, out _)))
         {
             _triggers.MarkServiced(stored.Key, "no-action", null);
-            Record(trigger, "no-action", "evidence-reference-unresolved", null);
+            Record(trigger, "no-action", "evidence-reference-unresolved", null, versionDetail);
             return;
         }
         var payload = new AdjudicateOperatorIntentPayload("route", feedback!,
@@ -305,7 +306,7 @@ internal sealed class ConductorStewardHost
             "steward", "conductor-steward", OperatorIntentAdjudication.StewardAssurance,
             _utcNow(), ActorKind: OperatorActorKind.Agent)).GetAwaiter().GetResult();
         _triggers.MarkServiced(stored.Key, "route-submitted", intent.Id);
-        Record(trigger, "route", "route-submitted", intent.Id);
+        Record(trigger, "route", "route-submitted", intent.Id, versionDetail);
     }
 
     private void Question(
@@ -314,7 +315,8 @@ internal sealed class ConductorStewardHost
         ConductorStewardTrigger trigger,
         string question,
         IReadOnlyList<string> modelReferences,
-        HashSet<GoalId> changed)
+        HashSet<GoalId> changed,
+        string detail = "")
     {
         var text = $"steward-owner-question case={trigger.CaseLetter} trigger={trigger.Identity} " +
                    $"question={question} evidence=[{string.Join(", ", trigger.EvidenceReferences.Concat(modelReferences))}]";
@@ -324,13 +326,14 @@ internal sealed class ConductorStewardHost
         if (observation.StateChanged) changed.Add(goal.Id);
         _conduct.Append("goal-escalation", goal.Id.Value, text);
         _lifecycle.AppendGoalEscalated(goal.Id, state, goal.Status, text, "steward-owner-question");
-        Record(trigger, "ask-owner", question, null);
+        Record(trigger, "ask-owner", question, null, detail);
     }
 
-    private void Record(ConductorStewardTrigger trigger, string kind, string reason, string? intentId) =>
+    private void Record(ConductorStewardTrigger trigger, string kind, string reason, string? intentId,
+        string detail = "") =>
         _conduct.Append("steward", trigger.GoalId,
             $"trigger={trigger.Identity} kind={kind} case={trigger.CaseLetter} reason={reason} " +
-            $"intent={intentId ?? "none"}");
+            $"intent={intentId ?? "none"}{detail}");
 
     private static string? CandidateAddedClassCollection(OrchestratorWorkspace workspace, Goal goal, string className)
     {
