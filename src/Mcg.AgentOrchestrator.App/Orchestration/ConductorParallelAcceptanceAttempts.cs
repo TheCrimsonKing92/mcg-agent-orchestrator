@@ -2563,6 +2563,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 "fault",
                 run.Exception switch
                 {
+                    AcceptanceExecutionIdentityChangedException { IsChangedIdentity: true } => "identity-stale",
                     DotnetBuildSlotsBusyException => "blocked-build-slot",
                     BuildLockBlockedException => "blocked-build-lock",
                     AcceptanceInfrastructureDeferredException deferred when
@@ -2715,6 +2716,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static Exception RehydrateFault(ConductorParallelAcceptanceRunArtifact artifact) =>
         artifact.FaultKind switch
         {
+            "identity-stale" => new AcceptanceExecutionIdentityChangedException(
+                artifact.FaultMessage ?? "acceptance identity changed", isChangedIdentity: true),
             "blocked-build-slot" => new DotnetBuildSlotsBusyException(
                 new DotnetBuildLeaseAcquisition.SlotsBusy("background-acceptance", [])),
             "blocked-build-lock" => new BuildLockBlockedException(

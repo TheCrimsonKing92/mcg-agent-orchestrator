@@ -964,6 +964,7 @@ public sealed partial class AgentOrchestratorKernel
 
         goal.ClearAcceptanceFailure();
         goal.ResetAutomaticAcceptanceRetryCount();
+        goal.ResetAcceptanceIdentityStale();
         var operatorRegateCount = goal.IncrementOperatorAcceptanceRegateCount();
         goal.SetStatus(GoalStatus.Verified);
         Append(

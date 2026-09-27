@@ -92,6 +92,10 @@ public sealed class Goal
 
     public int OperatorAcceptanceRegateCount { get; private set; }
 
+    public int ConsecutiveAcceptanceIdentityStaleCount { get; private set; }
+
+    public string? LastAcceptanceIdentityStaleAttemptId { get; private set; }
+
     public int ClarificationRoundCount { get; private set; }
 
     public string? SourceBacklogItemId { get; private set; }
@@ -801,6 +805,34 @@ public sealed class Goal
 
     internal int IncrementOperatorAcceptanceRegateCount() => ++OperatorAcceptanceRegateCount;
 
+    internal int RecordAcceptanceIdentityStale(string attemptId)
+    {
+        if (string.IsNullOrWhiteSpace(attemptId))
+        {
+            throw new ArgumentException("Acceptance attempt id is required.", nameof(attemptId));
+        }
+
+        if (LastAcceptanceIdentityStaleAttemptId == attemptId)
+        {
+            return ConsecutiveAcceptanceIdentityStaleCount;
+        }
+
+        LastAcceptanceIdentityStaleAttemptId = attemptId;
+        return ++ConsecutiveAcceptanceIdentityStaleCount;
+    }
+
+    internal void ResetAcceptanceIdentityStale()
+    {
+        ConsecutiveAcceptanceIdentityStaleCount = 0;
+        LastAcceptanceIdentityStaleAttemptId = null;
+    }
+
+    internal void RestoreAcceptanceIdentityStale(int count, string? attemptId)
+    {
+        ConsecutiveAcceptanceIdentityStaleCount = Math.Max(0, count);
+        LastAcceptanceIdentityStaleAttemptId = attemptId;
+    }
+
     internal void RestoreAcceptanceRetryCounts(int automaticRetryCount, int operatorRegateCount)
     {
         AutomaticAcceptanceRetryCount = Math.Max(0, automaticRetryCount);
@@ -1018,6 +1050,8 @@ public sealed class Goal
                     correction.Dispositions)).ToList(),
             AutomaticAcceptanceRetryCount: AutomaticAcceptanceRetryCount,
             OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount,
+            ConsecutiveAcceptanceIdentityStaleCount: ConsecutiveAcceptanceIdentityStaleCount,
+            LastAcceptanceIdentityStaleAttemptId: LastAcceptanceIdentityStaleAttemptId,
             CurrentHold: CurrentHold is null
                 ? null
                 : new GoalHoldSnapshot(
@@ -1148,6 +1182,9 @@ public sealed class Goal
         goal.RestoreAcceptanceRetryCounts(
             snapshot.AutomaticAcceptanceRetryCount,
             snapshot.OperatorAcceptanceRegateCount);
+        goal.RestoreAcceptanceIdentityStale(
+            snapshot.ConsecutiveAcceptanceIdentityStaleCount,
+            snapshot.LastAcceptanceIdentityStaleAttemptId);
         goal.RestoreHold(snapshot.CurrentHold);
 
         return goal;
