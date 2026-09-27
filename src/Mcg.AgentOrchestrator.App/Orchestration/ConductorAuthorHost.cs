@@ -61,16 +61,15 @@ internal sealed class ConductorAuthorHost
         var changed = new HashSet<GoalId>();
         if (!Enabled) return changed;
         Harvest(kernel, onlyGoalId, changed);
-        HarvestReady(kernel, onlyGoalId, changed);
         foreach (var goal in kernel.Goals.Where(goal => !goal.IsTerminal &&
                      (onlyGoalId is null || goal.Id.Value == onlyGoalId)))
         {
+            if (ConductorOwnerQuestionHolds.ExcludesFromWalk(goal.CurrentHold?.State)) continue;
             var items = _collaboration.ListAsync(goal.Id.Value).GetAwaiter().GetResult();
             if (!ConductorAuthorItems.Detect(goal, items, kernel.HumanInputRequests, []).Any()) continue;
             var intents = _intents.ListForGoalAsync(goal.Id.Value, int.MaxValue).GetAwaiter().GetResult();
             foreach (var item in ConductorAuthorItems.Detect(goal, items, kernel.HumanInputRequests, intents))
             {
-                if (goal.CurrentHold?.State == "author-owner-question") break;
                 if (!_claims.TryClaim(item, _utcNow())) continue;
                 try
                 {
@@ -90,6 +89,7 @@ internal sealed class ConductorAuthorHost
             }
         }
         Harvest(kernel, onlyGoalId, changed);
+        HarvestReady(kernel, onlyGoalId, changed);
         return changed;
     }
 
@@ -132,17 +132,29 @@ internal sealed class ConductorAuthorHost
                     running.Round.Exception?.GetBaseException().GetType().Name ?? "model-failure");
                 continue;
             }
-            ProcessCompleted(kernel, item, running.Round.Result, changed);
+            _claims.Preserve(item, running.Round.Result);
         }
     }
 
     private void HarvestReady(AgentOrchestratorKernel kernel, string? onlyGoalId, HashSet<GoalId> changed)
     {
-        foreach (var ready in _claims.Ready())
+        foreach (var ready in _claims.Ready()
+                     .OrderByDescending(entry => RequiresOwner(entry.Item, entry.Output)))
         {
             if (onlyGoalId is not null && ready.Item.GoalId != onlyGoalId) continue;
+            var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == ready.Item.GoalId);
+            if (goal is not null && ConductorOwnerQuestionHolds.ExcludesFromWalk(goal.CurrentHold?.State)) continue;
+            if (_rounds.Values.Any(running => running.Item.GoalId == ready.Item.GoalId)) continue;
             ProcessCompleted(kernel, ready.Item, ready.Output, changed);
         }
+    }
+
+    private static bool RequiresOwner(ConductorAuthorItem item, string output)
+    {
+        var result = ConductorAuthorResultParser.Parse(output);
+        return result?.Kind == "ask-owner" || result?.Kind == "answer" &&
+            (item.ForkKind == AcceptanceCriterionFeasibility.ForkKind ||
+             ConductorAuthorOwnerClassCheck.Evaluate(item.Question, result.Text!, result.EvidenceReferences) is not null);
     }
 
     private void ProcessCompleted(AgentOrchestratorKernel kernel, ConductorAuthorItem item,
@@ -156,6 +168,8 @@ internal sealed class ConductorAuthorHost
                 Record(item, "no-action", "item-superseded");
                 return;
             }
+            if (ConductorOwnerQuestionHolds.ExcludesFromWalk(goal.CurrentHold?.State))
+                throw new InvalidOperationException($"Cannot process Author item {identity} while an owner question holds its goal.");
             var result = ConductorAuthorResultParser.Parse(output);
             if (result is null)
             {
@@ -183,7 +197,9 @@ internal sealed class ConductorAuthorHost
     private void SubmitCheckedAnswer(AgentOrchestratorKernel kernel, Goal goal,
         ConductorAuthorItem item, ConductorAuthorResult result, HashSet<GoalId> changed)
     {
-        var reason = ConductorAuthorOwnerClassCheck.Evaluate(item.Question, result.Text!, result.EvidenceReferences);
+        var reason = item.ForkKind == AcceptanceCriterionFeasibility.ForkKind
+            ? "acceptance-weakening"
+            : ConductorAuthorOwnerClassCheck.Evaluate(item.Question, result.Text!, result.EvidenceReferences);
         if (reason is not null)
         {
             Escalate(kernel, goal, item, item.Question, result.Text!, reason, changed);

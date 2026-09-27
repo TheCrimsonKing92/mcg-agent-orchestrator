@@ -130,6 +130,88 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
     }
 
     [Xunit.Fact]
+    public async Task Feasibility_disposition_is_reserved_for_owner()
+    {
+        using var harness = new AuthorHarness("""
+            {"kind":"answer","text":"OPERATOR-OWNED","evidenceReferences":["src/Runtime.cs:12"]}
+            """);
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        await harness.Collaboration.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value,
+            "Feasibility", "Question: Criterion infeasible for Developer: test deployment\nFork kind: feasibility\nCriterion: test deployment",
+            $"spec-clarification:{goal.Id.Value}:feasibility").WaitAsync(Bound);
+
+        await harness.RoundTrip(goal);
+
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        Xunit.Assert.Equal("author-owner-question", goal.CurrentHold?.State);
+        Xunit.Assert.Contains("reason=acceptance-weakening", goal.CurrentHold!.Blocker);
+        Xunit.Assert.Contains("recommendation=OPERATOR-OWNED", goal.CurrentHold.Blocker);
+    }
+
+    [Xunit.Fact]
+    public async Task Owner_question_preempts_another_completed_answer_on_same_goal()
+    {
+        using var harness = new AuthorHarness(Answer);
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        await harness.Raise(goal, "Which runtime?");
+        await harness.Collaboration.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value,
+            "Other", "Question: May we waive criterion 3?\nFork kind: runtime",
+            $"spec-clarification:{goal.Id.Value}:other").WaitAsync(Bound);
+        var model = new SelectingAuthorModel();
+        var host = harness.NewHost(model);
+
+        host.ServiceTick(harness.Kernel);
+        await Task.WhenAll(host.CurrentRounds).WaitAsync(Bound);
+        host.ServiceTick(harness.Kernel);
+
+        Xunit.Assert.Equal(2, model.Calls);
+        Xunit.Assert.Equal("author-owner-question", goal.CurrentHold?.State);
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        host.ServiceTick(harness.Kernel);
+        Xunit.Assert.Equal("author-owner-question", goal.CurrentHold?.State);
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        host.Stop();
+    }
+
+    [Xunit.Fact]
+    public async Task Existing_steward_owner_hold_prevents_author_dispatch()
+    {
+        using var harness = new AuthorHarness(Answer);
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        await harness.Raise(goal, "Which runtime?");
+        harness.Kernel.ObserveGoalHold(goal.Id, "steward-owner-question", "Await owner",
+            DateTimeOffset.UtcNow, TimeSpan.MaxValue, "steward-owner-question:test");
+
+        harness.Host.ServiceTick(harness.Kernel);
+
+        Xunit.Assert.Equal(0, harness.Model.Calls);
+        Xunit.Assert.Equal("steward-owner-question", goal.CurrentHold?.State);
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+    }
+
+    [Xunit.Fact]
+    public async Task Steward_owner_hold_preserves_completed_author_round_without_submitting_answer()
+    {
+        using var harness = new AuthorHarness(Answer);
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        await harness.Raise(goal, "Which runtime?");
+        var delayed = new DelayedAuthorModel();
+        var host = harness.NewHost(delayed);
+        host.ServiceTick(harness.Kernel);
+        await delayed.Started.Task.WaitAsync(Bound);
+        harness.Kernel.ObserveGoalHold(goal.Id, "steward-owner-question", "Await owner",
+            DateTimeOffset.UtcNow, TimeSpan.MaxValue, "steward-owner-question:test");
+        delayed.Release.TrySetResult(Answer);
+        await Task.WhenAll(host.CurrentRounds).WaitAsync(Bound);
+
+        host.ServiceTick(harness.Kernel);
+
+        Xunit.Assert.Equal("steward-owner-question", goal.CurrentHold?.State);
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        host.Stop();
+    }
+
+    [Xunit.Fact]
     public async Task Failed_model_round_consumes_claim_and_leaves_item_open()
     {
         using var harness = new AuthorHarness("not a JSON result");
@@ -241,6 +323,20 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
         {
             Interlocked.Increment(ref _calls);
             return Task.FromResult(output);
+        }
+    }
+
+    private sealed class SelectingAuthorModel : IConductorAuthorModelRound
+    {
+        private int _calls;
+        internal int Calls => Volatile.Read(ref _calls);
+        public Task<string> DispatchAsync(ConductorAuthorRoundInput input, string workingDirectory,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult(input.Item.Question.Contains("waive", StringComparison.OrdinalIgnoreCase)
+                ? """{"kind":"ask-owner","question":"May we waive criterion 3?","recommendation":"Keep criterion 3"}"""
+                : Answer);
         }
     }
 
