@@ -946,6 +946,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         goal.ClearAcceptanceFailure();
+        goal.ResetAcceptanceIdentityStale();
         goal.SetStatus(GoalStatus.Verified);
         Append(
             goal,
@@ -1544,6 +1545,7 @@ public sealed partial class AgentOrchestratorKernel
 
         goal.SetStatus(GoalStatus.Active);
         goal.DeferAcceptanceFailureForRetry();
+        goal.ResetAcceptanceIdentityStale();
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
     }
 

@@ -66,6 +66,54 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStaleIdentity(ITest
     }
 
     [Fact]
+    public void UnresolvedIdentityArtifactStillEscalatesAsFault()
+    {
+        var attemptRoot = CreateTempDirectory("mcg-unresolved-identity-attempts");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, $"Update {Scope}");
+            var policy = ConductorAutonomyPolicy.Conservative;
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [Scope]);
+            var starter = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7104));
+            var started = starter.Evaluate(candidate, policy, PassingRun);
+            var child = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, isProcessAlive: _ => false);
+            child.RunAttemptForTests(
+                started.Attempt,
+                candidate,
+                policy,
+                (_, _, _, _, _) => throw new AcceptanceExecutionIdentityChangedException(
+                    "identity could not be resolved", isChangedIdentity: false));
+
+            var escalations = new List<string>();
+            var parent = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("reconciliation must not launch"));
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                writeEscalation: (_, _, reason) => escalations.Add(reason),
+                getLandingFileScopes: _ => [Scope],
+                parallelAcceptanceAttemptCoordinator: parent);
+
+            var summary = new ConductorBatchLoop().Run(kernel, driver, policy, NoStopPath(), maxIterations: 1);
+
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.Single(escalations);
+            Assert.Equal(0, goal.ConsecutiveAcceptanceIdentityStaleCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Fact]
     public void ThirdConsecutiveStaleResultEscalatesAndNonStaleResultResetsCount()
     {
         var (kernel, goal) = SimpleGoal($"Update {Scope}");
@@ -119,6 +167,39 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStaleIdentity(ITest
                 Assert.Single(escalations);
             }
         }
+    }
+
+    [Fact]
+    public void ManualRetryAfterCappedStaleResultAllowsNextStaleRunToRegate()
+    {
+        var (kernel, goal) = SimpleGoal($"Update {Scope}");
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        kernel.BeginGoalAcceptanceVerification(goal.Id, "Background gate started.");
+        for (var number = 1; number <= 3; number++)
+        {
+            kernel.RecordAcceptanceIdentityStale(goal.Id, $"prior-{number}");
+        }
+
+        kernel.ReconcileGoalAcceptanceFailed(goal.Id, ["stale cap reached"], "Stale cap reached.");
+        kernel.RetryTask(goal.Id, task.Id, "Mechanically reopen after stale cap.");
+        PassVerification(kernel, goal, task);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [Scope]);
+        var (run, attempt) = StaleResult(candidate, "after-reopen");
+        var escalations = new List<string>();
+        var driver = MakeDriver(writeEscalation: (_, _, reason) => escalations.Add(reason));
+        driver.BeginTick(kernel, 1);
+
+        ConductorBatchLoop.ReconcileParallelAcceptanceTerminalState(kernel, goal, run, attempt);
+        var result = ConductorBatchLoop.CompleteParallelAcceptanceRun(
+            driver, ConductorAutonomyPolicy.Conservative, run, attempt, out _);
+
+        Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Equal(1, goal.ConsecutiveAcceptanceIdentityStaleCount);
+        Assert.Empty(escalations);
     }
 
     private static (ConductorParallelAcceptanceRunResult Run, ConductorParallelAcceptanceAttempt Attempt) StaleResult(
