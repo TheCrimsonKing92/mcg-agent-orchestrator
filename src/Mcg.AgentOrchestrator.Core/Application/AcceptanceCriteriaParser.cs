@@ -47,6 +47,7 @@ public static class AcceptanceCriteriaParser
 
         var results = new List<string>();
         string? current = null;
+        int? criterionIndentColumn = null;
         for (var i = start; i < lines.Length; i++)
         {
             var line = lines[i];
@@ -59,8 +60,18 @@ public static class AcceptanceCriteriaParser
 
             if (TryStripListPrefix(trimmed, out var criterionText))
             {
+                var indentColumn = MeasureIndentColumn(line);
+                if (current is not null && indentColumn > criterionIndentColumn)
+                {
+                    current = $"{current} {criterionText}";
+                    continue;
+                }
+
                 AddCurrent();
                 current = criterionText;
+                criterionIndentColumn = criterionIndentColumn is { } baseline
+                    ? Math.Min(baseline, indentColumn)
+                    : indentColumn;
                 continue;
             }
 
@@ -81,6 +92,20 @@ public static class AcceptanceCriteriaParser
                 results.Add(current);
             current = null;
         }
+    }
+
+    private static int MeasureIndentColumn(string line)
+    {
+        var column = 0;
+        foreach (var character in line)
+        {
+            if (!char.IsWhiteSpace(character))
+                break;
+
+            column += character == '\t' ? 4 - column % 4 : 1;
+        }
+
+        return column;
     }
 
     public static string RemoveDeclaredSection(string objectiveText)
