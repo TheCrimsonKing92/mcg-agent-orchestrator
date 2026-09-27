@@ -1,11 +1,14 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class ConductorBatchLoopTestsStewardRoute
+public sealed class ConductorBatchLoopTestsStewardRoute : ConductorBatchLoopTests
 {
+    public ConductorBatchLoopTestsStewardRoute(ITestOutputHelper output) : base(output) { }
+
     [Xunit.Theory]
     [Xunit.InlineData("A", "NewTestFinding", "reversible")]
     [Xunit.InlineData("B", "ContractClarification", "reversible-with-cost")]
@@ -27,16 +30,44 @@ public sealed class ConductorBatchLoopTestsStewardRoute
             precedent = "model-proposed-example"
         });
         harness.Model.Reply(output);
-        harness.Host.ServiceTick(harness.Kernel);
-        await harness.Model.Started.Task;
-        await harness.Host.CurrentRound!;
-        harness.Host.ServiceTick(harness.Kernel);
+        var ticks = new List<BatchTickSummary>();
+        var roundCompleted = false;
+        void CompleteModelRound()
+        {
+            if (roundCompleted) return;
+            Xunit.Assert.NotNull(harness.Host.CurrentRound);
+            harness.Model.Started.Task.GetAwaiter().GetResult();
+            harness.Host.CurrentRound!.GetAwaiter().GetResult();
+            roundCompleted = true;
+        }
+        var stopPath = Path.Combine(harness.Root, "stop.signal");
+        var summary = new ConductorBatchLoop(operatorIntents: harness.Coordinator)
+            .WithSteward(harness.Host).Run(
+                harness.Kernel, MakeDriver(), ConductorAutonomyPolicy.Conservative,
+                stopPath, maxIterations: 2,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ =>
+                {
+                    if (harness.Task.Status == WorkTaskStatus.Assigned) return true;
+                    CompleteModelRound();
+                    return false;
+                },
+                keepAliveWhenIdle: true, persistGoalTick: (_, _) => { },
+                onTick: tick =>
+                {
+                    ticks.Add(tick);
+                    if (harness.Task.Status == WorkTaskStatus.Assigned)
+                        File.WriteAllText(stopPath, "stop");
+                    else
+                        CompleteModelRound();
+                });
+        Xunit.Assert.InRange(summary.Ticks, 1, 2);
+        Xunit.Assert.Equal(1, harness.Model.Calls);
         var intent = (await harness.Intents.ListForGoalAsync(harness.Goal.Id.Value)).Single();
         Xunit.Assert.Equal(OperatorIntentVerbs.Adjudicate, intent.Verb);
         Xunit.Assert.Equal(OperatorActorKind.Agent, intent.ActorKind);
         Xunit.Assert.Equal(OperatorIntentAdjudication.StewardAssurance, intent.AuthenticationAssurance);
-        harness.Coordinator.ExecutePending(harness.Kernel, harness.Goal);
-        harness.Coordinator.CompletePersisted([harness.Goal.Id]);
+        Xunit.Assert.Equal(OperatorIntentStatus.Applied, intent.Status);
         Xunit.Assert.Equal(WorkTaskStatus.Assigned, harness.Task.Status);
         Xunit.Assert.Equal(Enum.Parse<RetryCause>(cause), harness.Task.PendingRetryCause);
         Xunit.Assert.Contains("Named failure diagnosis", harness.Task.AcceptedRetryFeedback?.Message);
