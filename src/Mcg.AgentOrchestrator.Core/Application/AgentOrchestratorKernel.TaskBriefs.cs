@@ -956,10 +956,14 @@ public sealed partial class AgentOrchestratorKernel
             return [];
         }
 
+        var relevantRetryEvents = SelectUpstreamRetryEvents(goal, task, retryEvents);
+        var recipientIndex = FindTaskIndex(goal, task.Id);
         var feedbackEvents = goal.Timeline
             .Where(evt =>
                 IsAccumulatedRetryFeedbackEvent(evt) &&
-                (evt.Kind != ProgressKind.FindingEvidenceRunRecorded || evt.TaskId == task.Id))
+                (evt.Kind != ProgressKind.FindingEvidenceRunRecorded || evt.TaskId == task.Id) &&
+                (!IsAccumulatedRetryRoundEvent(evt) ||
+                 IsUpstreamRetryEvent(goal, task.Id, recipientIndex, evt)))
             .OrderByDescending(evt => evt.OccurredAt)
             .ThenByDescending(evt => (int)evt.Kind)
             .ToList();
@@ -968,12 +972,12 @@ public sealed partial class AgentOrchestratorKernel
             return [];
         }
 
-        var latestRetry = retryEvents.LastOrDefault();
-        var priorOutcomeEvent = latestRetry is null
+        var latestRetry = relevantRetryEvents.LastOrDefault();
+        var priorOutcomeEvent = latestRetry is not { TaskId: { } latestRetriedTaskId }
             ? null
             : goal.Timeline
                 .Where(evt =>
-                    evt.TaskId == latestRetry.TaskId &&
+                    evt.TaskId == latestRetriedTaskId &&
                     evt.OccurredAt <= latestRetry.OccurredAt &&
                     IsRetryPriorOutcomeEvent(evt))
                 .OrderByDescending(evt => evt.OccurredAt)
@@ -989,7 +993,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (latestRetry is not null)
         {
-            lines.Add($"Most recent retry: Retry {retryEvents.Count} of {retryEvents.Count}; {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}.");
+            lines.Add($"Most recent retry: Retry {relevantRetryEvents.Count} of {relevantRetryEvents.Count}; {latestRetry.OccurredAt:u}; {DescribeTimelineTask(goal, latestRetry)}.");
         }
 
         if (task.RequiredRole == AgentRole.Developer &&
@@ -1126,10 +1130,10 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            var status = DescribeAccumulatedRetryFeedbackStatus(retryEvents, feedbackEvents, evt);
-            var retryDescriptor = retryEvents.Count == 0
+            var status = DescribeAccumulatedRetryFeedbackStatus(retryEvents, relevantRetryEvents, feedbackEvents, evt);
+            var retryDescriptor = relevantRetryEvents.Count == 0
                 ? "Retry n/a"
-                : $"Retry {RetryOrdinalAt(retryEvents, evt.OccurredAt)} of {retryEvents.Count}";
+                : $"Retry {RetryOrdinalAt(relevantRetryEvents, evt.OccurredAt)} of {relevantRetryEvents.Count}";
             var line = $"- [{status}] {retryDescriptor}; {evt.OccurredAt:u}; {DescribeTimelineTask(goal, evt)}; {evt.Kind}: {PromptContextFormatter.TrimPromptBlock(message)}";
             if (emittedCount >= AccumulatedRetryFeedbackMaxEntries ||
                 operationalSectionChars + line.Length + Environment.NewLine.Length > AccumulatedRetryFeedbackMaxChars)
@@ -1613,12 +1617,13 @@ public sealed partial class AgentOrchestratorKernel
 
     private static string DescribeAccumulatedRetryFeedbackStatus(
         IReadOnlyList<ProgressEvent> retryEvents,
+        IReadOnlyList<ProgressEvent> relevantRetryEvents,
         IReadOnlyList<ProgressEvent> feedbackEvents,
         ProgressEvent feedbackEvent)
     {
         if (TryFindResolutionEvent(feedbackEvents, feedbackEvent, out var resolutionEvent))
         {
-            return $"resolved-in-round-{RetryOrdinalAt(retryEvents, resolutionEvent.OccurredAt)}";
+            return $"resolved-in-round-{RetryOrdinalAt(relevantRetryEvents, resolutionEvent.OccurredAt)}";
         }
 
         if (feedbackEvent.TaskId is { } sameTaskId &&
