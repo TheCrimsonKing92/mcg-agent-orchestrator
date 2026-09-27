@@ -58,7 +58,7 @@ internal delegate Task<CollaborationItem> CollaborationItemRaise(
 // fork on three axes, raises Clarification items for high-stakes ambiguities the refiner can't
 // resolve, and attaches the resulting RefinedSpec to the goal. Configuration errors are surfaced
 // immediately so refinement cannot silently run on the wrong model.
-internal sealed class GoalRefinementService
+internal sealed partial class GoalRefinementService
 {
     // Correlation key prefix used to look up open clarification items for a goal.
     internal const string CorrelationKeyPrefix = "spec-clarification:";
@@ -450,28 +450,7 @@ internal sealed class GoalRefinementService
         if (!resolved)
             return false;
 
-        var topicKey = ExtractTopicKey(correlationKey);
-        if (!string.IsNullOrWhiteSpace(topicKey))
-        {
-            var resolvedItem = (await _collaboration.ListAsync(goalId, cancellationToken))
-                .FirstOrDefault(item =>
-                    string.Equals(item.CorrelationKey, correlationKey, StringComparison.Ordinal));
-            var authoritativeAnswer = resolvedItem?.AuthoritativeAnswer;
-            if (resolvedItem is not null &&
-                authoritativeAnswer is not null &&
-                !string.IsNullOrWhiteSpace(resolvedItem.GoalId))
-            {
-                await _precedents.RecordPrecedentAsync(
-                    topicKey,
-                    authoritativeAnswer.Text,
-                    "Operator clarification answer.",
-                    cancellationToken,
-                    resolvedItem.Id,
-                    resolvedItem.GoalId,
-                    authoritativeAnswer.Id,
-                    authoritativeAnswer.BriefVersion);
-            }
-        }
+        await RecordResolvedClarificationPrecedentAsync(correlationKey, goalId, cancellationToken);
 
         return true;
     }

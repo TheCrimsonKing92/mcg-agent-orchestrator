@@ -35,8 +35,8 @@ public sealed class CliCommandTestsAttentionAnswerIntent : CliCommandTestBase
             (await intents.GetAsync(pending.Id).WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
 
         var duplicateOutput = ExecuteCliAndCapture(
-            ["attention", "answer", goal.Id.Value[..8], item.Id[..8], "Another scope",
-                "--actor-kind", "Agent", "--operator-actor", "author-agent"],
+            ["attention", "answer", "--actor-kind", "Agent", "--operator-actor", "author-agent",
+                goal.Id.Value[..8], item.Id[..8], "Another scope"],
             kernel, workspace);
         Xunit.Assert.Contains("status=Pending", duplicateOutput);
         var duplicate = (await intents.ListForGoalAsync(goal.Id.Value).WaitAsync(TimeSpan.FromSeconds(30)))

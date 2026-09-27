@@ -10,22 +10,31 @@ internal static partial class CliCommandHandlers
     private static bool HandleAttentionAnswer(
         IReadOnlyList<string> parts, CliExecutionContext context, CollaborationItemStore store)
     {
-        if (parts.Count < 4)
-            throw new ArgumentException(CliCommandHelp.AttentionUsage);
-
-        var clarifications = AllClarifications(store);
-        var globalClarification = ResolveClarificationByExactShortId(
-            clarifications, clarifications, parts[2],
-            $"Id '{parts[2]}' is ambiguous ({{0}} matches); use a goal-scoped id from `attention show <goal-id>` or a full correlation key.");
-        var globalHumanRequest = globalClarification is null && context.Kernel.HumanInputRequests.Any(request =>
-            request.Id.Value.StartsWith(parts[2], StringComparison.OrdinalIgnoreCase));
-        var scoped = globalClarification is null && !globalHumanRequest;
-        var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
-        if (scoped && parts.Count < 5)
-            throw new ArgumentException(CliCommandHelp.AttentionUsage);
-
-        var id = scoped ? parts[3] : parts[2];
         var answerParts = WithoutAnswerMetadataFlags(parts);
+        if (answerParts.Count < 4)
+            throw new ArgumentException(CliCommandHelp.AttentionUsage);
+
+        var idOrGoal = answerParts[2];
+        var clarifications = OpenClarifications(store);
+        var globalClarification = ResolveClarificationByExactShortId(
+            clarifications, clarifications, idOrGoal,
+            $"Id '{idOrGoal}' is ambiguous ({{0}} matches); use a goal-scoped id from `attention show <goal-id>` or a full correlation key.");
+        var globalHumanRequest = globalClarification is null && context.Kernel.HumanInputRequests.Any(request =>
+            request.Id.Value.StartsWith(idOrGoal, StringComparison.OrdinalIgnoreCase));
+        if (globalClarification is null && !globalHumanRequest &&
+            !context.Kernel.Goals.Any(candidate => candidate.Id.Value.StartsWith(idOrGoal, StringComparison.OrdinalIgnoreCase)))
+        {
+            var allClarifications = AllClarifications(store);
+            globalClarification = ResolveClarificationByExactShortId(
+                allClarifications, allClarifications, idOrGoal,
+                $"Id '{idOrGoal}' is ambiguous ({{0}} matches); use a goal-scoped id from `attention show <goal-id>` or a full correlation key.");
+        }
+        var scoped = globalClarification is null && !globalHumanRequest;
+        var goal = scoped ? ResolveAttentionGoal(context.Kernel, idOrGoal) : null;
+        if (scoped && answerParts.Count < 5)
+            throw new ArgumentException(CliCommandHelp.AttentionUsage);
+
+        var id = scoped ? answerParts[3] : idOrGoal;
         var answer = ResolveTextArgument(answerParts, scoped ? 4 : 3,
             CliCommandHelp.AttentionUsage, "--text-file");
         OperatorAnswerTargetKind targetKind;

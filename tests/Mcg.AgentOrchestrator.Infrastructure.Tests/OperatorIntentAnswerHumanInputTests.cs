@@ -140,4 +140,91 @@ public sealed class OperatorIntentAnswerHumanInputTests
         }
         finally { Directory.Delete(root, recursive: true); }
     }
+
+    [Xunit.Fact]
+    public async Task Prior_decision_replay_resumes_request_from_uncheckpointed_goal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"answer-replay-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Resume after restart", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Answer after restart", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which path?", HumanWaitKind.SpecClarification);
+            var uncheckpointed = kernel.ExportSnapshot();
+            var decisions = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput,
+                request.Id.Value, goal.Id.Value, "Use existing path", OperatorActorKind.Human);
+            var intent = await intents.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"),
+                Guid.NewGuid().ToString("N"), OperatorIntentVerbs.Answer, goal.Id.Value, null,
+                JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [], "operator", "cli",
+                "local-process", DateTimeOffset.UtcNow)).WaitAsync(TimeSpan.FromSeconds(30));
+            var firstCoordinator = new OperatorIntentCoordinator(intents, decisions: decisions,
+                goalStateVersionResolver: _ => 0);
+            Xunit.Assert.True(firstCoordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            Xunit.Assert.NotNull((await decisions.GetDecisionStateAsync($"answer-{intent.Id}")
+                .WaitAsync(TimeSpan.FromSeconds(30)))?.Receipt);
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed,
+                (await intents.GetAsync(intent.Id).WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
+
+            var restored = AgentOrchestratorKernel.FromSnapshot(uncheckpointed);
+            var restoredGoal = restored.GetGoal(goal.Id);
+            Xunit.Assert.False(restored.HumanInputRequests.Single().IsCompleted);
+            var replayCoordinator = new OperatorIntentCoordinator(intents, decisions: decisions,
+                goalStateVersionResolver: _ => 0);
+            Xunit.Assert.True(replayCoordinator.ExecutePending(restored, restoredGoal).MutatedGoalState);
+            replayCoordinator.CompletePersisted([goal.Id]);
+
+            Xunit.Assert.True(restored.HumanInputRequests.Single().IsCompleted);
+            Xunit.Assert.Equal(WorkTaskStatus.Assigned, restoredGoal.Tasks.Single().Status);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied,
+                (await intents.GetAsync(intent.Id).WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public async Task Rejected_answer_does_not_hide_new_retry_correction_request()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"answer-retry-correction-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel, AgentCatalog.Default().Agents, "Classify retry cause");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            await intents.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"),
+                Guid.NewGuid().ToString("N"), OperatorIntentVerbs.Retry, goal.Id.Value, task.Id.Value,
+                JsonSerializer.Serialize(new RetryOperatorIntentPayload("Retry after classification", null,
+                    RetryCause: RetryCause.Unknown), OperatorIntentJson.Options), [], "operator", "cli",
+                "local-process", DateTimeOffset.UtcNow)).WaitAsync(TimeSpan.FromSeconds(30));
+            var coordinator = new OperatorIntentCoordinator(intents,
+                decisions: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                goalStateVersionResolver: _ => 0);
+            Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            var firstRequest = Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            kernel.SubmitHumanInput(firstRequest.Id, "typo");
+            var duplicate = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput,
+                firstRequest.Id.Value, goal.Id.Value, "another answer", OperatorActorKind.Human);
+            var answer = await intents.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"),
+                Guid.NewGuid().ToString("N"), OperatorIntentVerbs.Answer, goal.Id.Value, null,
+                JsonSerializer.Serialize(duplicate, OperatorIntentJson.Options), [], "operator", "cli",
+                "local-process", DateTimeOffset.UtcNow)).WaitAsync(TimeSpan.FromSeconds(30));
+
+            Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            Xunit.Assert.Equal(OperatorIntentStatus.Rejected,
+                (await intents.GetAsync(answer.Id).WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
+            Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+            Xunit.Assert.NotEqual(firstRequest.Id, kernel.GetPendingHumanInput(goal.Id).Single().Id);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
 }

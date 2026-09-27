@@ -21,6 +21,7 @@ internal sealed partial class OperatorIntentCoordinator
     private readonly OperatorIntentAdjudication? _adjudication;
     private readonly ICollaborationItemStore? _decisions;
     private readonly ClarificationAnswerResolver? _clarificationAnswers;
+    private readonly ClarificationAnswerRecovery? _clarificationAnswerRecovery;
     private readonly Dictionary<string, List<(string IntentId, string Outcome)>> _pendingCompletions =
         new(StringComparer.Ordinal);
 
@@ -41,7 +42,8 @@ internal sealed partial class OperatorIntentCoordinator
         Func<GoalId, long?>? goalStateVersionResolver = null,
         AdjudicationEvidenceResolver? evidenceResolver = null,
         Func<GoalId, string, string?>? policyChangeFingerprintResolver = null,
-        ClarificationAnswerResolver? clarificationAnswers = null)
+        ClarificationAnswerResolver? clarificationAnswers = null,
+        ClarificationAnswerRecovery? clarificationAnswerRecovery = null)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -49,6 +51,7 @@ internal sealed partial class OperatorIntentCoordinator
         _policyChangeFingerprintResolver = policyChangeFingerprintResolver;
         _decisions = decisions;
         _clarificationAnswers = clarificationAnswers;
+        _clarificationAnswerRecovery = clarificationAnswerRecovery;
         if ((decisions is null) != (goalStateVersionResolver is null))
             throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
         _adjudication = decisions is null ? null : new OperatorIntentAdjudication(
@@ -70,6 +73,8 @@ internal sealed partial class OperatorIntentCoordinator
             evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             clarificationAnswers: (key, answer, briefVersion) =>
                 refinement.TryResolveOpenClarificationAsync(key, answer, briefVersion),
+            clarificationAnswerRecovery: (key, answer, briefVersion) =>
+                refinement.TryRecoverResolvedClarificationPrecedentAsync(key, answer, briefVersion),
             policyChangeFingerprintResolver: (goalId, sha) =>
             {
                 try
@@ -136,7 +141,7 @@ internal sealed partial class OperatorIntentCoordinator
                 {
                     if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated))
                     {
-                        mutated |= answerMutated;
+                        mutated |= answerMutated || retryClarification == RetryClarificationHandling.AwaitingNewAnswer;
                         break;
                     }
                     lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=" +
@@ -169,6 +174,12 @@ internal sealed partial class OperatorIntentCoordinator
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
+                break;
+            }
+            catch (AnswerApplicationRetryException ex) when (intent.Verb == OperatorIntentVerbs.Answer)
+            {
+                mutated = true;
+                lines.Add($"OPERATOR_INTENT id={intent.Id} verb=answer goal={goal.Id.Value[..8]} result=retryable reason={Sanitize(ex.Message)}");
                 break;
             }
             catch (Exception ex)
