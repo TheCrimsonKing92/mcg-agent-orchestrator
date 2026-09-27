@@ -67,7 +67,10 @@ public sealed record AcceptanceRunExecutionOptions(
 
 internal sealed class AcceptanceExecutionDrainException(string message) : InvalidOperationException(message);
 
-internal sealed class AcceptanceExecutionIdentityChangedException(string message) : InvalidOperationException(message);
+internal sealed class AcceptanceExecutionIdentityChangedException(string message, bool isChangedIdentity) : InvalidOperationException(message)
+{
+    public bool IsChangedIdentity { get; } = isChangedIdentity;
+}
 
 internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionContext
 {
@@ -375,7 +378,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
             string.IsNullOrWhiteSpace(verifyingCommitSha))
         {
             throw new AcceptanceExecutionIdentityChangedException(
-                $"Acceptance run '{RunId}' identity is unresolved; the result must remain on hold.");
+                $"Acceptance run '{RunId}' identity is unresolved; the result must remain on hold.", isChangedIdentity: false);
         }
 
         if (!Identity.CandidateTreeSha.Equals(candidateTreeSha, StringComparison.Ordinal) ||
@@ -383,7 +386,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
             !Identity.VerifyingCommitSha.Equals(verifyingCommitSha, StringComparison.Ordinal))
         {
             throw new AcceptanceExecutionIdentityChangedException(
-                $"Acceptance run '{RunId}' identity changed while the invocation was active; the result is stale.");
+                $"Acceptance run '{RunId}' identity changed while the invocation was active; the result is stale.", isChangedIdentity: true);
         }
     }
 }

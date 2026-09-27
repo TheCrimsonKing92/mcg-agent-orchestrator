@@ -791,6 +791,8 @@ internal sealed partial class ConductorBatchLoop
 
                     preWalkIntentLines.AddRange(intentResult.ProgressLines);
                     preWalkIntentProcessed |= intentResult.ProgressLines.Count > 0;
+                    if (intentResult.RejectedAdjudication)
+                        preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
                     if (intentResult.MutatedGoalState)
                     {
                         kernel.ClearGoalHold(scopedGoal.Id);
@@ -3707,6 +3709,10 @@ internal sealed partial class ConductorBatchLoop
         ConductorParallelAcceptanceAttempt attempt)
     {
         EnsureParallelAcceptanceTerminalIsVerifying(kernel, goal, attempt);
+        if (ReconcileIdentityStaleAcceptance(kernel, goal, run, attempt))
+        {
+            return;
+        }
         if (goal.Status != GoalStatus.Verifying)
         {
             return;
@@ -3757,6 +3763,7 @@ internal sealed partial class ConductorBatchLoop
         ConductorParallelAcceptanceAttempt attempt)
     {
         EnsureParallelAcceptanceTerminalIsVerifying(kernel, goal, attempt);
+        kernel.ResetAcceptanceIdentityStale(goal.Id);
         if (goal.Status != GoalStatus.Verifying)
         {
             return;
@@ -4159,6 +4166,7 @@ internal sealed partial class ConductorBatchLoop
             (run.Exception is (AcceptanceInfrastructureDeferredException or BuildLockBlockedException) &&
                 decision.Attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap) ||
             IsEnvironmentInterferenceAcceptanceRun(run) ||
+            IsIdentityStaleRegated(run, decision.Attempt) ||
             completion.IsHeld && run.EarlyResult is null)
         {
             return TerminalGoalRemedyExecutionResult.Retryable(75, capturedOutput);
@@ -4179,6 +4187,11 @@ internal sealed partial class ConductorBatchLoop
         evidenceMutationLeaseHeld = false;
         if (run.Exception is not null)
         {
+            if (IsIdentityStaleRun(run))
+            {
+                return CompleteIdentityStaleRun(driver, policy, run, attempt);
+            }
+
             if (run.Exception is AcceptanceGateEngineException gateEngineFault)
             {
                 if (attempt.TransientFailureCount >= ParallelAcceptanceTransientFailureCap)
@@ -4439,6 +4452,7 @@ internal sealed partial class ConductorBatchLoop
                     "structural-coverage-permit-unavailable",
                 AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
                 AcceptanceGateEngineException => "gate-engine-fault",
+                AcceptanceExecutionIdentityChangedException { IsChangedIdentity: true } => IdentityStaleDisposition,
                 _ => "fault"
             };
         }

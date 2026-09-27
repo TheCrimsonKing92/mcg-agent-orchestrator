@@ -49,16 +49,17 @@ internal static partial class CliCommandHandlers
     internal static AdjudicateOperatorIntentPayload BuildAdjudicationPayload(
         GoalScopedTaskMutationCommand command,
         OrchestratorWorkspace workspace,
-        GoalId goalId)
+        Goal goal,
+        TaskSpec task)
     {
         var prepared = command.Adjudication
             ?? throw new InvalidOperationException("Prepared adjudicate command is missing its typed payload.");
         var stateDbPath = Path.Combine(workspace.OrchestratorDirectory, "state.db");
         var expectedGoalStateVersion = SqliteOrchestratorStateRepository
-            .TryLoadGoalStateVersionAsync(stateDbPath, goalId.Value)
+            .TryLoadGoalStateVersionAsync(stateDbPath, goal.Id.Value)
             .GetAwaiter()
             .GetResult()
-            ?? throw new InvalidOperationException($"Goal state version is unavailable for '{goalId.Value}'.");
+            ?? throw new InvalidOperationException($"Goal state version is unavailable for '{goal.Id.Value}'.");
         return new AdjudicateOperatorIntentPayload(
             prepared.Shape,
             prepared.Text,
@@ -67,7 +68,8 @@ internal static partial class CliCommandHandlers
             prepared.WorkingDirectory,
             prepared.Cause,
             prepared.Reversibility,
-            prepared.Precedent);
+            prepared.Precedent,
+            Mcg.AgentOrchestrator.App.Orchestration.AdjudicationPrecondition.Capture(goal, task));
     }
 
     internal static OperatorActorKind ParseOperatorActorKind(string? value)

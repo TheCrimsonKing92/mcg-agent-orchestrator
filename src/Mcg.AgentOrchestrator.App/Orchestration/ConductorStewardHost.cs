@@ -298,7 +298,9 @@ internal sealed partial class ConductorStewardHost
         var payload = new AdjudicateOperatorIntentPayload("route", feedback!,
             resolvedReferences, version.Value, worktree,
             adjudication.Cause, adjudication.Reversibility,
-            $"steward-case={trigger.CaseLetter} trigger={trigger.Identity}");
+            $"steward-case={trigger.CaseLetter} trigger={trigger.Identity}",
+            AdjudicationPrecondition.Capture(goal,
+                goal.Tasks.Single(task => task.Id.Value == trigger.TaskId)));
         var intentId = Guid.NewGuid().ToString("N");
         var intent = _intents.EnqueueAsync(new OperatorIntentRecord(
             intentId, $"steward-{stored.Key}", OperatorIntentVerbs.Adjudicate,

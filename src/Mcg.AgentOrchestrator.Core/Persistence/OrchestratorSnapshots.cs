@@ -28,7 +28,9 @@ public sealed record GoalSnapshot(
     SourceBacklogCoverage? SourceBacklogCoverage = null,
     string? SliceBatchParentId = null,
     bool? AcceptanceFailureDeferredForRetry = null,
-    IReadOnlyList<CriterionEvidenceObligation>? CriterionEvidenceObligations = null);
+    IReadOnlyList<CriterionEvidenceObligation>? CriterionEvidenceObligations = null,
+    int ConsecutiveAcceptanceIdentityStaleCount = 0,
+    string? LastAcceptanceIdentityStaleAttemptId = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,

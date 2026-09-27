@@ -1969,6 +1969,14 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 baseline.OperatorAcceptanceRegateCount,
                 stored.OperatorAcceptanceRegateCount,
                 current.OperatorAcceptanceRegateCount),
+            ConsecutiveAcceptanceIdentityStaleCount = PickTickOwned(
+                baseline.ConsecutiveAcceptanceIdentityStaleCount,
+                stored.ConsecutiveAcceptanceIdentityStaleCount,
+                current.ConsecutiveAcceptanceIdentityStaleCount),
+            LastAcceptanceIdentityStaleAttemptId = PickTickOwned(
+                baseline.LastAcceptanceIdentityStaleAttemptId,
+                stored.LastAcceptanceIdentityStaleAttemptId,
+                current.LastAcceptanceIdentityStaleAttemptId),
             CurrentHold = PickTickOwned(
                 baseline.CurrentHold,
                 stored.CurrentHold,

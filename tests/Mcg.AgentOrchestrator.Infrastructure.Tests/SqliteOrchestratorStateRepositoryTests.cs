@@ -10,6 +10,27 @@ using System.Text.Json.Serialization;
 [Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class SqliteOrchestratorStateRepositoryTests
 {
+    [Xunit.Fact]
+    public async Task IdentityStaleSequenceSurvivesSqliteReload()
+    {
+        var db = TempDb();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Persist stale acceptance count", [
+            new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)
+        ]);
+        Assert.Equal(1, kernel.RecordAcceptanceIdentityStale(goal.Id, "stale-1"));
+        Assert.Equal(2, kernel.RecordAcceptanceIdentityStale(goal.Id, "stale-2"));
+
+        var repository = new SqliteOrchestratorStateRepository(db);
+        await repository.SaveAsync(kernel);
+        var reloaded = await new SqliteOrchestratorStateRepository(db).LoadGoalsAsync([goal.Id]);
+        var savedGoal = Assert.Single(reloaded.Goals);
+
+        Assert.Equal(2, savedGoal.ConsecutiveAcceptanceIdentityStaleCount);
+        Assert.Equal("stale-2", savedGoal.LastAcceptanceIdentityStaleAttemptId);
+        Assert.Equal(3, reloaded.RecordAcceptanceIdentityStale(goal.Id, "stale-3"));
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_existing_schema_startup_skips_DDL")]
     public void ExistingSchemaStartupSkipsDdl()
     {
