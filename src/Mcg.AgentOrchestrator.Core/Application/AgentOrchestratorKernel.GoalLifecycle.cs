@@ -610,7 +610,7 @@ public sealed partial class AgentOrchestratorKernel
             }
             else
             {
-                ReplaceEarlierRoundCriterionRetryFeedback(task, previousRetryAt, retryMessage);
+                ReplaceEarlierRoundCriterionRetryFeedback(task, previousRetryAt, retryAt, retryMessage);
             }
             RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage, correctionSource);
             Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);

@@ -41,6 +41,41 @@ public sealed class CriterionRetryFeedbackRoundTests
     }
 
     [Fact]
+    public void SameInstantReplayPreservesAuthoritativeFeedback()
+    {
+        var (kernel, goal, task, _) = CreateAssignedDeveloper();
+        kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, Earlier, RetryCause.ContractClarification);
+        var roundAt = task.LatestRetryAt;
+
+        // Retry admission can replay the already-applied retry with the same clock marker.
+        kernel.RetryTask(goal.Id, task.Id, Earlier, RetryCause.ContractClarification);
+
+        Assert.Equal(roundAt, task.LatestRetryAt);
+        Assert.Equal([Earlier], task.CriterionRetryFeedback);
+        Assert.Equal(Earlier, task.AcceptedRetryFeedback?.Message);
+        Assert.Null(task.CriterionRetryFeedbackRoundAt);
+    }
+
+    [Fact]
+    public void SameInstantReplayPreservesRecordedGateEvidence()
+    {
+        var (kernel, goal, task, clock) = CreateAssignedDeveloper();
+        kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, Earlier, RetryCause.ContractClarification);
+        CompleteFailedDispatch(kernel, goal, task, clock);
+        string[] gateEvidence = ["command: focused test", "evidence: CurrentFailureTests.Fails"];
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, gateEvidence);
+        clock.Advance();
+        kernel.RetryTask(goal.Id, task.Id, Current, RetryCause.CriterionEvidenceOwnerMismatch);
+        var roundAt = task.LatestRetryAt;
+
+        kernel.RetryTask(goal.Id, task.Id, Current, RetryCause.CriterionEvidenceOwnerMismatch);
+
+        Assert.Equal(roundAt, task.LatestRetryAt);
+        Assert.Equal(gateEvidence, task.CriterionRetryFeedback);
+        Assert.Contains(gateEvidence[1], UnmetCriteriaSection(kernel.BuildTaskBrief(goal.Id, task.Id).Content), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void EquivalentPendingRetryKeepsAccrualBehavior()
     {
         var (kernel, goal, task, _) = CreateAssignedDeveloper();
