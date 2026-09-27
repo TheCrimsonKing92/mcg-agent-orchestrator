@@ -867,6 +867,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Equal(
             [
                 "-c", "core.fsmonitor=false",
+                "-c", "core.longpaths=true",
                 "-c", "gc.auto=0",
                 "-c", "maintenance.auto=false",
                 "rev-parse", "--show-toplevel"

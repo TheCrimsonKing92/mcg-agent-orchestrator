@@ -121,6 +121,16 @@ public static partial class GoalWorktrees
         var rematerialized = new List<string>(candidates.Count);
         foreach (var candidate in candidates)
         {
+            if (!TryInvalidateCachedStat(candidate, out failure))
+            {
+                return Incomplete(
+                    branch,
+                    goalId,
+                    $"could not invalidate cached stat data for '{candidate.RelativePath}' before guarded checkout; checkout was not attempted: {failure}; exact preimages remain at '{preimageDirectory}'",
+                    rematerialized,
+                    preimageDirectory);
+            }
+
             var checkout = gitRunner(worktreePath, ["checkout", "--", candidate.RelativePath]);
             if (!checkout.Succeeded || checkout.DrainTimedOut)
             {
