@@ -34,7 +34,7 @@ public sealed class ConductorDriverTestsIncompleteScopeRetryContext
     [Fact]
     public void NewestRedReceiptOnCurrentCandidateAddsFailureDetail()
     {
-        var root = CreateTempDirectory();
+        var root = ConductorDriverTests.CreateTempDirectory();
         try
         {
             var trxPath = Path.Combine(root, "candidate.trx");
@@ -71,7 +71,7 @@ public sealed class ConductorDriverTestsIncompleteScopeRetryContext
     [Fact]
     public void EqualTimestampReceiptsUseOrdinalIdAndIgnoreBaselineRed()
     {
-        var root = CreateTempDirectory();
+        var root = ConductorDriverTests.CreateTempDirectory();
         try
         {
             var trxPath = Path.Combine(root, "candidate.trx");
