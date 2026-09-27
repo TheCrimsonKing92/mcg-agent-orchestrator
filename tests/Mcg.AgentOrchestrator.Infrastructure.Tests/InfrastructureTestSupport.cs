@@ -103,6 +103,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     var effectiveArguments = new[]
     {
         "-c", "core.fsmonitor=false",
+        "-c", "core.longpaths=true",
         "-c", "gc.auto=0",
         "-c", "maintenance.auto=false"
     }.Concat(arguments).ToArray();

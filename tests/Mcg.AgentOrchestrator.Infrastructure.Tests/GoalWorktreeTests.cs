@@ -192,13 +192,15 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         ]);
     }
 
-    private static string CreateSeededGitRepository(bool renameInitialBranchToMain = false)
+    private static string CreateSeededGitRepository(
+        bool renameInitialBranchToMain = false,
+        string? containerParent = null)
     {
         var template = renameInitialBranchToMain
             ? MainSeedRepositoryTemplate.Value
             : DefaultSeedRepositoryTemplate.Value;
         var container = Path.Combine(
-            EnsureSeedRepositoryProcessRoot(),
+            containerParent ?? EnsureSeedRepositoryProcessRoot(),
             BuildSeedRepositoryContainerName(
                 SeedRepositoryProcessStartTimeUtcTicks,
                 Interlocked.Increment(ref seedRepositoryCounter)));
@@ -284,6 +286,14 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
     private protected static string CreateSeededRepository()
     {
         var root = CreateSeededGitRepository();
+        _ = CreateMigratedStateRepository(
+            OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
+        return root;
+    }
+
+    private protected static string CreateSeededRepository(string containerParent)
+    {
+        var root = CreateSeededGitRepository(containerParent: containerParent);
         _ = CreateMigratedStateRepository(
             OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
         return root;
