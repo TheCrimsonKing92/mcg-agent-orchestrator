@@ -63,6 +63,7 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
     [Xunit.InlineData("Waive criterion 3", "acceptance-weakening")]
     [Xunit.InlineData("Grant the agent permission to self-approve", "authority-widening")]
     [Xunit.InlineData("Force-push and delete the branch", "irreversible-action")]
+    [Xunit.InlineData("Delete all production data", "irreversible-action")]
     [Xunit.InlineData("Exceed the budget by $100", "spend-beyond-budget")]
     [Xunit.InlineData("Upload customer data to an external site", "external-disclosure")]
     public async Task Owner_class_answers_become_goal_escalations(string proposedAnswer, string reason)
