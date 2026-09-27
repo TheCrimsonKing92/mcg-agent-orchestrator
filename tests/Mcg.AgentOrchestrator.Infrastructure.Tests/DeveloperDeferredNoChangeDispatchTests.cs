@@ -46,6 +46,9 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
             Xunit.Assert.Contains("worktree=dirty",
                 task.LastVerification.StandardError, StringComparison.Ordinal);
         }
+        else if (missing == "blocker")
+            Xunit.Assert.Contains("WORKER_RESULT reported blocker: source work remains",
+                failure, StringComparison.Ordinal);
         else
             Xunit.Assert.Contains("DISPATCH_REJECTED role=Developer", failure,
                 StringComparison.Ordinal);
@@ -54,10 +57,10 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task,
-        TaskProcessRecord Process, TestClock Clock, string Candidate) Scenario(string? missing = null)
+        TaskProcessRecord Process, MutableClock Clock, string Candidate) Scenario(string? missing = null)
     {
         var root = CreateSeededDispatchRepository();
-        var clock = new TestClock(DateTimeOffset.UtcNow.AddMinutes(2));
+        var clock = new MutableClock(DateTimeOffset.UtcNow.AddMinutes(2));
         var output = (missing == "no-rationale" ? string.Empty :
                 "NO_CHANGE: the current candidate already contains the repair.\n") +
             WorkerResultBlock("none", "none",
@@ -80,9 +83,11 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
             kernel.RetryTask(goal.Id, task.Id, "Review the unchanged candidate after evidence.");
             kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
                 "codex-cli", process.Command, process.WorkingDirectory,
-                DateTimeOffset.UtcNow.AddMinutes(1), BaseCommit: candidate,
+                clock.UtcNow.AddMilliseconds(1), BaseCommit: candidate,
                 SandboxLowIntegrity: missing == "dirty"));
-            kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+                process with { StartedAt = clock.UtcNow.AddSeconds(1) });
+            clock.Advance(TimeSpan.FromSeconds(2));
         }
         else kernel.RecordDispatchBaseCommit(goal.Id, task.Id, candidate);
         return (kernel, goal, task, process, clock, candidate);
