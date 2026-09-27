@@ -32,8 +32,8 @@ internal static class CliConductorStatusReader
 
         var build = events.Where(item => item.Kind == "supervisor-build").MaxBy(item => item.At);
         output.WriteLine($"Supervisor build: {ReadBuildCommit(build?.Detail) ?? "unavailable"}");
-        var logTick = events.Where(item => item.Kind.StartsWith("tick", StringComparison.OrdinalIgnoreCase) ||
-            Regex.IsMatch(item.Detail, @"\btick=\d+(?=\s|\r?$)")).MaxBy(item => item.At)?.At;
+        var logTick = events.Where(item => item.Kind.StartsWith("tick", StringComparison.OrdinalIgnoreCase))
+            .MaxBy(item => item.At)?.At;
         var dbTick = ReadLatestTick(workspace.RunEventStorePath);
         var tick = logTick is null ? dbTick : dbTick is null ? logTick :
             (logTick > dbTick ? logTick : dbTick);

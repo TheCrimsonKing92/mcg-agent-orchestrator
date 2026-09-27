@@ -47,7 +47,7 @@ public sealed class ConductorVerbStatusTests
         Assert.Contains("Conductor: stopped", text);
         Assert.Contains($"Stopped since {stop:O}; reason=operator-stop{Environment.NewLine}", text);
         Assert.Contains("Supervisor build: abc123", text);
-        Assert.Contains($"Latest tick: {stop:O}", text);
+        Assert.Contains($"Latest tick: {start.AddHours(1):O}", text);
         Assert.Contains($"  {goal.Id.Value} | {goal.Status} | role={goal.Tasks[0].RequiredRole}{Environment.NewLine}", text);
         Assert.Contains($"  {secondGoal.Id.Value} | {secondGoal.Status} | role={secondGoal.Tasks[0].RequiredRole}{Environment.NewLine}", text);
         Assert.Contains("Pending clarifications: 1; human waits: 1", text);
