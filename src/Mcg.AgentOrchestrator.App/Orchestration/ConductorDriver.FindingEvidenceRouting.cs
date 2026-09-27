@@ -625,8 +625,10 @@ internal sealed partial class ConductorDriver
                 FailedGoalFindingObservationKind.FindingActionableRed,
                 developer.Id,
                 BuildFailedGoalAttemptIdentity(developer),
-                FormatActionableCandidateRedMessage(candidateSha, receiptId, findingIds,
-                    attribution.FailingTestIdentities, additionalDetail),
+                AppendActionableCandidateRedFailureDetail(
+                    FormatActionableCandidateRedMessage(candidateSha, receiptId, findingIds,
+                        attribution.FailingTestIdentities, additionalDetail),
+                    receiptId, attribution.FailingTestIdentities, attribution.CandidateTestResultPaths),
                 null);
     }
 

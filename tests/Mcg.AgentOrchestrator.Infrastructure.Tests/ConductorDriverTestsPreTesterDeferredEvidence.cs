@@ -89,6 +89,40 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         Assert.Contains("DeferredAlphaTests.FailsOnCandidate", feedback[0], StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ActionableRedRetryCarriesCandidateFailureDetail()
+    {
+        using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
+        var trxPath = Path.Combine(scenario.Root, "candidate.trx");
+        ConductorDriverTestsActionableRedFailureDetail.WriteFailureTrx(
+            trxPath, "DeferredAlphaTests.FailsOnCandidate");
+        var roles = new List<AgentRole>();
+        var feedback = new List<string>();
+        var driver = scenario.Driver(request =>
+        {
+            var red = CandidateRedFindingEvidence(request, CandidateSha,
+                "DeferredAlphaTests.FailsOnCandidate");
+            var candidate = red.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
+            var check = candidate.Checks.Single() with { TestResultPaths = [trxPath] };
+            return red with
+            {
+                Checks = [check],
+                Arms = red.Arms.Select(arm => arm.Arm == FindingEvidenceArm.Candidate
+                    ? arm with { Checks = [check] } : arm).ToArray()
+            };
+        }, roles.Add, feedback.Add);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal([AgentRole.Developer], roles);
+        var message = Assert.Single(feedback);
+        Assert.StartsWith("ACTIONABLE_CANDIDATE_RED", message, StringComparison.Ordinal);
+        Assert.Contains("Candidate failure detail (receipt ", message, StringComparison.Ordinal);
+        Assert.Contains("DeferredAlphaTests.FailsOnCandidate", message, StringComparison.Ordinal);
+        Assert.Contains("fatal: synthetic too big", message, StringComparison.Ordinal);
+        Assert.Contains("at Synthetic.First()", message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

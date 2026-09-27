@@ -216,8 +216,9 @@ internal sealed partial class ConductorDriver
         if (TryEscalatePreTesterRedLoop(GetCurrentGoal(goal), goalPrefix, policy, fromState, out result))
             return true;
 
-        var feedback = FormatActionableCandidateRedMessage(
-            candidateSha!, receiptId, "pre-tester-deferred", failingTests);
+        var feedback = AppendActionableCandidateRedFailureDetail(
+            FormatActionableCandidateRedMessage(candidateSha!, receiptId, "pre-tester-deferred", failingTests),
+            receiptId, failingTests, candidate?.TestResultPaths);
         (_retryDeveloperAfterStructuralPreflight ?? _retryTask)(
             goal.Id, developer.Id, feedback, RetryRoundKind.Mechanical, RetryCause.NewSourceFinding);
         var refreshed = GetCurrentGoal(goal);
