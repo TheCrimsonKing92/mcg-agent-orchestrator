@@ -99,6 +99,12 @@ public sealed class OperatorIntentAnswerHumanInputTests
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which implementation?",
                 HumanWaitKind.SpecClarification);
+            var directKernel = new AgentOrchestratorKernel();
+            var directTask = new TaskSpec(TaskId.New(), "Use selected implementation", AgentRole.Developer);
+            var directGoal = directKernel.CreateGoal("Select implementation", [directTask]);
+            directKernel.ActivateGoal(directGoal.Id, AgentCatalog.Default().Agents);
+            var directRequest = directKernel.RequestHumanInput(directGoal.Id, directTask.Id,
+                "Which implementation?", HumanWaitKind.SpecClarification);
             var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
             var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
             var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput,
@@ -112,13 +118,18 @@ public sealed class OperatorIntentAnswerHumanInputTests
                 goalStateVersionResolver: _ => 0);
 
             Xunit.Assert.False(request.IsCompleted);
+            Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+            Xunit.Assert.Equal(directTask.Status, task.Status);
+            directKernel.SubmitHumanInput(directRequest.Id, "Use existing path");
             Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
             coordinator.CompletePersisted([goal.Id]);
 
             Xunit.Assert.True(request.IsCompleted);
             Xunit.Assert.Equal("Use existing path", request.Answer);
             Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
-            Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
+            Xunit.Assert.Equal(WorkTaskStatus.Assigned, directTask.Status);
+            Xunit.Assert.Equal(directTask.Status, task.Status);
+            Xunit.Assert.Equal(directGoal.Status, goal.Status);
             Xunit.Assert.Equal(OperatorIntentStatus.Applied,
                 (await intents.GetAsync(intent.Id).WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
             var decision = await collaboration.GetDecisionStateAsync($"answer-{intent.Id}").WaitAsync(TimeSpan.FromSeconds(30));
