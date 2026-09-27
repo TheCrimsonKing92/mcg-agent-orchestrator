@@ -27,7 +27,7 @@ public sealed class ConductorVerbStatusTests
             new { timestamp = start, eventKind = "loop-start", goalId = (string?)null, detail = "LOOP_START" },
             new { timestamp = start.AddMinutes(10), eventKind = "supervisor-build", goalId = (string?)null, detail = "SUPERVISOR_BUILD {\"commitSha\":\"abc123\"}" },
             new { timestamp = start.AddHours(1), eventKind = "tick-load-recovered", goalId = (string?)null, detail = "TICK tick=4" },
-            new { timestamp = stop, eventKind = "loop-stop", goalId = (string?)null, detail = "LOOP_STOP tick=5 reason=operator-stop" }
+            new { timestamp = stop, eventKind = "loop-stop", goalId = (string?)null, detail = "LOOP_STOP tick=5 reason=operator-stop\r" }
         };
         File.WriteAllText(workspace.ConductEventsLogPath,
             string.Join("\r\n", events.Select(item => JsonSerializer.Serialize(item))) + "\r\n");
@@ -45,7 +45,7 @@ public sealed class ConductorVerbStatusTests
         Assert.Equal(0, exit);
         var text = output.ToString();
         Assert.Contains("Conductor: stopped", text);
-        Assert.Contains("reason=operator-stop", text);
+        Assert.Contains($"Stopped since {stop:O}; reason=operator-stop{Environment.NewLine}", text);
         Assert.Contains("Supervisor build: abc123", text);
         Assert.Contains($"Latest tick: {stop:O}", text);
         Assert.Contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |", text);
@@ -53,7 +53,6 @@ public sealed class ConductorVerbStatusTests
         Assert.Contains("role=", text);
         Assert.Contains("Pending clarifications: 1; human waits: 1", text);
         Assert.Contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", text);
-        Assert.DoesNotContain("reason=operator-stop\r", text);
         foreach (var (path, hash) in original) Assert.Equal(hash, Hash(path));
 
         output.GetStringBuilder().Clear();
