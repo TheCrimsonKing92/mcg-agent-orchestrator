@@ -341,8 +341,8 @@ internal sealed partial class ConductorBatchLoop
             {
                 if (_selfRelaunchEnabled && _selfRelaunch is not null)
                 {
-                    var changes = RepositoryChangeClassifier.Classify(receipt.ChangedFiles);
-                    if (changes.RequiresConductorRelaunch)
+                    var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
+                    if (decision.Required)
                     {
                         pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
                         deferredSelfRelaunch = null;
@@ -351,6 +351,10 @@ internal sealed partial class ConductorBatchLoop
                         EmitProgress(
                             $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
                             $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
+                    }
+                    else
+                    {
+                        EmitRelaunchNotRequired(totalTicks, receipt, decision);
                     }
                 }
 
@@ -2004,6 +2008,7 @@ internal sealed partial class ConductorBatchLoop
             "LOOP_HANDOFF_PENDING" => "loop-handoff",
             "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
             "LOOP_RELAUNCH_SCHEDULED" => "loop-relaunch",
+            "LOOP_RELAUNCH_NOT_REQUIRED" => "loop-relaunch",
             "LOOP_RELAUNCH_DRAIN" => "loop-relaunch",
             "LOOP_RELAUNCH_REBUILD" => "loop-relaunch",
             "LOOP_RELAUNCH_ROLLBACK" => "loop-relaunch-rollback",
