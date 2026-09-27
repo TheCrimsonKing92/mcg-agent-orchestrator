@@ -284,7 +284,8 @@ internal sealed record ConductLoopLaunchRequest(
     string? ActivationFilePath = null,
     string? HandoffToken = null,
     int? IncumbentProcessId = null,
-    int AuthorityWaitTimeoutSeconds = 0);
+    int AuthorityWaitTimeoutSeconds = 0,
+    IReadOnlyDictionary<string, string>? AdditionalEnvironment = null);
 
 internal sealed record ConductLoopLaunchResult(
     int ProcessId,
@@ -853,6 +854,9 @@ internal static partial class ConductorLoopHandoff
         startInfo.Environment[BatchNameEnvironmentVariable] = request.Name;
         startInfo.Environment[RenewalCountEnvironmentVariable] = request.RenewalCount.ToString(CultureInfo.InvariantCulture);
         AddHandoffEnvironment(startInfo.Environment, request);
+        if (request.AdditionalEnvironment is not null)
+            foreach (var (key, value) in request.AdditionalEnvironment)
+                startInfo.Environment[key] = value;
         startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = request.WorkingDirectory;
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
@@ -1155,6 +1159,9 @@ internal static partial class ConductorLoopHandoff
         if (request.AuthorityWaitTimeoutSeconds > 0)
             values[AuthorityWaitTimeoutEnvironmentVariable] =
                 request.AuthorityWaitTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
+        if (request.AdditionalEnvironment is not null)
+            foreach (var (key, value) in request.AdditionalEnvironment)
+                values[key] = value;
 
         var builder = new StringBuilder();
         foreach (var pair in values.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))

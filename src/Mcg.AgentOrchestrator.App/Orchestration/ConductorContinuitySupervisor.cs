@@ -86,7 +86,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Action<string>? raiseActivationAttention = null,
     TimeSpan? tickStallBudget = null,
     Func<TimeSpan, CancellationToken, Task>? tickStallDelay = null,
-    IConductorDiagnosticDumpCapture? dumpCapture = null)
+    IConductorDiagnosticDumpCapture? dumpCapture = null,
+    ConductorSupervisorHandoffOptions? supervisorHandoff = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -144,18 +145,54 @@ internal sealed partial class ConductorContinuitySupervisor(
 
         try
         {
+        var inherited = await BeginSupervisionAsync(cancellationToken).ConfigureAwait(false);
+        if (supervisorHandoff is not null)
+        {
+            var own = supervisorHandoff.OwnBuild;
+            var ownDll = Path.Combine(own.RunDirectory, "Mcg.AgentOrchestrator.App.dll");
+            IDisposable? ownLease = File.Exists(ownDll)
+                ? File.Open(ownDll, FileMode.Open, FileAccess.Read, FileShare.Read)
+                : null;
+            currentBuild = new ConductorActivationBuild(own.CommitSha, own.RunDirectory,
+                [_dotnetPath, ownDll], ownLease);
+        }
+        ConductorSupervisorActiveChild? inheritedActiveChild = null;
+        if (inherited is not null)
+        {
+            renewalsWithoutProgress = inherited.RenewalsWithoutProgress;
+            blockedActivationCommit = inherited.BlockedActivationCommit;
+            _consecutiveSupervisorHandoffFailures = inherited.ConsecutiveFailures;
+            if (inherited.PendingSuccessor is { } staged)
+            {
+                IDisposable? stagedLease = File.Exists(staged.AppDllPath)
+                    ? File.Open(staged.AppDllPath, FileMode.Open, FileAccess.Read, FileShare.Read)
+                    : null;
+                pendingSuccessor = new ConductorPreparedSuccessor(staged.RunDirectory,
+                    staged.AppDllPath, staged.RepositoryHead, staged.StagedSourceCommit,
+                    staged.SelfCheckDetail, stagedLease);
+            }
+            inheritedActiveChild = inherited.ActiveChild;
+            if (inheritedActiveChild is not null)
+                attempt = inheritedActiveChild.Attempt - 1;
+        }
         while (true)
         {
             attempt++;
-            var artifactPath = Path.Combine(artifactDirectory, $"conduct-{Guid.NewGuid():N}.json");
+            var activeChild = inheritedActiveChild;
+            inheritedActiveChild = null;
+            var artifactPath = activeChild?.ExitArtifactPath ??
+                Path.Combine(artifactDirectory, $"conduct-{Guid.NewGuid():N}.json");
             var outputDirectory = Path.GetFullPath(logDirectory ?? Path.Combine(artifactDirectory, "logs"));
             Directory.CreateDirectory(outputDirectory);
             var stamp = _timeProvider.GetUtcNow().ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
             var outputPrefix = $"conduct-supervisor-{stamp}-{attempt:D3}-{Guid.NewGuid():N}";
-            var stdoutPath = Path.Combine(outputDirectory, $"{outputPrefix}.out.log");
-            var stderrPath = Path.Combine(outputDirectory, $"{outputPrefix}.err.log");
-            PrepareOutputFile(stdoutPath);
-            PrepareOutputFile(stderrPath);
+            var stdoutPath = activeChild?.StdoutPath ?? Path.Combine(outputDirectory, $"{outputPrefix}.out.log");
+            var stderrPath = activeChild?.StderrPath ?? Path.Combine(outputDirectory, $"{outputPrefix}.err.log");
+            if (activeChild is null)
+            {
+                PrepareOutputFile(stdoutPath);
+                PrepareOutputFile(stderrPath);
+            }
             var childArgs = args
                 .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
                 .Concat([
@@ -169,7 +206,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             string? stallFailure = null;
-            var successor = pendingSuccessor;
+            var successor = activeChild is null ? pendingSuccessor : null;
             var activationMonitor = new ActivationMonitor(_timeProvider.GetUtcNow);
             var liveProcessId = 0;
             var readiness = successor is null
@@ -201,7 +238,19 @@ internal sealed partial class ConductorContinuitySupervisor(
                 pid => Interlocked.Exchange(ref liveProcessId, pid));
             try
             {
-                if (successor is null)
+                if (activeChild is not null)
+                {
+                    var watched = await ObserveInheritedChildAsync(activeChild, currentBuild,
+                        outputDirectory, cancellationToken).ConfigureAwait(false);
+                    result = watched.Result;
+                    stallFailure = watched.Failure;
+                    if (watched.Stalled && !watched.TerminationConfirmed)
+                    {
+                        EscalateUnconfirmedTickStall(attempt, watched, stdoutPath, stderrPath);
+                        return 1;
+                    }
+                }
+                else if (successor is null)
                 {
                     if (restoring)
                     {
@@ -366,6 +415,37 @@ internal sealed partial class ConductorContinuitySupervisor(
                         if (activation.Adopted)
                         {
                             RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
+                            NoteAdoptedBuild(candidateBuild);
+                            ConductorSupervisorActiveChild? handoffChild = null;
+                            if (!runTask.IsCompleted && supervisorHandoff is not null)
+                            {
+                                var childPid = Volatile.Read(ref liveProcessId);
+                                if (childPid > 0)
+                                {
+                                    try
+                                    {
+                                        handoffChild = new ConductorSupervisorActiveChild(
+                                            supervisorHandoff.Seam.Identify(childPid), artifactPath,
+                                            stdoutPath, stderrPath, attempt);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        RecordSupervisorHandoffPreparationFailure(candidateBuild, ex);
+                                    }
+                                }
+                            }
+                            if (handoffChild is not null)
+                            {
+                                if (await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
+                                    null, renewalsWithoutProgress, blockedActivationCommit,
+                                    cancellationToken, handoffChild).ConfigureAwait(false))
+                                {
+                                    // Keep the stdout/stderr pipe owner alive until this child exits.
+                                    // The successor holds the supervisory lease during that interval.
+                                    await runTask.ConfigureAwait(false);
+                                    return 0;
+                                }
+                            }
                         }
                         if (activation.ProcessResult is not null)
                         {
@@ -530,6 +610,10 @@ internal sealed partial class ConductorContinuitySupervisor(
                         stdoutPath,
                         stderrPath);
                 }
+                if (await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
+                    pendingSuccessor, renewalsWithoutProgress, blockedActivationCommit,
+                    cancellationToken).ConfigureAwait(false))
+                    return 0;
                 continue;
             }
 
