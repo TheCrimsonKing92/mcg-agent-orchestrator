@@ -274,6 +274,7 @@ internal sealed partial class ConductorBatchLoop
         var totalEscalated = 0;
         var totalRetried = 0;
         var totalDone = 0;
+        var landedGoalIds = new HashSet<string>(StringComparer.Ordinal);
         var stopRequested = false;
         var maxDurationReached = false;
         var isDeferringMaxDurationStop = false;
@@ -336,6 +337,7 @@ internal sealed partial class ConductorBatchLoop
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         driver.SuccessfulLandingSink = receipt =>
         {
+            RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
             var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
             if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
             {
@@ -1666,7 +1668,7 @@ internal sealed partial class ConductorBatchLoop
         {
             StopLoop("loop-return");
         }
-        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks);
+        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds));
         }
         catch (Exception ex)
         {
@@ -5240,7 +5242,8 @@ public sealed record BatchLoopSummary(
     bool StopRequested,
     ConductorLoopHandoffResult? Handoff = null,
     string? StopReason = null,
-    int Rechecks = 0);
+    int Rechecks = 0,
+    int LandedGoals = 0);
 
 public sealed record ConductorLoopHandoffRequest(
     int Tick,

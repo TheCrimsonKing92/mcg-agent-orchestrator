@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -34,7 +35,8 @@ internal sealed record ConductorContinuityExitArtifact(
     string StopReason,
     int Ticks,
     int Done,
-    bool RestartRequested)
+    bool RestartRequested,
+    [property: JsonPropertyName("landedGoals")] int LandedGoals = 0)
 {
     public static void Write(string path, ConductorContinuityExitArtifact artifact)
     {
@@ -545,10 +547,11 @@ internal sealed partial class ConductorContinuitySupervisor(
 
             if (stallFailure is null && result.ExitCode == 0 && artifact is { RestartRequested: true })
             {
-                renewalsWithoutProgress = artifact.Done > 0 ? 0 : renewalsWithoutProgress + 1;
+                renewalsWithoutProgress = artifact.Done > 0 || artifact.LandedGoals > 0 ? 0 : renewalsWithoutProgress + 1;
                 if (renewalsWithoutProgress > maxRenewalsWithoutProgress)
                 {
                     var reason = $"renewal-cap count={renewalsWithoutProgress} max={maxRenewalsWithoutProgress}";
+                    TryAppendConductEvent($"SUPERVISOR_ESCALATED reason=renewal-cap count={renewalsWithoutProgress} max={maxRenewalsWithoutProgress}");
                     Record("restart", "escalated", attempt, reason, result.ProcessId, stdoutPath, stderrPath);
                     Console.Error.WriteLine($"[conduct supervisor] Escalated: {reason}.");
                     return 1;
@@ -632,6 +635,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             if (unexpectedStarts.Count > maxUnexpectedRestarts)
             {
                 var reason = $"restart-cap count={unexpectedStarts.Count} max={maxUnexpectedRestarts} windowSeconds={(int)_restartWindow.TotalSeconds} {failure}";
+                TryAppendConductEvent($"SUPERVISOR_ESCALATED reason=restart-cap count={unexpectedStarts.Count} max={maxUnexpectedRestarts}");
                 Record("restart", "escalated", attempt, reason, result.ProcessId, stdoutPath, stderrPath);
                 Console.Error.WriteLine($"[conduct supervisor] Escalated: {reason}.");
                 return 1;

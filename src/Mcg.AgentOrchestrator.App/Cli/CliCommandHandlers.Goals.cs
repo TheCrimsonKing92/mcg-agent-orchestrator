@@ -1855,17 +1855,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 {
                     ConductorContinuityExitArtifact.Write(
                         continuityExitArtifactPath,
-                        new ConductorContinuityExitArtifact(
-                            loopSummary.StopReason ?? "unknown",
-                            loopSummary.Ticks,
-                            loopSummary.Done,
-                            RestartRequested: string.Equals(
-                                loopSummary.StopReason,
-                                "max-duration",
-                                StringComparison.Ordinal) || delegateSelfRelaunchToSupervisor && string.Equals(
-                                loopSummary.StopReason,
-                                "self-relaunch-handoff",
-                                StringComparison.Ordinal)));
+                        ConductorContinuityExitArtifactFactory.FromLoopSummary(
+                            loopSummary, delegateSelfRelaunchToSupervisor));
                 }
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
