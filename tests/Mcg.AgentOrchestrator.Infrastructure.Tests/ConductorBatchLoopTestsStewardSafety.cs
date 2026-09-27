@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class ConductorStewardDotnetBuildSlotsSafetyTests
+public sealed class ConductorBatchLoopTestsStewardSafety
 {
     [Xunit.Fact]
     public async Task Owner_retry_during_model_round_supersedes_steward_route_without_creating_a_decision_request()
