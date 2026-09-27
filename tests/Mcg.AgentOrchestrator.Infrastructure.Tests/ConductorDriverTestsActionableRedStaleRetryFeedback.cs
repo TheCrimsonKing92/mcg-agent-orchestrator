@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 using static ConductorDriverTests;
 
@@ -30,6 +31,7 @@ public sealed class ConductorDriverTestsActionableRedStaleRetryFeedback
                     id: "fixture-red", classes: ["GateReadyCandidateProjectorTests"])]);
 
             var starts = 0;
+            string? publishedPromptPath = null;
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 runFocusedEvidence: (_, request) =>
@@ -44,7 +46,21 @@ public sealed class ConductorDriverTestsActionableRedStaleRetryFeedback
                             ? arm with { Checks = [check] } : arm).ToArray()
                     };
                 },
-                dispatchAndStart: _ => { starts++; return DispatchStartOutcome.Started(); },
+                dispatchAndStart: dispatchGoal =>
+                {
+                    publishedPromptPath = WorkerProfileDispatcher.PrepareTask(
+                        kernel,
+                        dispatchGoal,
+                        developer,
+                        new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory} {promptPath}"),
+                        Path.Combine(root, "prompts"),
+                        root,
+                        DateTimeOffset.UtcNow,
+                        providerName: "OpenAI",
+                        modelName: AgentCatalog.OpenAiSubscriptionModelAlias).PromptPath;
+                    starts++;
+                    return DispatchStartOutcome.Started();
+                },
                 retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
                     kernel.RetryTaskAutomatically(goalId, taskId, message, cause, retryRoundKind: roundKind),
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
@@ -61,14 +77,10 @@ public sealed class ConductorDriverTestsActionableRedStaleRetryFeedback
             Assert.StartsWith("ACTIONABLE_CANDIDATE_RED", feedback, StringComparison.Ordinal);
             Assert.Contains(TestIdentity, feedback, StringComparison.Ordinal);
             Assert.Null(developer.AcceptedRetryFeedback);
-            var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
-            const string heading = "## Unmet acceptance criteria from the prior attempt - fix these:";
-            var start = brief.IndexOf(heading, StringComparison.Ordinal);
-            Assert.True(start >= 0);
-            var end = brief.IndexOf(Environment.NewLine + Environment.NewLine, start, StringComparison.Ordinal);
-            var section = brief[start..(end < 0 ? brief.Length : end)];
-            Assert.Contains(TestIdentity, section, StringComparison.Ordinal);
-            Assert.DoesNotContain(Earlier, section, StringComparison.Ordinal);
+            var publishedPrompt = File.ReadAllText(Assert.IsType<string>(publishedPromptPath));
+            Assert.Contains("INLINE FULL: identity=task/criterion-retry-feedback.json", publishedPrompt, StringComparison.Ordinal);
+            Assert.Contains(TestIdentity, publishedPrompt, StringComparison.Ordinal);
+            Assert.DoesNotContain(Earlier, publishedPrompt, StringComparison.Ordinal);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
