@@ -1,0 +1,90 @@
+using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+internal sealed class OwnerConsoleHarness
+{
+    internal readonly AgentOrchestratorKernel Kernel = new();
+    internal readonly FakeState State;
+    internal readonly FakeQuestions Questions = new();
+    internal readonly FakeAnswers Answers = new();
+    internal readonly FakeOutput Output = new();
+    internal readonly FakeDigest Digest = new();
+    internal readonly FakeTail Tail = new();
+    internal readonly FakeLiveness Liveness = new();
+    internal readonly TimeProvider Clock = new FixedClock();
+
+    internal OwnerConsoleHarness() => State = new FakeState(Kernel);
+
+    internal Goal AddGoal(string id, string title, AgentRole role)
+    {
+        var goal = Kernel.CreateGoal(new GoalId(id), title,
+            [new TaskSpec(TaskId.New(), "Work", role)]);
+        Kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        return goal;
+    }
+
+    internal OwnerConsoleSession Session() => new(
+        State, Questions, Answers, Liveness, Digest, Tail, Output, Clock);
+
+    internal sealed class FakeState(AgentOrchestratorKernel kernel) : IOrchestratorStateQueries
+    {
+        internal readonly List<string> Calls = [];
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
+        {
+            Calls.Add("metadata");
+            return Task.FromResult<IReadOnlyList<GoalSummary>>(kernel.Goals.Select(goal =>
+                new GoalSummary(goal.Id.Value, goal.Status.ToString(), goal.Objective, "2026-01-01T00:00:00Z")).ToArray());
+        }
+
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(IReadOnlyCollection<GoalId> ids,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Add("goals");
+            return Task.FromResult(kernel);
+        }
+    }
+
+    internal sealed class FakeQuestions : IOwnerQuestionSource
+    {
+        internal readonly List<OwnerQuestion> Items = [];
+        public Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<OwnerQuestion>>(Items.ToArray());
+    }
+
+    internal sealed class FakeAnswers : IOwnerAnswerSubmitter
+    {
+        internal readonly List<(string Id, string Text)> Calls = [];
+        public void Submit(OwnerQuestion question, string answer) => Calls.Add((question.ItemId, answer));
+    }
+
+    internal sealed class FakeOutput : IOwnerConsoleOutput
+    {
+        private readonly System.Text.StringBuilder _buffer = new();
+        internal string Text => _buffer.ToString();
+        public void Write(string text) => _buffer.Append(text);
+        public void WriteLine(string text) => _buffer.AppendLine(text);
+    }
+
+    internal sealed class FakeDigest : IOwnerDigestSummary
+    {
+        public IReadOnlyList<string> ReadSummaryLines() => ["Owner digest: landed=2 pending=1"];
+    }
+
+    internal sealed class FakeTail : IGoalEventTail
+    {
+        internal int RequestedCount;
+        public IReadOnlyList<string> ReadLast(string goalId, int count)
+        { RequestedCount = count; return ["recent event"]; }
+    }
+
+    internal sealed class FakeLiveness : IConductorLiveness
+    {
+        public bool IsRunning() => true;
+    }
+
+    private sealed class FixedClock : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(2026, 1, 1, 0, 5, 0, TimeSpan.Zero);
+    }
+}
