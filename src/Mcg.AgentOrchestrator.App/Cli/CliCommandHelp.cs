@@ -75,6 +75,7 @@ internal static class CliCommandHelp
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
     public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json]";
+    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -518,6 +519,11 @@ internal static class CliCommandHelp
         "Report interventions, landings, escapes, tail time and mechanical hours.",
         ["--since", "--until", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry Conductor = new(
+        ConductorUsage,
+        "Start, report or stop the conductor from the terminal.",
+        ["--clear-stop", "--help", "-h"]);
+
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
@@ -686,6 +692,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  retry             Retry a task with operator feedback.");
         Console.WriteLine("  recover           Recover a goal with an operator note.");
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
+        Console.WriteLine("  conductor         Start, report or stop the conductor.");
         Console.WriteLine("  help <command>    Show command-specific help.");
     }
 
@@ -760,6 +767,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
         {
             entry = Conduct;
+            return true;
+        }
+
+        if (args[0].Equals("conductor", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Conductor;
             return true;
         }
 

@@ -84,29 +84,31 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 | `--daemon` | persistent mode for controlled active-goal intake; stays alive on an empty backlog and picks up goals submitted after the loop starts |
 | `--dashboard-url <url>` | attach to a running dashboard |
 
-**Stop a loop deliberately** by creating a `.conduct-stop` file in the repo root. A `.conduct-stop` is a detach, not a drain: at the next stop check the loop starts no new dispatches, attempts to detach live workers, persists the detached state, and exits without waiting for those workers to finish. A successful detach leaves the task running for a successor to reconcile; if detachment fails, the fallback cancels the dispatch so it can be requeued. Prefer a quiet window with no live workers before a deliberate stop. Ctrl-C is not equivalent: the conduct-loop path has no `Console.CancelKeyPress` handler, so Ctrl-C terminates without the detach/checkpoint path. Remove `.conduct-stop` before starting a new loop.
+**Stop a loop deliberately** with `mcg-orchestrator.cmd conductor stop`. Check it with `mcg-orchestrator.cmd conductor status`; start it deliberately with `mcg-orchestrator.cmd conductor start` (`--clear-stop` clears a prior stop request). A `.conduct-stop` is a detach, not a drain: at the next stop check the loop starts no new dispatches, attempts to detach live workers, persists the detached state, and exits without waiting for those workers to finish. A successful detach leaves the task running for a successor to reconcile; if detachment fails, the fallback cancels the dispatch so it can be requeued. Prefer a quiet window with no live workers before a deliberate stop. Ctrl-C is not equivalent: the conduct-loop path has no `Console.CancelKeyPress` handler, so Ctrl-C terminates without the detach/checkpoint path.
 
 ### Manual bounce fallback after loop-affecting code lands
 
 Use this procedure when self-relaunch is disabled, when activation reverts, or when the running supervisor predates the automatic activation implementation. Re-arm the landed code deliberately:
 
 1. Inspect active goals with `Get-OrchestratorSnapshot.ps1` and exact dispatch inventories; when practical, wait until no worker is in flight because `.conduct-stop` detaches rather than drains.
-2. Record the conductor PID from the first line of `.orchestrator\conduct-loop.lock`, create `.conduct-stop`, and wait for `LOOP_STOP` in `.orchestrator\logs\conduct-events.log`.
+2. Run `mcg-orchestrator.cmd conductor stop`, record the reported PID, and wait for `LOOP_STOP` in `.orchestrator\logs\conduct-events.log`. Use `conductor status` to inspect the current state.
 3. Confirm that recorded PID is no longer running with `Get-RepoProcessInfo.ps1 -Id <pid> -IncludeChildren`. An orderly exit normally removes `conduct-loop.lock`; if it remains, remove it only after the owner PID is confirmed dead.
-4. Remove `.conduct-stop`, then relaunch through `Start-OrchestratorCommand.ps1` without `-AppDll`. That path invokes `mcg-orchestrator.cmd`, whose HEAD/source freshness check rebuilds the app when the landed code is newer than the current binary.
+4. Run `mcg-orchestrator.cmd conductor start --clear-stop`. It uses `Start-OrchestratorCommand.ps1` without `-AppDll`, whose HEAD/source freshness check rebuilds the app when the landed code is newer than the current binary.
 
 ```powershell
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal-prefix>
 $conductorPid = Get-Content -LiteralPath .orchestrator\conduct-loop.lock -TotalCount 1
-New-Item -ItemType File .conduct-stop
+.\mcg-orchestrator.cmd conductor stop
 # Wait for LOOP_STOP, then verify the recorded lock PID is dead:
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-RepoProcessInfo.ps1 -Id $conductorPid -IncludeChildren
 # Only after the PID is confirmed dead; a live-owner lock failure must remain visible:
 if (Test-Path -LiteralPath .orchestrator\conduct-loop.lock) {
     Remove-Item -LiteralPath .orchestrator\conduct-loop.lock -ErrorAction Stop
 }
-Remove-Item -LiteralPath .conduct-stop
-.\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <batch-name> conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
+.\mcg-orchestrator.cmd conductor start --clear-stop
+# Fallback launcher when the conductor CLI is unavailable:
+$env:MCG_DISPATCH_MAX_RUNTIME_MIN = '120'
+.\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name conduct-loop-daemon conduct --loop --daemon --watch --poll-seconds 120 --max-duration 43200
 ```
 
 #### Is the loop alive? Read the lock, then verify that PID

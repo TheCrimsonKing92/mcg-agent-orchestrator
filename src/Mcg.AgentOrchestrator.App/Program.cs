@@ -172,6 +172,11 @@ if (CliOwnerDigestCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliOwnerDigestCommand.Run(startupArgs, workspace));
 }
 
+if (CliConductorCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliConductorCommand.Run(startupArgs, workspace));
+}
+
 if (ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
