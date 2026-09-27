@@ -601,11 +601,16 @@ public sealed partial class AgentOrchestratorKernel
         }
         else
         {
+            var previousRetryAt = task.LatestRetryAt;
             ResetTaskForRetry(task, retryAt, retryCause, retryRoundKind);
             if (authoritativeRetryFeedback)
             {
-                task.RecordCriterionRetryFeedback([retryMessage]);
+                task.RecordCriterionRetryFeedback([retryMessage], previousRetryAt);
                 task.RecordAcceptedRetryFeedback(retryMessage, retryAt);
+            }
+            else
+            {
+                ReplaceEarlierRoundCriterionRetryFeedback(task, previousRetryAt, retryAt, retryMessage);
             }
             RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage, correctionSource);
             Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);

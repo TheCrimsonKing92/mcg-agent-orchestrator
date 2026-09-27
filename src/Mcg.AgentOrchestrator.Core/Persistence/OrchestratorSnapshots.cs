@@ -133,7 +133,8 @@ public sealed record TaskSnapshot(
     PreDispatchIntegrationReceipt? PendingPreDispatchIntegrationReceipt = null,
     DateTimeOffset? LatestProviderBudgetRecoveryAt = null,
     int WorkerBuildCheckRecoveryCount = 0,
-    DateTimeOffset? LatestRoleInputRetryAt = null);
+    DateTimeOffset? LatestRoleInputRetryAt = null,
+    DateTimeOffset? CriterionRetryFeedbackRoundAt = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
