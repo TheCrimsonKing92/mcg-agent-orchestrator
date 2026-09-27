@@ -131,7 +131,7 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
                 "missing-text" => payload with { Text = "" },
                 "missing-evidence" => payload with { EvidenceReferences = [] },
                 "unknown-cause" => payload with { Cause = "not-a-cause" },
-                "stale-version" => payload with { ExpectedGoalStateVersion = Harness.Version - 1 },
+                "stale-version" => payload with { Precondition = AdjudicationPrecondition.Capture(goal, task) with { TaskStatus = WorkTaskStatus.Completed.ToString() } },
                 _ => throw new ArgumentOutOfRangeException(nameof(invalidCase))
             };
             var before = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id) with { Timeline = [] }, JsonOptions);
@@ -141,7 +141,7 @@ public sealed class OperatorIntentAdjudicationTests : ConductorBatchLoopTests
             var result = harness.Coordinator.ExecutePending(kernel, goal);
 
             var after = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id) with { Timeline = [] }, JsonOptions);
-            Assert.True(result.MutatedGoalState);
+            Assert.False(result.MutatedGoalState);
             Assert.Equal(before, after);
             Assert.Equal(timelineCount + 1, goal.Timeline.Count);
             var state = await harness.Decisions.GetDecisionStateAsync($"adjudicate-{intent.Id}");
