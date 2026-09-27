@@ -72,40 +72,6 @@ public static partial class RepositoryChangeClassifier
         "token"
     ];
 
-    private static readonly string[] ConductorRelaunchPathPrefixes =
-    [
-        "src/Mcg.AgentOrchestrator.App/Orchestration/Conductor",
-        "src/Mcg.AgentOrchestrator.App/Orchestration/Acceptance",
-        "src/Mcg.AgentOrchestrator.App/Orchestration/Dispatch",
-        "src/Mcg.AgentOrchestrator.App/Orchestration/GoalRefinementGate.cs",
-        "src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs",
-        "src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorEntityResolver.cs",
-        "src/Mcg.AgentOrchestrator.App/Orchestration/SemanticAcceptance",
-        "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals",
-        "src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner",
-        "src/Mcg.AgentOrchestrator.App/Application/",
-        "src/Mcg.AgentOrchestrator.App/Providers/",
-        "src/Mcg.AgentOrchestrator.App/SubscriptionPlanning/",
-        "src/Mcg.AgentOrchestrator.App/Program.cs",
-        "src/Mcg.AgentOrchestrator.Core/Conductor/",
-        "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
-        "src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier",
-        "src/Mcg.AgentOrchestrator.Core/Application/TaskComplexityEstimator",
-        "src/Mcg.AgentOrchestrator.Core/Application/LandingDecision",
-        "src/Mcg.AgentOrchestrator.Core/Application/VerificationPolicyCompiler",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
-        "src/Mcg.AgentOrchestrator.Infrastructure.Providers/",
-        "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Workers/",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Processes/",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunction",
-        "config/acceptance-manifest.json",
-        "scripts/resolve-run-dir.ps1",
-        "scripts/Update-AppDllGitHeadMarker.ps1",
-        "mcg-orchestrator.cmd"
-    ];
-
     public static RepositoryChangeSummary Classify(IEnumerable<string> paths)
     {
         var files = paths
@@ -118,9 +84,7 @@ public static partial class RepositoryChangeClassifier
             files.All(file => file.Categories.SequenceEqual([RepositoryChangeCategory.Documentation]));
         var hasGenerated = files.Any(file => file.IsGeneratedArtifact);
         var hasBuild = files.Any(file => file.Categories.Contains(RepositoryChangeCategory.BuildSystem));
-        var requiresConductorRelaunch = hasBuild || files.Any(file =>
-            ConductorRelaunchPathPrefixes.Any(prefix =>
-                file.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+        var requiresConductorRelaunch = files.Any(IsConductorRelaunchPath);
         var hasSecurity = files.Any(file => file.IsSecuritySensitive);
         var requiresBroad = files.Any(file => file.RequiresBroadVerification);
         var hasBehavior = files.Any(file =>
