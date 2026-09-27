@@ -259,7 +259,7 @@ internal sealed class OperatorIntentAdjudication(
         return parsed;
     }
 
-    private static AuthorizationTier ResolveAuthorizationTier(string assurance) => assurance switch
+    internal static AuthorizationTier ResolveAuthorizationTier(string assurance) => assurance switch
     {
         "local-process" => AuthorizationTier.AttestLand,
         "discord-operator-allowlist" => AuthorizationTier.Mutate,

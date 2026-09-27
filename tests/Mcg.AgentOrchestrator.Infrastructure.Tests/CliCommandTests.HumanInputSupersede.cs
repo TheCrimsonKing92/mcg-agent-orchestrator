@@ -86,10 +86,16 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
             correlationKey);
         Assert.True(await store.TryResolveAsync(correlationKey, "Use 5 seconds"));
 
-        var ordinaryAnswer = Assert.Throws<InvalidOperationException>(() => ExecuteCliAndCapture(
+        var ordinaryAnswer = ExecuteCliAndCapture(
             ["attention", "answer", goal.Id.Value[..8], "minimum-backoff-values", "5 seconds"],
             kernel,
-            workspace));
+            workspace);
+        var answerIntentStore = SqliteOperatorIntentStore.ForDirectories(
+            workspace.OrchestratorDirectory, workspace.LogDirectory);
+        var answerIntent = Assert.Single(await answerIntentStore.ListForGoalAsync(goal.Id.Value));
+        OperatorIntentCoordinator.CreateDefault(workspace).ExecutePending(kernel, goal);
+        var rejectedAnswer = await answerIntentStore.GetAsync(answerIntent.Id);
+        Assert.Equal(OperatorIntentStatus.Rejected, rejectedAnswer!.Status);
         var output = ExecuteCliAndCapture(
             ["supersede", goal.Id.Value[..8], "minimum-backoff-values", "5 seconds"],
             kernel,
@@ -117,7 +123,8 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
             workspace);
         var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-        Assert.Contains("already answered — use supersede", ordinaryAnswer.Message, StringComparison.Ordinal);
+        Assert.Contains("verb=answer", ordinaryAnswer, StringComparison.Ordinal);
+        Assert.Contains("already answered — use supersede", rejectedAnswer.Outcome, StringComparison.Ordinal);
         Assert.Contains("Authoritative answer: 5 seconds", output, StringComparison.Ordinal);
         Assert.Equal("5 seconds", updated.Resolution);
         Assert.Equal(2, updated.AnswerHistory?.Count);
