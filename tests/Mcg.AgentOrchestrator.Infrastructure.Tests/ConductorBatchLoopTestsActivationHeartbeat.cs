@@ -66,7 +66,7 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeat(ITestOutputHelper
         Assert.Equal(3, sleeps);
         var lines = outputText.Split('\n', StringSplitOptions.RemoveEmptyEntries |
             StringSplitOptions.TrimEntries);
-        Assert.Equal(2, lines.Count(line => line.StartsWith("TICK_END tick=1 activation=true ",
+        Assert.Equal(3, lines.Count(line => line.StartsWith("TICK_END tick=1 activation=true ",
             StringComparison.Ordinal)));
     }
 
