@@ -42,15 +42,17 @@ public sealed class CriterionOwnershipDerivationTests
         Xunit.Assert.Empty(result.OperatorOwned);
     }
 
-    [Xunit.Fact]
-    public void SubjectAcceptanceExecutionMentionDoesNotGrantGateOwnership()
+    [Xunit.Theory]
+    [Xunit.InlineData("Acceptance executes")]
+    [Xunit.InlineData("ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("executed by the acceptance gate")]
+    public void GateMarkerAnywhereMatchesCreationTimeClassification(string gateMarker)
     {
-        const string criterion =
-            "The subject mentions Acceptance executes this check. The report is ready. Developer owns. TEST-VERIFIABLE.";
+        var criterion = $"The focused behavior works. {gateMarker}.";
 
         var result = CriterionOwnershipDerivation.DeriveForRevision([criterion], [], []);
 
-        Xunit.Assert.Empty(result.AcceptanceGateOwned);
+        Xunit.Assert.Equal([criterion], result.AcceptanceGateOwned);
         Xunit.Assert.Empty(result.OperatorOwned);
     }
 

@@ -21,6 +21,29 @@ public sealed class GoalBriefRevisionOwnershipTests
             item => item.CriterionVersion == 2 && item.RequiredScope == "ownership mapping required");
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("Acceptance executes")]
+    [Xunit.InlineData("ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("executed by the acceptance gate")]
+    public void RewordedCreationTimeGateMarkerKeepsAcceptanceOwnership(string gateMarker)
+    {
+        const string original = "The original behavior works. Acceptance executes.";
+        var revised = $"The focused behavior works. {gateMarker}.";
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(Brief(original));
+        kernel.SetGoalRefinedSpec(goal.Id, Spec([original], [original]));
+
+        kernel.ReviseGoalBrief(goal.Id, Brief(revised));
+
+        Xunit.Assert.Equal([revised], goal.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        var obligation = Xunit.Assert.Single(goal.CriterionEvidenceObligations,
+            item => item.CriterionVersion == 2 && item.CriterionIndex == 0);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceScopes.FullAcceptanceGate, obligation.RequiredScope);
+        Xunit.Assert.DoesNotContain(goal.CriterionEvidenceObligations,
+            item => item.CriterionVersion == 2 && item.RequiredScope == "ownership mapping required");
+    }
+
     [Xunit.Fact]
     public void UnchangedCriteriaKeepOwnersAndNewOperatorPhraseAssignsOperator()
     {

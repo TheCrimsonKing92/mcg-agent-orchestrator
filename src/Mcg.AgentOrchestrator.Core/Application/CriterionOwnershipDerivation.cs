@@ -28,7 +28,7 @@ public static class CriterionOwnershipDerivation
                 AcceptanceCriterionOwnershipClassification.OperatorOwned or
                 AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal;
             var gateOwnedByMarker = !operatorOwnedByMarker &&
-                AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(marker.TrailingRegion);
+                AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion);
             if (priorOperator.Contains(criterion) ||
                 operatorOwnedByMarker)
             {
