@@ -11,10 +11,9 @@ internal static class ReverseDependencyTestImpactReader
     internal const int MaximumChangedSourceFiles = 5;
     private const int MaximumDependencyHops = 2;
     private const int MaximumFrontierSymbols = 64;
-    // The dispatch closure in this repository already resolves 33 consumer test classes, so a 32-class
-    // bound widened every dispatch change to the full Infrastructure suite. 48 keeps the guardrail
-    // against unbounded filters while leaving headroom for the closure's observed size.
-    internal const int MaximumSelectedTestClasses = 48;
+    // The current classifier closure resolves 49 consumer test classes. Keep a bounded focused
+    // filter with room for new tests before widening to the full Infrastructure suite.
+    internal const int MaximumSelectedTestClasses = 64;
     private const int MaximumIndexedSourceFiles = 2_000;
     private const int MaximumRetainedSnapshots = 4;
     private const string CacheSchema = "reverse-dependency-index-v1";

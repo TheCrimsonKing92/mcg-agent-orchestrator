@@ -399,6 +399,7 @@ public sealed partial class AgentOrchestratorKernel
         task.RecordCompletionVerdict(
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess,
             outcomeRule);
+        RecordDeferredNoChangeOutcome(goal, task, taskId, verification, outcomeRule);
         var isVerifiedNoChangeRound = string.Equals(
             outcomeRule,
             TaskOutcomeRules.VerifiedNoChangeRound.Token,

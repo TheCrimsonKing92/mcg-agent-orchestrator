@@ -2889,6 +2889,7 @@ internal sealed partial class ConductorBatchLoop
                 IsParallelAcceptanceLifecycleEligible(goal, driver) &&
                 goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
                 AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) &&
+                !ConductorDriver.HasPendingDeferredNoChangeEvidence(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 VerifiedAcceptanceEscalationDecision.TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
