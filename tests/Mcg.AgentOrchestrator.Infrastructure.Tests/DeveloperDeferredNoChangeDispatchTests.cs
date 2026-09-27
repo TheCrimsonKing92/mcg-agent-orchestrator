@@ -28,7 +28,8 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
     [Xunit.InlineData("no-rationale")]
     [Xunit.InlineData("no-classes")]
     [Xunit.InlineData("blocker")]
-    public void NonQualifyingCleanRoundKeepsRejectionDiagnostic(string missing)
+    [Xunit.InlineData("dirty")]
+    public void NonQualifyingRoundKeepsExistingDiagnostic(string missing)
     {
         var (kernel, goal, task, _, clock, _) = Scenario(missing);
 
@@ -36,8 +37,19 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
 
         Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Xunit.Assert.Equal(1, task.LastVerification!.ExitCode);
-        Xunit.Assert.Contains("DISPATCH_REJECTED role=Developer",
-            goal.Timeline.Last(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed).Message,
+        var failure = goal.Timeline.Last(evt => evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskFailed).Message;
+        if (missing == "dirty")
+        {
+            Xunit.Assert.Contains("left the worktree dirty",
+                task.LastVerification.StandardError, StringComparison.Ordinal);
+            Xunit.Assert.Contains("worktree=dirty",
+                task.LastVerification.StandardError, StringComparison.Ordinal);
+        }
+        else
+            Xunit.Assert.Contains("DISPATCH_REJECTED role=Developer", failure,
+                StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("DEFERRED_NO_CHANGE_OUTCOME", failure,
             StringComparison.Ordinal);
     }
 
@@ -53,14 +65,19 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
                     "deferred - DeferredAlphaTests",
                 commit: "none", blockers: missing == "blocker" ? "source work remains" : "none");
         var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
-            root, AgentRole.Developer, output, string.Empty, clock);
+            root, AgentRole.Developer, output, string.Empty, clock,
+            mutateWorktree: missing == "dirty"
+                ? worktree => File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted")
+                : null,
+            sandboxLowIntegrity: missing == "dirty");
         var candidate = ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]);
         if (missing != "no-retry")
         {
             kernel.RetryTask(goal.Id, task.Id, "Review the unchanged candidate after evidence.");
             kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
                 "codex-cli", process.Command, process.WorkingDirectory,
-                DateTimeOffset.UtcNow.AddMinutes(1), BaseCommit: candidate));
+                DateTimeOffset.UtcNow.AddMinutes(1), BaseCommit: candidate,
+                SandboxLowIntegrity: missing == "dirty"));
             kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
         }
         else kernel.RecordDispatchBaseCommit(goal.Id, task.Id, candidate);
