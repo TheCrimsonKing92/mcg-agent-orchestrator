@@ -2691,7 +2691,8 @@ internal sealed partial class ConductorDriver
             ? null
             : new ActionableCandidateRedAttribution(
                 attributableFindings.DistinctBy(finding => finding.StableId).ToArray(),
-                attributableFailingTests.ToArray());
+                attributableFailingTests.ToArray(),
+                candidate.TestResultPaths ?? []);
     }
 
     private static bool IsDeveloperOwnedFindingAnchor(string path) =>
@@ -2957,7 +2958,8 @@ internal sealed partial class ConductorDriver
 
     private sealed record ActionableCandidateRedAttribution(
         IReadOnlyList<ReviewFinding> Findings,
-        IReadOnlyList<string> FailingTestIdentities);
+        IReadOnlyList<string> FailingTestIdentities,
+        IReadOnlyList<string> CandidateTestResultPaths);
 
     internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
         Goal goal,
