@@ -53,6 +53,8 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _adopted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _restored =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _idleLaunched =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private ConductorSupervisorProcessRequest? _idleRequest;
@@ -66,6 +68,8 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
             {
                 if (evt.Operation == "activation" && evt.Status == "adopted")
                     _adopted.TrySetResult();
+                if (evt.Operation == "activation" && evt.Status == "restored")
+                    _restored.TrySetResult();
             };
             Host.Step = (request, index, token) =>
             {
@@ -112,15 +116,12 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
             for (var iteration = 0; iteration < 2; iteration++)
             {
                 Deadlines.Advance(TimeSpan.FromSeconds(120));
-                _idleRequest!.OnStandardOutputLine!($"TICK_END tick={iteration + 2} activation=true");
+                _idleRequest!.OnStandardOutputLine!("TICK_END tick=1 activation=true");
                 if (iteration == 0)
-                {
                     _idleRequest.OnStandardOutputLine("IDLE_SLEEP seconds=120");
-                    await Deadlines.WaitForCountAsync(2);
-                }
             }
-            if (!restore)
-                await AwaitSignalAsync(_adopted.Task, "ACTIVATION_ADOPTED");
+            await AwaitSignalAsync(restore ? _restored.Task : _adopted.Task,
+                restore ? "ACTIVATION_RESTORED" : "ACTIVATION_ADOPTED");
             ConductorContinuityExitArtifact.Write(_idleRequest!.ExitArtifactPath,
                 new("stop-file", 3, 0, false));
             _idleExit.TrySetResult(new ConductorSupervisorProcessResult(0, restore ? 102 : 101));
@@ -167,7 +168,7 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
         {
             _now += duration;
             foreach (var (due, completion) in _pending)
-                if (due <= _now) completion.TrySetResult();
+                if (due < _now) completion.TrySetResult();
         }
     }
 
