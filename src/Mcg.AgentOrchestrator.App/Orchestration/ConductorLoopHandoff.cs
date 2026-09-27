@@ -916,7 +916,8 @@ internal static partial class ConductorLoopHandoff
                         : "not-applicable";
                     TryAppendWindowsSpawnEvent(
                         request,
-                        $"spawnPath=windows-createprocess error={ex.GetType().Name} nativeError={nativeError} message={ex.Message}",
+                        FormatWindowsSpawnEventDetail(request,
+                            $"spawnPath=windows-createprocess error={ex.GetType().Name} nativeError={nativeError} message={ex.Message}"),
                         eventKind: "loop-handoff-console-suppression-failed");
                 }
 
@@ -930,11 +931,12 @@ internal static partial class ConductorLoopHandoff
                             : "existing-console-preserved";
                     TryAppendWindowsSpawnEvent(
                         request,
-                        $"spawnPath=windows-createprocess incumbentConsole={incumbentConsole.Window} " +
-                        $"incumbentConsoleAttached={ToLowerInvariant(incumbentConsole.Attached)} " +
-                        $"incumbentConsoleVisible={ToLowerInvariant(incumbentConsole.Visible)} " +
-                        $"spawnConsoleAttached={ToLowerInvariant(spawnConsole.Attached)} " +
-                        $"spawnConsoleVisible={ToLowerInvariant(spawnConsole.Visible)} suppression={suppression}");
+                        FormatWindowsSpawnEventDetail(request,
+                            $"spawnPath=windows-createprocess incumbentConsole={incumbentConsole.Window} " +
+                            $"incumbentConsoleAttached={ToLowerInvariant(incumbentConsole.Attached)} " +
+                            $"incumbentConsoleVisible={ToLowerInvariant(incumbentConsole.Visible)} " +
+                            $"spawnConsoleAttached={ToLowerInvariant(spawnConsole.Attached)} " +
+                            $"spawnConsoleVisible={ToLowerInvariant(spawnConsole.Visible)} suppression={suppression}"));
 
                     beforeCreateProcess?.Invoke();
                     if (!CreateProcessW(
