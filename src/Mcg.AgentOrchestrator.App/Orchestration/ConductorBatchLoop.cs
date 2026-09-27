@@ -978,6 +978,8 @@ internal sealed partial class ConductorBatchLoop
                     var idleInterval = ConsumeWatchInterval(
                         configuredInterval,
                         Math.Max(recheckableBlockedGoals, transientLoadRecheckPending ? 1 : 0));
+                    if (totalTicks < nextTick)
+                        CompleteActivationTick(nextTick);
                     EmitProgress(
                         recheckableBlockedGoals > 0 || transientLoadRecheckPending
                             ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals}" +
@@ -1013,8 +1015,6 @@ internal sealed partial class ConductorBatchLoop
                         break;
                     }
 
-                    if (totalTicks < nextTick)
-                        CompleteActivationTick(nextTick);
                     continue;
                 }
 
