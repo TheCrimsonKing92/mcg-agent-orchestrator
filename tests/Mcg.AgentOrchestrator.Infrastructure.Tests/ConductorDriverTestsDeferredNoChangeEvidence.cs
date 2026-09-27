@@ -70,21 +70,26 @@ public sealed class ConductorDriverTestsDeferredNoChangeEvidence
     public void GreenEvidenceDoesNotExemptTesterRedispatchOnSameCandidate()
     {
         using var scenario = new Scenario(passTester: true);
-        var dispatches = 0;
+        var dispatches = new List<AgentRole>();
         var driver = scenario.Driver(
             request => ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
                 scenario.Root, request, Candidate),
-            _ => dispatches++);
+            dispatches.Add);
         driver.OverrideCandidateIdentityResolverForTests(_ => scenario.Identity);
 
         driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
         Xunit.Assert.False(ConductorDriver.HasPendingDeferredNoChangeEvidence(scenario.Goal));
+        Xunit.Assert.Contains(AgentRole.Reviewer, dispatches);
+        dispatches.Clear();
         scenario.Kernel.RetryTask(scenario.Goal.Id, scenario.Tester.Id,
             "Repeat without a new candidate.", RetryCause.UnchangedContextRepeat);
+        Xunit.Assert.Equal(AgentRole.Tester,
+            Xunit.Assert.IsType<UnchangedCandidateHoldReason>(
+                UnchangedCandidateRule.Evaluate(scenario.Goal, scenario.Tester, scenario.Identity)).Role);
 
         var result = driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
 
-        Xunit.Assert.Equal(0, dispatches);
+        Xunit.Assert.Empty(dispatches);
         Xunit.Assert.IsType<UnchangedCandidateHoldReason>(
             Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome).TypedReason);
     }
