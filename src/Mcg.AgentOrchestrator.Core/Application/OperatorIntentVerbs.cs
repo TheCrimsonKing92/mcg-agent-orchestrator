@@ -4,6 +4,7 @@ public static class OperatorIntentVerbs
 {
     public const string Progress = "progress";
     public const string Retry = "retry";
+    public const string Answer = "answer";
     public const string VerifyManual = "verify-manual";
     public const string Adjudicate = "adjudicate";
     public const string ApprovePolicyChange = "approve-policy-change";
@@ -17,6 +18,21 @@ public enum OperatorActorKind
     Human = 1,
     Agent = 2
 }
+
+public enum OperatorAnswerTargetKind
+{
+    Clarification = 1,
+    HumanInput = 2
+}
+
+public sealed record AnswerOperatorIntentPayload(
+    OperatorAnswerTargetKind TargetKind,
+    string TargetId,
+    string GoalId,
+    string Text,
+    OperatorActorKind ActorKind,
+    IReadOnlyList<string>? EvidenceReferences = null,
+    string? Precedent = null);
 
 public sealed record AdjudicateOperatorIntentPayload(
     string Shape,

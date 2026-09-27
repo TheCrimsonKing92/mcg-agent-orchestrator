@@ -303,10 +303,11 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             ["attention", "answer", goal.Id.Value[..8], printedId, "Use the printed identifier."],
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         var resolved = (await store.ListAsync()).Single(item => item.Id == raised.Id);
 
         Xunit.Assert.Equal(raised.Id[..8], printedId);
-        Xunit.Assert.Contains($"Answered clarification '{printedId}'", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verb=answer", output, StringComparison.Ordinal);
         Xunit.Assert.Equal("Use the printed identifier.", resolved.Resolution);
     }
 
@@ -329,9 +330,10 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             ["attention", "answer", raised.Id[..8], "Use the global printed identifier."],
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         var resolved = (await store.ListAsync()).Single(item => item.Id == raised.Id);
 
-        Xunit.Assert.Contains($"Answered clarification '{raised.Id[..8]}'", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verb=answer", output, StringComparison.Ordinal);
         Xunit.Assert.Equal("Use the global printed identifier.", resolved.Resolution);
     }
 
@@ -359,12 +361,14 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
                 $"attention answer {goal.Id.Value[..8]} stranded-edits-preservation-mechanism Preserve edits."),
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, goal);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         var items = await store.ListAsync();
 
         Xunit.Assert.Contains("[stranded-edits-disposition] Disposition", shown, StringComparison.Ordinal);
         Xunit.Assert.Contains("[stranded-edits-preservation-mechanism] Preservation", shown, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Answered clarification 'stranded-edits-disposition'", firstAnswer, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Answered clarification 'stranded-edits-preservation-mechanism'", secondAnswer, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verb=answer", firstAnswer, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verb=answer", secondAnswer, StringComparison.Ordinal);
         Xunit.Assert.Equal("Apply disposition.", items.Single(item => item.CorrelationKey == disposition).Resolution);
         Xunit.Assert.Equal("Preserve edits.", items.Single(item => item.CorrelationKey == preservation).Resolution);
     }
@@ -395,6 +399,7 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             ["attention", "answer", goal.Id.Value[..8], "stranded-edits-disposition", "Apply disposition."],
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         var after = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
 
         const string stableLine = "[stranded-edits-preservation-mechanism] Preservation";
@@ -425,13 +430,14 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
                 $"attention answer {goal.Id.Value[..8]} {secondKey} Second answer."),
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         var resolved = (await store.ListAsync()).Single(item => item.CorrelationKey == secondKey);
 
         Xunit.Assert.Contains($"[{firstKey}] First", shown, StringComparison.Ordinal);
         Xunit.Assert.Contains($"[{secondKey}] Second", shown, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("more characters", ambiguous.Message, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.Contains("full correlation key", ambiguous.Message, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains($"Answered clarification '{secondKey}'", answered, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verb=answer", answered, StringComparison.Ordinal);
         Xunit.Assert.Equal("Second answer.", resolved.Resolution);
     }
 
@@ -455,9 +461,10 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         var answerParts = CliArgumentParser.NormalizeArgs(
             ["attention", "answer", goal.Id.Value[..8], correlationKey, "Use", "the", "narrow", "scope."]);
         var answered = ExecuteCliAndCapture(answerParts, kernel, workspace);
+        ApplyQueuedAnswer(kernel, workspace, goal);
 
         Xunit.Assert.Contains($"[{correlationKey}] Scope", shown, StringComparison.Ordinal);
-        Xunit.Assert.Contains($"Answered clarification '{correlationKey}'", answered, StringComparison.Ordinal);
+        Xunit.Assert.Contains("verb=answer", answered, StringComparison.Ordinal);
     }
 
 
@@ -492,9 +499,10 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         _ = await store.RaiseAsync(CollaborationItemType.Clarification, other.Id.Value, "Other clarification", "Other body", $"spec-clarification:{other.Id.Value}:scope:44444444");
 
         var output = ExecuteCliAndCapture(["attention", "answer", "eeeeeeee", "33333333", "Use the target answer."], kernel, workspace);
+        ApplyQueuedAnswer(kernel, workspace, target);
         var queue = await store.GetAttentionQueueAsync();
 
-        Xunit.Assert.Equal($"Answered clarification '33333333' for goal '{target.Id.Value[..8]}'.{Environment.NewLine}", output);
+        Xunit.Assert.Contains("verb=answer", output);
         Xunit.Assert.DoesNotContain("Other clarification", output);
         Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{target.Id.Value}:scope:33333333");
         Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{other.Id.Value}:scope:44444444");
@@ -520,11 +528,14 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             ["attention", "answer", target.Id.Value[..8], "33333333", "Measure it with two conductor gates."],
             kernel,
             workspace);
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace);
+        coordinator.ExecutePending(kernel, target);
         var item = Xunit.Assert.Single(await store.ListAsync(target.Id.Value));
 
-        Xunit.Assert.Equal(
-            $"Failed to resolve clarification '33333333' for goal '{target.Id.Value[..8]}'.{Environment.NewLine}",
-            output);
+        Xunit.Assert.Contains("verb=answer", output);
+        var rejected = Xunit.Assert.Single(await SqliteOperatorIntentStore.ForDirectories(
+            workspace.OrchestratorDirectory, workspace.LogDirectory).ListForGoalAsync(target.Id.Value));
+        Xunit.Assert.Equal(OperatorIntentStatus.Rejected, rejected.Status);
         Xunit.Assert.Equal(CollaborationItemStatus.Raised, item.Status);
         Xunit.Assert.Null(item.Resolution);
     }
@@ -547,9 +558,10 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             CliArgumentParser.SplitCommand($"attention answer {target.Id.Value[..8]} 12345678 --text-file {answerPath}"),
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, target);
         var resolved = (await store.ListAsync()).Single(item => item.CorrelationKey == $"spec-clarification:{target.Id.Value}:scope:12345678");
 
-        Xunit.Assert.Equal($"Answered clarification '12345678' for goal '{target.Id.Value[..8]}'.{Environment.NewLine}", output);
+        Xunit.Assert.Contains("verb=answer", output);
         Xunit.Assert.Equal(answer, resolved.Resolution);
     }
 
@@ -647,9 +659,10 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             ["attention", "answer", "66666666", "Use", "the", "global", "answer."],
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, goalA);
         var queue = await store.GetAttentionQueueAsync();
 
-        Xunit.Assert.Equal($"Answered clarification '66666666'.{Environment.NewLine}", output);
+        Xunit.Assert.Contains("verb=answer", output);
         Xunit.Assert.DoesNotContain("Unrelated clarification", output);
         Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{goalA.Id.Value}:global:66666666");
         Xunit.Assert.Equal(10, queue.Count);
@@ -672,11 +685,12 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             ["attention", "answer", "66666666", "deadbeef", "continue"],
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, goalA);
         var items = await store.ListAsync();
         var resolved = items.Single(item => item.CorrelationKey == $"spec-clarification:{goalA.Id.Value}:global:66666666");
         var queue = await store.GetAttentionQueueAsync();
 
-        Xunit.Assert.Equal($"Answered clarification '66666666'.{Environment.NewLine}", output);
+        Xunit.Assert.Contains("verb=answer", output);
         Xunit.Assert.Equal("deadbeef continue", resolved.Resolution);
         Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{goalA.Id.Value}:global:66666666");
         Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{goalB.Id.Value}:global:deadbeef");
@@ -699,11 +713,12 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             ["attention", "answer", "66666666", "deadbeef", "continue"],
             kernel,
             workspace);
+        ApplyQueuedAnswer(kernel, workspace, owner);
         var items = await store.ListAsync();
         var resolved = items.Single(item => item.CorrelationKey == $"spec-clarification:{owner.Id.Value}:global:66666666");
         var queue = await store.GetAttentionQueueAsync();
 
-        Xunit.Assert.Equal($"Answered clarification '66666666'.{Environment.NewLine}", output);
+        Xunit.Assert.Contains("verb=answer", output);
         Xunit.Assert.Equal("deadbeef continue", resolved.Resolution);
         Xunit.Assert.DoesNotContain(queue, item => item.CorrelationKey == $"spec-clarification:{owner.Id.Value}:global:66666666");
         Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{collidingGoal.Id.Value}:scope:deadbeef");
@@ -851,8 +866,9 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
 
         var result = ExecuteCliAndCaptureResult(command, kernel, workspace);
 
-        Xunit.Assert.True(result.Changed);
-        Xunit.Assert.Same(goal, result.CurrentGoal);
+        Xunit.Assert.False(result.Changed);
+        Xunit.Assert.False(request.IsCompleted);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         Xunit.Assert.True(request.IsCompleted);
         Xunit.Assert.Equal("approved", request.Answer);
         Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
@@ -885,8 +901,9 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
 
         var result = ExecuteCliAndCaptureResult(globalCommand, kernel, workspace);
 
-        Xunit.Assert.True(result.Changed);
-        Xunit.Assert.Same(goal, result.CurrentGoal);
+        Xunit.Assert.False(result.Changed);
+        Xunit.Assert.False(request.IsCompleted);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         Xunit.Assert.True(request.IsCompleted);
         Xunit.Assert.Equal("globally-approved", request.Answer);
         Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
@@ -913,8 +930,9 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
 
         var result = ExecuteCliAndCaptureResult(command, kernel, workspace);
 
-        Xunit.Assert.True(result.Changed);
-        Xunit.Assert.Same(goal, result.CurrentGoal);
+        Xunit.Assert.False(result.Changed);
+        Xunit.Assert.False(request.IsCompleted);
+        ApplyQueuedAnswer(kernel, workspace, goal);
         Xunit.Assert.True(request.IsCompleted);
         Xunit.Assert.Equal("full-id-approved", request.Answer);
         Xunit.Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
@@ -999,4 +1017,11 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
     }
 
 
+    private static void ApplyQueuedAnswer(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal)
+    {
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace);
+        Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+        coordinator.CompletePersisted([goal.Id]);
+    }
 }
