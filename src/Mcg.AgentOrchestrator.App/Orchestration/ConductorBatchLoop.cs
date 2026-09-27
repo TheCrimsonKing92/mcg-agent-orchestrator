@@ -697,6 +697,7 @@ internal sealed partial class ConductorBatchLoop
 
             var preWalkClock = Stopwatch.StartNew();
             var stewardChangedGoalIds = ServiceSteward(kernel, onlyGoalId);
+            var authorChangedGoalIds = ServiceAuthor(kernel, onlyGoalId);
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
             var preWalkIntentLines = new List<string>();
             var preWalkIntentProcessed = false;
@@ -718,7 +719,7 @@ internal sealed partial class ConductorBatchLoop
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !sweepTerminalizedGoalIds.Contains(g.Id)
                     && !checkpointHeldGoals.ContainsKey(g.Id.Value)
-                    && (g.CurrentHold?.State != "steward-owner-question" || actionableIntentGoalIds.Contains(g.Id.Value))
+                    && (!ConductorOwnerQuestionHolds.ExcludesFromWalk(g.CurrentHold?.State) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))
                 .ToArray();
@@ -726,6 +727,7 @@ internal sealed partial class ConductorBatchLoop
                 .Select(goal => goal.Id).ToHashSet();
             var scopedGoalsById = scopedGoals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
             var preWalkIntentChangedGoalIds = new HashSet<GoalId>(stewardChangedGoalIds);
+            preWalkIntentChangedGoalIds.UnionWith(authorChangedGoalIds);
             if (_operatorIntents is not null)
             {
                 foreach (var actionableGoalId in actionableIntentGoalIds)
@@ -1698,6 +1700,7 @@ internal sealed partial class ConductorBatchLoop
         finally
         {
             StopSteward();
+            StopAuthor();
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
