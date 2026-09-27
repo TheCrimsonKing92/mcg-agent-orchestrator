@@ -19,7 +19,8 @@ internal sealed record ApparatusRedEvidence(
     IReadOnlyList<ApparatusRedFailingTest> FailingTests,
     bool EveryFailedCheckHasTestIdentities,
     int RegateCount,
-    int RegateCap);
+    int RegateCap,
+    bool WithinAttemptRerunExplained = false);
 
 internal abstract record ApparatusRedDisposition
 {
@@ -121,6 +122,11 @@ internal static class ApparatusRedClassifier
             return new ApparatusRedDisposition.Genuine(
                 $"failing test {failingTest.TestIdentity} has neither a recorded infrastructure signature " +
                 "nor a prior cross-goal occurrence");
+        }
+
+        if (evidence.WithinAttemptRerunExplained)
+        {
+            evidenceKinds.Add(WithinAttemptRerunApparatusEvidence.EvidenceKind);
         }
 
         var evidenceKind = string.Join(
