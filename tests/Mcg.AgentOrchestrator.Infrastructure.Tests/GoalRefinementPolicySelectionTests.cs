@@ -166,7 +166,7 @@ public sealed class GoalRefinementPolicySelectionTests
                 .Where(item => item.Kind == ProgressKind.GoalPolicyDecision)
                 .Select(item => item.Message)
                 .ToArray();
-            var receipt = Assert.Single(decisions.Where(item => item.StartsWith("spec_refinement outcome=", StringComparison.Ordinal)));
+            var receipt = Assert.Single(decisions.Where(item => item.StartsWith("spec_refinement outcome=completed", StringComparison.Ordinal)));
             var fallbackDecisions = decisions
                 .Where(item => item.StartsWith(GoalRefinementWorkCoordinator.PolicyFallbackDecisionPrefix, StringComparison.Ordinal))
                 .ToArray();
