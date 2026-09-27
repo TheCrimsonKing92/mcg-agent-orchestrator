@@ -66,14 +66,15 @@ internal sealed partial class OperatorIntentCoordinator
                 if (CollaborationItemLifecycle.IsTerminal(item.Status))
                 {
                     if (item.ResolvedAt is not { } resolvedAt || resolvedAt < intent.ClaimedAt ||
-                        !string.Equals(item.AuthoritativeAnswer?.Text, payload.Text, StringComparison.Ordinal) ||
-                        item.AuthoritativeAnswer.BriefVersion != goal.AuthoritativeBrief.Version)
+                        item.AuthoritativeAnswer is not { } authoritativeAnswer ||
+                        authoritativeAnswer.BriefVersion is not { } answerBriefVersion ||
+                        !string.Equals(authoritativeAnswer.Text, payload.Text, StringComparison.Ordinal))
                         throw new InvalidOperationException($"Clarification '{payload.TargetId}' is already answered — use supersede.");
                     try
                     {
                         if (!(_clarificationAnswerRecovery ?? throw new InvalidOperationException(
                             "Clarification answer recovery is not configured."))
-                            (item.CorrelationKey, payload.Text, goal.AuthoritativeBrief.Version).GetAwaiter().GetResult())
+                            (item.CorrelationKey, payload.Text, answerBriefVersion).GetAwaiter().GetResult())
                             throw new InvalidOperationException("Resolved clarification answer could not be recovered.");
                     }
                     catch (Exception ex)
@@ -103,7 +104,7 @@ internal sealed partial class OperatorIntentCoordinator
                 if (request.IsCompleted)
                 {
                     if (request.AnsweredAt is not { } answeredAt || answeredAt < intent.ClaimedAt ||
-                        !string.Equals(request.Answer, payload.Text, StringComparison.Ordinal))
+                        !string.Equals(request.Answer, payload.Text.Trim(), StringComparison.Ordinal))
                         throw new InvalidOperationException($"Human-input request '{payload.TargetId}' is already answered.");
                     break;
                 }

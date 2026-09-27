@@ -142,6 +142,47 @@ public sealed class OperatorIntentAnswerHumanInputTests
     }
 
     [Xunit.Fact]
+    public async Task Claimed_answer_recovers_after_human_input_completed_with_trailing_newline()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"answer-completed-recovery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Resume after answer", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Recover human input answer", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var request = kernel.RequestHumanInput(goal.Id, task.Id, "Which path?",
+                HumanWaitKind.SpecClarification);
+            var decisions = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            var payload = new AnswerOperatorIntentPayload(OperatorAnswerTargetKind.HumanInput,
+                request.Id.Value, goal.Id.Value, "Use existing path\r\n", OperatorActorKind.Human);
+            var intent = await intents.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"),
+                Guid.NewGuid().ToString("N"), OperatorIntentVerbs.Answer, goal.Id.Value, null,
+                JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [], "operator", "cli",
+                "local-process", DateTimeOffset.UtcNow)).WaitAsync(TimeSpan.FromSeconds(30));
+            Xunit.Assert.NotNull(await intents.ClaimNextAsync(goal.Id.Value, OperatorIntentCoordinator.ClaimOwner)
+                .WaitAsync(TimeSpan.FromSeconds(30)));
+            kernel.SubmitHumanInput(request.Id, payload.Text);
+            Xunit.Assert.Equal("Use existing path", request.Answer);
+
+            var coordinator = new OperatorIntentCoordinator(intents, decisions: decisions,
+                goalStateVersionResolver: _ => 0);
+            Xunit.Assert.True(coordinator.ExecutePending(kernel, goal).MutatedGoalState);
+            coordinator.CompletePersisted([goal.Id]);
+
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied,
+                (await intents.GetAsync(intent.Id).WaitAsync(TimeSpan.FromSeconds(30)))!.Status);
+            Xunit.Assert.NotNull((await decisions.GetDecisionStateAsync($"answer-{intent.Id}")
+                .WaitAsync(TimeSpan.FromSeconds(30)))?.Receipt);
+            Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Fact]
     public async Task Prior_decision_replay_resumes_request_from_uncheckpointed_goal()
     {
         var root = Path.Combine(Path.GetTempPath(), $"answer-replay-{Guid.NewGuid():N}");

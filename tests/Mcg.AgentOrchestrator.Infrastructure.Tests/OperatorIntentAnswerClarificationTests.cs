@@ -96,8 +96,10 @@ public sealed class OperatorIntentAnswerClarificationTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    [Xunit.Fact]
-    public async Task Claimed_answer_recovers_decision_and_precedent_after_resolution()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task Claimed_answer_recovers_decision_and_precedent_after_resolution(bool briefRevised)
     {
         var root = Path.Combine(Path.GetTempPath(), $"answer-recovery-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -124,6 +126,8 @@ public sealed class OperatorIntentAnswerClarificationTests
                 .WaitAsync(TimeSpan.FromSeconds(30)));
             Xunit.Assert.True(await decisions.TryResolveAsync(key, "Windows",
                 briefVersion: goal.AuthoritativeBrief.Version).WaitAsync(TimeSpan.FromSeconds(30)));
+            if (briefRevised)
+                kernel.ReviseGoalBrief(goal.Id, "Recover clarification answer under revised brief");
             Xunit.Assert.Null(await precedents.TryGetPrecedentAsync("scope").WaitAsync(TimeSpan.FromSeconds(30)));
             var coordinator = new OperatorIntentCoordinator(intents, decisions: decisions,
                 goalStateVersionResolver: _ => 0,
