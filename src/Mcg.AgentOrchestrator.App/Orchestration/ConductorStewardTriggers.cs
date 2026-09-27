@@ -33,7 +33,7 @@ internal sealed record ConductorStewardTrigger(
     internal string TaskCandidateIdentity => $"{GoalId}:{TaskId}:{CandidateSha}";
 }
 
-internal sealed class ConductorStewardTriggerDetector(
+internal sealed partial class ConductorStewardTriggerDetector(
     Func<Goal, string, string?>? candidateAddedClassCollection = null,
     Func<Goal, IReadOnlyList<string>>? acceptanceTrxPaths = null)
 {
@@ -60,7 +60,7 @@ internal sealed class ConductorStewardTriggerDetector(
             if (string.IsNullOrWhiteSpace(candidateSha)) continue;
             var workerResult = ExtractWorkerResult(verification.AuthoritativeStandardOutput ?? verification.StandardOutput);
             if (task.RequiredRole == AgentRole.Developer &&
-                ContainsNoChangeRejection(verification) &&
+                IsNoCommitRejection(verification) &&
                 (needsInspection?.Invoke(ConductorStewardTriggerKind.DeveloperNoChangeWithConfirmedRed,
                     task.Id.Value, candidateSha) ?? true) &&
                 TryFindConfirmedRed(goal, candidateSha, out var redEvidence, out var redReferences))
@@ -126,11 +126,6 @@ internal sealed class ConductorStewardTriggerDetector(
         }
         return result;
     }
-
-    private static bool ContainsNoChangeRejection(TaskVerificationRecord verification) =>
-        string.Equals(verification.OrchestratorFailureReason, "no-change-evidence", StringComparison.Ordinal) ||
-        (verification.AuthoritativeStandardError ?? verification.StandardError)
-            .Contains("reason=no-change-evidence", StringComparison.Ordinal);
 
     private static bool TryFindConfirmedRed(
         Goal goal, string candidateSha, out string evidence, out IReadOnlyList<string> references)
