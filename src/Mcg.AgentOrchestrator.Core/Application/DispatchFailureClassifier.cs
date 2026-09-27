@@ -770,6 +770,18 @@ public static partial class DispatchFailureClassifier
                     $"deferred-no-change-round: candidate {task.LastDispatch!.BaseCommit}"));
         }
 
+        if (task.RequiredRole == AgentRole.Developer &&
+            DeferredNoChangeOutcome.ContainsMarker(verification.StandardError))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.UnknownFailure,
+                task, verification, workerResultPresent, hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure, exitCode, hasZeroByteOutput,
+                    null, null, RecoveryRecommendation.OperatorNeeded,
+                    "Deferred no-change marker disagrees with authoritative worker output."));
+        }
+
         if (IsRetryRoundWithoutCommitOrDeferral(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(

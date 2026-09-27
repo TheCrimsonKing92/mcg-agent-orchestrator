@@ -14,16 +14,16 @@ internal sealed partial class ConductorDriver
         out ConductorAdvanceResult result)
     {
         result = default!;
-        if (fromState is not (GoalLifecycleState.WorkspaceReady or
+        if (fromState is not (GoalLifecycleState.WorkspaceReady or GoalLifecycleState.Dispatched or
             GoalLifecycleState.Verifying or GoalLifecycleState.Verified)) return false;
 
         var developer = goal.Tasks.LastOrDefault(task =>
             task.RequiredRole == AgentRole.Developer && task.Status == WorkTaskStatus.Completed &&
             string.Equals(task.LastVerification?.CompletionVerdictRule,
                 "deferred-no-change-round", StringComparison.Ordinal));
-        if (developer?.LastVerification is null ||
-            !DeferredNoChangeOutcome.TryParse(developer.LastVerification.StandardError, out var outcome))
-            return false;
+        if (developer?.LastVerification is null) return false;
+        if (!DeferredNoChangeOutcome.TryParse(developer.LastVerification.StandardError, out var outcome))
+            throw new InvalidDataException("Deferred no-change completion lost its candidate-bound outcome.");
 
         var prior = DeferredNoChangeEvidenceIndexLines.Latest(goal, developer.Id, outcome.CandidateSha);
         if (prior is { Outcome: "green" })
@@ -46,9 +46,11 @@ internal sealed partial class ConductorDriver
         if (!_focusedEvidenceRunnerConfigured || _executionDirectory is null ||
             !string.Equals(currentSha, outcome.CandidateSha, StringComparison.OrdinalIgnoreCase))
         {
-            result = MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState,
-                    $"Deferred no-change evidence awaits candidate {outcome.CandidateSha} and a focused runner."));
+            result = Escalate(goal, goalPrefix, policy, fromState,
+                $"DEFERRED_NO_CHANGE_EVIDENCE_UNAVAILABLE task={developer.Id.Value} " +
+                $"candidate_sha={outcome.CandidateSha}; current_sha={currentSha ?? "none"}; " +
+                $"focused_runner_configured={_focusedEvidenceRunnerConfigured}; " +
+                $"execution_directory_present={_executionDirectory is not null}");
             return true;
         }
 
@@ -83,7 +85,8 @@ internal sealed partial class ConductorDriver
         {
             RecordDeferredNoChangeEvidence("unusable", [], null);
             return RetryDeveloperForDeferredNoChange(
-                goal, developer, outcome, receiptId, notRun, [], goalPrefix, policy, fromState, out result);
+                goal, developer, outcome, receiptId, notRun, [], null,
+                goalPrefix, policy, fromState, out result);
         }
 
         if (prior is null)
@@ -136,7 +139,7 @@ internal sealed partial class ConductorDriver
             failingTests, attempt?.ResultPath);
         if (green) return false;
         return RetryDeveloperForDeferredNoChange(
-            goal, developer, outcome, receiptId, notRun, failingTests,
+            goal, developer, outcome, receiptId, notRun, failingTests, candidate?.TestResultPaths,
             goalPrefix, policy, fromState, out result);
 
         void RecordDeferredNoChangeEvidence(
@@ -154,6 +157,7 @@ internal sealed partial class ConductorDriver
         string receiptId,
         IReadOnlyList<string> notRun,
         IReadOnlyList<string> failingTests,
+        IReadOnlyList<string>? testResultPaths,
         string goalPrefix,
         ConductorAutonomyPolicy policy,
         GoalLifecycleState fromState,
@@ -164,7 +168,7 @@ internal sealed partial class ConductorDriver
                 FormatActionableCandidateRedMessage(
                     outcome.CandidateSha, receiptId, "deferred-no-change", failingTests,
                     $"Originating deferred no-change task={developer.Id.Value}."),
-                receiptId, failingTests, null)
+                receiptId, failingTests, testResultPaths)
             : $"DEFERRED_NO_CHANGE_EVIDENCE_UNUSABLE candidate_sha={outcome.CandidateSha}; " +
               $"receipt_id={receiptId}; not_run={string.Join(',', notRun)}; " +
               $"requested_classes={string.Join(',', outcome.TestClasses)}. Repair the class declaration or test evidence.";

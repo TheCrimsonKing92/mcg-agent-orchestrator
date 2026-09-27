@@ -62,6 +62,31 @@ public sealed class DeveloperDeferredNoChangeQualifierTests
         Xunit.Assert.True(Qualify(goal, developer, Output("AlphaTests, BetaTests"), out _));
     }
 
+    [Xunit.Fact]
+    public void StderrCannotSupplyWorkerResultOrRationale()
+    {
+        var (goal, developer) = Scenario();
+        var catalog = WorkerProviderCatalog.Default();
+        var classifier = new WorkerDispatchCompletionClassifier(
+            dispatch => catalog.ResolveProfile(dispatch.WorkerName),
+            new SystemClock(), _ => false, _ => throw new FileNotFoundException());
+
+        var accepted = DeveloperDeferredNoChangeQualifier.TryQualify(
+            goal, developer, Candidate, true, false, string.Empty, Output("AlphaTests"),
+            classifier, out _);
+
+        Xunit.Assert.False(accepted);
+    }
+
+    [Xunit.Fact]
+    public void UnresolvableFailingTestIdentityDisqualifiesRound()
+    {
+        var (goal, developer) = Scenario(
+            "ACTIONABLE_CANDIDATE_RED failing_tests=DisplayNameOnly. Repair the source.");
+
+        Xunit.Assert.False(Qualify(goal, developer, Output("AlphaTests"), out _));
+    }
+
     private static (Goal Goal, TaskSpec Developer) Scenario(string? feedback = null, bool retry = true)
     {
         var kernel = new AgentOrchestratorKernel();

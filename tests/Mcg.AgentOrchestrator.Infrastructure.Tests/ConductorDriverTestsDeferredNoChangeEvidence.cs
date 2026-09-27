@@ -24,6 +24,8 @@ public sealed class ConductorDriverTestsDeferredNoChangeEvidence
             },
             role => order.Add(role.ToString()));
 
+        Xunit.Assert.True(ConductorDriver.HasPendingDeferredNoChangeEvidence(scenario.Goal));
+
         driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
 
         Xunit.Assert.Equal("focused", order[0]);
@@ -32,6 +34,7 @@ public sealed class ConductorDriverTestsDeferredNoChangeEvidence
             evt.Message.StartsWith("finding-evidence deferred-no-change outcome=green;", StringComparison.Ordinal) &&
             evt.Message.Contains("candidate_sha=" + Candidate, StringComparison.Ordinal) &&
             evt.Message.Contains("DeferredAlphaTests", StringComparison.Ordinal));
+        Xunit.Assert.False(ConductorDriver.HasPendingDeferredNoChangeEvidence(scenario.Goal));
         driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
         Xunit.Assert.Equal(1, order.Count(item => item == "focused"));
         Xunit.Assert.DoesNotContain("Tester", order);
@@ -63,6 +66,53 @@ public sealed class ConductorDriverTestsDeferredNoChangeEvidence
         Xunit.Assert.Single(requests);
     }
 
+    [Xunit.Fact]
+    public void GreenEvidenceDoesNotExemptTesterRedispatchOnSameCandidate()
+    {
+        using var scenario = new Scenario(passTester: true);
+        var dispatches = 0;
+        var driver = scenario.Driver(
+            request => ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
+                scenario.Root, request, Candidate),
+            _ => dispatches++);
+        driver.OverrideCandidateIdentityResolverForTests(_ => scenario.Identity);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+        Xunit.Assert.False(ConductorDriver.HasPendingDeferredNoChangeEvidence(scenario.Goal));
+        scenario.Kernel.RetryTask(scenario.Goal.Id, scenario.Tester.Id,
+            "Repeat without a new candidate.", RetryCause.UnchangedContextRepeat);
+
+        var result = driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Xunit.Assert.Equal(0, dispatches);
+        Xunit.Assert.IsType<UnchangedCandidateHoldReason>(
+            Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome).TypedReason);
+    }
+
+    [Xunit.Fact]
+    public void PriorRedEvidenceEscalatesWithoutASecondRun()
+    {
+        using var scenario = new Scenario(passTester: true);
+        scenario.Kernel.RecordFindingEvidenceRun(scenario.Goal.Id, scenario.Tester.Id,
+            DeferredNoChangeEvidenceIndexLines.FormatMarker(new DeferredNoChangeEvidenceEntry(
+                "red", scenario.Developer.Id, Candidate, "receipt-red",
+                ["Infrastructure.Tests:DeferredAlphaTests"], [], null,
+                ["DeferredAlphaTests.FailsOnCandidate"])));
+        var runs = 0;
+        var driver = scenario.Driver(_ =>
+        {
+            runs++;
+            throw new InvalidOperationException("The prior red result must be single use.");
+        }, _ => { });
+
+        var result = driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Xunit.Assert.Equal(0, runs);
+        Xunit.Assert.True(result.WasEscalated);
+        Xunit.Assert.Contains("DEFERRED_NO_CHANGE_REPEAT_RED", result.Outcome.ToString(),
+            StringComparison.Ordinal);
+    }
+
     private sealed class Scenario : IDisposable
     {
         public string Root { get; } = ConductorDriverTests.CreateTempDirectory();
@@ -70,6 +120,7 @@ public sealed class ConductorDriverTestsDeferredNoChangeEvidence
         public Goal Goal { get; }
         public TaskSpec Developer { get; }
         public TaskSpec Tester { get; }
+        public CandidateIdentity Identity { get; } = new("deferred-candidate", "base", "manifest");
 
         public Scenario(bool passTester)
         {
@@ -96,7 +147,8 @@ public sealed class ConductorDriverTestsDeferredNoChangeEvidence
                 DispatchTask(Kernel, Goal, Tester, baseCommit: Candidate);
                 Kernel.RecordTaskVerification(Goal.Id, Tester.Id, new TaskVerificationRecord(
                     "test.exe", "C:\\tmp", 0, "pass", "", DateTimeOffset.UtcNow,
-                    HasCommittedChanges: false, ReviewedCommit: Candidate));
+                    WorkerResultPresent: true, HasCommittedChanges: false,
+                    ReviewedCommit: Candidate, CandidateIdentity: Identity));
             }
             var worktree = GoalWorktrees.WorktreePath(Root, Goal.Id);
             Directory.CreateDirectory(worktree);

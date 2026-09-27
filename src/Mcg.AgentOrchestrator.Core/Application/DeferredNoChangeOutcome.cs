@@ -11,6 +11,9 @@ public sealed record DeferredNoChangeOutcome(
 {
     private const string Marker = "DEFERRED_NO_CHANGE_OUTCOME=";
 
+    public static bool ContainsMarker(string? text) =>
+        text?.Contains(Marker, StringComparison.Ordinal) == true;
+
     public string FormatMarker() => Marker + Convert.ToBase64String(
         JsonSerializer.SerializeToUtf8Bytes(this));
 

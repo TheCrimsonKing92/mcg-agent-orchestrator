@@ -31,16 +31,14 @@ internal static class DeveloperDeferredNoChangeQualifier
             string.IsNullOrWhiteSpace(candidate) ||
             !Regex.IsMatch(candidate, "^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$") ||
             !string.Equals(candidate, head, StringComparison.OrdinalIgnoreCase) ||
-            !classifier.HasExplicitNoChangeRationale(standardOutput, standardError) ||
-            !(WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
-              WorkerResultParser.TryParseResult(standardError, out result, out _)) ||
+            !classifier.HasExplicitNoChangeRationale(standardOutput, string.Empty) ||
+            !WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
             result.BlockersStatus != WorkerResultParser.BlockersStatus.None ||
             result.TestsStatus != WorkerResultParser.TestsStatus.Deferred ||
             !result.Fields.TryGetValue("tests", out var testsField))
             return false;
 
         var rationale = RationaleLine.Match(standardOutput);
-        if (!rationale.Success) rationale = RationaleLine.Match(standardError);
         if (!rationale.Success) return false;
         var classes = DeveloperDeferredTestClassNames.Parse(testsField);
         if (classes.Count == 0) return false;
@@ -55,16 +53,16 @@ internal static class DeveloperDeferredNoChangeQualifier
             .SelectMany(message => FailingTests.Matches(message)
                 .SelectMany(match => match.Groups["identities"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries)))
             .Select(DeclaringClass)
-            .Where(name => name.Length > 0)
             .ToArray();
+        if (required.Any(string.IsNullOrEmpty)) return false;
         if (task.PendingRetryCause == RetryCause.NewTestFinding)
         {
             required = required.Concat(goal.Tasks
                 .SelectMany(other => other.LastVerification?.MergedReviewFindings ?? [])
                 .Where(finding => finding.State == ReviewFindingState.Open &&
                     finding.EvidenceRequest is not null &&
-                    finding.Category is FindingCategory.SpecCompliance or FindingCategory.Correctness or
-                        FindingCategory.TestCoverage or FindingCategory.CodeQuality or FindingCategory.Unspecified)
+                    finding.Severity == FindingSeverity.Blocking &&
+                    ReviewFindingRouting.Project([finding])[0].TargetRole == AgentRole.Developer)
                 .SelectMany(finding => finding.EvidenceRequest!.Selections)
                 .Select(selection => selection.TestClass)).ToArray();
             if (required.Length == 0) return false;
