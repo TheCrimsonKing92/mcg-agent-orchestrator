@@ -34,7 +34,25 @@ public sealed class ConductorBatchLoopTestsRelaunchDecision : ConductorBatchLoop
         Assert.Equal(kernel.GoalId, kernelDecision.GoalId);
     }
 
-    private static LandingObservation RunLanding(string changedPath)
+    [Xunit.Fact]
+    public void EachSuccessfulLandingEmitsDecisionWhenSelfRelaunchDisabled()
+    {
+        var kernel = RunLanding(
+            "src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.GoalLifecycle.cs",
+            selfRelaunchEnabled: false);
+
+        Assert.Contains("LOOP_RELAUNCH_NOT_REQUIRED", kernel.Output, StringComparison.Ordinal);
+        Assert.Contains($"goal={kernel.GoalId}", kernel.Output, StringComparison.Ordinal);
+        Assert.Contains("classification=self-relaunch-disabled", kernel.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("LOOP_RELAUNCH_SCHEDULED", kernel.Output, StringComparison.Ordinal);
+        Assert.Equal(0, kernel.RelaunchCalls);
+        var decision = Assert.Single(kernel.Events.Where(record =>
+            record.Detail.StartsWith("LOOP_RELAUNCH_NOT_REQUIRED", StringComparison.Ordinal)));
+        Assert.Equal("loop-relaunch", decision.EventKind);
+        Assert.Equal(kernel.GoalId, decision.GoalId);
+    }
+
+    private static LandingObservation RunLanding(string changedPath, bool selfRelaunchEnabled = true)
     {
         var root = CreateTempDirectory("mcg-relaunch-decision");
         var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
@@ -61,7 +79,7 @@ public sealed class ConductorBatchLoopTestsRelaunchDecision : ConductorBatchLoop
                     relaunchCalls++;
                     return new ConductorSelfRelaunchResult(false, "build", "test stop");
                 },
-                selfRelaunchEnabled: true,
+                selfRelaunchEnabled: selfRelaunchEnabled,
                 conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
                     kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 3));
 
