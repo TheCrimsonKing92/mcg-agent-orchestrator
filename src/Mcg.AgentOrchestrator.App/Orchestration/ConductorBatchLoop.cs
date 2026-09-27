@@ -789,6 +789,8 @@ internal sealed partial class ConductorBatchLoop
 
                     preWalkIntentLines.AddRange(intentResult.ProgressLines);
                     preWalkIntentProcessed |= intentResult.ProgressLines.Count > 0;
+                    if (intentResult.RejectedAdjudication)
+                        preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
                     if (intentResult.MutatedGoalState)
                     {
                         kernel.ClearGoalHold(scopedGoal.Id);

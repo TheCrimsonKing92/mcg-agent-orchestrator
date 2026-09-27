@@ -1872,7 +1872,7 @@ internal static partial class CliPersistentStateRunner
                     manual.ExitCode == 0 ? manual.AuthoritativeStandardOutput : manual.AuthoritativeStandardError,
                     manual.WorkingDirectory))
                 : throw new InvalidOperationException("Prepared verify-manual command is missing verification evidence."),
-            OperatorIntentVerbs.Adjudicate => CliCommandHandlers.BuildAdjudicationPayload(preparedCommand, workspace, goal.Id),
+            OperatorIntentVerbs.Adjudicate => CliCommandHandlers.BuildAdjudicationPayload(preparedCommand, workspace, goal, task),
             _ => throw new InvalidOperationException(
                 $"Goal-scoped mutation '{preparedCommand.Command}' is not backed by the operator intent inbox.")
         };

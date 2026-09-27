@@ -6,7 +6,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record OperatorIntentExecutionResult(
     bool MutatedGoalState,
-    IReadOnlyList<string> ProgressLines);
+    IReadOnlyList<string> ProgressLines)
+{
+    public bool RejectedAdjudication { get; init; }
+}
 
 internal sealed partial class OperatorIntentCoordinator
 {
@@ -102,6 +105,7 @@ internal sealed partial class OperatorIntentCoordinator
         }
 
         var mutated = false;
+        var rejectedAdjudication = false;
         var lines = new List<string>();
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
@@ -194,13 +198,16 @@ internal sealed partial class OperatorIntentCoordinator
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=rejected reason={Sanitize(ex.Message)}");
                 if (ex is OperatorIntentAdjudicationRejectedException)
                 {
-                    mutated = true;
+                    rejectedAdjudication = true;
                     break;
                 }
             }
         }
 
-        return new OperatorIntentExecutionResult(mutated, lines);
+        return new OperatorIntentExecutionResult(mutated, lines)
+        {
+            RejectedAdjudication = rejectedAdjudication
+        };
     }
 
     public IReadOnlyList<string> RejectPending(string goalId, string reason, string? reasonCode = null)
