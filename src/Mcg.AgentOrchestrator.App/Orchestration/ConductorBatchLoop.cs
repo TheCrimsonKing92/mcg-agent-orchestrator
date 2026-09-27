@@ -696,8 +696,7 @@ internal sealed partial class ConductorBatchLoop
                 $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}{FormatSweepPhaseAttribution(_tickPhaseElapsedMs)}"));
 
             var preWalkClock = Stopwatch.StartNew();
-            var stewardChangedGoalIds = ServiceSteward(kernel, onlyGoalId);
-            var authorChangedGoalIds = ServiceAuthor(kernel, onlyGoalId);
+            var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
             var preWalkIntentLines = new List<string>();
             var preWalkIntentProcessed = false;
@@ -726,8 +725,7 @@ internal sealed partial class ConductorBatchLoop
             var verifiedGoalIdsAtTickStart = scopedGoals.Where(goal => goal.Status == GoalStatus.Verified)
                 .Select(goal => goal.Id).ToHashSet();
             var scopedGoalsById = scopedGoals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
-            var preWalkIntentChangedGoalIds = new HashSet<GoalId>(stewardChangedGoalIds);
-            preWalkIntentChangedGoalIds.UnionWith(authorChangedGoalIds);
+            var preWalkIntentChangedGoalIds = new HashSet<GoalId>(hostedChangedGoalIds);
             if (_operatorIntents is not null)
             {
                 foreach (var actionableGoalId in actionableIntentGoalIds)
@@ -1701,8 +1699,7 @@ internal sealed partial class ConductorBatchLoop
         }
         finally
         {
-            StopSteward();
-            StopAuthor();
+            StopStewardAndAuthor();
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
