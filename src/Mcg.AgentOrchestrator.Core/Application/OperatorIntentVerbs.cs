@@ -42,7 +42,15 @@ public sealed record AdjudicateOperatorIntentPayload(
     string WorkingDirectory,
     string? Cause = null,
     string? Reversibility = null,
-    string? Precedent = null);
+    string? Precedent = null,
+    AdjudicationPreconditionFacts? Precondition = null);
+
+public sealed record AdjudicationPreconditionFacts(
+    string TaskStatus,
+    long? TaskDispatchedAtUtcTicks,
+    long? TaskLatestRetryAtUtcTicks,
+    string GoalStatus,
+    string? GoalCandidateCommit);
 
 public sealed record ApprovePolicyChangeOperatorIntentPayload(string CandidateSha, string Reason);
 

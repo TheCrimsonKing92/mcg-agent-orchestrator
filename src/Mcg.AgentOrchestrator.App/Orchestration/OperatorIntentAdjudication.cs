@@ -37,7 +37,7 @@ internal sealed class OperatorIntentAdjudication(
         if (reason is null && invalidReversibility)
             reason = "unknown-reversibility";
         var currentVersion = goalStateVersionResolver(goal.Id);
-        if (reason is null && currentVersion != payload.ExpectedGoalStateVersion)
+        if (reason is null && AdjudicationPrecondition.IsStale(payload, goal, task))
             reason = "stale-goal-state-version";
 
         var actionKind = shape == "route" ? DecisionActionKind.Retry : DecisionActionKind.VerifyManual;
@@ -61,7 +61,7 @@ internal sealed class OperatorIntentAdjudication(
             DecisionDefaultDisposition.NoAction,
             new DecisionBlockingImpact("The task remains unchanged when adjudication is rejected.", []),
             [DecisionReuseScope.ThisOccurrence],
-            [new DecisionAllowedAction(actionRef, shape, actionKind, requiredTier, expiresAt, payload.ExpectedGoalStateVersion)],
+            [new DecisionAllowedAction(actionRef, shape, actionKind, requiredTier, expiresAt, currentVersion)],
             now);
         decisions.RaiseDecisionRequestAsync(request).GetAwaiter().GetResult();
         var receipt = decisions.RecordDecisionAsync(
@@ -69,7 +69,7 @@ internal sealed class OperatorIntentAdjudication(
             OperatorActorIdentity.Format(intent.Actor, intent.ActorKind),
             intent.Channel,
             assurance,
-            payload.ExpectedGoalStateVersion,
+            currentVersion,
             new DecisionResponse(actionRef, shape, DecisionReuseScope.ThisOccurrence, false),
             now,
             reversibility,
