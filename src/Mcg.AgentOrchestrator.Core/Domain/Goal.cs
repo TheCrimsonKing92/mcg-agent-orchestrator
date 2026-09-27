@@ -655,6 +655,14 @@ public sealed class Goal
                 continue;
 
             var priorOwner = priorOwners.Single();
+            if (superseded.Spec.AcceptanceCriteria.Count != replacement.Spec.AcceptanceCriteria.Count)
+            {
+                _refinementOwnershipDiagnostics.Add(new RefinementOwnershipDiagnostic(
+                    replacement.Version, index, superseded.Version, priorOwner.Owner,
+                    $"Criterion {index} previously had owner {priorOwner.Owner}; index carry skipped because the criterion count changed from {superseded.Spec.AcceptanceCriteria.Count} to {replacement.Spec.AcceptanceCriteria.Count}."));
+                continue;
+            }
+
             var criterion = RequireText(replacement.Spec.AcceptanceCriteria[index], nameof(replacement));
             _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
                 id, index, replacement.Version, criterion, CriterionEvidenceOwner.Unknown,

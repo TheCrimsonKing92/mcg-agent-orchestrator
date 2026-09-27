@@ -146,8 +146,17 @@ public sealed partial class AgentOrchestratorKernel
             goal.RefinedSpec is { } currentSpec &&
             !currentSpec.AcceptanceCriteria.SequenceEqual(declaredCriteria, StringComparer.Ordinal))
         {
+            var ownership = CriterionOwnershipDerivation.DeriveForRevision(
+                declaredCriteria,
+                currentSpec.AcceptanceGateOwnedAcceptanceCriteria,
+                currentSpec.OperatorOwnedAcceptanceCriteria);
             goal.RecordRefinedSpec(
-                currentSpec with { AcceptanceCriteria = declaredCriteria.ToArray() },
+                currentSpec with
+                {
+                    AcceptanceCriteria = declaredCriteria.ToArray(),
+                    AcceptanceGateOwnedAcceptanceCriteria = ownership.AcceptanceGateOwned,
+                    OperatorOwnedAcceptanceCriteria = ownership.OperatorOwned
+                },
                 recordedAt);
             refinedCriteriaCount = declaredCriteria.Count;
             refinedCriteriaReDerived = true;
