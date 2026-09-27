@@ -842,8 +842,9 @@ internal sealed class OwnedProcessGroup : IDisposable
                 nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
                 bInheritHandle = false
             };
+            var nativePath = ExtendedLengthPath.Convert(path);
             var handle = CreateFileW(
-                path,
+                nativePath,
                 GenericWrite,
                 FileShareRead | FileShareDelete,
                 ref securityAttributes,
