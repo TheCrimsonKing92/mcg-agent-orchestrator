@@ -14,6 +14,9 @@ internal sealed record ConductorStewardStoredTrigger(
     DateTimeOffset FirstOccurrence,
     bool RepeatQuestionRaised);
 
+internal sealed record ConductorStewardReadyRound(
+    ConductorStewardStoredTrigger Stored, string Output, long ClaimedGoalVersion);
+
 internal sealed class ConductorStewardTriggerStore(string path)
 {
     private readonly string _connectionString = new SqliteConnectionStringBuilder
@@ -24,6 +27,20 @@ internal sealed class ConductorStewardTriggerStore(string path)
 
     internal static string KeyFor(ConductorStewardTrigger trigger) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(trigger.Identity))).ToLowerInvariant();
+
+    internal bool NeedsInspection(string goalId, string taskId, string candidateSha,
+        ConductorStewardTriggerKind kind)
+    {
+        var identity = $"{goalId}:{taskId}:{candidateSha}:{kind}";
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT outcome, repeat_question_raised FROM steward_triggers WHERE key = $key";
+        command.Parameters.AddWithValue("$key", key);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return true;
+        return !reader.IsDBNull(0) && reader.GetString(0) == "route-applied" && reader.GetInt64(1) == 0;
+    }
 
     internal ConductorStewardStoredTrigger Observe(ConductorStewardTrigger trigger)
     {
@@ -47,7 +64,7 @@ internal sealed class ConductorStewardTriggerStore(string path)
         return Get(connection, KeyFor(trigger))!;
     }
 
-    internal ConductorStewardStoredTrigger? ClaimNext(DateTimeOffset now)
+    internal ConductorStewardStoredTrigger? ClaimNext(DateTimeOffset now, IReadOnlySet<string> eligibleGoalIds)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction(deferred: false);
@@ -62,14 +79,23 @@ internal sealed class ConductorStewardTriggerStore(string path)
         using var select = connection.CreateCommand();
         select.Transaction = transaction;
         select.CommandText = """
-            SELECT pending.key FROM steward_triggers AS pending
+            SELECT pending.key, pending.goal_id FROM steward_triggers AS pending
             WHERE pending.status = 'pending' AND NOT EXISTS (
                 SELECT 1 FROM steward_triggers AS submitted
                 WHERE submitted.goal_id = pending.goal_id AND submitted.task_id = pending.task_id
                   AND submitted.candidate_sha = pending.candidate_sha AND submitted.outcome = 'route-submitted')
-            ORDER BY pending.rowid LIMIT 1
+            ORDER BY pending.rowid
             """;
-        var key = select.ExecuteScalar() as string;
+        string? key = null;
+        using (var reader = select.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (!eligibleGoalIds.Contains(reader.GetString(1))) continue;
+                key = reader.GetString(0);
+                break;
+            }
+        }
         if (key is null)
         {
             transaction.Commit();
@@ -83,6 +109,85 @@ internal sealed class ConductorStewardTriggerStore(string path)
         update.ExecuteNonQuery();
         transaction.Commit();
         return Get(connection, key);
+    }
+
+    internal void ReleaseClaim(string key)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE steward_triggers SET status = 'pending', claimed_at = NULL
+            WHERE key = $key AND status = 'in-flight'
+            """;
+        command.Parameters.AddWithValue("$key", key);
+        command.ExecuteNonQuery();
+    }
+
+    internal void PreserveCompletedRound(string key, string output, long claimedGoalVersion)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = "UPDATE steward_triggers SET status = 'ready' WHERE key = $key AND status = 'in-flight'";
+        update.Parameters.AddWithValue("$key", key);
+        if (update.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"Steward trigger {key} is not in flight at completed-round handoff.");
+        using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT INTO steward_ready_rounds (key, output, claimed_goal_version)
+            VALUES ($key, $output, $version)
+            ON CONFLICT(key) DO UPDATE SET output = excluded.output,
+                claimed_goal_version = excluded.claimed_goal_version
+            """;
+        insert.Parameters.AddWithValue("$key", key);
+        insert.Parameters.AddWithValue("$output", output);
+        insert.Parameters.AddWithValue("$version", claimedGoalVersion);
+        insert.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    internal ConductorStewardReadyRound? ClaimReady(DateTimeOffset now, IReadOnlySet<string> eligibleGoalIds)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using var select = connection.CreateCommand();
+        select.Transaction = transaction;
+        select.CommandText = """
+            SELECT st.key, ready.output, ready.claimed_goal_version, st.goal_id
+            FROM steward_triggers AS st
+            JOIN steward_ready_rounds AS ready ON ready.key = st.key
+            WHERE st.status = 'ready' ORDER BY st.rowid
+            """;
+        string? key = null;
+        string? output = null;
+        long version = 0;
+        using (var reader = select.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (!eligibleGoalIds.Contains(reader.GetString(3))) continue;
+                key = reader.GetString(0);
+                output = reader.GetString(1);
+                version = reader.GetInt64(2);
+                break;
+            }
+        }
+        if (key is null)
+        {
+            transaction.Commit();
+            return null;
+        }
+        using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = "UPDATE steward_triggers SET status = 'in-flight', claimed_at = $now WHERE key = $key AND status = 'ready'";
+        update.Parameters.AddWithValue("$now", now.ToString("O"));
+        update.Parameters.AddWithValue("$key", key);
+        if (update.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"Steward ready round {key} could not be claimed.");
+        transaction.Commit();
+        return new ConductorStewardReadyRound(Get(connection, key)!, output!, version);
     }
 
     internal IReadOnlyList<ConductorStewardStoredTrigger> ExpireStale(DateTimeOffset before)
@@ -102,12 +207,20 @@ internal sealed class ConductorStewardTriggerStore(string path)
     internal void MarkServiced(string key, string outcome, string? intentId)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "UPDATE steward_triggers SET status = 'serviced', outcome = $outcome, intent_id = $intent WHERE key = $key";
         command.Parameters.AddWithValue("$outcome", outcome);
         command.Parameters.AddWithValue("$intent", (object?)intentId ?? DBNull.Value);
         command.Parameters.AddWithValue("$key", key);
         command.ExecuteNonQuery();
+        using var delete = connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = "DELETE FROM steward_ready_rounds WHERE key = $key";
+        delete.Parameters.AddWithValue("$key", key);
+        delete.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     internal void MarkRouteApplied(string key)
@@ -171,6 +284,8 @@ internal sealed class ConductorStewardTriggerStore(string path)
               first_occurrence TEXT NOT NULL, status TEXT NOT NULL, claimed_at TEXT,
               outcome TEXT, intent_id TEXT, repeat_question_raised INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS steward_triggers_queue ON steward_triggers(status, first_occurrence);
+            CREATE TABLE IF NOT EXISTS steward_ready_rounds (
+              key TEXT PRIMARY KEY, output TEXT NOT NULL, claimed_goal_version INTEGER NOT NULL);
             """;
         command.ExecuteNonQuery();
         return connection;

@@ -44,7 +44,8 @@ internal sealed class ConductorStewardTriggerDetector(
     private readonly Func<Goal, string, string?> _candidateAddedClassCollection = candidateAddedClassCollection ?? ((_, _) => null);
     private readonly Func<Goal, IReadOnlyList<string>> _acceptanceTrxPaths = acceptanceTrxPaths ?? (_ => []);
 
-    internal IReadOnlyList<ConductorStewardTrigger> Detect(Goal goal)
+    internal IReadOnlyList<ConductorStewardTrigger> Detect(Goal goal,
+        Func<ConductorStewardTriggerKind, string, string, bool>? needsInspection = null)
     {
         if (goal.IsTerminal) return [];
         var result = new List<ConductorStewardTrigger>();
@@ -60,6 +61,8 @@ internal sealed class ConductorStewardTriggerDetector(
             var workerResult = ExtractWorkerResult(verification.AuthoritativeStandardOutput ?? verification.StandardOutput);
             if (task.RequiredRole == AgentRole.Developer &&
                 ContainsNoChangeRejection(verification) &&
+                (needsInspection?.Invoke(ConductorStewardTriggerKind.DeveloperNoChangeWithConfirmedRed,
+                    task.Id.Value, candidateSha) ?? true) &&
                 TryFindConfirmedRed(goal, candidateSha, out var redEvidence, out var redReferences))
             {
                 result.Add(new ConductorStewardTrigger(goal.Id.Value, task.Id.Value, candidateSha,
@@ -68,7 +71,9 @@ internal sealed class ConductorStewardTriggerDetector(
                     redEvidence, workerResult, redReferences, criteria));
             }
             if (task.RequiredRole == AgentRole.Planner &&
-                string.Equals(verification.CompletionVerdictRule, "planner-output-contract-rejected", StringComparison.Ordinal))
+                string.Equals(verification.CompletionVerdictRule, "planner-output-contract-rejected", StringComparison.Ordinal) &&
+                (needsInspection?.Invoke(ConductorStewardTriggerKind.PlannerOutputContractRejected,
+                    task.Id.Value, candidateSha) ?? true))
             {
                 result.Add(new ConductorStewardTrigger(goal.Id.Value, task.Id.Value, candidateSha,
                     ConductorStewardTriggerKind.PlannerOutputContractRejected,
@@ -83,7 +88,9 @@ internal sealed class ConductorStewardTriggerDetector(
             !string.IsNullOrWhiteSpace(failure.BranchHeadSha))
         {
             var developer = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
-            if (developer is not null)
+            if (developer is not null &&
+                (needsInspection?.Invoke(ConductorStewardTriggerKind.AcceptanceCollectionGuardClass,
+                    developer.Id.Value, failure.BranchHeadSha!) ?? true))
             {
                 var sources = (failure.CheckAttributions ?? [])
                     .Select(attribution => (Evidence: $"{attribution.CheckName}: {attribution.Evidence}", TrxPath: (string?)null))

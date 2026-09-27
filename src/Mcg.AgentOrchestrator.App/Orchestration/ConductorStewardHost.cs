@@ -20,6 +20,7 @@ internal sealed class ConductorStewardHost
     private readonly CancellationTokenSource _shutdown = new();
     private Task<string>? _round;
     private ConductorStewardStoredTrigger? _running;
+    private long? _claimedGoalVersion;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web);
 
     internal ConductorStewardHost(
@@ -61,26 +62,33 @@ internal sealed class ConductorStewardHost
             throw new InvalidOperationException("Steward model round did not drain after conductor shutdown cancellation.");
         if (_running is { } running)
         {
-            _triggers.MarkServiced(running.Key, "model-failure", null);
-            Record(running.Trigger, "model-failure", "conductor-stop", null);
+            if (_round is { IsCompletedSuccessfully: true } completed && _claimedGoalVersion is { } version)
+                _triggers.PreserveCompletedRound(running.Key, completed.Result, version);
+            else
+            {
+                _triggers.MarkServiced(running.Key, "model-failure", null);
+                Record(running.Trigger, "model-failure", "conductor-stop", null);
+            }
             _running = null;
             _round = null;
+            _claimedGoalVersion = null;
         }
     }
 
     internal static ConductorStewardHost CreateDefault(OrchestratorWorkspace workspace)
     {
-        var versionReader = OperatorChannelComposition.BuildGoalStateVersionReader(workspace.OrchestratorDirectory);
         var enabledSetting = Environment.GetEnvironmentVariable(EnabledEnvironmentVariable);
         return new ConductorStewardHost(
             new ConductorStewardTriggerStore(Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")),
             new ConductorStewardTriggerDetector(
                 (goal, className) => CandidateAddedClassCollection(workspace, goal, className),
                 goal => ConductorStewardAcceptanceTrxResolver.Resolve(workspace.OrchestratorDirectory, goal)),
-            new ClaudeConductorStewardModelRound(),
+            new ClaudeConductorStewardModelRound(Path.Combine(workspace.OrchestratorDirectory, "steward-rounds")),
             SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
             new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
-            goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult(),
+            goalId => SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(
+                Path.Combine(workspace.OrchestratorDirectory, "state.db"), goalId.Value,
+                CancellationToken.None).GetAwaiter().GetResult(),
             goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
             new ConductEventLogWriter(workspace.ConductEventsLogPath),
@@ -96,11 +104,12 @@ internal sealed class ConductorStewardHost
         foreach (var expired in _triggers.ExpireStale(now.AddMinutes(-15)))
             Record(expired.Trigger, "model-failure", "timeout", null);
         ReconcileSubmittedRoutes();
-        Harvest(kernel, changed);
+        Harvest(kernel, onlyGoalId, changed);
 
         foreach (var goal in kernel.Goals.Where(goal => !goal.IsTerminal &&
                      (onlyGoalId is null || goal.Id.Value == onlyGoalId)))
-        foreach (var trigger in _detector.Detect(goal))
+        foreach (var trigger in _detector.Detect(goal, (kind, taskId, sha) =>
+                     _triggers.NeedsInspection(goal.Id.Value, taskId, sha, kind)))
         {
             var stored = _triggers.Observe(trigger);
             if (stored.Status == "serviced" && stored.Outcome == "route-applied" &&
@@ -123,21 +132,50 @@ internal sealed class ConductorStewardHost
 
         if (_round is null)
         {
-            var claim = _triggers.ClaimNext(now);
+            var eligibleGoalIds = kernel.Goals.Where(goal => !goal.IsTerminal &&
+                    (onlyGoalId is null || goal.Id.Value == onlyGoalId))
+                .Select(goal => goal.Id.Value).ToHashSet(StringComparer.Ordinal);
+            var ready = _triggers.ClaimReady(now, eligibleGoalIds);
+            if (ready is not null)
+            {
+                _running = ready.Stored;
+                _claimedGoalVersion = ready.ClaimedGoalVersion;
+                _round = Task.FromResult(ready.Output);
+                Harvest(kernel, onlyGoalId, changed);
+                return changed;
+            }
+            var claim = _triggers.ClaimNext(now, eligibleGoalIds);
             if (claim is not null)
             {
                 _running = claim;
                 var goal = kernel.Goals.FirstOrDefault(item => item.Id.Value == claim.Trigger.GoalId);
-                if (goal is null || goal.IsTerminal)
+                if (goal is null || goal.IsTerminal || !eligibleGoalIds.Contains(goal.Id.Value))
                 {
-                    _triggers.MarkServiced(claim.Key, "no-action", null);
-                    Record(claim.Trigger, "no-action", "goal-unavailable", null);
+                    _triggers.ReleaseClaim(claim.Key);
                     _running = null;
                 }
                 else
                 {
-                    var worktree = _workingDirectory(goal);
-                    _round = Task.Run(() => _model.DispatchAsync(claim.Trigger, worktree, _shutdown.Token), _shutdown.Token);
+                    var current = _detector.Detect(goal).Any(item =>
+                        item.Identity == claim.Trigger.Identity &&
+                        item.OccurredAt == claim.Trigger.OccurredAt);
+                    if (!current)
+                    {
+                        _triggers.MarkServiced(claim.Key, "no-action", null);
+                        Record(claim.Trigger, "no-action", "trigger-superseded", null);
+                        _running = null;
+                    }
+                    else if ((_claimedGoalVersion = _version(goal.Id)) is null)
+                    {
+                        _triggers.MarkServiced(claim.Key, "no-action", null);
+                        Record(claim.Trigger, "no-action", "goal-version-unavailable", null);
+                        _running = null;
+                    }
+                    else
+                    {
+                        var worktree = _workingDirectory(goal);
+                        _round = Task.Run(() => _model.DispatchAsync(claim.Trigger, worktree, _shutdown.Token), _shutdown.Token);
+                    }
                 }
             }
         }
@@ -157,24 +195,48 @@ internal sealed class ConductorStewardHost
         }
     }
 
-    private void Harvest(AgentOrchestratorKernel kernel, HashSet<GoalId> changed)
+    private void Harvest(AgentOrchestratorKernel kernel, string? onlyGoalId, HashSet<GoalId> changed)
     {
         if (_round is null || !_round.IsCompleted || _running is null) return;
         var stored = _running;
         var round = _round;
+        HarvestCompleted(kernel, onlyGoalId, changed, stored, round);
         _round = null;
         _running = null;
+        _claimedGoalVersion = null;
+    }
+
+    private void HarvestCompleted(AgentOrchestratorKernel kernel, string? onlyGoalId,
+        HashSet<GoalId> changed, ConductorStewardStoredTrigger stored, Task<string> round)
+    {
         var trigger = stored.Trigger;
         var goal = kernel.Goals.FirstOrDefault(item => item.Id.Value == trigger.GoalId);
-        if (goal is null || goal.IsTerminal)
+        if (goal is null || (onlyGoalId is not null && goal.Id.Value != onlyGoalId))
+        {
+            if (round.IsCompletedSuccessfully && _claimedGoalVersion is { } preservedVersion)
+                _triggers.PreserveCompletedRound(stored.Key, round.Result, preservedVersion);
+            else
+                _triggers.MarkServiced(stored.Key, "model-failure", null);
+            return;
+        }
+        if (goal.IsTerminal)
         {
             _triggers.MarkServiced(stored.Key, "no-action", null);
             Record(trigger, "no-action", "goal-unavailable", null);
             return;
         }
+        var current = _detector.Detect(goal).Any(item =>
+            item.Identity == trigger.Identity && item.OccurredAt == trigger.OccurredAt);
+        if (!current || _claimedGoalVersion != _version(goal.Id))
+        {
+            _triggers.MarkServiced(stored.Key, "no-action", null);
+            Record(trigger, "no-action", "trigger-superseded", null);
+            return;
+        }
         if (round.IsFaulted || round.IsCanceled)
         {
-            var reason = round.Exception?.GetBaseException() is OperationCanceledException ? "timeout" : "model-failure";
+            var reason = round.IsCanceled || round.Exception?.GetBaseException() is OperationCanceledException
+                ? "timeout" : "model-failure";
             _triggers.MarkServiced(stored.Key, "model-failure", null);
             Record(trigger, "model-failure", reason, null);
             return;
@@ -195,6 +257,13 @@ internal sealed class ConductorStewardHost
         }
 
         var worktree = _workingDirectory(goal);
+        var feedback = ConductorStewardRetryTemplate.Compose(trigger, adjudication);
+        if (adjudication.Kind == "route" && feedback is null)
+        {
+            _triggers.MarkServiced(stored.Key, "no-action", null);
+            Record(trigger, "no-action", "incomplete-template", null);
+            return;
+        }
         var rejection = ConductorStewardRoutePolicy.RejectionReason(trigger, adjudication, goal, worktree, _evidence);
         if (rejection is null && _triggers.HasAppliedRoute(trigger)) rejection = "route-bound-exceeded";
         if (rejection is not null)
@@ -205,14 +274,7 @@ internal sealed class ConductorStewardHost
             _triggers.MarkServiced(stored.Key, "owner-question", null);
             return;
         }
-        var feedback = ConductorStewardRetryTemplate.Compose(trigger, adjudication);
-        if (feedback is null)
-        {
-            _triggers.MarkServiced(stored.Key, "no-action", null);
-            Record(trigger, "no-action", "incomplete-template", null);
-            return;
-        }
-        var version = _version(goal.Id);
+        var version = _claimedGoalVersion;
         if (version is null)
         {
             _triggers.MarkServiced(stored.Key, "no-action", null);
@@ -223,8 +285,17 @@ internal sealed class ConductorStewardHost
             .Append($"steward-trigger={stored.Key}").Append($"steward-case={trigger.CaseLetter}");
         if (!string.IsNullOrWhiteSpace(adjudication.Precedent))
             references = references.Append($"model-precedent={adjudication.Precedent}");
-        var payload = new AdjudicateOperatorIntentPayload("route", feedback,
-            references.Distinct(StringComparer.Ordinal).ToArray(), version.Value, worktree,
+        var resolvedReferences = references.Distinct(StringComparer.Ordinal).ToArray();
+        var evidencePayload = new AdjudicateOperatorIntentPayload("route", feedback!,
+            resolvedReferences, version.Value, worktree);
+        if (resolvedReferences.Any(reference => !_evidence.TryResolve(reference, goal, evidencePayload, out _)))
+        {
+            _triggers.MarkServiced(stored.Key, "no-action", null);
+            Record(trigger, "no-action", "evidence-reference-unresolved", null);
+            return;
+        }
+        var payload = new AdjudicateOperatorIntentPayload("route", feedback!,
+            resolvedReferences, version.Value, worktree,
             adjudication.Cause, adjudication.Reversibility,
             $"steward-case={trigger.CaseLetter} trigger={trigger.Identity}");
         var intentId = Guid.NewGuid().ToString("N");

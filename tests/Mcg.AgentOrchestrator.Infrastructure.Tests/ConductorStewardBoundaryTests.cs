@@ -1,5 +1,6 @@
 using System.Reflection;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ConductorStewardBoundaryTests
 {
@@ -14,10 +15,7 @@ public sealed class ConductorStewardBoundaryTests
         foreach (var type in stewardTypes)
             Xunit.Assert.False(HasForbiddenReference(type), type.FullName);
 
-        var operatorComms = Assembly.Load("Mcg.AgentOrchestrator.Infrastructure.OperatorComms");
-        var negativeControl = operatorComms.GetTypes().First(type =>
-            type.Name.Contains("StewardShadowRecommendationStore", StringComparison.Ordinal));
-        Xunit.Assert.True(HasForbiddenReference(negativeControl));
+        Xunit.Assert.True(HasForbiddenReference(typeof(ForbiddenFieldNegativeControl)));
     }
 
     private static bool HasForbiddenReference(Type type)
@@ -39,4 +37,9 @@ public sealed class ConductorStewardBoundaryTests
         type.Name.Contains("Discord", StringComparison.OrdinalIgnoreCase) ||
         (type.HasElementType && type.GetElementType() is { } element && ForbiddenType(element)) ||
         (type.IsGenericType && type.GetGenericArguments().Any(ForbiddenType));
+
+    private sealed class ForbiddenFieldNegativeControl
+    {
+        private readonly SqliteStewardShadowRecommendationStore? _store;
+    }
 }

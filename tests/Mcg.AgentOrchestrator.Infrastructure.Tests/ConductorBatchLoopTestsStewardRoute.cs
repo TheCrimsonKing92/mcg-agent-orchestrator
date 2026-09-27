@@ -174,12 +174,14 @@ internal sealed class StewardFakeModel : IConductorStewardModelRound
 {
     private string? _output;
     private Exception? _failure;
+    private bool _cancel;
     private TaskCompletionSource<string>? _held;
     internal int Calls { get; private set; }
     internal TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource<bool> SecondStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal void Reply(string output) => _output = output;
     internal void Fail(Exception exception) => _failure = exception;
+    internal void Cancel() => _cancel = true;
     internal void Hold() => _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal void Release() => _held!.TrySetResult(_output ?? "{\"kind\":\"no-action\",\"reason\":\"done\"}");
     public Task<string> DispatchAsync(ConductorStewardTrigger trigger, string workingDirectory,
@@ -188,6 +190,7 @@ internal sealed class StewardFakeModel : IConductorStewardModelRound
         Calls++;
         Started.TrySetResult(true);
         if (Calls == 2) SecondStarted.TrySetResult(true);
+        if (_cancel) return Task.FromCanceled<string>(new CancellationToken(canceled: true));
         if (_failure is not null) return Task.FromException<string>(_failure);
         if (_held is not null) return _held.Task;
         return Task.FromResult(_output ?? throw new InvalidOperationException("Fake output was not set."));

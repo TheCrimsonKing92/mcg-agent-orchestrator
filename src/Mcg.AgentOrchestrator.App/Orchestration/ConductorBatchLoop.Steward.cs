@@ -21,10 +21,14 @@ internal sealed partial class ConductorBatchLoop
         }
         catch (Exception ex)
         {
-            EmitProgress($"STEWARD result=store-unavailable reason={SanitizeReason(ex.Message)}");
-            return new HashSet<GoalId>();
+            EmitProgress($"STEWARD result=service-failed error={ex.GetType().Name} reason={SanitizeReason(ex.Message)}");
+            throw;
         }
     }
 
-    private void StopSteward() => _steward?.Stop();
+    private void StopSteward()
+    {
+        try { _steward?.Stop(); }
+        catch (Exception ex) { TryWriteAbnormalExitDiagnosticFailure("steward stop", ex); }
+    }
 }
