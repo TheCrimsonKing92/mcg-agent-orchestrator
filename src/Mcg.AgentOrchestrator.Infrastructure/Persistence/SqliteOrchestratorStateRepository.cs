@@ -2089,6 +2089,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             CriterionRetryCount = PickStoreOwned(baseline.CriterionRetryCount, stored.CriterionRetryCount, current.CriterionRetryCount),
             WorkerBuildCheckRecoveryCount = PickStoreOwned(baseline.WorkerBuildCheckRecoveryCount, stored.WorkerBuildCheckRecoveryCount, current.WorkerBuildCheckRecoveryCount),
             CriterionRetryFeedback = PickStoreOwnedList(baseline.CriterionRetryFeedback, stored.CriterionRetryFeedback, current.CriterionRetryFeedback),
+            CriterionRetryFeedbackRoundAt = PickStoreOwned(baseline.CriterionRetryFeedbackRoundAt, stored.CriterionRetryFeedbackRoundAt, current.CriterionRetryFeedbackRoundAt),
             AcceptedRetryFeedback = PickStoreOwned(baseline.AcceptedRetryFeedback, stored.AcceptedRetryFeedback, current.AcceptedRetryFeedback),
             EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount),
             LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),

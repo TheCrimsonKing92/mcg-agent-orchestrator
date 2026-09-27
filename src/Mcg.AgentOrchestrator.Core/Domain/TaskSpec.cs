@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-public sealed class TaskSpec
+public sealed partial class TaskSpec
 {
     internal const int VerificationHistoryLimit = 20;
     internal const int PreReviewEvidenceHistoryLimit = 20;
@@ -265,7 +265,8 @@ public sealed class TaskSpec
             PendingPreDispatchIntegrationReceipt,
             LatestProviderBudgetRecoveryAt,
             WorkerBuildCheckRecoveryCount,
-            LatestRoleInputRetryAt);
+            LatestRoleInputRetryAt,
+            CriterionRetryFeedbackRoundAt);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -487,6 +488,7 @@ public sealed class TaskSpec
         task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
+        task.CriterionRetryFeedbackRoundAt = snapshot.CriterionRetryFeedbackRoundAt;
         task.LatestRoleInputRetryAt = snapshot.LatestRoleInputRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         task.PendingReviewFindingRepairCheckpoint = snapshot.PendingReviewFindingRepairCheckpoint;
@@ -838,6 +840,7 @@ public sealed class TaskSpec
             .Where(item => item.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        CriterionRetryFeedbackRoundAt = LatestRetryAt;
         AcceptedRetryFeedback = null;
     }
 
@@ -850,6 +853,7 @@ public sealed class TaskSpec
     internal void ClearCriterionRetryFeedback()
     {
         CriterionRetryFeedback = [];
+        CriterionRetryFeedbackRoundAt = null;
         AcceptedRetryFeedback = null;
     }
 
