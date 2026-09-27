@@ -12,6 +12,8 @@ internal sealed class OwnerConsoleHarness
     internal readonly FakeDigest Digest = new();
     internal readonly FakeTail Tail = new();
     internal readonly FakeLiveness Liveness = new();
+    internal readonly FakeConductor Conductor = new();
+    internal readonly FakeDigestReport DigestReport = new();
     internal readonly TimeProvider Clock = new FixedClock();
 
     internal OwnerConsoleHarness() => State = new FakeState(Kernel);
@@ -25,7 +27,32 @@ internal sealed class OwnerConsoleHarness
     }
 
     internal OwnerConsoleSession Session() => new(
-        State, Questions, Answers, Liveness, Digest, Tail, Output, Clock);
+        State, Questions, Answers, Liveness, Digest, Tail, Output, Clock, Conductor, DigestReport);
+
+    internal sealed class FakeConductor : IOwnerConsoleConductor
+    {
+        internal readonly List<string[]> Calls = [];
+        public int Run(IReadOnlyList<string> args, TextWriter output, TextWriter error)
+        {
+            Calls.Add(args.ToArray());
+            output.WriteLine($"conductor output {Calls.Count}");
+            error.WriteLine($"conductor error {Calls.Count}");
+            return 0;
+        }
+    }
+
+    internal sealed class FakeDigestReport : IOwnerConsoleDigestReport
+    {
+        internal int Calls;
+        public int Run(TextWriter output)
+        {
+            Calls++;
+            output.WriteLine("digest first");
+            output.WriteLine("digest second");
+            output.WriteLine("digest third");
+            return 0;
+        }
+    }
 
     internal sealed class FakeState(AgentOrchestratorKernel kernel) : IOrchestratorStateQueries
     {
