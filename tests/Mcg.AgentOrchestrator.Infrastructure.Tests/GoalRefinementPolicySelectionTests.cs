@@ -69,11 +69,17 @@ public sealed class GoalRefinementPolicySelectionTests
     [Fact]
     public async Task BalancedPolicyStillAsksHighRiskAndFeasibilityForks()
     {
+        var expectedQuestions = new[]
+        {
+            "Which risk should be accepted?",
+            "Can this operation be reversed?",
+            "Who can verify this criterion?"
+        };
         var forks = new[]
         {
-            Fork("observable-behavior", "risk", "low", "high", "Which risk should be accepted?"),
-            Fork("reversibility", "reversal", "high", "high", "Can this operation be reversed?"),
-            Fork("feasibility", "criterion", "high", "low", "Who can verify this criterion?")
+            Fork("observable-behavior", "risk", "low", "high", expectedQuestions[0]),
+            Fork("reversibility", "reversal", "high", "high", expectedQuestions[1]),
+            Fork("feasibility", "criterion", "high", "low", expectedQuestions[2])
         };
         var result = await RunCoordinatorAsync(
             (ConductorAutonomyPolicy.Permissive with { Name = BalancedPolicyName }).ToJson(),
@@ -82,6 +88,11 @@ public sealed class GoalRefinementPolicySelectionTests
         Assert.True(result.Processed.Attached);
         Assert.Equal(3, result.Goal.RefinedSpec!.OpenQuestions.Count);
         Assert.All(result.Goal.RefinedSpec.OpenQuestions, item => Assert.Equal("Open", item.Status));
+        Assert.Equal(
+            expectedQuestions.OrderBy(question => question, StringComparer.Ordinal),
+            result.Goal.RefinedSpec.OpenQuestions
+                .Select(item => item.Question)
+                .OrderBy(question => question, StringComparer.Ordinal));
         Assert.Equal(GoalRefinementReadiness.AwaitingClarification, Readiness(result));
         Assert.Empty(result.Goal.RefinedSpec.Decisions);
         Assert.Equal(3, result.CollaborationItems.Count);
