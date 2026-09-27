@@ -49,11 +49,24 @@ public sealed class AcceptanceLaneMembershipTests
         var descriptors = RunnableClasses();
         var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
         var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
+        var mismatches = new List<AcceptanceLaneMembershipMismatch>();
         foreach (var descriptor in descriptors)
         {
-            Xunit.Assert.Equal(
-                AcceptanceLaneMembership.LanesIncluding(baseline, descriptor.FullName).Select(lane => lane.Name).Order(),
-                AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName).Select(lane => lane.Name).Order());
+            var baselineNames = AcceptanceLaneMembership.LanesIncluding(baseline, descriptor.FullName)
+                .Select(lane => lane.Name).Order().ToArray();
+            var resolvedNames = AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName)
+                .Select(lane => lane.Name).Order().ToArray();
+            if (!baselineNames.SequenceEqual(resolvedNames))
+            {
+                mismatches.Add(new AcceptanceLaneMembershipMismatch(
+                    descriptor.FullName, descriptor.Collection, baselineNames, resolvedNames));
+            }
+        }
+
+        if (mismatches.Count > 0)
+        {
+            Xunit.Assert.Fail(AcceptanceLaneMembershipDiagnostics.Describe(
+                mismatches, nameof(ExistingRunnableClassesKeepTheirSubstringLaneMembership)));
         }
     }
 
@@ -91,11 +104,26 @@ public sealed class AcceptanceLaneMembershipTests
         var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
         var descriptors = RunnableClasses();
         var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
+        var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
         var owned = lanes.SelectMany(lane => lane.OwnedCollections).ToHashSet(StringComparer.Ordinal);
+        var mismatches = new List<AcceptanceLaneMembershipMismatch>();
         foreach (var descriptor in descriptors.Where(item => item.Collection is not null && owned.Contains(item.Collection)))
         {
-            Xunit.Assert.DoesNotContain(AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName),
-                lane => lane.Name == "Remainder");
+            var resolvedLanes = AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName);
+            if (resolvedLanes.Any(lane => lane.Name == "Remainder"))
+            {
+                mismatches.Add(new AcceptanceLaneMembershipMismatch(
+                    descriptor.FullName, descriptor.Collection,
+                    AcceptanceLaneMembership.LanesIncluding(baseline, descriptor.FullName)
+                        .Select(lane => lane.Name).ToArray(),
+                    resolvedLanes.Select(lane => lane.Name).ToArray()));
+            }
+        }
+
+        if (mismatches.Count > 0)
+        {
+            Xunit.Assert.Fail(AcceptanceLaneMembershipDiagnostics.Describe(
+                mismatches, nameof(RemainderExcludesEveryOwnedCollectionMember)));
         }
     }
 
