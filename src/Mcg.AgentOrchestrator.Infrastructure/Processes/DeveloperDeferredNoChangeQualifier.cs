@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class DeveloperDeferredNoChangeQualifier
 {
     private static readonly Regex RationaleLine = new(
-        @"(?im)^\s*(?:NO_CHANGE:|No-change rationale:|No changes needed:)\s*(?<reason>\S[^\r\n]*)$",
+        @"(?im)^\s*(?:NO_CHANGE:|No-change rationale:|No changes needed:)\s*(?<reason>\S[^\r\n]*?)\r?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex FailingTests = new(
         @"failing_tests=(?<identities>[^\s;]+)",

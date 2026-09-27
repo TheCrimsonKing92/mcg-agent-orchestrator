@@ -17,6 +17,19 @@ public sealed class DeveloperDeferredNoChangeQualifierTests
         Xunit.Assert.StartsWith("NO_CHANGE:", outcome.Rationale, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void RetryWithCrLfRationaleAndDeferredClassesQualifies()
+    {
+        var (goal, developer) = Scenario();
+        var output = Output("AlphaTests").Replace("\n", "\r\n", StringComparison.Ordinal);
+
+        var accepted = Qualify(goal, developer, output, out var outcome);
+
+        Xunit.Assert.True(accepted);
+        Xunit.Assert.Equal(["AlphaTests"], outcome.TestClasses);
+        Xunit.Assert.Equal("NO_CHANGE: the candidate already has the repair.", outcome.Rationale);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("no-retry")]
     [Xunit.InlineData("no-rationale")]
