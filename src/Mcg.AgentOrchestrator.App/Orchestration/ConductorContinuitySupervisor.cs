@@ -411,10 +411,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                         }
 
                         currentBuild.Lease?.Dispose();
+                        var previousBuild = currentBuild;
                         currentBuild = candidateBuild;
                         if (activation.Adopted)
                         {
-                            RecordActivation("adopted", attempt, candidateBuild, currentBuild, null, activation.Detail);
+                            RecordActivation("adopted", attempt, candidateBuild, previousBuild, null, activation.Detail);
                             NoteAdoptedBuild(candidateBuild);
                             ConductorSupervisorActiveChild? handoffChild = null;
                             if (!runTask.IsCompleted && supervisorHandoff is not null)
