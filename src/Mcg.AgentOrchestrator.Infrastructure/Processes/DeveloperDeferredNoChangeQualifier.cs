@@ -47,6 +47,11 @@ internal static class DeveloperDeferredNoChangeQualifier
 
         var required = task.CriterionRetryFeedback
             .Append(task.AcceptedRetryFeedback?.Message ?? string.Empty)
+            .Concat(goal.Timeline
+                .Where(item => item.TaskId == task.Id &&
+                    item.OccurredAt >= task.LatestRetryAt &&
+                    item.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRetryFeedbackUpdated)
+                .Select(item => item.Message))
             .SelectMany(message => FailingTests.Matches(message)
                 .SelectMany(match => match.Groups["identities"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries)))
             .Select(DeclaringClass)

@@ -11,7 +11,9 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.True(task.Status == WorkTaskStatus.Completed,
+            $"Actual status: {task.Status}; verification: {task.LastVerification?.StandardError}; " +
+            $"last task event: {goal.Timeline.LastOrDefault(evt => evt.TaskId == task.Id)?.Message}");
         Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
         Xunit.Assert.Equal(candidate, task.LastDispatch!.ResultCommit);
         Xunit.Assert.True(DeferredNoChangeOutcome.TryParse(
