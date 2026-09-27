@@ -12,7 +12,8 @@ internal sealed record ApparatusRedGateReading(
     IReadOnlyList<string> ChangedPaths,
     IReadOnlyList<ApparatusRedFailingTest> FailingTests,
     bool EveryFailedCheckHasTestIdentities,
-    IReadOnlyList<string> FailedCheckNames);
+    IReadOnlyList<string> FailedCheckNames,
+    bool WithinAttemptRerunExplained = false);
 
 /// <summary>
 /// The composition root for apparatus-RED classification: it owns the census store, the test-source
@@ -145,7 +146,8 @@ internal sealed class ApparatusRedGate
             failingTests,
             reading.EveryFailedCheckHasTestIdentities,
             AcceptanceFailingTestIndex.CountRegates(records, goal.Id.Value),
-            _perGoalRegateCap));
+            _perGoalRegateCap,
+            reading.WithinAttemptRerunExplained));
     }
 
     /// <summary>Durably records one apparatus re-gate so the per-goal bound survives a restart.</summary>
@@ -184,6 +186,16 @@ internal sealed class ApparatusRedGate
                 check.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) == true)
             .Select(check => check.Name)
             .ToHashSet(StringComparer.Ordinal);
+        var rerunExplainedChecks = failedIdentityBearingChecks.Count == 0
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : acceptance.RequiredUnmetCriteria
+                .GroupBy(check => check.Name, StringComparer.Ordinal)
+                .Where(group => group.Count() == 1)
+                .Select(group => group.Single())
+                .Where(WithinAttemptRerunApparatusEvidence.IsExplainedIdentitylessCheck)
+                .Select(check => check.Name)
+                .ToHashSet(StringComparer.Ordinal);
+        var explainedByRerun = false;
         foreach (var check in acceptance.RequiredUnmetCriteria)
         {
             var identities = check.FailingTestIdentities?
@@ -192,9 +204,17 @@ internal sealed class ApparatusRedGate
                 .ToArray() ?? [];
             if (identities.Length == 0)
             {
-                if (check.CoveredBy is { Count: > 0 } coveredBy &&
-                    coveredBy.All(failedIdentityBearingChecks.Contains))
+                if (rerunExplainedChecks.Contains(check.Name))
                 {
+                    explainedByRerun = true;
+                    continue;
+                }
+
+                if (check.CoveredBy is { Count: > 0 } coveredBy &&
+                    coveredBy.All(name => failedIdentityBearingChecks.Contains(name) ||
+                        rerunExplainedChecks.Contains(name)))
+                {
+                    explainedByRerun |= coveredBy.Any(rerunExplainedChecks.Contains);
                     continue;
                 }
 
@@ -267,7 +287,8 @@ internal sealed class ApparatusRedGate
             everyCheckHasIdentities,
             acceptance.FailedChecks is { Count: > 0 } failedChecks
                 ? failedChecks
-                : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray());
+                : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray(),
+            explainedByRerun);
     }
 
     private static IReadOnlyList<AcceptanceTrxFailure> ReadTrxFailures(AcceptanceCheckResult check)

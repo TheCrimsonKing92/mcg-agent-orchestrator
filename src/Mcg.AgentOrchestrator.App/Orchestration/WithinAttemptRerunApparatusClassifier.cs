@@ -18,15 +18,7 @@ internal static class WithinAttemptRerunApparatusClassifier
             return null;
         }
 
-        var partitions = unmet.Where(check =>
-            !check.Passed &&
-            check.WithinAttemptRerun is { ExecutedTestCount: > 0, RerunTestResultPaths.Count: > 0 } evidence &&
-            evidence.PartitionId.Length > 0 &&
-            (evidence.FailedPredicate is AcceptanceShardCompletionPredicates.MissingTrx or
-                AcceptanceShardCompletionPredicates.MalformedTrx) &&
-            check.CompletionDecision?.FailedPredicate == evidence.FailedPredicate &&
-            check.FailingTestIdentities?.Any(identity => !string.IsNullOrWhiteSpace(identity)) != true)
-            .ToArray();
+        var partitions = unmet.Where(WithinAttemptRerunApparatusEvidence.IsExplainedIdentitylessCheck).ToArray();
         if (partitions.Length == 0)
         {
             return null;
