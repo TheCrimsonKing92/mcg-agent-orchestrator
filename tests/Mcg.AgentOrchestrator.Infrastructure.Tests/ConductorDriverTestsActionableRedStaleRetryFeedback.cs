@@ -78,9 +78,13 @@ public sealed class ConductorDriverTestsActionableRedStaleRetryFeedback
             Assert.Contains(TestIdentity, feedback, StringComparison.Ordinal);
             Assert.Null(developer.AcceptedRetryFeedback);
             var publishedPrompt = File.ReadAllText(Assert.IsType<string>(publishedPromptPath));
-            Assert.Contains("INLINE FULL: identity=task/criterion-retry-feedback.json", publishedPrompt, StringComparison.Ordinal);
-            Assert.Contains(TestIdentity, publishedPrompt, StringComparison.Ordinal);
-            Assert.DoesNotContain(Earlier, publishedPrompt, StringComparison.Ordinal);
+            const string heading = "## Unmet acceptance criteria from the prior attempt - fix these:";
+            var sectionStart = publishedPrompt.IndexOf(heading, StringComparison.Ordinal);
+            Assert.True(sectionStart >= 0, "The published brief must include the current retry feedback section.");
+            var nextSectionStart = publishedPrompt.IndexOf("\n## ", sectionStart + heading.Length, StringComparison.Ordinal);
+            var currentFeedbackSection = publishedPrompt[sectionStart..(nextSectionStart < 0 ? publishedPrompt.Length : nextSectionStart)];
+            Assert.Contains(TestIdentity, currentFeedbackSection, StringComparison.Ordinal);
+            Assert.DoesNotContain(Earlier, currentFeedbackSection, StringComparison.Ordinal);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
