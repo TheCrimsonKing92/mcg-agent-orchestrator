@@ -138,6 +138,7 @@ internal sealed class GoalRefinementService
                 ClarificationAnswerHistory = clarificationAnswerHistory
             };
             kernel.RecordGoalRefinement(goalId, fallback);
+            kernel.RecordGoalPolicyDecision(goalId, FallbackVerificationClassPolicy.BuildOwnershipReceipt(fallback));
             return RefinementResult.Fallback(
                 fallback,
                 attempt.Invocation,
@@ -1026,12 +1027,20 @@ internal sealed class GoalRefinementService
     private static RefinedSpec BuildFallbackSpec(string objective)
     {
         var declaredCriteria = ParseDeclaredAcceptanceCriteria(objective);
+        IReadOnlyList<string> criteria = declaredCriteria.Count > 0
+            ? declaredCriteria
+            : [$"The objective is achieved: {objective}"];
+        var ownership = CriterionOwnershipDerivation.DeriveForRevision(criteria, [], []);
         return new RefinedSpec(
             $"Implement: {objective}",
-            declaredCriteria.Count > 0 ? declaredCriteria : [$"The objective is achieved: {objective}"],
-            VerificationClass.TestVerifiable,
+            criteria,
+            FallbackVerificationClassPolicy.Classify(criteria),
             [],
-            []);
+            [])
+        {
+            AcceptanceGateOwnedAcceptanceCriteria = ownership.AcceptanceGateOwned,
+            OperatorOwnedAcceptanceCriteria = ownership.OperatorOwned
+        };
     }
 
     private static List<string> ResolveAcceptanceCriteria(
