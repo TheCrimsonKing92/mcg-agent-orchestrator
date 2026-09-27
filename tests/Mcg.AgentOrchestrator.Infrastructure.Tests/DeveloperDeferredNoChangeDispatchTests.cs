@@ -73,6 +73,10 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
         var candidate = ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]);
         if (missing != "no-retry")
         {
+            kernel.RecordTaskProcessRefreshed(goal.Id, task.Id,
+                process with { CompletedAt = clock.UtcNow, ExitCode = 0 }, null);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed,
+                "Prior candidate completed.");
             kernel.RetryTask(goal.Id, task.Id, "Review the unchanged candidate after evidence.");
             kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
                 "codex-cli", process.Command, process.WorkingDirectory,
