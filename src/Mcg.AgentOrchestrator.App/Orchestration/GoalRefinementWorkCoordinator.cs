@@ -21,7 +21,7 @@ internal sealed record GoalRefinementWorkLaunchResult(
 /// Owns refinement after intake commits. The state outbox is the durable, leased work queue;
 /// the detached process is only an executor and may be replaced after a crash.
 /// </summary>
-internal static class GoalRefinementWorkCoordinator
+internal static partial class GoalRefinementWorkCoordinator
 {
     internal const string OutboxKind = "goal-spec-refinement";
     internal const string CommandName = "goal-refinement-run";
@@ -136,16 +136,21 @@ internal static class GoalRefinementWorkCoordinator
 
                     if (!synchronizingAnswers)
                     {
+                        phase = "load-refinement-policy";
+                        var selection = LoadRefinementPolicy(workspace);
+                        if (selection.FallbackDecision is not null)
+                            refinementKernel.RecordGoalPolicyDecision(goalId, selection.FallbackDecision);
                         phase = "provider-refinement";
                         var refinement = await service.RefineAsync(
                                 refinementKernel,
                                 goalId,
+                                policy: selection.Policy,
                                 cancellationToken: claimCancellationToken)
                             .ConfigureAwait(false);
                         phase = "record-policy-receipt";
                         refinementKernel.RecordGoalPolicyDecision(
                             goalId,
-                            GoalRefinementGate.BuildPolicyReceipt(refinement));
+                            GoalRefinementGate.BuildPolicyReceipt(refinement, selection.Policy.Name));
                     }
                     else
                     {

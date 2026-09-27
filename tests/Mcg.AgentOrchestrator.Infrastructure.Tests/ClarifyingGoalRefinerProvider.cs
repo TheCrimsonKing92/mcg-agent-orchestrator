@@ -3,6 +3,9 @@ using Mcg.AgentOrchestrator.Core;
 internal sealed class ClarifyingGoalRefinerProvider : IModelProvider
 {
     private int _invocationCount;
+    private readonly string? _response;
+
+    public ClarifyingGoalRefinerProvider(string? response = null) => _response = response;
 
     public string ProviderName => "clarifying-refiner";
 
@@ -32,6 +35,6 @@ internal sealed class ClarifyingGoalRefinerProvider : IModelProvider
             }
             ```
             """;
-        return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
+        return Task.FromResult(new ModelResponse(_response ?? response, new ModelUsage(1, 1), "stop"));
     }
 }
