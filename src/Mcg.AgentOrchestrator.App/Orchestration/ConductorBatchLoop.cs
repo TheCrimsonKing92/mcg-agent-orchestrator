@@ -693,6 +693,7 @@ internal sealed partial class ConductorBatchLoop
                 $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}{FormatSweepPhaseAttribution(_tickPhaseElapsedMs)}"));
 
             var preWalkClock = Stopwatch.StartNew();
+            var stewardChangedGoalIds = ServiceSteward(kernel, onlyGoalId);
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
             var preWalkIntentLines = new List<string>();
             var preWalkIntentProcessed = false;
@@ -714,13 +715,14 @@ internal sealed partial class ConductorBatchLoop
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !sweepTerminalizedGoalIds.Contains(g.Id)
                     && !checkpointHeldGoals.ContainsKey(g.Id.Value)
+                    && (g.CurrentHold?.State != "steward-owner-question" || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))
                 .ToArray();
             var verifiedGoalIdsAtTickStart = scopedGoals.Where(goal => goal.Status == GoalStatus.Verified)
                 .Select(goal => goal.Id).ToHashSet();
             var scopedGoalsById = scopedGoals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
-            var preWalkIntentChangedGoalIds = new HashSet<GoalId>();
+            var preWalkIntentChangedGoalIds = new HashSet<GoalId>(stewardChangedGoalIds);
             if (_operatorIntents is not null)
             {
                 foreach (var actionableGoalId in actionableIntentGoalIds)
@@ -1692,6 +1694,7 @@ internal sealed partial class ConductorBatchLoop
         }
         finally
         {
+            StopSteward();
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
