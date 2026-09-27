@@ -5,7 +5,7 @@ public sealed class CriterionOwnershipDerivationTests
     [Xunit.Fact]
     public void OperatorPhraseOverridesPreservedGateOwnerAndGateMarker()
     {
-        const string criterion = "The operator owns the check. Acceptance executes.";
+        const string criterion = "The operator owns the check; Acceptance executes. TEST-VERIFIABLE.";
 
         var result = CriterionOwnershipDerivation.DeriveForRevision(
             [criterion], [criterion], []);
@@ -28,5 +28,28 @@ public sealed class CriterionOwnershipDerivationTests
 
         Xunit.Assert.Equal([marker, gate], result.AcceptanceGateOwned);
         Xunit.Assert.Equal([operated], result.OperatorOwned);
+    }
+
+    [Xunit.Fact]
+    public void SubjectOperatorOwnershipMentionDoesNotOverrideTrailingDeveloperOwner()
+    {
+        const string criterion =
+            "The report explains operator-owned mappings. The report is ready. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+
+        var result = CriterionOwnershipDerivation.DeriveForRevision([criterion], [], []);
+
+        Xunit.Assert.Equal([criterion], result.AcceptanceGateOwned);
+        Xunit.Assert.Empty(result.OperatorOwned);
+    }
+
+    [Xunit.Fact]
+    public void OperatorExecutesRealWorldCriterionIsOperatorOwned()
+    {
+        const string criterion = "The live result is observed. Operator executes. REAL-WORLD-DEPENDENT.";
+
+        var result = CriterionOwnershipDerivation.DeriveForRevision([criterion], [], []);
+
+        Xunit.Assert.Empty(result.AcceptanceGateOwned);
+        Xunit.Assert.Equal([criterion], result.OperatorOwned);
     }
 }

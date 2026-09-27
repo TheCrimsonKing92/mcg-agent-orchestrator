@@ -23,13 +23,18 @@ public static class CriterionOwnershipDerivation
             if (!seen.Add(criterion))
                 continue;
 
+            var marker = AcceptanceCriterionOwnershipMarker.Classify(criterion);
+            var operatorOwnedByMarker = marker.Classification is
+                AcceptanceCriterionOwnershipClassification.OperatorOwned or
+                AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal;
+            var gateOwnedByMarker = !operatorOwnedByMarker &&
+                AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion);
             if (priorOperator.Contains(criterion) ||
-                AcceptanceCriterionOwnershipMarker.HasOperatorOwnershipPhrase(criterion))
+                operatorOwnedByMarker)
             {
                 operatorOwned.Add(criterion);
             }
-            else if (priorGate.Contains(criterion) ||
-                     AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion))
+            else if (priorGate.Contains(criterion) || gateOwnedByMarker)
             {
                 gateOwned.Add(criterion);
             }
