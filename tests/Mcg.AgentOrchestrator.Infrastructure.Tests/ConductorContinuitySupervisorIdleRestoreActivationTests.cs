@@ -31,6 +31,18 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
         Assert.Empty(scenario.Attention);
     }
 
+    private static async Task AwaitSignalAsync(Task signal, string name)
+    {
+        try
+        {
+            await signal.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            throw new Xunit.Sdk.XunitException($"Timed out awaiting {name}.");
+        }
+    }
+
     private sealed class Scenario(bool restore)
     {
         public readonly RecordingEvents Events = new();
@@ -41,6 +53,8 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _adopted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _idleLaunched =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private ConductorSupervisorProcessRequest? _idleRequest;
 
         public ScriptedHost Host { get; } = new((_, _, _) =>
@@ -50,8 +64,7 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
         {
             Events.OnAppend = evt =>
             {
-                if (evt.Operation == "activation" &&
-                    evt.Status == (restore ? "restored" : "adopted"))
+                if (evt.Operation == "activation" && evt.Status == "adopted")
                     _adopted.TrySetResult();
             };
             Host.Step = (request, index, token) =>
@@ -70,6 +83,7 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
                 }
 
                 _idleRequest = request;
+                _idleLaunched.TrySetResult();
                 request.OnStandardOutputLine!("LOOP_READY lock=acquired");
                 request.OnStandardOutputLine("LOOP_START tick=0");
                 request.OnStandardOutputLine("TICK_END tick=1 activation=true");
@@ -92,23 +106,32 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
                 "C:\\repo", Path.Combine(Path.GetTempPath(), $"mcg-idle-restore-{Guid.NewGuid():N}"),
                 "default", "default");
 
+            await AwaitSignalAsync(_idleLaunched.Task, restore ? "restored child launch" : "candidate child launch");
             await Deadlines.WaitForCountAsync(1);
             Assert.Equal(TimeSpan.FromMinutes(4), Deadlines.LastDuration);
             for (var iteration = 0; iteration < 2; iteration++)
             {
                 Deadlines.Advance(TimeSpan.FromSeconds(120));
-                _idleRequest!.OnStandardOutputLine!("TICK_END tick=1 activation=true");
+                _idleRequest!.OnStandardOutputLine!($"TICK_END tick={iteration + 2} activation=true");
                 if (iteration == 0)
                 {
                     _idleRequest.OnStandardOutputLine("IDLE_SLEEP seconds=120");
                     await Deadlines.WaitForCountAsync(2);
                 }
             }
-            await _adopted.Task.WaitAsync(TestContext.Current.CancellationToken);
+            if (!restore)
+                await AwaitSignalAsync(_adopted.Task, "ACTIVATION_ADOPTED");
             ConductorContinuityExitArtifact.Write(_idleRequest!.ExitArtifactPath,
                 new("stop-file", 3, 0, false));
             _idleExit.TrySetResult(new ConductorSupervisorProcessResult(0, restore ? 102 : 101));
-            return await run.WaitAsync(TestContext.Current.CancellationToken);
+            try
+            {
+                return await run.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                throw new Xunit.Sdk.XunitException("Timed out awaiting supervisor run completion.");
+            }
         }
     }
 
@@ -137,7 +160,7 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
             if (_pending.Count >= count) return Task.CompletedTask;
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _registrations.Add((count, completion));
-            return completion.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return AwaitSignalAsync(completion.Task, $"delay registration count {count}");
         }
 
         public void Advance(TimeSpan duration)
