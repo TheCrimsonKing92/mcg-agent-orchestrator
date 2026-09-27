@@ -1,0 +1,69 @@
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+[Xunit.Collection("IsolatedProcessSpawning")]
+public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestSupport
+{
+    [Xunit.Fact]
+    public void RetryWithNamedDeferredClassCompletesOnUnchangedCandidate()
+    {
+        var (kernel, goal, task, process, clock, candidate) = Scenario();
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Xunit.Assert.Equal(0, task.LastVerification!.ExitCode);
+        Xunit.Assert.Equal(candidate, task.LastDispatch!.ResultCommit);
+        Xunit.Assert.True(DeferredNoChangeOutcome.TryParse(
+            task.LastVerification.StandardError, out var outcome));
+        Xunit.Assert.Equal(["DeferredAlphaTests"], outcome.TestClasses);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id &&
+            evt.Message.Contains("DEFERRED_NO_CHANGE_OUTCOME", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id &&
+            evt.Message.Contains("DISPATCH_REJECTED", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("no-retry")]
+    [Xunit.InlineData("no-rationale")]
+    [Xunit.InlineData("no-classes")]
+    [Xunit.InlineData("blocker")]
+    public void NonQualifyingCleanRoundKeepsRejectionDiagnostic(string missing)
+    {
+        var (kernel, goal, task, _, clock, _) = Scenario(missing);
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Xunit.Assert.Equal(1, task.LastVerification!.ExitCode);
+        Xunit.Assert.Contains("DISPATCH_REJECTED role=Developer",
+            goal.Timeline.Last(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed).Message,
+            StringComparison.Ordinal);
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task,
+        TaskProcessRecord Process, TestClock Clock, string Candidate) Scenario(string? missing = null)
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.UtcNow.AddMinutes(2));
+        var output = (missing == "no-rationale" ? string.Empty :
+                "NO_CHANGE: the current candidate already contains the repair.\n") +
+            WorkerResultBlock("none", "none",
+                missing == "no-classes" ? "deferred - conductor will verify" :
+                    "deferred - DeferredAlphaTests",
+                commit: "none", blockers: missing == "blocker" ? "source work remains" : "none");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root, AgentRole.Developer, output, string.Empty, clock);
+        var candidate = ReadGit(process.WorkingDirectory, ["rev-parse", "HEAD"]);
+        if (missing != "no-retry")
+        {
+            kernel.RetryTask(goal.Id, task.Id, "Review the unchanged candidate after evidence.");
+            kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+                "codex-cli", process.Command, process.WorkingDirectory,
+                DateTimeOffset.UtcNow.AddMinutes(1), BaseCommit: candidate));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        }
+        else kernel.RecordDispatchBaseCommit(goal.Id, task.Id, candidate);
+        return (kernel, goal, task, process, clock, candidate);
+    }
+}

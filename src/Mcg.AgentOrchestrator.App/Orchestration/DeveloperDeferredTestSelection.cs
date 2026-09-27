@@ -9,36 +9,9 @@ internal sealed record DeveloperDeferredTestSelection(
 
 internal static class DeveloperDeferredTestSelections
 {
-    private static readonly Regex ClassToken = new(
-        @"^[A-Z][A-Za-z0-9_]*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex QuotedClassToken = new(
-        "(?<quote>[`\"'])(?<name>[A-Z][A-Za-z0-9_]*)\\k<quote>",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     internal static DeveloperDeferredTestSelection Resolve(string worktreePath, string testsField)
     {
-        var deferred = testsField.IndexOf("deferred", StringComparison.OrdinalIgnoreCase);
-        if (deferred < 0) return new DeveloperDeferredTestSelection([], []);
-        var declaration = testsField[(deferred + "deferred".Length)..].TrimStart(' ', ':', '-');
-        // A declaration is a comma-separated list. Stop at prose or another field.
-        declaration = declaration.Split([';', '\r', '\n'], 2)[0];
-        var names = new List<string>();
-        var barePrefix = true;
-        foreach (var part in declaration.Split(',', StringSplitOptions.TrimEntries))
-        {
-            var wrapped = QuotedClassToken.Matches(part);
-            if (wrapped.Count > 0)
-            {
-                names.AddRange(wrapped.Select(match => match.Groups["name"].Value));
-                continue;
-            }
-            // Bare names are accepted only as the leading comma-delimited declaration.
-            if (barePrefix && ClassToken.IsMatch(part))
-                names.Add(part);
-            else
-                barePrefix = false;
-        }
-        var distinctNames = names.Distinct(StringComparer.Ordinal).ToArray();
+        var distinctNames = DeveloperDeferredTestClassNames.Parse(testsField);
         var root = Path.Combine(worktreePath, "tests");
         if (!Directory.Exists(root)) return new DeveloperDeferredTestSelection([], distinctNames);
 

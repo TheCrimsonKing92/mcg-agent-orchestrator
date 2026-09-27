@@ -1656,9 +1656,9 @@ public sealed partial class BackgroundDispatchRunner
                 var roleStillRequiresChangeEvidence =
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var allowsNoChangeCompletion = _completionClassifier.AllowsNoChangeCompletion(
-                    task,
-                    decisionStandardOutput,
-                    decisionStandardError);
+                    task, decisionStandardOutput, decisionStandardError) || TryAcceptDeferredNoChange(
+                    kernel.GetGoal(goalId), task, worktreeEvidence, decisionStandardOutput,
+                    decisionStandardError, ref standardErrorDiagnostic);
                 var requiresCommitEvidence =
                     !successfulChildWithoutUsableWorkerResult &&
                     _completionClassifier.RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&

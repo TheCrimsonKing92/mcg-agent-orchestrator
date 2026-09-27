@@ -198,7 +198,7 @@ public static class DispatchRejectionDiagnosticMarker
     }
 }
 
-public static class DispatchFailureClassifier
+public static partial class DispatchFailureClassifier
 {
     private static readonly TimeSpan BareClockRetryStalenessTolerance = TimeSpan.FromHours(1);
 
@@ -757,6 +757,17 @@ public static class DispatchFailureClassifier
                 null,
                 RecoveryRecommendation.None,
                 BuildVerifiedNoChangeRoundEvidenceSummary(task, verification)));
+        }
+
+        if (IsDeveloperDeferredNoChangeRound(task, verification, workerResultPresent, hasCommittedChanges))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.DeferredNoChangeRound,
+                task, verification, workerResultPresent, hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.VerifiedSuccess, exitCode, hasZeroByteOutput,
+                    null, null, RecoveryRecommendation.None,
+                    $"deferred-no-change-round: candidate {task.LastDispatch!.BaseCommit}"));
         }
 
         if (IsRetryRoundWithoutCommitOrDeferral(task, verification, workerResultPresent, hasCommittedChanges))
