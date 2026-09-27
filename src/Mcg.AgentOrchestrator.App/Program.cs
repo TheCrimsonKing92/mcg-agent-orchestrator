@@ -172,6 +172,9 @@ if (CliOwnerDigestCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliOwnerDigestCommand.Run(startupArgs, workspace));
 }
 
+if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
+    return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(workspace));
+
 if (ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
