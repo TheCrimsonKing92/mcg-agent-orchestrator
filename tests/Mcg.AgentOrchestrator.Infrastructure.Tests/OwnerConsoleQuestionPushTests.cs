@@ -46,6 +46,42 @@ public sealed class OwnerConsoleQuestionPushTests
     }
 
     [Fact]
+    public async Task EscalationBeforeQuestionCommitPushesOnNextRefresh()
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.AddGoal("11111111111111111111111111111111", "Build search", AgentRole.Developer);
+        var session = harness.Session();
+        await session.StartAsync(null, CancellationToken.None);
+
+        await session.HandleEventAsync(new OwnerConductEvent(harness.Clock.GetUtcNow(),
+            "goal-escalation", goal.Id.Value, "waiting"), CancellationToken.None);
+        harness.Questions.Items.Add(new OwnerQuestion("clarification-late", goal.Id.Value,
+            OwnerQuestionKind.Clarification, "Can billing change?"));
+        await session.HandleCommandAsync("board", CancellationToken.None);
+
+        Assert.Contains("[1] 11111111 Can billing change?", harness.Output.Text);
+        Assert.Equal(1, harness.Output.Text.Count(ch => ch == '\a'));
+    }
+
+    [Fact]
+    public async Task UnresolvedAnswerKeepsQuestionNumberAndReportsFailure()
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.AddGoal("11111111111111111111111111111111", "Build search", AgentRole.Developer);
+        harness.Questions.Items.Add(new OwnerQuestion("clarification-1", goal.Id.Value,
+            OwnerQuestionKind.Clarification, "Is this feasible?"));
+        var session = harness.Session();
+        await session.StartAsync(null, CancellationToken.None);
+
+        await session.HandleCommandAsync("answer 1 maybe", CancellationToken.None);
+        await session.HandleCommandAsync("answer 1 yes", CancellationToken.None);
+
+        Assert.Equal([("clarification-1", "maybe"), ("clarification-1", "yes")], harness.Answers.Calls);
+        Assert.Contains("question 1 is still open", harness.Output.Text);
+        Assert.DoesNotContain("answered question 1", harness.Output.Text);
+    }
+
+    [Fact]
     public async Task StewardEscalationIsViewOnlyAndNeitherAnswerCommandSubmits()
     {
         var harness = new OwnerConsoleHarness();

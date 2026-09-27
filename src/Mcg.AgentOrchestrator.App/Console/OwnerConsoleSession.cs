@@ -25,7 +25,7 @@ internal sealed class OwnerConsoleSession(
         _lastConductEvent = lastActivity;
         foreach (var line in digest.ReadSummaryLines().Take(5))
             output.WriteLine(line);
-        await RefreshQuestionsAsync(printNew: true, cancellationToken);
+        await RefreshQuestionsAsync(cancellationToken);
         await PrintHeaderAsync(cancellationToken);
         output.WriteLine("Type help for commands.");
     }
@@ -33,22 +33,14 @@ internal sealed class OwnerConsoleSession(
     internal async Task HandleEventAsync(OwnerConductEvent item, CancellationToken cancellationToken)
     {
         _lastConductEvent = item.Timestamp;
-        await RefreshQuestionsAsync(printNew: false, cancellationToken);
-        if (item.EventKind.Equals("goal-escalation", StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var pair in _open.OrderBy(pair => pair.Key))
-            {
-                if (item.GoalId is not null && pair.Value.GoalId.StartsWith(item.GoalId, StringComparison.OrdinalIgnoreCase))
-                    PrintQuestion(pair.Key, pair.Value);
-            }
-        }
+        await RefreshQuestionsAsync(cancellationToken);
         if (item.EventKind is "watch-transition" or "acceptance" or "loop-relaunch" or "goal-escalation")
             await PrintBoardAsync(cancellationToken);
     }
 
     internal async Task<bool> HandleCommandAsync(string raw, CancellationToken cancellationToken)
     {
-        await RefreshQuestionsAsync(printNew: false, cancellationToken);
+        await RefreshQuestionsAsync(cancellationToken);
         var line = raw.TrimEnd('\r').Trim();
         if (line.Length == 0) return true;
         var parts = line.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
@@ -98,16 +90,16 @@ internal sealed class OwnerConsoleSession(
         try
         {
             answers.Submit(question, text);
-            output.WriteLine($"answered question {number}");
-            _open.Remove(number);
-            _retired.Add(number);
-            await RefreshQuestionsAsync(printNew: false, cancellationToken);
+            await RefreshQuestionsAsync(cancellationToken);
+            output.WriteLine(_open.ContainsKey(number)
+                ? $"question {number} is still open; answer was not accepted"
+                : $"answered question {number}");
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException)
-        { output.WriteLine($"error: {ex.Message}"); await RefreshQuestionsAsync(printNew: false, cancellationToken); }
+        { output.WriteLine($"error: {ex.Message}"); await RefreshQuestionsAsync(cancellationToken); }
     }
 
-    private async Task RefreshQuestionsAsync(bool printNew, CancellationToken cancellationToken)
+    private async Task RefreshQuestionsAsync(CancellationToken cancellationToken)
     {
         var current = await questions.ListOpenAsync(cancellationToken);
         var ids = current.Select(item => item.ItemId).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -116,7 +108,7 @@ internal sealed class OwnerConsoleSession(
         foreach (var question in current)
         {
             if (!_numbers.TryGetValue(question.ItemId, out var number))
-            { number = _nextNumber++; _numbers.Add(question.ItemId, number); if (printNew) PrintQuestion(number, question); }
+            { number = _nextNumber++; _numbers.Add(question.ItemId, number); PrintQuestion(number, question); }
             if (!_retired.Contains(number)) _open[number] = question;
         }
     }
