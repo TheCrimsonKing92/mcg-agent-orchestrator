@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsStewardNoCommitRejection
