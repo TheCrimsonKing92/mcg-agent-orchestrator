@@ -77,7 +77,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentsAdjudicatePrecondition
     }
 
     [Xunit.Fact]
-    public async Task Rejected_adjudication_keeps_hold_and_escalation_across_next_tick()
+    public async Task Rejected_adjudication_keeps_hold_and_escalation_across_next_sweep()
     {
         using var harness = new StewardHarness("C");
         harness.Seed("C");
@@ -85,13 +85,14 @@ public sealed class ConductorBatchLoopTestsOperatorIntentsAdjudicatePrecondition
             goalStateVersionResolver: _ => 7,
             evidenceResolver: new AdjudicationEvidenceResolver(harness.Root));
         var escalations = 0;
+        var sweeps = 0;
         OperatorIntentRecord? intent = null;
         GoalHoldState? hold = null;
         var stopPath = Path.Combine(harness.Root, "stop.signal");
 
-        var summary = new ConductorBatchLoop(operatorIntents: coordinator).Run(
+        var summary = new ConductorBatchLoop(sweep: _ => sweeps++, operatorIntents: coordinator).Run(
             harness.Kernel, MakeDriver(writeEscalation: (_, _, _) => escalations++),
-            ConductorAutonomyPolicy.Conservative, stopPath, maxIterations: 3,
+            ConductorAutonomyPolicy.Conservative, stopPath, maxIterations: 4,
             watchInterval: TimeSpan.FromMilliseconds(1), sleepFunc: _ => false,
             keepAliveWhenIdle: true, persistGoalTick: (_, _) => { },
             onTick: tick =>
@@ -107,7 +108,8 @@ public sealed class ConductorBatchLoopTestsOperatorIntentsAdjudicatePrecondition
                 }
             });
 
-        Assert.Equal(3, summary.Ticks);
+        Assert.Equal(2, summary.Ticks);
+        Assert.True(sweeps >= 3);
         Assert.Equal(1, escalations);
         Assert.Equal(hold, harness.Goal.CurrentHold);
         Assert.Equal(OperatorIntentStatus.Rejected, (await harness.Intents.GetAsync(intent!.Id))!.Status);
