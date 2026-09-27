@@ -87,7 +87,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     TimeSpan? tickStallBudget = null,
     Func<TimeSpan, CancellationToken, Task>? tickStallDelay = null,
     IConductorDiagnosticDumpCapture? dumpCapture = null,
-    ConductorSupervisorHandoffOptions? supervisorHandoff = null)
+    ConductorSupervisorHandoffOptions? supervisorHandoff = null,
+    TimeSpan? outputSilenceBudget = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -142,6 +143,7 @@ internal sealed partial class ConductorContinuitySupervisor(
         var restoring = false;
         var attempt = 0;
         var activationTickGapTimeout = ResolveActivationTickGapTimeout(args);
+        InitializeOutputSilenceBudget(args);
 
         try
         {

@@ -46,8 +46,12 @@ internal sealed partial class ConductorContinuitySupervisor
             var snapshot = monitor.Snapshot();
             var lastEnd = monitor.LastTickEnd();
             var remaining = _tickStallBudget - (_timeProvider.GetUtcNow() - (lastEnd.EndedAt ?? watchStartedAt));
+            var lastLineAt = monitor.LastLineAt();
+            var silenceRemaining = _outputSilenceBudget - (_timeProvider.GetUtcNow() - lastLineAt);
+            var silenceFirst = silenceRemaining < remaining;
+            var nextDeadline = silenceFirst ? silenceRemaining : remaining;
             using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var deadline = _tickStallDelay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero,
+            var deadline = _tickStallDelay(nextDeadline > TimeSpan.Zero ? nextDeadline : TimeSpan.Zero,
                 deadlineCts.Token);
             var completed = await Task.WhenAny(runTask, snapshot.Changed, deadline).ConfigureAwait(false);
             deadlineCts.Cancel();
@@ -68,6 +72,12 @@ internal sealed partial class ConductorContinuitySupervisor
                 continue;
             }
 
+            if (silenceFirst && monitor.LastLineAt() != lastLineAt)
+            {
+                continue;
+            }
+
+            var trigger = silenceFirst ? "output-silence" : "tick-end";
             var processId = processIdSource();
             ConductorDumpCaptureResult dump;
             try
@@ -85,12 +95,15 @@ internal sealed partial class ConductorContinuitySupervisor
             }
 
             var failure = $"tick-stall lastTick={currentEnd.Tick?.ToString(CultureInfo.InvariantCulture) ?? "none"}";
-            RecordTickStall("detected", attempt, build, currentEnd, processId, dump);
+            if (silenceFirst) failure += " trigger=output-silence";
+            RecordTickStall("detected", attempt, build, currentEnd, processId, dump,
+                trigger, lastLineAt);
             processCts.Cancel();
             var stopped = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
             if (stopped?.TerminationConfirmed != true)
             {
-                RecordTickStall("escalated", attempt, build, currentEnd, processId, dump);
+                RecordTickStall("escalated", attempt, build, currentEnd, processId, dump,
+                    trigger, lastLineAt);
                 return new(stopped ?? new ConductorSupervisorProcessResult(-1, processId), true, false,
                     failure + " terminationConfirmed=false");
             }
@@ -105,7 +118,9 @@ internal sealed partial class ConductorContinuitySupervisor
         ConductorActivationBuild build,
         (int? Tick, DateTimeOffset? EndedAt) lastEnd,
         int processId,
-        ConductorDumpCaptureResult dump)
+        ConductorDumpCaptureResult dump,
+        string trigger,
+        DateTimeOffset lastLineAt)
     {
         var now = _timeProvider.GetUtcNow();
         var line = $"CONDUCTOR_TICK_STALL lastTick={lastEnd.Tick?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
@@ -114,7 +129,9 @@ internal sealed partial class ConductorContinuitySupervisor
             $"commit={build.CommitSha} build={build.StagedBuildId} " +
             $"pid={(processId > 0 ? processId.ToString(CultureInfo.InvariantCulture) : "unknown")} " +
             (dump.Captured ? $"dump=captured path={dump.DumpPath}" :
-                $"dump=not-captured reason={dump.Reason}");
+                $"dump=not-captured reason={dump.Reason}") +
+            $" trigger={trigger} lastLineAt={lastLineAt.ToString("O", CultureInfo.InvariantCulture)} " +
+            $"outputSilenceBudgetMinutes={_outputSilenceBudget.TotalMinutes.ToString(CultureInfo.InvariantCulture)}";
         TryAppendConductEvent(line);
         try
         {
@@ -125,6 +142,9 @@ internal sealed partial class ConductorContinuitySupervisor
                         lastTick = lastEnd.Tick,
                         lastTickEndAt = lastEnd.EndedAt,
                         budgetSeconds = _tickStallBudget.TotalSeconds,
+                        trigger,
+                        lastLineAt,
+                        outputSilenceBudgetMinutes = _outputSilenceBudget.TotalMinutes,
                         build = new { commitSha = build.CommitSha, stagedBuildId = build.StagedBuildId },
                         processId = processId > 0 ? (int?)processId : null,
                         dump = new { captured = dump.Captured, path = dump.DumpPath, reason = dump.Reason },

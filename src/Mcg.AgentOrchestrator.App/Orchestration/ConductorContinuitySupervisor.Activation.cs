@@ -42,14 +42,20 @@ internal sealed partial class ConductorContinuitySupervisor
         private int _ticks;
         private int? _lastTick;
         private DateTimeOffset? _lastTickEndAt;
+        private DateTimeOffset _lastLineAt;
         private TaskCompletionSource _changed = NewSignal();
 
-        internal ActivationMonitor(Func<DateTimeOffset> utcNow) => _utcNow = utcNow;
+        internal ActivationMonitor(Func<DateTimeOffset> utcNow)
+        {
+            _utcNow = utcNow;
+            _lastLineAt = utcNow();
+        }
 
         internal void OnLine(string line)
         {
             lock (_gate)
             {
+                if (!string.IsNullOrWhiteSpace(line)) _lastLineAt = _utcNow();
                 if (line.StartsWith("LOOP_START ", StringComparison.Ordinal) && !_started)
                 {
                     _started = true;
@@ -88,6 +94,14 @@ internal sealed partial class ConductorContinuitySupervisor
             lock (_gate)
             {
                 return (_lastTick, _lastTickEndAt);
+            }
+        }
+
+        internal DateTimeOffset LastLineAt()
+        {
+            lock (_gate)
+            {
+                return _lastLineAt;
             }
         }
 
