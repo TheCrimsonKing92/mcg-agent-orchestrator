@@ -20,6 +20,8 @@ public sealed class ConductorVerbStartTests
             "-Name", "conduct-loop-daemon", "conduct", "--loop", "--daemon", "--watch",
             "--poll-seconds", "120", "--max-duration", "43200"], request.Arguments);
         Assert.Equal("120", request.Environment["MCG_DISPATCH_MAX_RUNTIME_MIN"]);
+        Assert.Contains(CliProtectedProcessEnvironment.ProtectedPidVariable,
+            request.EnvironmentVariablesToRemove);
         Assert.Contains("pid 1234", output.ToString());
         Assert.Contains("stdout.log", output.ToString());
         Assert.Contains("conductor status", output.ToString());

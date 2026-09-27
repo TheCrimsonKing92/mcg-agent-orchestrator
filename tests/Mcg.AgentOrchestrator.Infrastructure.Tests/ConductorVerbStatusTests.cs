@@ -48,9 +48,8 @@ public sealed class ConductorVerbStatusTests
         Assert.Contains($"Stopped since {stop:O}; reason=operator-stop{Environment.NewLine}", text);
         Assert.Contains("Supervisor build: abc123", text);
         Assert.Contains($"Latest tick: {stop:O}", text);
-        Assert.Contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |", text);
-        Assert.Contains("cccccccccccccccccccccccccccccccc |", text);
-        Assert.Contains("role=", text);
+        Assert.Contains($"  {goal.Id.Value} | {goal.Status} | role={goal.Tasks[0].RequiredRole}{Environment.NewLine}", text);
+        Assert.Contains($"  {secondGoal.Id.Value} | {secondGoal.Status} | role={secondGoal.Tasks[0].RequiredRole}{Environment.NewLine}", text);
         Assert.Contains("Pending clarifications: 1; human waits: 1", text);
         Assert.Contains("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", text);
         foreach (var (path, hash) in original) Assert.Equal(hash, Hash(path));

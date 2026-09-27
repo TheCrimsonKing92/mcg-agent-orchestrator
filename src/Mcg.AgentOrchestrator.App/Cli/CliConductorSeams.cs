@@ -9,7 +9,8 @@ internal sealed record ConductorLaunchRequest(
     string FileName,
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
-    IReadOnlyDictionary<string, string> Environment);
+    IReadOnlyDictionary<string, string> Environment,
+    IReadOnlyCollection<string> EnvironmentVariablesToRemove);
 
 internal sealed record ConductorLaunchResult(int ExitCode, string? StandardOutput, string? StandardError);
 
@@ -33,6 +34,7 @@ internal sealed class SystemConductorProcessLauncher : IConductorProcessLauncher
         };
         foreach (var argument in request.Arguments) start.ArgumentList.Add(argument);
         foreach (var (key, value) in request.Environment) start.Environment[key] = value;
+        foreach (var key in request.EnvironmentVariablesToRemove) start.Environment.Remove(key);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not launch PowerShell.");
         process.StandardInput.Close();
         // The detached child can inherit a pipe handle. Bound reads by the launcher process,
