@@ -46,6 +46,30 @@ public sealed class OwnerConsoleQuestionPushTests
     }
 
     [Fact]
+    public async Task StewardEscalationIsViewOnlyAndNeitherAnswerCommandSubmits()
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.AddGoal("11111111111111111111111111111111", "Build search", AgentRole.Developer);
+        var session = harness.Session();
+        await session.StartAsync(null, CancellationToken.None);
+        harness.Questions.Items.Add(new OwnerQuestion("steward-1", goal.Id.Value,
+            OwnerQuestionKind.StewardHold, "Should this goal be retried?"));
+
+        await session.HandleEventAsync(new OwnerConductEvent(harness.Clock.GetUtcNow(),
+            "goal-escalation", goal.Id.Value, "waiting"), CancellationToken.None);
+        await session.HandleCommandAsync("answer 1 yes", CancellationToken.None);
+        await session.HandleCommandAsync("accept 1", CancellationToken.None);
+
+        Assert.Contains("[1]", harness.Output.Text);
+        Assert.Contains("Should this goal be retried?", harness.Output.Text);
+        Assert.Contains("view only", harness.Output.Text);
+        Assert.Contains($"retry --goal {goal.Id.Value}", harness.Output.Text);
+        Assert.Contains($"adjudicate --goal {goal.Id.Value}", harness.Output.Text);
+        Assert.Equal(2, harness.Output.Text.Split("Steward questions are answered through goal verbs for now").Length - 1);
+        Assert.Empty(harness.Answers.Calls);
+    }
+
+    [Fact]
     public void ClarificationFieldParsingAcceptsCrLf()
     {
         Assert.Equal("May this touch billing?", OwnerQuestionReadModel.Field(

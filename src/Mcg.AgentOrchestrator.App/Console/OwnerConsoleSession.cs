@@ -87,7 +87,7 @@ internal sealed class OwnerConsoleSession(
             return;
         }
         if (question.Kind == OwnerQuestionKind.StewardHold)
-        { output.WriteLine("steward questions require an operator intent; this console cannot answer one"); return; }
+        { output.WriteLine($"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {question.GoalId}."); return; }
         if (command == "accept")
         {
             text = question.ProposedDefault;
@@ -130,7 +130,10 @@ internal sealed class OwnerConsoleSession(
             question.Confidence is null ? null : $"confidence: {question.Confidence}",
             question.ProposedDefault is null ? null : $"default: {question.ProposedDefault}"
         }.Where(field => field is not null);
-        output.WriteLine($"[{number}] {question.GoalId[..Math.Min(8, question.GoalId.Length)]} {question.Text}{(fields.Any() ? " | " + string.Join(" | ", fields) : "")}");
+        var stewardGuidance = question.Kind == OwnerQuestionKind.StewardHold
+            ? $" | view only | CLI: mcg-orchestrator.cmd retry --goal {question.GoalId} <task-number> <message> or mcg-orchestrator.cmd adjudicate --goal {question.GoalId} <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>"
+            : string.Empty;
+        output.WriteLine($"[{number}] {question.GoalId[..Math.Min(8, question.GoalId.Length)]} {question.Text}{(fields.Any() ? " | " + string.Join(" | ", fields) : "")}{stewardGuidance}");
     }
 
     private async Task PrintHeaderAsync(CancellationToken cancellationToken)
