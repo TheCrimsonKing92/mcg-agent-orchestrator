@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -171,14 +170,15 @@ internal sealed partial class ConductorContinuitySupervisor
     private void RecordActivation(
         string status,
         int attempt,
-        ConductorActivationBuild failed,
-        ConductorActivationBuild restored,
+        ConductorActivationBuild primaryBuild,
+        ConductorActivationBuild? secondaryBuild,
         ConductorActivationRevertReason? reason,
         string detail)
     {
+        var (primaryRole, secondaryRole) = ActivationBuildRoles(status);
         var line = $"ACTIVATION_{status.ToUpperInvariant().Replace('-', '_')} " +
-            $"failedCommit={failed.CommitSha} failedBuild={failed.StagedBuildId} " +
-            $"restoredCommit={restored.CommitSha} restoredBuild={restored.StagedBuildId} " +
+            $"{primaryRole}Commit={primaryBuild.CommitSha} {primaryRole}Build={primaryBuild.StagedBuildId} " +
+            $"{secondaryRole}Commit={secondaryBuild?.CommitSha ?? "none"} {secondaryRole}Build={secondaryBuild?.StagedBuildId ?? "none"} " +
             $"reason={reason?.ToString() ?? "none"} detail={Sanitize(detail)}";
         TryAppendConductEvent(line);
         var now = _timeProvider.GetUtcNow();
@@ -188,15 +188,7 @@ internal sealed partial class ConductorContinuitySupervisor
                 "activation",
                 status,
                 line,
-                JsonSerializer.Serialize(new
-                {
-                    failedBuild = new { commitSha = failed.CommitSha, stagedBuildId = failed.StagedBuildId },
-                    restoredBuild = new { commitSha = restored.CommitSha, stagedBuildId = restored.StagedBuildId },
-                    reason = reason?.ToString(),
-                    detail,
-                    attempt,
-                    occurredAt = now
-                }),
+                SerializeActivationPayload(status, primaryBuild, secondaryBuild, reason, detail, attempt, now),
                 now))
             .GetAwaiter().GetResult();
     }

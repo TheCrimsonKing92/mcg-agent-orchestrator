@@ -334,38 +334,39 @@ internal sealed partial class ConductorBatchLoop
             return effectiveInterval;
         }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
-        if ((_selfRelaunchEnabled && _selfRelaunch is not null) ||
-            _postLandingCanary is not null)
+        driver.SuccessfulLandingSink = receipt =>
         {
-            driver.SuccessfulLandingSink = receipt =>
+            var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
+            if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
             {
-                if (_selfRelaunchEnabled && _selfRelaunch is not null)
-                {
-                    var changes = RepositoryChangeClassifier.Classify(receipt.ChangedFiles);
-                    if (changes.RequiresConductorRelaunch)
-                    {
-                        pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
-                        deferredSelfRelaunch = null;
-                        selfRelaunchRetryAfterTick = null;
-                        selfRelaunchDrainStartedAt ??= _utcNow();
-                        EmitProgress(
-                            $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
-                            $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
-                    }
-                }
+                pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
+                deferredSelfRelaunch = null;
+                selfRelaunchRetryAfterTick = null;
+                selfRelaunchDrainStartedAt ??= _utcNow();
+                EmitProgress(
+                    $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
+                    $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
+            }
+            else
+            {
+                var reason = decision.Required
+                    ? (_selfRelaunchEnabled ? "self-relaunch-unavailable" : "self-relaunch-disabled") +
+                      $"+{decision.Classification}"
+                    : decision.Classification;
+                EmitRelaunchNotRequired(totalTicks, receipt, decision with { Required = false, Classification = reason });
+            }
 
-                if (_postLandingCanary is not null)
+            if (_postLandingCanary is not null)
+            {
+                var canaryTask = _postLandingCanary.LaunchLandingAsync(receipt);
+                lock (canaryTasksGate)
                 {
-                    var canaryTask = _postLandingCanary.LaunchLandingAsync(receipt);
-                    lock (canaryTasksGate)
-                    {
-                        canaryTasks.Add(canaryTask);
-                    }
+                    canaryTasks.Add(canaryTask);
                 }
+            }
 
-                previousSuccessfulLandingSink?.Invoke(receipt);
-            };
-        }
+            previousSuccessfulLandingSink?.Invoke(receipt);
+        };
         var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
         EmitProgress(
             $"LOOP_START policy={Sanitize(policy.Name)} policySource={SanitizeReason(policySource)} maxIterations={maxIterations?.ToString() ?? "none"} " +
@@ -2007,6 +2008,7 @@ internal sealed partial class ConductorBatchLoop
             "LOOP_HANDOFF_PENDING" => "loop-handoff",
             "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
             "LOOP_RELAUNCH_SCHEDULED" => "loop-relaunch",
+            "LOOP_RELAUNCH_NOT_REQUIRED" => "loop-relaunch",
             "LOOP_RELAUNCH_DRAIN" => "loop-relaunch",
             "LOOP_RELAUNCH_REBUILD" => "loop-relaunch",
             "LOOP_RELAUNCH_ROLLBACK" => "loop-relaunch-rollback",
