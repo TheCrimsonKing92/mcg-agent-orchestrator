@@ -11,15 +11,15 @@ public static class CriterionOwnershipDerivation
         IReadOnlyList<string> priorGateOwned,
         IReadOnlyList<string> priorOperatorOwned)
     {
-        var priorGate = priorGateOwned.Select(item => item.Trim()).ToHashSet(StringComparer.Ordinal);
-        var priorOperator = priorOperatorOwned.Select(item => item.Trim()).ToHashSet(StringComparer.Ordinal);
+        var priorGate = priorGateOwned.ToHashSet(StringComparer.Ordinal);
+        var priorOperator = priorOperatorOwned.ToHashSet(StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var gateOwned = new List<string>();
         var operatorOwned = new List<string>();
 
         foreach (var item in newCriteria)
         {
-            var criterion = item.Trim();
+            var criterion = item;
             if (!seen.Add(criterion))
                 continue;
 
@@ -28,7 +28,7 @@ public static class CriterionOwnershipDerivation
                 AcceptanceCriterionOwnershipClassification.OperatorOwned or
                 AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal;
             var gateOwnedByMarker = !operatorOwnedByMarker &&
-                AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion);
+                AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(marker.TrailingRegion);
             if (priorOperator.Contains(criterion) ||
                 operatorOwnedByMarker)
             {

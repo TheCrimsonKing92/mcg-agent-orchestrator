@@ -19,7 +19,7 @@ public sealed class CriterionOwnershipDerivationTests
     {
         const string gate = "A gate check.";
         const string operated = "An operator check.";
-        const string marker = "Acceptance executes this check.";
+        const string marker = "The check passes. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
 
         var result = CriterionOwnershipDerivation.DeriveForRevision(
             [operated, marker, gate, operated, gate, "a gate check."],
@@ -39,6 +39,28 @@ public sealed class CriterionOwnershipDerivationTests
         var result = CriterionOwnershipDerivation.DeriveForRevision([criterion], [], []);
 
         Xunit.Assert.Equal([criterion], result.AcceptanceGateOwned);
+        Xunit.Assert.Empty(result.OperatorOwned);
+    }
+
+    [Xunit.Fact]
+    public void SubjectAcceptanceExecutionMentionDoesNotGrantGateOwnership()
+    {
+        const string criterion =
+            "The subject mentions Acceptance executes this check. The report is ready. Developer owns. TEST-VERIFIABLE.";
+
+        var result = CriterionOwnershipDerivation.DeriveForRevision([criterion], [], []);
+
+        Xunit.Assert.Empty(result.AcceptanceGateOwned);
+        Xunit.Assert.Empty(result.OperatorOwned);
+    }
+
+    [Xunit.Fact]
+    public void PriorOwnershipRequiresExactCriterionText()
+    {
+        var result = CriterionOwnershipDerivation.DeriveForRevision(
+            ["Criterion."], [" Criterion."], ["Criterion. "]);
+
+        Xunit.Assert.Empty(result.AcceptanceGateOwned);
         Xunit.Assert.Empty(result.OperatorOwned);
     }
 
