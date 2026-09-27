@@ -123,10 +123,7 @@ internal sealed partial class ConductorDriver
             _recordCriterionRetryFeedback(
                 goal.Id,
                 targetTaskId,
-                [
-                    decision.FeedbackCommand ?? throw new InvalidOperationException("Criterion retry command evidence is missing."),
-                    decision.FeedbackEvidence ?? throw new InvalidOperationException("Criterion retry failure evidence is missing.")
-                ]);
+                BuildCriterionRetryFeedback(goal, targetTaskId, decision));
         }
 
         try
