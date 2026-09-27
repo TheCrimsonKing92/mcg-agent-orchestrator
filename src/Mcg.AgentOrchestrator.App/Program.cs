@@ -211,12 +211,19 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
         }
 
         var conductEventLogWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        var supervisorSeam = new SystemConductorSupervisorHandoffSeam(
+            Path.Combine(workspace.OrchestratorDirectory, "continuity"));
         var supervisor = new ConductorContinuitySupervisor(
             new SystemConductorSupervisorProcessHost(),
             new SqliteRunEventStore(workspace.RunEventStorePath),
             stageSuccessor: stageSuccessor,
             appendConductEvent: (eventKind, goalId, detail) =>
-                conductEventLogWriter.Append(eventKind, goalId, detail));
+                conductEventLogWriter.Append(eventKind, goalId, detail),
+            supervisorHandoff: new ConductorSupervisorHandoffOptions(
+                supervisorSeam,
+                SystemConductorSupervisorHandoffSeam.ReadOwnBuild(),
+                TimeSpan.FromMinutes(2),
+                TimeSpan.FromMilliseconds(250)));
         return await supervisor.RunAsync(
             startupArgs,
             workspace.ExecutionDirectory,
