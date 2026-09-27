@@ -1832,7 +1832,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     lifecycleRecorder: new ConductorLifecycleRecorder(
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
                     blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
-                    workspace: context.Workspace).Run(
+                    workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1952,7 +1952,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace),
                     lifecycleRecorder: new ConductorLifecycleRecorder(
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
-                    workspace: context.Workspace).Run(
+                    workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),

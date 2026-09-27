@@ -15,6 +15,7 @@ internal sealed class OperatorIntentAdjudication(
     AdjudicationEvidenceResolver evidenceResolver)
 {
     private const string TemplateVersion = "operator-adjudication-v1";
+    internal const string StewardAssurance = "steward";
 
     public void Apply(
         AgentOrchestratorKernel kernel,
@@ -27,6 +28,11 @@ internal sealed class OperatorIntentAdjudication(
         var shape = NormalizeShape(payload.Shape);
         var manifest = BuildEvidenceManifest(goal, payload, out var unresolvedEvidence);
         var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause);
+        if (intent.AuthenticationAssurance == StewardAssurance &&
+            (intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "steward" ||
+             intent.Channel != "conductor-steward" || shape != "route" ||
+             retryCause is not (RetryCause.NewTestFinding or RetryCause.ContractClarification)))
+            reason = "steward-capability-boundary";
         var reversibility = ParseReversibility(payload.Reversibility, shape, out var invalidReversibility);
         if (reason is null && invalidReversibility)
             reason = "unknown-reversibility";
@@ -257,6 +263,7 @@ internal sealed class OperatorIntentAdjudication(
     {
         "local-process" => AuthorizationTier.AttestLand,
         "discord-operator-allowlist" => AuthorizationTier.Mutate,
+        StewardAssurance => AuthorizationTier.Mutate,
         _ => AuthorizationTier.Answer
     };
 
