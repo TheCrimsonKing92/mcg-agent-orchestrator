@@ -100,7 +100,7 @@ internal static class GoalRefinementGate
         return !string.Equals(question.Answer, resolved.Resolution, StringComparison.Ordinal);
     }
 
-    internal static string BuildPolicyReceipt(RefinementResult result)
+    internal static string BuildPolicyReceipt(RefinementResult result, string? classificationPolicy = null)
     {
         var metadata = result.Invocation;
         var prefix = $"spec_refinement outcome={result.Disposition.ToString().ToLowerInvariant()}";
@@ -116,7 +116,8 @@ internal static class GoalRefinementGate
             $" provider_kind={Token(metadata.ProviderKind)}" +
             $" worker_profile={Token(metadata.WorkerProfile)}" +
             $" model={Token(metadata.Model)}" +
-            $" reasoning_effort={Token(metadata.ReasoningEffort)}";
+            $" reasoning_effort={Token(metadata.ReasoningEffort)}" +
+            (classificationPolicy is null ? string.Empty : $" classification_policy={Token(classificationPolicy)}");
     }
 
     private static string Token(string value, int maxLength = 100)
