@@ -46,7 +46,8 @@ public sealed class ConductorSelfRelaunchTests
             loopStartProbe: (_, _) => false,
             verificationTimeout: TimeSpan.FromMilliseconds(100),
             verificationHardTimeout: TimeSpan.FromSeconds(1),
-            loopArgs: ["conduct", "--loop", "--daemon", "--watch", "1", "--max-duration", "30"]);
+            loopArgs: ["conduct", "--loop", "--daemon", "--watch", "1", "--max-duration", "30"],
+            usePrebuiltPayload: true);
 
         var result = ConductorSelfRelaunch.Create(fixture.Options)(
             new ConductorSelfRelaunchRequest("goal-real-handoff-failure", 8));
@@ -62,7 +63,7 @@ public sealed class ConductorSelfRelaunchTests
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_successor_process_failure_is_classified_as_self_check")]
     public void RealSuccessorProcessFailureIsClassifiedAsSelfCheck()
     {
-        using var fixture = RealRelaunchFixture.Create();
+        using var fixture = RealRelaunchFixture.Create(usePrebuiltPayload: true);
         File.WriteAllText(fixture.Options.StateStorePath, "not-a-sqlite-database");
 
         var result = ConductorSelfRelaunch.Create(fixture.Options)(
@@ -104,7 +105,7 @@ public sealed class ConductorSelfRelaunchTests
     [Xunit.Fact]
     public void Resolver_failure_removes_built_successor_output()
     {
-        using var fixture = RealRelaunchFixture.Create();
+        using var fixture = RealRelaunchFixture.Create(usePrebuiltPayload: true);
         File.WriteAllText(fixture.Options.ResolveRunDirectoryScriptPath,
             "param([string]$Dll)\r\nWrite-Error 'intentional resolver failure'\r\nexit 13\r\n");
 
@@ -114,6 +115,22 @@ public sealed class ConductorSelfRelaunchTests
         Assert.False(result.HandedOff);
         Assert.Equal("stage", result.FailedPhase);
         Assert.Contains("publish content-addressed run directory", result.Reason);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
+    }
+
+    [Xunit.Fact]
+    public void Missing_prebuilt_output_fails_build_without_fallback()
+    {
+        using var fixture = RealRelaunchFixture.Create(usePrebuiltPayload: true);
+        var missingOutput = Path.Combine(fixture.Root, "missing-prebuilt-app");
+
+        var result = ConductorSelfRelaunch.Create(
+            fixture.Options with { PrebuiltAppOutputDirectory = missingOutput })(
+            new ConductorSelfRelaunchRequest("goal-missing-prebuilt-output", 12));
+
+        Assert.False(result.HandedOff);
+        Assert.Equal("build", result.FailedPhase);
+        Assert.Contains(missingOutput, result.Reason, StringComparison.Ordinal);
         Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
     }
 
@@ -360,14 +377,23 @@ public sealed class ConductorSelfRelaunchTests
 
     private sealed class RealRelaunchFixture : IDisposable
     {
+        private readonly int _appBuildInvocationCountAtStart;
+        private readonly IReadOnlyDictionary<string, string>? _sharedPayloadHashesAtStart;
+        private readonly bool _usePrebuiltPayload;
+
         private RealRelaunchFixture(
             string root,
             ConductorLoopLeaseController lease,
-            ConductorSelfRelaunchOptions options)
+            ConductorSelfRelaunchOptions options,
+            bool usePrebuiltPayload,
+            IReadOnlyDictionary<string, string>? sharedPayloadHashesAtStart)
         {
             Root = root;
             Lease = lease;
             Options = options;
+            _usePrebuiltPayload = usePrebuiltPayload;
+            _sharedPayloadHashesAtStart = sharedPayloadHashesAtStart;
+            _appBuildInvocationCountAtStart = ConductorSelfRelaunch.AppBuildInvocationCount;
         }
 
         public string Root { get; }
@@ -379,7 +405,8 @@ public sealed class ConductorSelfRelaunchTests
             Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
             TimeSpan verificationTimeout = default,
             TimeSpan verificationHardTimeout = default,
-            IReadOnlyList<string>? loopArgs = null)
+            IReadOnlyList<string>? loopArgs = null,
+            bool usePrebuiltPayload = false)
         {
             var root = CreateTempDirectory();
             var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
@@ -432,7 +459,26 @@ public sealed class ConductorSelfRelaunchTests
                 HandoffOptions: handoffOptions,
                 BuildTimeout: TimeSpan.FromMinutes(3),
                 SelfCheckTimeout: TimeSpan.FromSeconds(30));
-            return new RealRelaunchFixture(root, lease, options);
+            IReadOnlyDictionary<string, string>? sharedPayloadHashes = null;
+            if (usePrebuiltPayload)
+            {
+                sharedPayloadHashes = ConductorSelfRelaunchSharedAppPayload.SnapshotHashes();
+                var privateCopy = Path.Combine(root, "prebuilt-app");
+                ConductorSelfRelaunchSharedAppPayload.CreatePrivateCopy(privateCopy);
+                Assert.NotEqual(ConductorSelfRelaunchSharedAppPayload.DirectoryPath, privateCopy);
+                Assert.True(privateCopy.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+                Assert.True(File.Exists(Path.Combine(privateCopy, Path.GetFileName(options.AppDllPath))));
+                Assert.All(Directory.EnumerateFiles(privateCopy, "*", SearchOption.AllDirectories),
+                    file => Assert.False(File.GetAttributes(file).HasFlag(FileAttributes.ReadOnly)));
+                options = options with { PrebuiltAppOutputDirectory = privateCopy };
+            }
+            else
+            {
+                Assert.Null(options.PrebuiltAppOutputDirectory);
+                Assert.Null(options.Staging.PrebuiltAppOutputDirectory);
+            }
+
+            return new RealRelaunchFixture(root, lease, options, usePrebuiltPayload, sharedPayloadHashes);
         }
 
         public void Dispose()
@@ -450,6 +496,13 @@ public sealed class ConductorSelfRelaunchTests
 
             Lease.Dispose();
             TryDeleteDirectory(Root);
+            Assert.Equal(
+                _usePrebuiltPayload ? 0 : 1,
+                ConductorSelfRelaunch.AppBuildInvocationCount - _appBuildInvocationCountAtStart);
+            if (_sharedPayloadHashesAtStart is not null)
+            {
+                ConductorSelfRelaunchSharedAppPayload.AssertHashesEqual(_sharedPayloadHashesAtStart);
+            }
         }
     }
 }
