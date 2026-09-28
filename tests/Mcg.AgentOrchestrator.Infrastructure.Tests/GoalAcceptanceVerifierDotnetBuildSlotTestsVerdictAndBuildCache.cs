@@ -65,8 +65,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             var thirdReceipt = Assert.Single(third.Checks!, check => check.Name == "infrastructure partition verdict cache");
             Assert.Contains("{partition_id=remainder,verdict=GREEN}", thirdReceipt.ResultSummary, StringComparison.Ordinal);
             Assert.Contains("aggregate_verdict=GREEN", thirdReceipt.ResultSummary, StringComparison.Ordinal);
-            Assert.Contains("before_reroll_wall_time=20-25m", thirdReceipt.ResultSummary, StringComparison.Ordinal);
-            Assert.Contains("after_reroll_wall_time=2-7m", thirdReceipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("reused_lanes=1", thirdReceipt.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("executed_lanes=1", thirdReceipt.ResultSummary, StringComparison.Ordinal);
         }
         finally
         {
