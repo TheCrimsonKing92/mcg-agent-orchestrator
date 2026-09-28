@@ -85,7 +85,10 @@ internal sealed partial class ConductorStewardHost
             new ConductorStewardTriggerDetector(
                 (goal, className) => CandidateAddedClassCollection(workspace, goal, className),
                 goal => ConductorStewardAcceptanceTrxResolver.Resolve(workspace.OrchestratorDirectory, goal)),
-            new ClaudeConductorStewardModelRound(Path.Combine(workspace.OrchestratorDirectory, "steward-rounds")),
+            new ClaudeConductorStewardModelRound(Path.Combine(workspace.OrchestratorDirectory, "steward-rounds"),
+                lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
+                    message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
+                        .Append("steward-lessons", null, message))),
             SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
             new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             goalId => SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(

@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record ConductorAuthorRoundInput(
     ConductorAuthorItem Item, string GoalBrief, string RefinedSpec,
-    SpecRefinerPrecedent? MatchingPrecedent);
+    SpecRefinerPrecedent? MatchingPrecedent, ConductorLessonSelection? Lessons = null);
 
 internal interface IConductorAuthorModelRound
 {
@@ -13,33 +13,22 @@ internal interface IConductorAuthorModelRound
         CancellationToken cancellationToken);
 }
 
-internal sealed class ClaudeConductorAuthorModelRound(string receiptDirectory) : IConductorAuthorModelRound
+internal sealed class ClaudeConductorAuthorModelRound(
+    string receiptDirectory,
+    Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null)
+    : IConductorAuthorModelRound
 {
+    private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync =
+        runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
+
     public async Task<string> DispatchAsync(ConductorAuthorRoundInput input,
         string workingDirectory, CancellationToken cancellationToken)
     {
-        var prompt = $$"""
-            You are the conductor Author. Read repository source at the current candidate to answer
-            a residual specification clarification. You have read-only access. Return exactly one
-            JSON object, optionally fenced as json. Allowed kinds:
-            {"kind":"answer","text":"answer","evidenceReferences":["repo/relative/file:line"],"precedent":"optional"}
-            {"kind":"ask-owner","question":"question","recommendation":"recommendation"}
-            Ask the owner for decisions about agent authority, acceptance waivers, spend beyond budget,
-            irreversible actions, external disclosure, or insufficient source evidence.
-
-            Item: {{input.Item.Identity}}
-            Question: {{input.Item.Question}}
-            Goal brief:
-            {{input.GoalBrief}}
-            Refined spec:
-            {{input.RefinedSpec}}
-            Matching precedent:
-            {{JsonSerializer.Serialize(input.MatchingPrecedent)}}
-            """;
+        var prompt = ConductorAuthorPrompt.Render(input);
         WorkerProcessRunResult result;
         try
         {
-            result = await WorkerProcessRunner.RunBufferedAsync(
+            result = await _runProcessAsync(
                 new WorkerProcessRunRequest("claude --model sonnet --permission-mode plan -p",
                     workingDirectory, TimeSpan.FromMinutes(10), prompt), cancellationToken);
             WriteReceipt(input.Item, result.ExitCode, result.StandardOutput, result.StandardError, null);

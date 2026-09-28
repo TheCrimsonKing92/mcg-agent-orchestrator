@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class ConductorStewardEvidenceBundle
 {
     internal const string Heading = "## Precomputed evidence bundle";
+    internal const string LessonsHeading = "## Operator lessons";
     private const int MaxReasonLines = 30;
     private const int MaxReasonChars = 4000;
     private const int MaxReasonLineChars = 400;
@@ -19,7 +20,8 @@ internal static class ConductorStewardEvidenceBundle
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal static string Build(ConductorStewardTrigger trigger, string worktree,
-        IConductorStewardTrackedFileLister files, Func<string, string, bool> pathExists)
+        IConductorStewardTrackedFileLister files, Func<string, string, bool> pathExists,
+        ConductorLessonSelection? lessons = null)
     {
         var bundle = new StringBuilder(Heading).AppendLine()
             .Append("Candidate commit: ").AppendLine(trigger.CandidateSha)
@@ -86,6 +88,7 @@ internal static class ConductorStewardEvidenceBundle
             }
         }
         if (paths.Length > MaxPaths) bundle.AppendLine("[additional paths truncated]");
+        bundle.AppendLine().AppendLine(LessonsHeading).AppendLine(ConductorLessonSelector.Render(lessons));
         return bundle.ToString().TrimEnd();
     }
 

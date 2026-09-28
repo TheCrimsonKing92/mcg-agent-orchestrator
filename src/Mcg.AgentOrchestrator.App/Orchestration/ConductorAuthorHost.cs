@@ -15,6 +15,7 @@ internal sealed class ConductorAuthorHost
     private readonly Func<Goal, string> _workingDirectory;
     private readonly IGoalLifecycleEventWriter _lifecycle;
     private readonly ConductEventLogWriter _conduct;
+    private readonly ConductorLessonSelector? _lessons;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Dictionary<string, (ConductorAuthorItem Item, Task<string> Round)> _rounds = new(StringComparer.Ordinal);
@@ -25,7 +26,8 @@ internal sealed class ConductorAuthorHost
         IConductorAuthorModelRound model, IOperatorIntentStore intents,
         SpecRefinerPrecedentStore precedents, Func<Goal, string> workingDirectory,
         IGoalLifecycleEventWriter lifecycle, ConductEventLogWriter conduct,
-        Func<DateTimeOffset>? utcNow = null, bool enabled = true)
+        Func<DateTimeOffset>? utcNow = null, bool enabled = true,
+        ConductorLessonSelector? lessons = null)
     {
         _claims = claims;
         _collaboration = collaboration;
@@ -35,6 +37,7 @@ internal sealed class ConductorAuthorHost
         _workingDirectory = workingDirectory;
         _lifecycle = lifecycle;
         _conduct = conduct;
+        _lessons = lessons;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         Enabled = enabled;
     }
@@ -54,7 +57,10 @@ internal sealed class ConductorAuthorHost
         goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
         new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
         new ConductEventLogWriter(workspace.ConductEventsLogPath),
-        enabled: ResolveEnabled(Environment.GetEnvironmentVariable(EnabledEnvironmentVariable)));
+        enabled: ResolveEnabled(Environment.GetEnvironmentVariable(EnabledEnvironmentVariable)),
+        lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
+            message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
+                .Append("author-lessons", null, message)));
 
     internal IReadOnlySet<GoalId> ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
     {
@@ -76,7 +82,8 @@ internal sealed class ConductorAuthorHost
                     var precedent = string.IsNullOrWhiteSpace(item.ForkKind) ? null :
                         _precedents.TryGetPrecedentAsync(item.ForkKind).GetAwaiter().GetResult();
                     var input = new ConductorAuthorRoundInput(item, goal.Objective,
-                        JsonSerializer.Serialize(goal.RefinedSpec, Json), precedent);
+                        JsonSerializer.Serialize(goal.RefinedSpec, Json), precedent,
+                        _lessons?.Select(ConductorLessonSelector.AuthorTags(item.ForkKind)));
                     var directory = _workingDirectory(goal);
                     var round = Task.Run(() => _model.DispatchAsync(input, directory, _shutdown.Token), _shutdown.Token);
                     _rounds.Add(item.Identity, (item, round));
