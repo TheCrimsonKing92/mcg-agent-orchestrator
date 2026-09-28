@@ -3118,7 +3118,7 @@ internal sealed partial class ConductorDriver
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .Order(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                if (AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(resolvedGoals, goalId => recovery.Receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision, kernel, $"cohort-receipt:{recovery.Receipt.ReceiptId}") is { } evidenceDiagnostic) { Console.WriteLine($"COHORT_RECOVERY_HELD cohort={recovery.Receipt.Identity.Value} detail={evidenceDiagnostic}"); continue; }
+                if (AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(resolvedGoals, goalId => recovery.Receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision, kernel, $"cohort-receipt:{recovery.Receipt.ReceiptId}", workspace.ExecutionDirectory) is { } evidenceDiagnostic) { Console.WriteLine($"COHORT_RECOVERY_HELD cohort={recovery.Receipt.Identity.Value} detail={evidenceDiagnostic}"); continue; }
                 foreach (var goal in resolvedGoals)
                 {
                     GoalOperationJournal.Completed(

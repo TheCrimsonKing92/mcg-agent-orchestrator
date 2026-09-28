@@ -254,7 +254,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
             CriterionEvidenceOwner.Acceptance,
             "test",
             CriterionEvidenceScopes.FullAcceptanceGate,
-            expectedCandidateSha: new string('a', 40));
+            expectedCandidateSha: candidateSha);
         if (withOperatorObligation)
         {
             kernel.MapCriterionEvidenceOwner(

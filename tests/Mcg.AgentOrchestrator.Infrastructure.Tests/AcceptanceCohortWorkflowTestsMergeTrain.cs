@@ -85,7 +85,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                     CriterionEvidenceOwner.Acceptance,
                     "test",
                     CriterionEvidenceScopes.FullAcceptanceGate,
-                    expectedCandidateSha: main);
+                    expectedCandidateSha: candidate);
             }
             var verifier = new SequenceAcceptanceVerifier(
             [
@@ -180,7 +180,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                     []));
                 kernel.MapCriterionEvidenceOwner(
                     goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance, "test",
-                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: main);
+                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate.Revision);
                 if (goal == goals[0])
                 {
                     kernel.MapCriterionEvidenceOwner(

@@ -51,7 +51,8 @@ internal static class AcceptanceCriterionEvidenceRecovery
                 goal,
                 "merge-train-receipt",
                 receipt.ReceiptId,
-                member.CandidateRevision);
+                member.CandidateRevision,
+                executionDirectory);
         }
 
         foreach (var receipt in cohortStore.ReadPassedReceiptsForGoal(goal.Id))
@@ -67,7 +68,8 @@ internal static class AcceptanceCriterionEvidenceRecovery
                 goal,
                 "cohort-receipt",
                 receipt.ReceiptId,
-                member.CandidateRevision);
+                member.CandidateRevision,
+                executionDirectory);
         }
 
         var attempts = GoalTerminalReconciliationEvidenceResolver.ResolveForGoal(
@@ -95,7 +97,8 @@ internal static class AcceptanceCriterionEvidenceRecovery
                 goal,
                 "acceptance-attempt",
                 attempt.AttemptId,
-                attempt.CandidateSha);
+                attempt.CandidateSha,
+                executionDirectory);
         }
 
         return null;
@@ -106,13 +109,15 @@ internal static class AcceptanceCriterionEvidenceRecovery
         Goal goal,
         string sourceKind,
         string sourceId,
-        string candidateSha)
+        string candidateSha,
+        string executionDirectory)
     {
         var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
             goal,
             candidateSha,
             kernel,
-            $"{sourceKind}:{sourceId}");
+            $"{sourceKind}:{sourceId}",
+            executionDirectory);
         return new AcceptanceCriterionEvidenceRecoveryResult(
             sourceKind,
             sourceId,

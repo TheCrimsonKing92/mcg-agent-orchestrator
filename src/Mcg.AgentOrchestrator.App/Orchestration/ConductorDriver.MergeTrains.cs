@@ -497,7 +497,8 @@ internal sealed partial class ConductorDriver
                     resolvedGoals,
                     goalId => recovery.Receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
                     kernel,
-                    $"merge-train-receipt:{recovery.Receipt.ReceiptId}");
+                    $"merge-train-receipt:{recovery.Receipt.ReceiptId}",
+                    workspace.ExecutionDirectory);
                 if (evidenceDiagnostic is not null)
                 {
                     Console.WriteLine($"MERGE_TRAIN_RECOVERY_HELD train={recovery.Receipt.Identity.Value} detail={evidenceDiagnostic}");
