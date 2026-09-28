@@ -28,7 +28,12 @@ internal sealed class AcceptanceGateEngineSettings
             return new AcceptanceGateEngineSettings();
         }
 
-        using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        return Parse(File.ReadAllText(manifestPath));
+    }
+
+    internal static AcceptanceGateEngineSettings Parse(string manifestJson)
+    {
+        using var document = JsonDocument.Parse(manifestJson);
         if (!document.RootElement.TryGetProperty("engine", out var engineElement))
         {
             return new AcceptanceGateEngineSettings();

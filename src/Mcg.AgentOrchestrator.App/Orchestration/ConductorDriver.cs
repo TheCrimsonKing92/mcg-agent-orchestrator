@@ -3555,7 +3555,9 @@ internal sealed partial class ConductorDriver
         var gateProgressEventWriter = new ConductEventLogWriter(
             Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
         var executionOptions = new AcceptanceRunExecutionOptions(
-            ProgressSink: progress => AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress));
+            ProgressSink: progress => AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress),
+            OwnerProtectedCohortMembers: bindings.Select(binding =>
+                new AcceptanceOwnerProtectedCohortMember(binding.GoalId, binding.CandidateRevision)).ToArray());
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;

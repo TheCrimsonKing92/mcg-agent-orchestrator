@@ -63,7 +63,10 @@ public sealed record AcceptanceRunExecutionOptions(
     TimeSpan? DrainTimeout = null,
     string? RunId = null,
     string? ResultsPrefix = null,
-    string? LivenessCheckHint = null);
+    string? LivenessCheckHint = null,
+    IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers = null);
+
+public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
 internal sealed class AcceptanceExecutionDrainException(string message) : InvalidOperationException(message);
 
@@ -111,6 +114,8 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     public string ResultsPrefix { get; }
     public string ApparatusReceiptPath { get; }
     public AcceptanceGateEngineSettings Settings { get; }
+    public IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers =>
+        _options.OwnerProtectedCohortMembers;
     public CancellationToken CancellationToken => _lifetime.Token;
     public AcceptanceAttemptArtifactCustodyContext? ArtifactCustody { get; protected init; }
 
