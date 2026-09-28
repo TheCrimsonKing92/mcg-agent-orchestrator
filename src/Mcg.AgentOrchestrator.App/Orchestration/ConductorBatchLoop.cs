@@ -202,7 +202,7 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
-        ResetLandingTickSave();
+        checkpointGoalTick = ResetLandingTickSave(checkpointGoalTick);
         _consecutiveJanitorialFailures.Clear();
         var previousConductEventLogWriter = leaseAcquisition.PreviousConductEventLogWriter;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
@@ -1576,8 +1576,8 @@ internal sealed partial class ConductorBatchLoop
                     CompletePersistedOperatorIntents(changedGoalIds, tickLines);
                 }
             }
-            if (pendingSelfRelaunch is not null)
-                SaveLandingTickBeforeRelaunch(kernel, checkpointGoalTick, persistGoalTick, persistTick, checkpointHeldGoals, totalTicks, busyWriteDelay);
+            SaveLandingTickBeforeRelaunch(
+                pendingSelfRelaunch is not null, kernel, checkpointGoalTick, persistGoalTick, persistTick, checkpointHeldGoals, totalTicks, busyWriteDelay);
 
             var operatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? [];
             var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false)
