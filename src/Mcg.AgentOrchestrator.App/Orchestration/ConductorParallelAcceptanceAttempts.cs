@@ -334,7 +334,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCompletionGateForTests
     }
 }
 
-internal sealed class ConductorParallelAcceptanceAttemptCoordinator
+internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
     internal const string GateDispatchKind = "gate";
@@ -601,6 +601,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (current is not null && IsReconciled(current))
         {
+            if (TryHoldRefusedCarryRelaunch(
+                    current, candidate, policy, dispatchKind,
+                    out var refusedCarryDecision))
+                return refusedCarryDecision;
+
             if (current.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
                 current.SupersessionCause is not null)
             {
