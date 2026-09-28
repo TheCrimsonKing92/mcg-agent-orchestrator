@@ -41,7 +41,8 @@ public sealed record ConductorAutonomyPolicy(
     int ReviewAutoRetryStopRound = 7,
     int PlannerSampleCount = 1,
     int AcceptanceWidth = 2,
-    int AcceptanceCohortGatherWindowSeconds = 480)
+    int AcceptanceCohortGatherWindowSeconds = 480,
+    bool AcceptanceAttemptBelowNormalPriority = true)
 {
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
     public const int MinimumAcceptanceWidth = 1;
@@ -202,6 +203,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"plannerSampleCount\": {PlannerSampleCount},");
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
+        sb.AppendLine($"  \"acceptanceAttemptBelowNormalPriority\": {AcceptanceAttemptBelowNormalPriority.ToString().ToLowerInvariant()},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -284,6 +286,15 @@ public sealed record ConductorAutonomyPolicy(
                         $"conductor-policy.json{src}: acceptanceCohortGatherWindowSeconds must be an integer.");
                 gatherWindowSeconds = Math.Max(0, RequireInt(root, "acceptanceCohortGatherWindowSeconds", src));
             }
+            var belowNormalPriority = true;
+            if (root.TryGetProperty("acceptanceAttemptBelowNormalPriority", out var priorityElement) &&
+                priorityElement.ValueKind != JsonValueKind.Null)
+            {
+                if (priorityElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: acceptanceAttemptBelowNormalPriority must be a boolean.");
+                belowNormalPriority = priorityElement.GetBoolean();
+            }
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
                 && thresholdEl.ValueKind != JsonValueKind.Null)
@@ -333,7 +344,8 @@ public sealed record ConductorAutonomyPolicy(
                 reviewAutoRetryStopRound,
                 plannerSampleCount,
                 acceptanceWidth,
-                gatherWindowSeconds);
+                gatherWindowSeconds,
+                belowNormalPriority);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

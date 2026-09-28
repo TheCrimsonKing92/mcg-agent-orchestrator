@@ -1126,7 +1126,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     internal static int RunOwnedProcess(
         string metadataPath,
-        TimeSpan? attemptWriterLeaseTimeout = null)
+        TimeSpan? attemptWriterLeaseTimeout = null,
+        Func<bool>? lowerCurrentProcessPriority = null)
     {
         ConductorParallelAcceptanceAttempt? attempt = null;
         IDisposable? artifactLease = null;
@@ -1140,6 +1141,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             {
                 throw new InvalidOperationException("acceptance attempt metadata was empty");
             }
+
+            ApplyOwnedProcessPriority(
+                attempt,
+                lowerCurrentProcessPriority ?? ProcessTreeGuiSuppression.TryLowerCurrentProcessToBelowNormal);
 
             artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
                 Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
