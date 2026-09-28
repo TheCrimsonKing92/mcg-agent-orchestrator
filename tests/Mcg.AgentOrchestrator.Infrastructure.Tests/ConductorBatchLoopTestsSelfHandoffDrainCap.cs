@@ -109,7 +109,12 @@ public sealed class ConductorBatchLoopTestsSelfHandoffDrainCap : ConductorBatchL
             var summary = new ConductorBatchLoop(
                 utcNow: () => now,
                 reapGoalRunningDispatches: (_, _) => cancelled++,
-                detachGoalRunningDispatches: (_, _) => { detached++; detachedAt = now; },
+                detachGoalRunningDispatches: (_, goal) =>
+                {
+                    var runningDispatches = goal.Tasks.Count(task => task.LastProcess is { IsRunning: true });
+                    detached += runningDispatches;
+                    if (runningDispatches > 0) detachedAt = now;
+                },
                 selfRelaunchEnabled: true,
                 selfRelaunch: _ =>
                 {
