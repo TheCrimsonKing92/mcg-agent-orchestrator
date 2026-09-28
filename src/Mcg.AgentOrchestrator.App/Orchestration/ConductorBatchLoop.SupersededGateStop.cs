@@ -12,19 +12,45 @@ internal sealed partial class ConductorBatchLoop
         string landedGoalId)
     {
         NoteLandingForTick(landedGoalId);
-        var goals = kernel.Goals.Where(goal => goal.Id.Value != landedGoalId).ToArray();
-        foreach (var attempt in driver.ParallelAcceptanceAttemptCoordinator.GetSupersedableGateAttempts(
-                     goals.Select(goal => goal.Id.Value)))
+        string? currentMain = null;
+        var mainResolved = false;
+        foreach (var goal in kernel.Goals.Where(goal =>
+                     goal.Id.Value != landedGoalId && goal.Status != GoalStatus.Completed))
         {
-            var goal = goals.Single(goal => goal.Id.Value == attempt.GoalId);
-            var currentMain = driver.ResolveCurrentMainHeadSha(goal);
-            if (attempt.MainHeadSha is null || currentMain is null ||
-                string.Equals(attempt.MainHeadSha, currentMain, StringComparison.Ordinal))
+            IReadOnlyList<ConductorParallelAcceptanceAttempt> attempts;
+            try
+            {
+                attempts = driver.ParallelAcceptanceAttemptCoordinator.GetSupersedableGateAttempts(
+                    [goal.Id.Value]);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                EmitProgress($"SUPERSEDED_GATE_STOP_FAILED goal={goal.Id.Value} error={SanitizeReason(ex.Message)}");
                 continue;
+            }
 
-            var stop = SupersededAttemptStop ??
-                driver.ParallelAcceptanceAttemptCoordinator.RequestSupersededMainStop;
-            stop(attempt, currentMain);
+            foreach (var attempt in attempts)
+            {
+                try
+                {
+                    if (!mainResolved)
+                    {
+                        currentMain = driver.ResolveCurrentMainHeadSha(goal);
+                        mainResolved = true;
+                    }
+                    if (attempt.MainHeadSha is null || currentMain is null ||
+                        string.Equals(attempt.MainHeadSha, currentMain, StringComparison.Ordinal))
+                        continue;
+
+                    var stop = SupersededAttemptStop ??
+                        driver.ParallelAcceptanceAttemptCoordinator.RequestSupersededMainStop;
+                    stop(attempt, currentMain);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                {
+                    EmitProgress($"SUPERSEDED_GATE_STOP_FAILED goal={goal.Id.Value} attempt={attempt.AttemptId} error={SanitizeReason(ex.Message)}");
+                }
+            }
         }
     }
 }

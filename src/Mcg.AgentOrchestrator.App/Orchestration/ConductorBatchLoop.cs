@@ -344,7 +344,6 @@ internal sealed partial class ConductorBatchLoop
         driver.SuccessfulLandingSink = receipt =>
         {
             RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
-            NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
             var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
             if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
             {
@@ -366,6 +365,7 @@ internal sealed partial class ConductorBatchLoop
                 EmitRelaunchNotRequired(totalTicks, receipt, decision with { Required = false, Classification = reason });
             }
 
+            NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
             if (_postLandingCanary is not null)
             {
                 var canaryTask = _postLandingCanary.LaunchLandingAsync(receipt);

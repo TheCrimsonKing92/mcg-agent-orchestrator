@@ -70,6 +70,11 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
             Assert.Single(coordinator.GetCapacityReservingAttempts([waiting.Id.Value]));
             Assert.Contains(waiting.Id.Value, coordinator.GetLiveAttemptGoalIds([waiting.Id.Value]));
 
+            loop.Run(kernel, driver, policy, NoStopPath(), maxIterations: 1);
+            Assert.Equal(GoalStatus.Verifying, kernel.GetGoal(waiting.Id).Status);
+            Assert.Single(coordinator.GetUnreconciledAttempts([waiting.Id.Value]));
+            Assert.Equal([started.Attempt.AttemptId], stopCalls);
+
             alive = false;
             File.WriteAllText(started.Attempt.ExitCodePath, "1");
             loop.Run(kernel, driver, policy, NoStopPath(), maxIterations: 1);
@@ -128,6 +133,59 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
     }
 
     [Fact]
+    public void StopArtifactReadFailureDoesNotInterruptCompletedLanding()
+    {
+        var root = CreateTempDirectory("mcg-superseded-stop-failure");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var landing = CreateVerifiedSimpleGoal(kernel, "Land despite stop failure");
+            var waiting = CreateVerifiedSimpleGoal(kernel, "Gate with unreadable stop metadata");
+            var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 };
+            var candidate = ConductorParallelAcceptanceCandidate.Create(waiting, 1, [Scope], Branch, OldMain);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root, isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7109));
+            var started = coordinator.Evaluate(candidate, policy, PassingRun);
+            var main = OldMain;
+            var stopCalls = 0;
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getLandingFileScopes: goal => goal.Id == landing.Id ? [LandingScope] : [Scope],
+                getAcceptanceSlotCount: _ => 2,
+                runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(
+                    true, [], BranchHeadSha: Branch, MainHeadSha: OldMain),
+                resolveAcceptanceHeads: _ => (Branch, main),
+                land: goal =>
+                {
+                    main = NewMain;
+                    kernel.CompleteGoal(goal.Id, "Landed");
+                    return new LandingResult(goal.Id.Value, goal.Id.Value[..8],
+                        new LandingDecision.Promote(), "integration", true, "Landed", Branch);
+                },
+                parallelAcceptanceAttemptCoordinator: coordinator);
+            var loop = new ConductorBatchLoop
+            {
+                SupersededAttemptStop = (_, _) =>
+                {
+                    stopCalls++;
+                    throw new IOException("attempt metadata is unreadable");
+                }
+            };
+
+            loop.Run(kernel, driver, policy, NoStopPath(), maxIterations: 1);
+
+            Assert.Equal(GoalStatus.Completed, kernel.GetGoal(landing.Id).Status);
+            Assert.Equal(1, stopCalls);
+            Assert.Null(ReadAttempt(started.Attempt.MetadataPath).SupersedingMainHeadSha);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void RecordedGreenLaneRemainsReusableAfterStop()
     {
         var root = CreateTempDirectory("mcg-superseded-cache");
@@ -169,7 +227,7 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
     }
 
     [Fact]
-    public void PublishedUnreconciledVerdictIsStaleAfterMainAdvances()
+    public void PublishedUnreconciledVerdictIsNotStoppedAfterMainAdvances()
     {
         var root = CreateTempDirectory("mcg-published-superseded-gate");
         try
@@ -188,14 +246,14 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
 
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
                 ReadAttempt(started.Attempt.MetadataPath).Outcome);
-            Assert.Single(parent.GetSupersedableGateAttempts([goal.Id.Value]));
-            Assert.True(parent.RequestSupersededMainStop(started.Attempt, NewMain));
+            Assert.Empty(parent.GetSupersedableGateAttempts([goal.Id.Value]));
+            Assert.False(parent.RequestSupersededMainStop(started.Attempt, NewMain));
 
             var decision = parent.ObserveExistingAttempt(started.Attempt, candidate);
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
-            Assert.Equal(ConductorBatchLoop.IdentityStaleDisposition,
+            Assert.Equal("passed",
                 ConductorBatchLoop.AcceptanceRunDisposition(Assert.IsType<ConductorParallelAcceptanceRunResult>(decision.Run)));
-            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Faulted,
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
                 ReadAttempt(started.Attempt.MetadataPath).Outcome);
         }
         finally

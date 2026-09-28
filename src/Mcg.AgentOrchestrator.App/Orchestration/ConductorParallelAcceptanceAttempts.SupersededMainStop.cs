@@ -8,10 +8,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     internal IReadOnlyList<ConductorParallelAcceptanceAttempt> GetSupersedableGateAttempts(
         IEnumerable<string> goalIds) =>
         GetUnreconciledAttempts(goalIds)
-            .Where(attempt => attempt.Kind == GateDispatchKind &&
-                !attempt.ReconciledAt.HasValue &&
-                attempt.SupersedingMainHeadSha is null)
+            .Where(IsStoppableSupersededGateAttempt)
             .ToArray();
+
+    private bool IsStoppableSupersededGateAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Kind == GateDispatchKind &&
+        attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
+        !attempt.ReconciledAt.HasValue &&
+        !File.Exists(attempt.ResultPath) &&
+        !File.Exists(attempt.ExitCodePath) &&
+        _isProcessAlive(attempt.OwnerProcessId) &&
+        attempt.SupersedingMainHeadSha is null;
 
     internal bool RequestSupersededMainStop(
         ConductorParallelAcceptanceAttempt attempt,
@@ -22,9 +29,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         {
             var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
             if (current.AttemptId != attempt.AttemptId ||
-                current.Kind != GateDispatchKind ||
-                current.ReconciledAt.HasValue ||
-                current.SupersedingMainHeadSha is not null)
+                !IsStoppableSupersededGateAttempt(current))
                 return false;
 
             WriteAttemptFile(current with { SupersedingMainHeadSha = supersedingMainHeadSha });
@@ -43,20 +48,32 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             candidate,
             new AcceptanceExecutionIdentityChangedException(
                 "main advanced during acceptance", isChangedIdentity: true));
+        ConductorParallelAcceptanceAttempt? unmarked = null;
         lock (MetadataWriteGate)
         {
             var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
-            if (current.AttemptId != attempt.AttemptId || current.SupersedingMainHeadSha is null)
+            if (current.AttemptId != attempt.AttemptId)
                 throw new InvalidDataException("Superseded acceptance attempt changed before exit reconciliation.");
 
-            var completed = current with
+            if (current.SupersedingMainHeadSha is null)
             {
-                Outcome = ConductorParallelAcceptanceAttemptOutcome.Faulted,
-                CompletedAt = current.CompletedAt ?? _utcNow(),
-                Detail = "identity-stale: main advanced during acceptance"
-            };
-            WriteAttemptFile(completed);
-            return ConductorParallelAcceptanceAttemptDecision.Completed(completed, run);
+                // The child may have published terminal metadata after the stop request.
+                // Observe its real artifacts rather than inventing a stale outcome.
+                unmarked = current;
+            }
+            else
+            {
+                var completed = current with
+                {
+                    Outcome = ConductorParallelAcceptanceAttemptOutcome.Faulted,
+                    CompletedAt = current.CompletedAt ?? _utcNow(),
+                    Detail = "identity-stale: main advanced during acceptance"
+                };
+                WriteAttemptFile(completed);
+                return ConductorParallelAcceptanceAttemptDecision.Completed(completed, run);
+            }
         }
+
+        return TryCompleteRunningAttempt(unmarked, candidate);
     }
 }
