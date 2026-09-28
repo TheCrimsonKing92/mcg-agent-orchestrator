@@ -60,8 +60,13 @@ public static void PrintTask(Goal goal, TaskSpec task)
         {
             Console.WriteLine($"Prompt size: {promptCharacterCount} chars");
         }
+        PrintContextUsageLine(task);
         Console.WriteLine($"Working directory: {task.LastDispatch.WorkingDirectory}");
         Console.WriteLine($"Dispatched: {task.LastDispatch.DispatchedAt:u}");
+    }
+    else
+    {
+        PrintContextUsageLine(task);
     }
 
     if (task.LastProcess is not null)

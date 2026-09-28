@@ -75,6 +75,7 @@ internal static class CliCommandHelp
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
     public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json]";
+    public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
 
     private static readonly CommandHelpEntry Conduct = new(
@@ -518,6 +519,11 @@ internal static class CliCommandHelp
         OwnerDigestUsage,
         "Report interventions, landings, escapes, tail time and mechanical hours.",
         ["--since", "--until", "--json", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry ContextUsage = new(
+        ContextUsageUsage,
+        "Report per-role and per-model worker dispatch context usage.",
+        ["--since", "--role", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
@@ -965,6 +971,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("owner-digest", StringComparison.OrdinalIgnoreCase))
         {
             entry = OwnerDigest;
+            return true;
+        }
+
+        if (args[0].Equals("context-usage", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ContextUsage;
             return true;
         }
 

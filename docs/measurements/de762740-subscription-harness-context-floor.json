@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "goal": "de762740",
+  "status": "measured-candidate-below-material-threshold",
+  "statusDetail": "A valid profile-faithful paired live Compare exists (de762740-subscription-harness-context-floor-live-20260915.json, 2026-09-15, terminalStatus valid, 3 pairs, all six runs exit 0 with usage present and deliveredPromptAttested true). It measures the AGENTS.md trim alone and it does not meet the material-reduction threshold: median total input fell 82560 -> 75682 (6878 tokens, 8.33 percent, below the 10 percent bar) and median uncached input rose 23552 -> 28834 (+5282 tokens, +22.43 percent) rather than falling. Acceptance evidence 2 is therefore measured and not met at n=3; it is no longer blocked on provider availability.",
+  "knownNonProductionProbe": {
+    "inputTokens": 24043,
+    "cachedInputTokens": 11008,
+    "uncachedInputTokens": 13035,
+    "outputTokens": 5,
+    "limitation": "The command omitted production project_doc_max_bytes=65536 and --cd; it is premise evidence, not a calibration."
+  },
+  "codexCalibration": {
+    "source": "de762740-subscription-harness-context-floor-live-20260915.json",
+    "date": "2026-09-15",
+    "profile": "codex-cli",
+    "role": "Developer",
+    "model": "gpt-5.6-sol",
+    "reasoningEffort": "low",
+    "sandbox": "read-only",
+    "commandTemplate": "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}",
+    "commandTemplateSha256": "9051d0255c3257d76461a27877b5255110faf889d8ed515d07562e9dffd85f85",
+    "promptSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+    "pairs": 3,
+    "sampleSizeDisclosure": "small-sample-n=3",
+    "medians": {
+      "baselineInputTokens": 82560,
+      "candidateInputTokens": 75682,
+      "baselineUncachedInputTokens": 23552,
+      "candidateUncachedInputTokens": 28834
+    },
+    "measuredDeltas": {
+      "inputTokens": -6878,
+      "inputPercent": -8.33,
+      "uncachedInputTokens": 5282,
+      "uncachedInputPercent": 22.43
+    },
+    "materialReduction": {
+      "inputTokens": false,
+      "uncachedInputTokens": false,
+      "threshold": "at least 1000 tokens and 10 percent in both medians"
+    },
+    "interpretation": "Equal task content in both arms (identical promptSha256 and identical non-AGENTS.md inventory hashes), so the only varied input is AGENTS.md: 35532 bytes baseline versus 28069 bytes candidate. The trim moves median total input by about 8 percent and does not reduce uncached input at n=3. Run-to-run cache variance is large (baseline uncached spans 19207-36488 across the three pairs), so the uncached comparison at this sample size is not separable from cache-hit noise; it is reported as measured and not met, not as a measured regression."
+  },
+  "liveAttemptsNote": "Every paid Compare attempt made for this goal is listed below, valid or not, so that the calibration can be read together with what preceded it. The three 2026-09-02/03 attempts are invalid: Compare stops after the first invalid run instead of burning the remaining pairs, which is why their paidProcessStartedCount is 1 while pairs is 3. The 2026-09-15 attempt completed all six runs and is the calibration source above.",
+  "liveAttempts": [
+    {
+      "receipt": "de762740-subscription-harness-context-floor-live-20260902.json",
+      "date": "2026-09-02",
+      "pairsRequested": 3,
+      "paidProcessStartedCount": 1,
+      "terminalStatus": "invalid",
+      "exitCode": 1,
+      "usageError": "provider-usage-missing",
+      "failureReason": "Provider-side: codex_core::responses_retry exhausted 5/5 stream disconnects against api.openai.com/v1/responses; no usage line was emitted."
+    },
+    {
+      "receipt": "de762740-subscription-harness-context-floor-live-retry1-20260902.json",
+      "date": "2026-09-02",
+      "pairsRequested": 3,
+      "paidProcessStartedCount": 1,
+      "terminalStatus": "invalid",
+      "exitCode": 1,
+      "usageError": "provider-usage-missing",
+      "failureReason": "Provider-side: same exhausted stream-disconnect retry sequence on the immediate retry."
+    },
+    {
+      "receipt": "de762740-subscription-harness-context-floor-live-recovery-20260903.json",
+      "date": "2026-09-03",
+      "pairsRequested": 1,
+      "paidProcessStartedCount": 1,
+      "terminalStatus": "invalid",
+      "exitCode": 1,
+      "usageError": "provider-usage-missing",
+      "failureReason": "Provider-side: single-pair recovery attempt the next day hit the same exhausted stream-disconnect retries."
+    },
+    {
+      "receipt": "de762740-subscription-harness-context-floor-live-20260915.json",
+      "date": "2026-09-15",
+      "pairsRequested": 3,
+      "paidProcessStartedCount": 6,
+      "terminalStatus": "valid",
+      "exitCode": 0,
+      "usageError": null,
+      "medians": {
+        "baselineInputTokens": 82560,
+        "candidateInputTokens": 75682,
+        "baselineUncachedInputTokens": 23552,
+        "candidateUncachedInputTokens": 28834
+      },
+      "materialReduction": {
+        "inputTokens": false,
+        "uncachedInputTokens": false
+      },
+      "failureReason": null,
+      "outcome": "All six runs completed with exit 0, usage present, and deliveredPromptAttested true. Baseline root was a clean copy of main a7a90387e with the same .scratch probe context; candidate root was the goal/de762740 worktree. This is the calibration source; the candidate does not meet the material threshold at n=3."
+    }
+  ],
+  "settledBy": "Settled on 2026-09-15 by the paired live -Mode Compare receipt listed last in liveAttempts. Acceptance evidence 2 is now measured and not met for the AGENTS.md trim alone; re-opening it would require a different candidate (for example role-scoped autoload), not another run of this one.",
+  "policyCandidate": {
+    "baselineOnDiskBytes": 35532,
+    "candidateOnDiskBytes": 28069,
+    "reductionBytes": 7463,
+    "reductionPercent": 21.0,
+    "baselineSha256": "3565c06eac42dacbce82b8debd12beb0604f13a2d2edf9c6cb09cf14555ec450",
+    "candidateSha256": "eedd9fcc665de4817d3ae722d40eeb33d214b119763bba53b7e38900b36a3184",
+    "provenance": "Byte figures now match the arms actually measured on 2026-09-15 (baseline AGENTS.md from main a7a90387e, candidate AGENTS.md from this worktree after main integration bc1315001). They supersede the pre-integration snapshot 35106 -> 27641 bytes (candidate sha256 f0b22922f84b40507d62d80261e01086c52b27281c931ee10a5cf90e5cd8a1a1), which no longer matched the tree on disk.",
+    "claim": "A 21 percent byte-level trim of AGENTS.md yields about 8 percent median total input reduction and no uncached input reduction at n=3, so it does not meet the material threshold on its own."
+  },
+  "requiredCommandFragments": [
+    "--json",
+    "--cd {workingDirectory}",
+    "--sandbox {sandboxMode}",
+    "project_doc_max_bytes=65536"
+  ],
+  "sourceAttribution": [
+    { "identity": "AGENTS.md", "classification": "authoritative", "required": true },
+    { "identity": "selected SKILL.md", "classification": "authoritative", "required": true },
+    { "identity": "authoritative brief/spec/output contract", "classification": "authoritative", "required": true },
+    { "identity": "system prompt and tool schemas", "classification": "opaque-harness", "required": true }
+  ]
+}
