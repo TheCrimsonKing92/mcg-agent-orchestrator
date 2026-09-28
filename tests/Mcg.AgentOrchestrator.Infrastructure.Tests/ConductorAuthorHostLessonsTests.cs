@@ -39,7 +39,7 @@ public sealed class ConductorAuthorHostLessonsTests
         var input = await fixture.Dispatch();
 
         Xunit.Assert.Empty(input.Lessons!.Lessons);
-        Xunit.Assert.Contains("Operator lessons:" + Environment.NewLine + "none", fixture.Model.Prompt);
+        Xunit.Assert.Matches(@"Operator lessons:\r?\nnone", fixture.Model.Prompt!);
         Xunit.Assert.Single(fixture.Notes);
     }
 
