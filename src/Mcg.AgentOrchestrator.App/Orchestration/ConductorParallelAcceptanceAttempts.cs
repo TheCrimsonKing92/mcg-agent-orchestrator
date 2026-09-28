@@ -334,7 +334,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCompletionGateForTests
     }
 }
 
-internal sealed class ConductorParallelAcceptanceAttemptCoordinator
+internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
     internal const string GateDispatchKind = "gate";
@@ -621,6 +621,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     requestContext,
                     stableSlotExhaustionPolicy,
                     successor);
+            }
+
+            if (TryReusePassedReconciledAttempt(current, candidate, dispatchKind, focusedEvidenceRequest, requestContext) is { } reused)
+            {
+                return reused;
             }
 
             current = null;
