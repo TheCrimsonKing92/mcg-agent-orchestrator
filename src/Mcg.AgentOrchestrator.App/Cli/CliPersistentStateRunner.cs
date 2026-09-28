@@ -252,10 +252,8 @@ internal static partial class CliPersistentStateRunner
         {
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
-        if (args.Count > 0 && args[0].Equals(OperatorIntentVerbs.CancelDispatch, StringComparison.OrdinalIgnoreCase))
-        {
+        if (IsCancelDispatchCommand(args))
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
-        }
         if (IsGoalScopedTaskMutationCommand(args) || args.Count > 0 && args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
