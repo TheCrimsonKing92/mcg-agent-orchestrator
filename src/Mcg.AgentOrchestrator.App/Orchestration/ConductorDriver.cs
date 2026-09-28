@@ -3562,6 +3562,7 @@ internal sealed partial class ConductorDriver
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;
         IReadOnlyList<string> failedChecks = [];
+        IReadOnlyList<string> cohortFailingTests = [];
         int? gateExitCode = null;
         IReadOnlyList<string> gateTestResultPaths = [];
         DotnetBuildEnvironmentLease? stableSlotLease = null;
@@ -3590,6 +3591,7 @@ internal sealed partial class ConductorDriver
                 .Where(check => !check.Passed && !check.Advisory)
                 .Select(check => check.Name)
                 .ToArray() ?? [];
+            cohortFailingTests = CohortFailingTestIdentities(verification);
             gateExecutionComplete = true;
             gateClock.Stop();
             receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
@@ -3650,7 +3652,8 @@ internal sealed partial class ConductorDriver
             AppendCohortAttributionStartEvent(gateProgressEventWriter, identity, bindings);
             var first = RunCohortPartition(bindings[0], 0, identity, gateProgressEventWriter, cancellationToken);
             var second = RunCohortPartition(bindings[1], 1, identity, gateProgressEventWriter, cancellationToken);
-            var attribution = ConductorAcceptanceCohortAttribution.Classify(first.Outcome, second.Outcome);
+            var classified = ConductorAcceptanceCohortFailingTestAttribution.Classify(cohortFailingTests, first, second);
+            var attribution = classified.Outcome;
             var innocentGoalId = attribution switch
             {
                 AcceptanceCohortAttributionOutcome.FirstMemberFailed => bindings[1].GoalId,
@@ -3662,7 +3665,9 @@ internal sealed partial class ConductorDriver
                 attribution,
                 [first, second],
                 pairFingerprint,
-                innocentGoalId);
+                innocentGoalId,
+                classified.AttributedMembers,
+                classified.UnrelatedFailures);
         }
 
         return receipt;
@@ -3683,6 +3688,7 @@ internal sealed partial class ConductorDriver
         string? treeRevision = null;
         var partitionManifest = identity.ManifestIdentity;
         IReadOnlyList<string> testResultPaths = [];
+        IReadOnlyList<string> failingTestIdentities = [];
         AcceptanceCohortGateOutcome outcome;
         try
         {
@@ -3700,6 +3706,7 @@ internal sealed partial class ConductorDriver
                 stableSlotIndex: null, stableSlotLease: null, cancellationToken,
                 CreateCohortAttributionExecutionOptions(gateProgressEventWriter, identity, member));
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
+            failingTestIdentities = CohortFailingTestIdentities(result);
             partition.AssertGoalBranchesUnchanged();
             outcome = ClassifyCohortVerification(result);
         }
@@ -3725,7 +3732,7 @@ internal sealed partial class ConductorDriver
             partitionManifest,
             outcome,
             checked((long)clock.Elapsed.TotalMilliseconds),
-            testResultPaths);
+            testResultPaths) { FailingTestIdentities = failingTestIdentities };
     }
 
     private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>
