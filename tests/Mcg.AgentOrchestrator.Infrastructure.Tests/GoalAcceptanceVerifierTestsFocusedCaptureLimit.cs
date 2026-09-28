@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -160,6 +163,28 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
             Assert.Contains("acceptance-check-capture-limit:", result.Summary, StringComparison.Ordinal);
             Assert.Contains("cap_bytes=4096", result.Summary, StringComparison.Ordinal);
             Assert.DoesNotContain("acceptance-check-timeout", result.Summary, StringComparison.Ordinal);
+
+            var eventPath = Path.Combine(root, "conduct-events.log");
+            var goal = new AgentOrchestratorKernel().CreateGoal("Record capture-limited focused evidence");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                runInline: true,
+                acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: new ConductEventLogWriter(eventPath));
+            coordinator.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                (_, _, _, _) => result);
+
+            var evidenceEnd = Assert.Single(File.ReadLines(eventPath)
+                .Select(line => JsonNode.Parse(line)!.AsObject())
+                .Where(item => item["eventKind"]!.GetValue<string>() == "EVIDENCE_END"));
+            var detail = evidenceEnd["detail"]!.GetValue<string>();
+            Assert.Contains("acceptance-check-capture-limit:", detail, StringComparison.Ordinal);
+            Assert.Contains("cap_bytes=4096", detail, StringComparison.Ordinal);
+            Assert.DoesNotContain("acceptance-check-timeout", detail, StringComparison.Ordinal);
         }
         finally
         {
