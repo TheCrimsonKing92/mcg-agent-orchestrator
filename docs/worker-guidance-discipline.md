@@ -92,6 +92,16 @@ such as under `Expected to change:`, to declare it even when another clause proh
 an objective declares both a directory and an equally or more trusted specific path beneath it,
 only the specific path is declared; name the directory alone when the exact file is not known.
 
+## Acceptance criteria that survive refinement
+
+- Write each criterion as one flat line, because a nested bullet becomes its own criterion.
+- End each criterion with an explicit owner sentence, such as `Developer owns; Acceptance executes.` or `Reviewer owns; Reviewer executes.`, because otherwise the refiner may assign the evidence owner.
+- Before writing `passes unmodified` for existing facts, search those test classes for assertions on the behavior or message text being changed; carve out pinned facts by exact name or put new information in a separate field or timeline note, because a pinned assertion can contradict the change.
+- Quantify obligations as `at least one ... and all ...` and state what happens when there are zero, because `every` passes vacuously with no obligations.
+- Put the Planner's plan summary on the same line as `plan=` and cite concrete repository files instead of a wildcard path, because the Planner contract rejects a following-line summary or wildcard citation.
+- Describe the in-process test seam explicitly instead of naming conductor start or stop commands or tick counts, because those phrases trip live-conductor and sandbox feasibility checks.
+- Give workers fixture data inline instead of pointing them at runtime state under `.orchestrator/`, because workers cannot read that state.
+
 ## Corollaries
 
 **State the mechanism, not the property.** "Durable" is an adjective; "persisted to the outbox,
