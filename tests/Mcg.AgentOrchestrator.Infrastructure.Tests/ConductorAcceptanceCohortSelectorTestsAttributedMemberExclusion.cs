@@ -47,7 +47,7 @@ public sealed class ConductorAcceptanceCohortSelectorTestsAttributedMemberExclus
             var train = ConductorMergeTrainSelector.Select([a, b, c, d], attributedMemberKeys: keys);
             Assert.Equal([b.GoalId, c.GoalId, d.GoalId], train!.Members.Select(member => member.GoalId));
 
-            var changed = Ready('1', 'y');
+            var changed = Ready('1', 'e');
             Assert.Equal(a.GoalId, changed.GoalId);
             Assert.Equal([a.GoalId, b.GoalId],
                 ConductorAcceptanceCohortSelector.Select([changed, b, c], attributedMemberKeys: keys)
