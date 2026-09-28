@@ -293,6 +293,7 @@ internal sealed partial class ConductorBatchLoop
             ResolveRelaunchDrainCap(_readRelaunchDrainCap()));
         ConductorLoopHandoffResult? selfRelaunchHandoff = null;
         var started = _utcNow();
+        _cohortGatherDeadline = ComputeCohortGatherDeadline(started, maxDuration);
         var effectiveGoalStallThreshold = goalStallThreshold ?? DefaultGoalStallThreshold;
         if (effectiveGoalStallThreshold < TimeSpan.Zero)
         {
@@ -3320,10 +3321,9 @@ internal sealed partial class ConductorBatchLoop
                 $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result=held {cohortHoldDetail}",
                 changedGoalLines);
         }
-        if (suppressNewAcceptanceAdmission)
-        {
-            return results;
-        }
+        if (suppressNewAcceptanceAdmission) return results;
+        HoldLoneReadyGoalForInReviewCohortPartner(kernel, scopedGoals, orderedEligible, productionCandidates,
+            acceptanceCensus, driver, policy, results, tick, changedGoalLines);
         var oldestWaiterObservation = ObserveOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
         var oldestWaiter = oldestWaiterObservation.Waiter;
         var oldestServedThisTick = false;
