@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 1,
+  "mode": "Compare",
+  "profile": "codex-cli",
+  "role": "Developer",
+  "model": "gpt-5.6-sol",
+  "reasoningEffort": "low",
+  "sandbox": "read-only",
+  "commandTemplate": "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}",
+  "commandTemplateSha256": "9051d0255c3257d76461a27877b5255110faf889d8ed515d07562e9dffd85f85",
+  "paidProcessStarted": true,
+  "paidProcessStartedCount": 6,
+  "scorecardEligible": false,
+  "workerShell": {
+    "executable": "C:\\Users\\miles\\AppData\\Local\\Programs\\PowerShell\\7\\pwsh.exe",
+    "arguments": [
+      "-NoProfile",
+      "-NonInteractive",
+      "-InputFormat",
+      "None",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command"
+    ],
+    "contractSha256": "8f1f2d136fc992c8b770f1a1f38ab7d558e559106441a1b4734cd0cf81193b4b"
+  },
+  "resolvedCommand": "codex exec --json --skip-git-repo-check --model 'gpt-5.6-sol' -c model_reasoning_effort='low' -c project_doc_max_bytes=65536 --sandbox 'read-only' --cd 'C:\\Users\\miles\\vcs\\mcg-agent-orchestrator\\.orchestrator-worktrees\\de762740'",
+  "requiredContextInventory": [
+    {
+      "logicalIdentity": "AGENTS.md",
+      "classification": "Authoritative",
+      "bytes": 28069,
+      "sha256": "eedd9fcc665de4817d3ae722d40eeb33d214b119763bba53b7e38900b36a3184"
+    },
+    {
+      "logicalIdentity": ".agents/skills/verification-before-completion/SKILL.md",
+      "classification": "Authoritative",
+      "bytes": 1434,
+      "sha256": "f796598cc251050000c0317311ee75af4d26c692f00c515aa79651dd54a2a472"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/objective.md",
+      "classification": "Authoritative",
+      "bytes": 2810,
+      "sha256": "022a9439dbff1248b4f4c0c49a257f8e4d701c3054c8033983d522112117d861"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/refined-spec.md",
+      "classification": "Authoritative",
+      "bytes": 14126,
+      "sha256": "fcf699a2c904806ab27bd8c08a6455cf168b6a56d3bda210210d238853b0a1c2"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/output-contract.md",
+      "classification": "Authoritative",
+      "bytes": 3285,
+      "sha256": "33c8868f9808fe20648fb9d35f050ab200139b6ebc7655aca2791207bd0a5cf3"
+    }
+  ],
+  "promptSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+  "pairs": 3,
+  "sampleSizeDisclosure": "small-sample-n=3",
+  "baselineInventory": [
+    {
+      "logicalIdentity": "AGENTS.md",
+      "classification": "Authoritative",
+      "bytes": 35532,
+      "sha256": "3565c06eac42dacbce82b8debd12beb0604f13a2d2edf9c6cb09cf14555ec450"
+    },
+    {
+      "logicalIdentity": ".agents/skills/verification-before-completion/SKILL.md",
+      "classification": "Authoritative",
+      "bytes": 1434,
+      "sha256": "f796598cc251050000c0317311ee75af4d26c692f00c515aa79651dd54a2a472"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/objective.md",
+      "classification": "Authoritative",
+      "bytes": 2810,
+      "sha256": "022a9439dbff1248b4f4c0c49a257f8e4d701c3054c8033983d522112117d861"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/refined-spec.md",
+      "classification": "Authoritative",
+      "bytes": 14126,
+      "sha256": "fcf699a2c904806ab27bd8c08a6455cf168b6a56d3bda210210d238853b0a1c2"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/output-contract.md",
+      "classification": "Authoritative",
+      "bytes": 3285,
+      "sha256": "33c8868f9808fe20648fb9d35f050ab200139b6ebc7655aca2791207bd0a5cf3"
+    }
+  ],
+  "candidateInventory": [
+    {
+      "logicalIdentity": "AGENTS.md",
+      "classification": "Authoritative",
+      "bytes": 28069,
+      "sha256": "eedd9fcc665de4817d3ae722d40eeb33d214b119763bba53b7e38900b36a3184"
+    },
+    {
+      "logicalIdentity": ".agents/skills/verification-before-completion/SKILL.md",
+      "classification": "Authoritative",
+      "bytes": 1434,
+      "sha256": "f796598cc251050000c0317311ee75af4d26c692f00c515aa79651dd54a2a472"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/objective.md",
+      "classification": "Authoritative",
+      "bytes": 2810,
+      "sha256": "022a9439dbff1248b4f4c0c49a257f8e4d701c3054c8033983d522112117d861"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/refined-spec.md",
+      "classification": "Authoritative",
+      "bytes": 14126,
+      "sha256": "fcf699a2c904806ab27bd8c08a6455cf168b6a56d3bda210210d238853b0a1c2"
+    },
+    {
+      "logicalIdentity": ".scratch/de762740-probe-context/output-contract.md",
+      "classification": "Authoritative",
+      "bytes": 3285,
+      "sha256": "33c8868f9808fe20648fb9d35f050ab200139b6ebc7655aca2791207bd0a5cf3"
+    }
+  ],
+  "runs": [
+    {
+      "arm": "baseline",
+      "pair": 1,
+      "attemptStatus": "completed",
+      "processStarted": true,
+      "commandFingerprint": "6e2e3925a5816d5905ea4405be52d88aa782f7866c6b994d3dfff14256a363fd",
+      "exitCode": 0,
+      "inputTokens": 82560,
+      "cachedInputTokens": 59008,
+      "uncachedInputTokens": 23552,
+      "outputTokens": 545,
+      "usageError": null,
+      "deliveredPromptContentSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptEnvelopeSha256": "adce8e51262273a00a45c2bf17ee4572563ccff633732088286df66f0e1637b2",
+      "deliveredPromptMarkerExpected": "mcg_prompt_sha256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptMarkerObserved": "MCG_PROMPT_SHA256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptAttested": true,
+      "stderrTail": "Reading prompt from stdin...\n2026-09-15T15:17:04.059206Z ERROR codex_models_manager::manager: failed to load models cache: missing field `supports_parallel_tool_calls` at line 132 column 5\n",
+      "exitArtifact": {
+        "observed": true,
+        "exitCode": 0,
+        "stdoutBytes": 25716,
+        "stderrBytes": 189
+      }
+    },
+    {
+      "arm": "candidate",
+      "pair": 1,
+      "attemptStatus": "completed",
+      "processStarted": true,
+      "commandFingerprint": "4277fa6c5a1187ef1a2e4580df5b0e3570a3d3d02fe4951538bbd731ea66084c",
+      "exitCode": 0,
+      "inputTokens": 51662,
+      "cachedInputTokens": 30720,
+      "uncachedInputTokens": 20942,
+      "outputTokens": 386,
+      "usageError": null,
+      "deliveredPromptContentSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptEnvelopeSha256": "adce8e51262273a00a45c2bf17ee4572563ccff633732088286df66f0e1637b2",
+      "deliveredPromptMarkerExpected": "mcg_prompt_sha256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptMarkerObserved": "MCG_PROMPT_SHA256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptAttested": true,
+      "stderrTail": "Reading prompt from stdin...\n2026-09-15T15:18:12.142114Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_parallel_tool_calls` at line 132 column 5\n2026-09-15T15:18:24.614676Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_parallel_tool_calls` at line 132 column 5\n",
+      "exitArtifact": {
+        "observed": true,
+        "exitCode": 0,
+        "stdoutBytes": 24670,
+        "stderrBytes": 345
+      }
+    },
+    {
+      "arm": "baseline",
+      "pair": 2,
+      "attemptStatus": "completed",
+      "processStarted": true,
+      "commandFingerprint": "6e2e3925a5816d5905ea4405be52d88aa782f7866c6b994d3dfff14256a363fd",
+      "exitCode": 0,
+      "inputTokens": 82567,
+      "cachedInputTokens": 63360,
+      "uncachedInputTokens": 19207,
+      "outputTokens": 513,
+      "usageError": null,
+      "deliveredPromptContentSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptEnvelopeSha256": "adce8e51262273a00a45c2bf17ee4572563ccff633732088286df66f0e1637b2",
+      "deliveredPromptMarkerExpected": "mcg_prompt_sha256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptMarkerObserved": "MCG_PROMPT_SHA256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptAttested": true,
+      "stderrTail": "Reading prompt from stdin...\n2026-09-15T15:18:38.693709Z ERROR codex_models_manager::manager: failed to load models cache: missing field `supports_parallel_tool_calls` at line 132 column 5\n",
+      "exitArtifact": {
+        "observed": true,
+        "exitCode": 0,
+        "stdoutBytes": 25614,
+        "stderrBytes": 189
+      }
+    },
+    {
+      "arm": "candidate",
+      "pair": 2,
+      "attemptStatus": "completed",
+      "processStarted": true,
+      "commandFingerprint": "4277fa6c5a1187ef1a2e4580df5b0e3570a3d3d02fe4951538bbd731ea66084c",
+      "exitCode": 0,
+      "inputTokens": 75682,
+      "cachedInputTokens": 46848,
+      "uncachedInputTokens": 28834,
+      "outputTokens": 478,
+      "usageError": null,
+      "deliveredPromptContentSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptEnvelopeSha256": "adce8e51262273a00a45c2bf17ee4572563ccff633732088286df66f0e1637b2",
+      "deliveredPromptMarkerExpected": "mcg_prompt_sha256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptMarkerObserved": "MCG_PROMPT_SHA256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptAttested": true,
+      "stderrTail": "Reading prompt from stdin...\n",
+      "exitArtifact": {
+        "observed": true,
+        "exitCode": 0,
+        "stdoutBytes": 26154,
+        "stderrBytes": 29
+      }
+    },
+    {
+      "arm": "baseline",
+      "pair": 3,
+      "attemptStatus": "completed",
+      "processStarted": true,
+      "commandFingerprint": "6e2e3925a5816d5905ea4405be52d88aa782f7866c6b994d3dfff14256a363fd",
+      "exitCode": 0,
+      "inputTokens": 55176,
+      "cachedInputTokens": 18688,
+      "uncachedInputTokens": 36488,
+      "outputTokens": 383,
+      "usageError": null,
+      "deliveredPromptContentSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptEnvelopeSha256": "adce8e51262273a00a45c2bf17ee4572563ccff633732088286df66f0e1637b2",
+      "deliveredPromptMarkerExpected": "mcg_prompt_sha256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptMarkerObserved": "MCG_PROMPT_SHA256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptAttested": true,
+      "stderrTail": "Reading prompt from stdin...\n",
+      "exitArtifact": {
+        "observed": true,
+        "exitCode": 0,
+        "stdoutBytes": 24182,
+        "stderrBytes": 29
+      }
+    },
+    {
+      "arm": "candidate",
+      "pair": 3,
+      "attemptStatus": "completed",
+      "processStarted": true,
+      "commandFingerprint": "4277fa6c5a1187ef1a2e4580df5b0e3570a3d3d02fe4951538bbd731ea66084c",
+      "exitCode": 0,
+      "inputTokens": 75691,
+      "cachedInputTokens": 46848,
+      "uncachedInputTokens": 28843,
+      "outputTokens": 470,
+      "usageError": null,
+      "deliveredPromptContentSha256": "b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptEnvelopeSha256": "adce8e51262273a00a45c2bf17ee4572563ccff633732088286df66f0e1637b2",
+      "deliveredPromptMarkerExpected": "mcg_prompt_sha256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptMarkerObserved": "MCG_PROMPT_SHA256:b7695ed9557eb2425065b9b41ca132809fd7b7f22188ef1749dd2c753d46585f",
+      "deliveredPromptAttested": true,
+      "stderrTail": "Reading prompt from stdin...\n",
+      "exitArtifact": {
+        "observed": true,
+        "exitCode": 0,
+        "stdoutBytes": 26118,
+        "stderrBytes": 29
+      }
+    }
+  ],
+  "terminalStatus": "valid",
+  "medians": {
+    "baselineInputTokens": 82560.0,
+    "candidateInputTokens": 75682.0,
+    "baselineUncachedInputTokens": 23552.0,
+    "candidateUncachedInputTokens": 28834.0
+  },
+  "materialReduction": {
+    "inputTokens": false,
+    "uncachedInputTokens": false,
+    "threshold": "at least 1000 tokens and 10 percent in both medians"
+  }
+}
