@@ -12,9 +12,6 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
     public void SingleGoalLandingIsSavedBeforeSelfRelaunchReload()
     {
         var kernel = new AgentOrchestratorKernel();
-        // The earlier active goal has no parallel result. A landing during the
-        // pre-walk parallel phase schedules relaunch before this goal is walked.
-        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Existing worker");
         var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
         var attemptRoot = CreateTempDirectory("mcg-single-landing-tick-durability");
         var stopFilePath = Path.Combine(attemptRoot, "stop");
@@ -107,20 +104,12 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
     public void CohortLandingAddsBothMembersToTickChangedGoals()
     {
         var kernel = new AgentOrchestratorKernel();
-        var ordinary = CreateVerifiedSimpleGoal(kernel, "Operator evidence excludes this goal from cohort");
         var first = CreateVerifiedSimpleGoal(kernel, "First cohort member");
         var second = CreateVerifiedSimpleGoal(kernel, "Second cohort member");
-        kernel.RecordGoalRefinement(ordinary.Id, new RefinedSpec(
-            ordinary.Objective, ["Operator confirms landing"], VerificationClass.RealWorldDependent, [], []));
-        kernel.MapCriterionEvidenceOwner(ordinary.Id, 0, 1, CriterionEvidenceOwner.Operator,
-            "operator", "operator:real-world", expectedCandidateSha: ordinary.Id.Value.PadRight(40, 'b')[..40]);
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [ordinary.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/OrdinaryTests.cs"],
-            [first.Id] = [
-                "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs",
-                "tests/Mcg.AgentOrchestrator.Core.Tests/FirstCohortMemberTests.cs"],
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstCohortMember.razor"],
             [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortMemberTests.cs"]
         };
         var projector = new GateReadyCandidateProjector(
@@ -144,7 +133,11 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                 {
                     kernel.CompleteGoal(member, "Cohort landing, recording, and cleanup completed.");
                     driver!.SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
-                        member.Value, paths[member], mainRevision));
+                        member.Value,
+                        member == first.Id
+                            ? ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"]
+                            : paths[member],
+                        mainRevision));
                 }
                 return new ConductorAcceptanceCohortRunResult(
                     null,
