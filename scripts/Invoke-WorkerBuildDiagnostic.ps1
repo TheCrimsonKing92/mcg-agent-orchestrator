@@ -1,6 +1,6 @@
 param(
     [ValidateRange(1, 3600)]
-    [int]$TimeoutSeconds = 120,
+    [int]$TimeoutSeconds = 900,
 
     [Parameter(Mandatory = $true, Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
