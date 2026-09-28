@@ -25,9 +25,14 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
             kernel.MapCriterionEvidenceOwner(target.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
                 "reviewer", CriterionEvidenceScopes.FullAcceptanceGate,
                 expectedCandidateSha: fixture.OldHead);
-            var original = Assert.Single(target.CriterionEvidenceObligations);
             var persisted = kernel.ExportSnapshot();
             var relaunchCalls = 0;
+            int? cohortMemberCount = null;
+            string? rebindDiagnostic = null;
+            CriterionEvidenceState? reboundState = null;
+            Exception? cohortException = null;
+            AgentOrchestratorKernel? reloaded = null;
+            Exception? reloadException = null;
             const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
             var paths = new Dictionary<GoalId, IReadOnlyList<string>>
             {
@@ -53,17 +58,25 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                 gateReadyCandidateProjector: projector,
                 runAcceptanceCohort: (selection, goals, policy) =>
                 {
-                    Assert.Equal(2, selection.Members.Count);
-                    Assert.Null(AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                        target, fixture.NewHead, kernel, "cohort gate", fixture.Repository));
-                    Assert.Equal(CriterionEvidenceState.Satisfied, original.State);
-                    kernel.CompleteGoal(target.Id, "Cohort landing, recording, and cleanup completed.");
-                    kernel.CompleteGoal(partner.Id, "Cohort landing, recording, and cleanup completed.");
+                    cohortMemberCount = selection.Members.Count;
+                    try
+                    {
+                        rebindDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+                            target, fixture.NewHead, kernel, "cohort gate", fixture.Repository);
+                        reboundState = target.CriterionEvidenceObligations.Single().State;
+                        kernel.CompleteGoal(target.Id, "Cohort landing, recording, and cleanup completed.");
+                        kernel.CompleteGoal(partner.Id, "Cohort landing, recording, and cleanup completed.");
+                        RunGit(fixture.Repository, "checkout", "main");
+                        RunGit(fixture.Repository, "merge", "--ff-only", "candidate-old");
+                    }
+                    catch (Exception exception)
+                    {
+                        cohortException = exception;
+                    }
                     driver!.SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                         target.Id.Value, paths[target.Id], fixture.NewHead));
                     driver.SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                         partner.Id.Value, paths[partner.Id], fixture.NewHead));
-                    RunGit(fixture.Repository, "merge", "--ff-only", "candidate-old");
                     return new ConductorAcceptanceCohortRunResult(
                         null,
                         goals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id))
@@ -75,18 +88,18 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                         "outcome=passed");
                 });
 
-            new ConductorBatchLoop(
+            var output = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(
                 selfRelaunch: _ =>
                 {
                     relaunchCalls++;
-                    var reloaded = AgentOrchestratorKernel.FromSnapshot(persisted);
-                    var goal = reloaded.GetGoal(target.Id);
-                    Assert.Equal(GoalStatus.Completed, goal.Status);
-                    var obligation = Assert.Single(goal.CriterionEvidenceObligations);
-                    Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
-                    Assert.Equal(fixture.NewHead, obligation.ExpectedCandidateSha);
-                    Assert.Equal(fixture.NewHead, obligation.CandidateSha);
-                    Assert.Equal(GoalStatus.Completed, reloaded.GetGoal(partner.Id).Status);
+                    try
+                    {
+                        reloaded = AgentOrchestratorKernel.FromSnapshot(persisted);
+                    }
+                    catch (Exception exception)
+                    {
+                        reloadException = exception;
+                    }
                     return ConductorSelfRelaunchResult.PreparationFailed("fixture", "reload observed");
                 },
                 selfRelaunchEnabled: true).Run(
@@ -95,8 +108,23 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                     persistGoalTick: (checkpoint, changedIds) =>
                     {
                         if (changedIds.Contains(target.Id)) persisted = checkpoint.ExportSnapshot();
-                    });
+                    }));
+            Assert.Equal(2, cohortMemberCount);
+            Assert.Null(rebindDiagnostic);
+            Assert.Equal(CriterionEvidenceState.Satisfied, reboundState);
+            Assert.Null(cohortException);
+            Assert.DoesNotContain("outcome=gate-fault", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("outcome=exception", output, StringComparison.Ordinal);
             Assert.Equal(1, relaunchCalls);
+            Assert.Null(reloadException);
+            Assert.NotNull(reloaded);
+            var goal = reloaded.GetGoal(target.Id);
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            var obligation = Assert.Single(goal.CriterionEvidenceObligations);
+            Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
+            Assert.Equal(fixture.NewHead, obligation.ExpectedCandidateSha);
+            Assert.Equal(fixture.NewHead, obligation.CandidateSha);
+            Assert.Equal(GoalStatus.Completed, reloaded.GetGoal(partner.Id).Status);
         }
         finally
         {
