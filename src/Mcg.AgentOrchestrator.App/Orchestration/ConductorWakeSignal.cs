@@ -9,7 +9,7 @@ internal interface IConductorWakeSignal : IDisposable
     bool Wait(TimeSpan timeout);
 }
 
-internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSignal
+internal sealed partial class FileSystemWatcherConductorWakeSignal : IConductorWakeSignal, IConductorAttemptExitWakeSignal
 {
     private readonly SemaphoreSlim _signal = new(0, 1);
     private readonly Action<string> _warn;
@@ -87,6 +87,11 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
 
     public bool Wait(TimeSpan timeout)
     {
+        if (TryConsumeExistingAttemptExit())
+        {
+            return true;
+        }
+
         if (HasExistingTrackedExitArtifact())
         {
             return true;
@@ -95,12 +100,12 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
         if (_watcher is null || Volatile.Read(ref _watcherFailed) != 0)
         {
             Thread.Sleep(timeout);
-            return HasExistingTrackedExitArtifact();
+            return TryConsumeExistingAttemptExit() || HasExistingTrackedExitArtifact();
         }
 
         if (!_signal.Wait(timeout))
         {
-            return HasExistingTrackedExitArtifact();
+            return TryConsumeExistingAttemptExit() || HasExistingTrackedExitArtifact();
         }
 
         Interlocked.Exchange(ref _signaled, 0);
@@ -114,6 +119,9 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
             return;
         }
 
+        Volatile.Write(ref _lastWakeReason, (int)(path.EndsWith(SqliteOperatorIntentStore.WakeFileSuffix, StringComparison.OrdinalIgnoreCase)
+            ? ConductorWakeReason.OperatorIntent
+            : ConductorWakeReason.DispatchExit));
         Signal();
     }
 
@@ -141,6 +149,7 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
 
         if (paths.Any(File.Exists))
         {
+            Volatile.Write(ref _lastWakeReason, (int)ConductorWakeReason.DispatchExit);
             return true;
         }
 
@@ -177,6 +186,7 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
                 }
             }
 
+            Volatile.Write(ref _lastWakeReason, (int)ConductorWakeReason.OperatorIntent);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -218,6 +228,7 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
         }
 
         Interlocked.Exchange(ref _signaled, 0);
+        Volatile.Write(ref _lastWakeReason, (int)ConductorWakeReason.Unknown);
     }
 
     private static string NormalizePath(string path)
@@ -234,6 +245,7 @@ internal sealed class FileSystemWatcherConductorWakeSignal : IConductorWakeSigna
 
     public void Dispose()
     {
+        DisposeAttemptWatchers();
         _watcher?.Dispose();
         _signal.Dispose();
     }
