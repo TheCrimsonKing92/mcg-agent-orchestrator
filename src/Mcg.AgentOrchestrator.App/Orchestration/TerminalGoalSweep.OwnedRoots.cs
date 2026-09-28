@@ -54,9 +54,20 @@ internal static partial class TerminalGoalSweep
         string stateDbPath, bool reclaimGoalRoots)
     {
         var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
-        return ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
+        var result = ExecuteOwnedBuildRootReap(() => ReapOwnedBuildRootsCore(
             stateDbPath, storageRoot, s_ownedRootState, usesSharedStorageRoot: true,
             reclaimGoalRoots: reclaimGoalRoots, requireSharedRootOwnership: reclaimGoalRoots));
+        string artifactReport;
+        try
+        {
+            artifactReport = TempRootJanitor.ReapLeakedTempArtifacts(
+                Path.GetTempPath(), OrchestratorTempRoot.GetParent(), TimeProvider.System).SummaryLine;
+        }
+        catch (Exception ex)
+        {
+            artifactReport = $"temp-artifact-janitor failed={ex.GetType().Name}";
+        }
+        return result with { ObserveOnlyReports = [.. result.ObserveOnlyReports, artifactReport] };
     }
 
     // A temporary or scoped store cannot prove that a root in the shared folder is orphaned.
@@ -91,12 +102,10 @@ internal static partial class TerminalGoalSweep
 
         var writeFailures = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
             MaxOwnedBuildRootsPerSweep, writeFailureScope);
-        return writeFailures.Count == 0
-            ? result
-            : result with
-            {
-                ObserveOnlyReports = [.. result.ObserveOnlyReports, .. writeFailures]
-            };
+        return result with
+        {
+            ObserveOnlyReports = [.. result.ObserveOnlyReports, .. writeFailures]
+        };
     }
 
     internal static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRootsCore(

@@ -8275,7 +8275,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken = default,
         Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
         CancellationToken timeoutSignal = default,
-        Action<SpawnProcessIdentity>? commandIdentityObserver = null) =>
+        Action<SpawnProcessIdentity>? commandIdentityObserver = null,
+        bool? keepCaptureFiles = null) =>
         RunProcessAsync(
             arguments,
             workingDirectory,
@@ -8284,7 +8285,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken,
             cleanupObserver,
             timeoutSignal,
-            commandIdentityObserver: commandIdentityObserver);
+            commandIdentityObserver: commandIdentityObserver,
+            keepCaptureFiles: keepCaptureFiles);
 
     internal static Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
         string[] arguments,
@@ -8371,13 +8373,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? apparatusReceiptPath = null,
         TimeSpan? heartbeatInterval = null, TimeSpan? progressInterval = null,
         TimeSpan? capturePublicationInterval = null,
-        bool stopOnCaptureLimit = false)
+        bool stopOnCaptureLimit = false,
+        bool? keepCaptureFiles = null)
     {
         engineSettings ??= new AcceptanceGateEngineSettings();
         // Keep the shell command semantics, but own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
-        var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
-        var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
+        var (stdoutPath, stderrPath) = CreateCaptureFilePaths();
 
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
@@ -8573,7 +8575,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             completedProcessId = commandIdentityTracker.Identity?.ProcessId ?? completedProcessId;
             completedProcessStartedAt = commandIdentityTracker.Identity?.StartedAt ?? completedProcessStartedAt;
             commandIdentityTracker = null;
-            keepOutputFiles = timedOut || exitCode != 0;
+            keepOutputFiles = ShouldKeepCaptureFiles(keepCaptureFiles, timedOut, exitCode);
             WorkerProcessJobAccounting? accounting = null;
             try
             {

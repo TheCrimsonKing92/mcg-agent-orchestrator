@@ -100,7 +100,7 @@ internal sealed partial class GoalRefinementService
         _subscriptionCompleterFactory = subscriptionCompleterFactory;
         _subscriptionTimeout = subscriptionTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
         _rawOutputDirectory = Path.GetFullPath(rawOutputDirectory ??
-            Path.Combine(Path.GetTempPath(), "mcg-spec-refiner", "logs"));
+            Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("spec-refiner"), "logs"));
         if (rawOutputStamp is not null &&
             (rawOutputStamp.Length != 17 || rawOutputStamp.Any(character => !char.IsAsciiDigit(character))))
         {

@@ -61,7 +61,7 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
                 unresolvedReason: null);
         }
 
-        var baselineRoot = Path.Combine(Path.GetTempPath(), "mcg-structural-coverage-baselines");
+        var baselineRoot = OrchestratorTempRoot.GetPurposeDirectory("structural-coverage-baselines");
         Directory.CreateDirectory(baselineRoot);
         var safeOwner = string.IsNullOrWhiteSpace(ownerKey) ? "operator" : ownerKey;
         var baselinePath = Path.Combine(

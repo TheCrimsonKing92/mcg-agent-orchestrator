@@ -53,7 +53,7 @@ internal sealed record TempRootJanitorOwnedParentDeleteResult(
 /// <summary>
 /// Removes the process-owned test roots whose names encode the owning process id.
 /// </summary>
-internal static class TempRootJanitor
+internal static partial class TempRootJanitor
 {
     private const string OwnedRootParentName = "mcg-tests";
     private const int DeleteAttemptLimit = 6;

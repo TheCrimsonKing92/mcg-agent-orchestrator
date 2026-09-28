@@ -94,7 +94,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
         _dotnetPath = string.IsNullOrWhiteSpace(dotnetPath) ? "dotnet" : dotnetPath;
         _buildCacheRoot = string.IsNullOrWhiteSpace(buildCacheRoot)
-            ? Path.Combine(Path.GetTempPath(), "mcg-post-landing-canary-build")
+            ? OrchestratorTempRoot.GetPurposeDirectory("post-landing-canary-build")
             : Path.GetFullPath(buildCacheRoot);
         _logDirectory = string.IsNullOrWhiteSpace(logDirectory)
             ? Path.Combine(_repositoryRoot, ".orchestrator", "logs")
@@ -118,7 +118,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, logs, cancellationToken)
             .ConfigureAwait(false);
         var canaryBuildEnvironmentRoot = Path.Combine(
-            Path.GetTempPath(),
+            OrchestratorTempRoot.GetPurposeDirectory("pc"),
             $"mcg-pc-{Environment.ProcessId}-{Guid.NewGuid():N}"[..24]);
         var repositoryKey = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(_repositoryRoot)))[..16];
@@ -298,8 +298,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         CancellationToken cancellationToken)
     {
         var worktreeRoot = Path.Combine(
-            Path.GetTempPath(),
-            "mcg-post-landing-canary-worktrees",
+            OrchestratorTempRoot.GetPurposeDirectory("post-landing-canary-worktrees"),
             landingSha[..Math.Min(12, landingSha.Length)],
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.GetDirectoryName(worktreeRoot)!);

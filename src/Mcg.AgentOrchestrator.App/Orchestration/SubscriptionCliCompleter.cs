@@ -93,7 +93,7 @@ internal sealed class SubscriptionCliCompleter
         string promptFileName,
         CancellationToken cancellationToken)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), $"mcg-cli-complete-{Guid.NewGuid():N}");
+        var tempDir = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("cli-complete"), $"mcg-cli-complete-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         var promptPath = Path.Combine(tempDir, promptFileName);
         try

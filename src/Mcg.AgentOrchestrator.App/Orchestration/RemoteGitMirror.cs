@@ -353,7 +353,7 @@ internal static class RemoteGitMirror
 
         var source = SourceFor(refspec);
         var tempRef = $"refs/mcg-mirror/{Guid.NewGuid():N}";
-        var bundlePath = Path.Combine(Path.GetTempPath(), $"mcg-git-mirror-{Guid.NewGuid():N}.bundle");
+        var bundlePath = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("git-mirror"), $"mcg-git-mirror-{Guid.NewGuid():N}.bundle");
         try
         {
             var update = GitRunner(executionDirectory, ["update-ref", tempRef, source]);
@@ -405,7 +405,7 @@ internal static class RemoteGitMirror
             return new GitCli.GitResult(0, string.Empty, string.Empty);
         }
 
-        var bundlePath = Path.Combine(Path.GetTempPath(), $"mcg-git-mirror-tags-{Guid.NewGuid():N}.bundle");
+        var bundlePath = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("git-mirror"), $"mcg-git-mirror-tags-{Guid.NewGuid():N}.bundle");
         try
         {
             var bundleArgs = new List<string> { "bundle", "create", bundlePath };

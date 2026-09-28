@@ -7,13 +7,19 @@ internal static class WorktreeTreeDigest
     internal const string Algorithm = "wbc1:git-tree";
 
     internal static bool TryCompute(string worktreeRoot, out string digest, out string reason)
+        => TryCompute(worktreeRoot, out digest, out reason, null);
+
+    internal static bool TryCompute(string worktreeRoot, out string digest, out string reason,
+        Action<string>? temporaryRootObserver)
     {
         digest = string.Empty;
         reason = "digest-unavailable";
-        var temporaryRoot = Path.Combine(Path.GetTempPath(), "mcg-worktree-digest-" + Guid.NewGuid().ToString("N"));
+        var temporaryRoot = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("worktree-digest"),
+            "mcg-worktree-digest-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(temporaryRoot);
+            temporaryRootObserver?.Invoke(temporaryRoot);
             var objects = Path.Combine(temporaryRoot, "objects");
             Directory.CreateDirectory(objects);
             var commonObjects = Run(worktreeRoot, null, "rev-parse", "--path-format=absolute", "--git-path", "objects");
