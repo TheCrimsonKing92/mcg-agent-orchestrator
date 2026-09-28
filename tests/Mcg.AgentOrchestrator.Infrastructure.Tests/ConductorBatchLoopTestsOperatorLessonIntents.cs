@@ -53,4 +53,41 @@ public sealed class ConductorBatchLoopTestsOperatorLessonIntents : ConductorBatc
         Assert.DoesNotContain(OperatorIntentScopes.Workspace, reloadCalls);
         Assert.DoesNotContain(progress, line => line.Contains("awaiting-goal-reload", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void FaultingWorkspaceIntentStoreDoesNotCreateAnIntentTick()
+    {
+        var now = new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.Zero);
+        var coordinator = new OperatorIntentCoordinator(new FaultingWorkspaceIntentStore(), utcNow: () => now);
+        var loop = new ConductorBatchLoop(operatorIntents: coordinator, utcNow: () => now);
+
+        var result = loop.Run(new AgentOrchestratorKernel(), MakeDriver(),
+            ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 2,
+            sleepFunc: _ => throw new InvalidOperationException("Empty loop unexpectedly slept."));
+
+        Assert.Equal(0, result.Ticks);
+    }
+}
+
+internal sealed class FaultingWorkspaceIntentStore : IOperatorIntentStore
+{
+    public Task<OperatorIntentRecord?> ClaimNextAsync(string goalId, string claimOwner,
+        CancellationToken cancellationToken = default) => throw new IOException("workspace intent store failed");
+
+    public Task<IReadOnlyList<string>> ListActionableGoalIdsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
+
+    public Task<OperatorIntentRecord> EnqueueAsync(OperatorIntentRecord intent, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+    public Task<OperatorIntentRecord?> ClaimNextByVerbAsync(string goalId, string verb, string claimOwner,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task CompleteAsync(string intentId, string claimOwner, OperatorIntentStatus status, string outcome,
+        DateTimeOffset completedAt, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<OperatorIntentRecord?> GetAsync(string intentId, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException();
+    public Task<IReadOnlyList<OperatorIntentRecord>> ListForGoalAsync(string goalId, int limit = 20,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyDictionary<string, ActionableOperatorIntentSummary>> ListActionableSummariesAsync(
+        IReadOnlyCollection<string> goalIds, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public void AcknowledgeWake(string intentId) => throw new NotSupportedException();
 }

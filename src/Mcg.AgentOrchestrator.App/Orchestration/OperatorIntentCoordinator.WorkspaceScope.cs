@@ -22,28 +22,30 @@ internal sealed partial class OperatorIntentCoordinator
             var intent = _store.ClaimNextAsync(OperatorIntentScopes.Workspace, ClaimOwner)
                 .GetAwaiter().GetResult();
             if (intent is null) break;
-            if (Lessons is null)
-                throw new InvalidOperationException("Workspace intent services are unavailable.");
+            bool replayed;
             try
             {
-                var replayed = intent.Verb switch
+                if (Lessons is null)
+                    throw new InvalidOperationException("Workspace intent services are unavailable.");
+                replayed = intent.Verb switch
                 {
                     OperatorIntentVerbs.LessonRecord => ApplyLessonRecord(kernel, intent, Lessons),
                     OperatorIntentVerbs.LessonRetire => ApplyLessonRetire(intent, Lessons),
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
-                _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Applied,
-                    replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
-                    _utcNow()).GetAwaiter().GetResult();
-                lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result={(replayed ? "applied-recovered" : "applied")}");
             }
-            catch (Exception ex) when (ex is OperatorLessonRejectedException or System.Text.Json.JsonException)
+            catch (Exception ex)
             {
                 var reason = Sanitize(ex.Message);
                 _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Rejected,
                     $"Rejected {intent.Verb}: {reason}", _utcNow()).GetAwaiter().GetResult();
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result=rejected reason={reason}");
+                continue;
             }
+            _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Applied,
+                replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
+                _utcNow()).GetAwaiter().GetResult();
+            lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result={(replayed ? "applied-recovered" : "applied")}");
         }
         return lines;
     }

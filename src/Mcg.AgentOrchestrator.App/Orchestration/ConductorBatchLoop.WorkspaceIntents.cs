@@ -13,7 +13,8 @@ internal sealed partial class ConductorBatchLoop
         }
         catch (Exception ex)
         {
-            return [$"OPERATOR_INTENT scope=workspace result=store-unavailable reason={SanitizeReason(ex.Message)}"];
+            EmitProgress($"OPERATOR_INTENT scope=workspace result=store-unavailable reason={SanitizeReason(ex.Message)}");
+            return [];
         }
     }
 }

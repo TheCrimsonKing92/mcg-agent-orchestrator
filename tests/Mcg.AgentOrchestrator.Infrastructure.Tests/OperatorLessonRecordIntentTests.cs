@@ -44,6 +44,28 @@ public sealed class OperatorLessonRecordIntentTests
         Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant(),
             Assert.Single(lesson.Evidence).ContentHash);
     }
+
+    [Fact]
+    public async Task FailedGoalLookupRejectsClaimAndDoesNotBlockLaterWorkspaceIntent()
+    {
+        using var fixture = new OperatorLessonHarness();
+        File.WriteAllText(Path.Combine(fixture.Root, "proof.txt"), "verified proof\n");
+        var invalid = await fixture.Record(["focused-evidence:receipt"], goalId: Guid.NewGuid().ToString("N"));
+        var valid = await fixture.Record(["operator-evidence:proof.txt"]);
+        var coordinator = new OperatorIntentCoordinator(fixture.IntentStore, utcNow: () => fixture.Now)
+        {
+            Lessons = new OperatorLessonIntentServices(fixture.LessonStore,
+                new AdjudicationEvidenceResolver(fixture.Root), _ => throw new IOException("goal lookup failed"))
+        };
+
+        coordinator.ExecuteWorkspacePending(new AgentOrchestratorKernel());
+
+        var rejected = await fixture.IntentStore.GetAsync(invalid.Id);
+        Assert.Equal(OperatorIntentStatus.Rejected, rejected!.Status);
+        Assert.Contains("goal lookup failed", rejected.Outcome, StringComparison.Ordinal);
+        Assert.Equal(OperatorIntentStatus.Applied, (await fixture.IntentStore.GetAsync(valid.Id))!.Status);
+        Assert.Equal(valid.Id, Assert.Single(fixture.LessonStore.List()).Id);
+    }
 }
 
 internal sealed class OperatorLessonHarness : IDisposable
