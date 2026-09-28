@@ -628,6 +628,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     successor);
             }
 
+            if (TryReusePassedReconciledAttempt(current, candidate, dispatchKind, focusedEvidenceRequest, requestContext) is { } reused)
+            {
+                return reused;
+            }
+
             current = null;
         }
 
