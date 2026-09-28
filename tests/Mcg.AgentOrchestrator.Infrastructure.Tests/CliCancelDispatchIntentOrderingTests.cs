@@ -23,7 +23,8 @@ public sealed class CliCancelDispatchIntentOrderingTests
         var intent = Xunit.Assert.Single(await store.ListForGoalAsync(goal.Id.Value));
         Xunit.Assert.Equal(OperatorIntentVerbs.CancelDispatch, intent.Verb);
         Xunit.Assert.Equal(task.Id.Value, intent.TaskId);
-        var payload = JsonSerializer.Deserialize<CancelDispatchOperatorIntentPayload>(intent.PayloadJson)!;
+        var payload = JsonSerializer.Deserialize<CancelDispatchOperatorIntentPayload>(
+            intent.PayloadJson, OperatorIntentJson.Options)!;
         Xunit.Assert.Equal(task.LastProcess.ProcessId, payload.ProcessId);
         Xunit.Assert.Equal(task.LastProcess.StartedAt, payload.ProcessStartedAt);
         Xunit.Assert.Equal(BackgroundDispatchRunner.BuildDispatchId(goal.Id, task.Id, task.LastDispatch!), payload.DispatchId);
