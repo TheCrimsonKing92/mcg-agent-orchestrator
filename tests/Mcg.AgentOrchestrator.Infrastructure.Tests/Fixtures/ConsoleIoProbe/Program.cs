@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 if (args.Length > 0 && args[0] == "--startup-launch") return StartupPipeProbe.Launch(args[1..]);
 if (args.Length > 0 && args[0] == "--startup-child") return StartupPipeProbe.Run(args[1..]);
+if (args.Length > 0 && args[0] == "--priority-grandchild") return await BelowNormalGrandchildProbe.Run(args[1..]);
 
 var options = ProbeOptions.Parse(args);
 
