@@ -56,6 +56,13 @@ public static class DeveloperDeferredTestClassNames
     private static readonly Regex QuotedClassToken = new(
         "(?<quote>[`\"'])(?<name>[A-Z][A-Za-z0-9_]*)\\k<quote>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex LeadingConnective = new(
+        @"^(?:naming|for|of)(?=$|[\s:\-\u2014\u2013])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex ClassListSeparator = new(
+        @"\s*,\s*(?:and\s+)?|\s+and\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly char[] DeclarationSeparators = [' ', ':', '-', '\u2014', '\u2013'];
 
     public static bool IsValid(string? name) => name is not null && ClassToken.IsMatch(name);
 
@@ -63,11 +70,14 @@ public static class DeveloperDeferredTestClassNames
     {
         var deferred = testsField.IndexOf("deferred", StringComparison.OrdinalIgnoreCase);
         if (deferred < 0) return [];
-        var declaration = testsField[(deferred + "deferred".Length)..].TrimStart(' ', ':', '-');
+        var declaration = testsField[(deferred + "deferred".Length)..].TrimStart(DeclarationSeparators);
         declaration = declaration.Split([';', '\r', '\n'], 2)[0];
+        var connective = LeadingConnective.Match(declaration);
+        if (connective.Success)
+            declaration = declaration[connective.Length..].TrimStart(DeclarationSeparators);
         var names = new List<string>();
         var barePrefix = true;
-        foreach (var part in declaration.Split(',', StringSplitOptions.TrimEntries))
+        foreach (var part in ClassListSeparator.Split(declaration).Select(value => value.Trim()))
         {
             var wrapped = QuotedClassToken.Matches(part);
             if (wrapped.Count > 0)
