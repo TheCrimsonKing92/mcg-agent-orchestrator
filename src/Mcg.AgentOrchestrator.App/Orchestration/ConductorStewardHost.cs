@@ -34,7 +34,8 @@ internal sealed partial class ConductorStewardHost
         IGoalLifecycleEventWriter lifecycle,
         ConductEventLogWriter conduct,
         Func<DateTimeOffset>? utcNow = null,
-        bool enabled = true)
+        bool enabled = true,
+        ConductorStewardDeterministicRoute? deterministicRoute = null)
     {
         _triggers = triggers;
         _detector = detector;
@@ -46,6 +47,7 @@ internal sealed partial class ConductorStewardHost
         _lifecycle = lifecycle;
         _conduct = conduct;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _deterministicRoute = deterministicRoute ?? new ConductorStewardDeterministicRoute();
         Enabled = enabled;
     }
 
@@ -93,7 +95,9 @@ internal sealed partial class ConductorStewardHost
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
             new ConductEventLogWriter(workspace.ConductEventsLogPath),
             enabled: !string.Equals(enabledSetting, "false", StringComparison.OrdinalIgnoreCase) &&
-                     enabledSetting != "0");
+                     enabledSetting != "0",
+            deterministicRoute: new ConductorStewardDeterministicRoute(
+                new GitConductorStewardTrackedFileLister(), new ManifestConductorStewardLaneSubstringResolver()));
     }
 
     internal IReadOnlySet<GoalId> ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
@@ -174,7 +178,7 @@ internal sealed partial class ConductorStewardHost
                     else
                     {
                         var worktree = _workingDirectory(goal);
-                        _round = Task.Run(() => _model.DispatchAsync(claim.Trigger, worktree, _shutdown.Token), _shutdown.Token);
+                        _round = StartRound(claim.Trigger, worktree);
                     }
                 }
             }

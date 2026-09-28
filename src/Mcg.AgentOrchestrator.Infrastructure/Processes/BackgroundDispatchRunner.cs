@@ -1254,7 +1254,7 @@ public sealed partial class BackgroundDispatchRunner
         DateTimeOffset? contextReceiptAttemptAt = dispatchAttempt?.ContextPackageReceipt is null
             ? null
             : dispatchAttempt.DispatchedAt;
-        var jsonl = NormalizeStructuredCodexOutput(dispatchAttempt, processRecord.StandardOutputPath);
+        var providerUsage = ResolveDispatchProviderUsage(dispatchAttempt, processRecord.StandardOutputPath);
         var outputSnapshot = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath);
         var errorSnapshot = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;
@@ -1862,8 +1862,8 @@ public sealed partial class BackgroundDispatchRunner
             AutoRequeueDisposition: DispatchAutoRequeueDisposition.FromInterruptedWorkCheckpoint(
                 checkpointDisposition,
                 recoveryDecision),
-            ProviderUsage: jsonl?.Usage,
-            ProviderUsageUnavailableReason: jsonl?.UsageUnavailableReason ?? "unsupported",
+            ProviderUsage: providerUsage.Usage,
+            ProviderUsageUnavailableReason: providerUsage.UnavailableReason,
             DispatchAttemptAt: contextReceiptAttemptAt);
         _processLogReader.Evict(processRecord);
         return outcome;
