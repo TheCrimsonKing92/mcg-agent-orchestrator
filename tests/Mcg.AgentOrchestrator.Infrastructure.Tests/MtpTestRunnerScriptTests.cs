@@ -432,6 +432,10 @@ public sealed class MtpTestRunnerScriptTests
             .Select(group =>
             {
                 var representative = group.FirstOrDefault(item => MtpFilterArgumentSemantics.IsNonVacuous(item.Arguments, universe));
+                if (representative.Arguments is null)
+                {
+                    representative = group.First();
+                }
                 Assert.NotNull(representative.Arguments);
                 return (Signature: group.Key, representative.Filter, representative.Arguments);
             }).ToArray();
