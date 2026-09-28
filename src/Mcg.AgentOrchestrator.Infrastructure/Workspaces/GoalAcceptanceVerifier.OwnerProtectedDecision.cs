@@ -15,7 +15,7 @@ public sealed partial class GoalAcceptanceVerifier
         return EvaluateOwnerProtectedConfigurationCore(worktreePath, goalId, changedFiles, cohortMembers,
             AcceptanceGitTextResolver.Resolve, store,
             () => AcceptanceTestInventorySource.Read(worktreePath, AcceptanceGitTextResolver.Resolve),
-            ResolveGitScalar(worktreePath, "rev-parse", "HEAD"));
+            () => ResolveGitScalar(worktreePath, "rev-parse", "HEAD"));
     }
 
     internal static OwnerProtectedDecision EvaluateOwnerProtectedConfigurationForTests(string worktreePath,
@@ -24,18 +24,18 @@ public sealed partial class GoalAcceptanceVerifier
         Func<string, string[], string?> gitText, ICollaborationItemStore? decisions,
         Func<AcceptanceTestInventory> inventory, string? candidateSha) =>
         EvaluateOwnerProtectedConfigurationCore(worktreePath, goalId, changedFiles, cohortMembers,
-            gitText, decisions, inventory, candidateSha);
+            gitText, decisions, inventory, () => candidateSha);
 
     private static OwnerProtectedDecision EvaluateOwnerProtectedConfigurationCore(string worktreePath,
         GoalId? goalId, IReadOnlyList<string>? changedFiles,
         IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? cohortMembers,
         Func<string, string[], string?> gitText, ICollaborationItemStore? decisions,
-        Func<AcceptanceTestInventory> inventory, string? candidateSha)
+        Func<AcceptanceTestInventory> inventory, Func<string?> candidateSha)
     {
         var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, gitText);
         if (failure is null) return new(null, null);
         if (goalId is { } singleGoal && decisions is not null &&
-            IsApproved(worktreePath, changedFiles, gitText, decisions, singleGoal, candidateSha,
+            IsApproved(worktreePath, changedFiles, gitText, decisions, singleGoal, candidateSha(),
                 "HEAD", readCommittedCandidate: false))
             return new(null, null);
         var equivalent = IsEquivalentManifestChange(worktreePath, changedFiles, gitText, inventory, "HEAD",
