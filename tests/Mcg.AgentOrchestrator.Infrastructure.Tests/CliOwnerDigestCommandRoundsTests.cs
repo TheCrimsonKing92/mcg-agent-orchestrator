@@ -1,0 +1,147 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+public sealed class CliOwnerDigestCommandRoundsTests
+{
+    private const string RoundGoal = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    private const string DeveloperTask = "task-developer";
+    private const string ReviewerTask = "task-reviewer";
+    private const string OutsideTask = "task-outside";
+
+    [Fact]
+    public async Task RoundsAggregateByRoleAndModelWithinWindowWithoutWritingStores()
+    {
+        using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        await AddRoundsAsync(fixture);
+        var before = HashFiles(fixture.Workspace.OrchestratorDirectory);
+        var walBefore = HashWalFiles(fixture.Workspace.OrchestratorDirectory);
+
+        var text = Run(fixture, "--rounds");
+        Assert.Equal(0, text.Code);
+        Assert.Contains("Developer | 2 | 1 | 1 | 0 | 0 | 100 | 10 | 20 | 1", text.Output);
+        Assert.Contains("Reviewer | 1 | 0 | 0 | 0 | 1 | 200 | 50 | 40 | 0", text.Output);
+        Assert.Contains("anthropic/claude | 2 | 0 | 1 | 0 | 1 | 300 | 60 | 60 | 0", text.Output);
+        Assert.Contains("openai/gpt | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1", text.Output);
+
+        var json = Run(fixture, "--rounds", "--json");
+        Assert.Equal(0, json.Code);
+        using var document = JsonDocument.Parse(json.Output);
+        var rounds = document.RootElement.GetProperty("rounds");
+        AssertRows(rounds.GetProperty("byRole"),
+            ("Developer", 2, 100, 1), ("Reviewer", 1, 200, 0));
+        AssertRows(rounds.GetProperty("byModel"),
+            ("anthropic/claude", 2, 300, 0), ("openai/gpt", 1, 0, 1));
+        Assert.Equal(1, rounds.GetProperty("byRole")[0].GetProperty("failed").GetInt32());
+        Assert.Equal(1, rounds.GetProperty("byRole")[0].GetProperty("completed").GetInt32());
+        Assert.Equal(1, rounds.GetProperty("byRole")[1].GetProperty("other").GetInt32());
+        Assert.Equal(10, rounds.GetProperty("byRole")[0].GetProperty("cachedInputTokens").GetInt64());
+        Assert.Equal(20, rounds.GetProperty("byRole")[0].GetProperty("outputTokens").GetInt64());
+        Assert.Equal(50, rounds.GetProperty("byRole")[1].GetProperty("cachedInputTokens").GetInt64());
+        Assert.Equal(40, rounds.GetProperty("byRole")[1].GetProperty("outputTokens").GetInt64());
+        Assert.Equal(60, rounds.GetProperty("byModel")[0].GetProperty("cachedInputTokens").GetInt64());
+        Assert.Equal(60, rounds.GetProperty("byModel")[0].GetProperty("outputTokens").GetInt64());
+        Assert.Equal(before, HashFiles(fixture.Workspace.OrchestratorDirectory));
+        foreach (var (path, hash) in HashWalFiles(fixture.Workspace.OrchestratorDirectory))
+            Assert.True(hash == EmptyFileHash ||
+                (walBefore.TryGetValue(path, out var original) && hash == original),
+                $"SQLite WAL file changed and is not empty: {path}");
+    }
+
+    [Fact]
+    public async Task WithoutRoundsOutputIsUnchangedAndUnknownFlagShowsUsage()
+    {
+        using var fixture = await OwnerDigestTestFixture.CreateAsync();
+        var originalText = Run(fixture);
+        var originalJson = Run(fixture, "--json");
+        Assert.Equal(0, originalText.Code);
+        Assert.Equal(0, originalJson.Code);
+        await AddRoundsAsync(fixture);
+
+        var laterText = Run(fixture);
+        var laterJson = Run(fixture, "--json");
+        Assert.Equal(0, laterText.Code);
+        Assert.Equal(0, laterJson.Code);
+        Assert.Equal(originalText.Output, laterText.Output);
+        Assert.Equal(originalJson.Output, laterJson.Output);
+        Assert.DoesNotContain("Rounds by role", originalText.Output);
+        using var document = JsonDocument.Parse(originalJson.Output);
+        Assert.False(document.RootElement.TryGetProperty("rounds", out _));
+        var exception = Assert.Throws<ArgumentException>(() =>
+            CliOwnerDigestCommand.Parse(["owner-digest", "--bogus"]));
+        Assert.Equal(CliCommandHelp.OwnerDigestUsage, exception.Message);
+        Assert.Contains("--rounds", exception.Message);
+    }
+
+    private static void AssertRows(JsonElement rows,
+        params (string Key, int Rounds, long Input, int Unreported)[] expected)
+    {
+        Assert.Equal(expected.Length, rows.GetArrayLength());
+        for (var index = 0; index < expected.Length; index++)
+        {
+            Assert.Equal(expected[index].Key, rows[index].GetProperty("key").GetString());
+            Assert.Equal(expected[index].Rounds, rows[index].GetProperty("rounds").GetInt32());
+            Assert.Equal(expected[index].Input, rows[index].GetProperty("inputTokens").GetInt64());
+            Assert.Equal(expected[index].Unreported, rows[index].GetProperty("usageUnreported").GetInt32());
+        }
+    }
+
+    private static async Task AddRoundsAsync(OwnerDigestTestFixture fixture)
+    {
+        var start = OwnerDigestTestFixture.Start;
+        TaskDispatchSnapshot Dispatch(double hour, string provider, long? input, long? cached, long? output) =>
+            new("worker", "command", "working-directory", start.AddHours(hour), provider,
+                provider == "anthropic" ? "claude" : "gpt",
+                ContextPackageReceipt: new WorkerContextPackageReceipt("package", [],
+                    Value(input), Value(cached), Value(output)));
+        ProgressEventSnapshot Event(string task, double hour, ProgressKind kind) =>
+            new(RoundGoal, task, kind, "event", start.AddHours(hour));
+        var goal = new GoalSnapshot(RoundGoal, "Round report", GoalStatus.Active,
+            [new TaskSnapshot(DeveloperTask, "Develop", AgentRole.Developer, WorkTaskStatus.Completed,
+                null, null, null, [], null, null, DispatchHistory:
+                [Dispatch(1, "anthropic", 100, 10, 20), Dispatch(2, "openai", null, null, null)]),
+             new TaskSnapshot(ReviewerTask, "Review", AgentRole.Reviewer, WorkTaskStatus.Running,
+                null, null, null, [], null, null, DispatchHistory:
+                [Dispatch(-2, "anthropic", 1000, 0, 500), Dispatch(5, "anthropic", 200, 50, 40)]),
+             new TaskSnapshot(OutsideTask, "Outside", AgentRole.Reviewer, WorkTaskStatus.Completed,
+                null, null, null, [], null, null, DispatchHistory:
+                [Dispatch(25, "openai", 9999, 9999, 9999)])],
+            [Event(DeveloperTask, 1.5, ProgressKind.TaskFailed),
+             Event(DeveloperTask, 3, ProgressKind.TaskCompleted),
+             Event(ReviewerTask, -1, ProgressKind.TaskRetried),
+             Event(OutsideTask, 25.5, ProgressKind.TaskCompleted)]);
+        await new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath)
+            .SaveGoalSnapshotsAsync([goal]);
+    }
+
+    private static ProviderUsageValue Value(long? count) => count is { } value
+        ? ProviderUsageValue.Reported(value) : ProviderUsageValue.Unknown("unavailable");
+
+    private static (int Code, string Output) Run(OwnerDigestTestFixture fixture,
+        params string[] flags)
+    {
+        var args = new[] { "owner-digest", "--since", OwnerDigestTestFixture.Start.ToString("O"),
+            "--until", OwnerDigestTestFixture.End.ToString("O") }.Concat(flags).ToArray();
+        using var output = new StringWriter();
+        var code = CliOwnerDigestCommand.Run(args, fixture.Workspace, fixture.Clock, output);
+        return (code, output.ToString());
+    }
+
+    private static readonly string EmptyFileHash = Convert.ToHexString(SHA256.HashData([]));
+
+    private static Dictionary<string, string> HashFiles(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(path => !path.EndsWith("-shm", StringComparison.OrdinalIgnoreCase) &&
+                !path.EndsWith("-wal", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(path => Path.GetRelativePath(root, path),
+                path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))),
+                StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<string, string> HashWalFiles(string root) =>
+        Directory.EnumerateFiles(root, "*-wal", SearchOption.AllDirectories)
+            .ToDictionary(path => Path.GetRelativePath(root, path),
+                path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))),
+                StringComparer.OrdinalIgnoreCase);
+}

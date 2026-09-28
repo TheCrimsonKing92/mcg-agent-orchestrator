@@ -18,12 +18,18 @@ internal static class CliOwnerDigestCommand
     {
         try
         {
-            var (since, until, json) = Parse(args);
-            var digest = Read(workspace, clock ?? new SystemClock(), since, until);
+            var (since, until, json, rounds) = Parse(args);
+            IReadOnlyList<Goal> goals = [];
+            var digest = rounds
+                ? Read(workspace, clock ?? new SystemClock(), out goals, since, until)
+                : Read(workspace, clock ?? new SystemClock(), since, until);
             var writer = output ?? Console.Out;
             if (json)
             {
-                writer.WriteLine(JsonSerializer.Serialize(digest, new JsonSerializerOptions
+                if (rounds)
+                    CliOwnerDigestRounds.WriteJson(writer, digest, goals);
+                else
+                    writer.WriteLine(JsonSerializer.Serialize(digest, new JsonSerializerOptions
                 {
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase
                 }));
@@ -36,6 +42,8 @@ internal static class CliOwnerDigestCommand
                     writer.WriteLine($"{row.GoalId} | {row.LandedAt:O} | {row.Interventions.Human}/{row.Interventions.Agent}/{row.Interventions.Other} | {row.LandingStatus} | {row.TailHours?.ToString("0.###", CultureInfo.InvariantCulture) ?? "unknown"} | {row.MechanicalHours.Human:0.###}/{row.MechanicalHours.Agent:0.###}/{row.MechanicalHours.Other:0.###}");
                 writer.WriteLine($"Totals: landed={digest.Totals.LandedGoals} interventions={digest.Totals.Interventions.Total} H/A/O={digest.Totals.Interventions.Human}/{digest.Totals.Interventions.Agent}/{digest.Totals.Interventions.Other} mean={digest.Totals.MeanInterventionsPerLanding?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a"} correct={digest.Totals.CorrectLandings} escapes={digest.Totals.Escapes} pending={digest.Totals.Pending} correct-rate={digest.Totals.CorrectLandingRate?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a"} tail-median-h={digest.Totals.TailMedianHours?.ToString("0.###", CultureInfo.InvariantCulture) ?? "unknown"} tail-p90-h={digest.Totals.TailP90Hours?.ToString("0.###", CultureInfo.InvariantCulture) ?? "unknown"} tail-known={digest.Totals.KnownTailCount} tail-unknown={digest.Totals.UnknownTailCount} mechanical-h={digest.Totals.MechanicalHours.Total:0.###} H/A/O={digest.Totals.MechanicalHours.Human:0.###}/{digest.Totals.MechanicalHours.Agent:0.###}/{digest.Totals.MechanicalHours.Other:0.###} unresolved-h={digest.Totals.UnresolvedHoldHours:0.###}");
                 writer.WriteLine($"Non-landed goals with interventions in window: {digest.NonLandedGoalsWithInterventions}");
+                if (rounds)
+                    CliOwnerDigestRounds.WriteText(writer, digest, goals);
             }
             return 0;
         }
@@ -48,11 +56,16 @@ internal static class CliOwnerDigestCommand
 
     internal static OwnerDigestResult Read(OrchestratorWorkspace workspace, IClock clock,
         DateTimeOffset? since = null, DateTimeOffset? until = null)
+        => Read(workspace, clock, out _, since, until);
+
+    internal static OwnerDigestResult Read(OrchestratorWorkspace workspace, IClock clock,
+        out IReadOnlyList<Goal> goals, DateTimeOffset? since = null, DateTimeOffset? until = null)
     {
         if (!File.Exists(workspace.SqliteStatePath))
             throw new FileNotFoundException("State database is missing.", workspace.SqliteStatePath);
         var kernel = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
             .LoadAsync().GetAwaiter().GetResult();
+        goals = kernel.Goals.ToArray();
         var inputs = kernel.Goals.ToDictionary(g => g.Id.Value,
             g => new OwnerDigestGoalInput(g.Id.Value, null, null, g.Timeline),
             StringComparer.OrdinalIgnoreCase);
@@ -127,16 +140,22 @@ internal static class CliOwnerDigestCommand
         return rows;
     }
 
-    private static (DateTimeOffset? Since, DateTimeOffset? Until, bool Json) Parse(IReadOnlyList<string> args)
+    internal static (DateTimeOffset? Since, DateTimeOffset? Until, bool Json, bool Rounds) Parse(IReadOnlyList<string> args)
     {
         DateTimeOffset? since = null, until = null;
         var json = false;
+        var rounds = false;
         for (var i = 1; i < args.Count; i++)
         {
             var flag = args[i];
             if (flag.Equals("--json", StringComparison.OrdinalIgnoreCase))
             {
                 json = true;
+                continue;
+            }
+            if (flag.Equals("--rounds", StringComparison.OrdinalIgnoreCase))
+            {
+                rounds = true;
                 continue;
             }
             if (i + 1 >= args.Count ||
@@ -149,6 +168,6 @@ internal static class CliOwnerDigestCommand
             else throw new ArgumentException(CliCommandHelp.OwnerDigestUsage);
             i++;
         }
-        return (since, until, json);
+        return (since, until, json, rounds);
     }
 }
