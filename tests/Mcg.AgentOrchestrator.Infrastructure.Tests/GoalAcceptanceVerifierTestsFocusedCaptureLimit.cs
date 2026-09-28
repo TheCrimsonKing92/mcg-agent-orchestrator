@@ -111,7 +111,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         await using var owner = CreateFocusedOwner(root);
         var check = new GoalAcceptanceVerifier.AcceptanceManifestCheck
         {
-            Name = "small focused command", Type = "command", Command = "pwsh",
+            Name = "small focused command", Type = "command", Command = "powershell",
             Arguments = ["-NoProfile", "-NonInteractive", "-Command", "[Console]::WriteLine('ok')"],
             TimeoutMinutes = 1
         };
@@ -168,12 +168,12 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
     }
 
     private static string[] LoopingArguments() =>
-        ["pwsh", "-NoProfile", "-NonInteractive", "-Command",
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
             "while ($true) { [Console]::WriteLine('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') }"];
 
     private static GoalAcceptanceVerifier.AcceptanceManifestCheck LoopingCheck(int timeoutMinutes, string? pidPath = null) => new()
     {
-        Name = "unbounded output", Type = "command", Command = "pwsh",
+        Name = "unbounded output", Type = "command", Command = "powershell",
         Arguments = pidPath is null ? LoopingArguments()[1..] :
             ["-NoProfile", "-NonInteractive", "-Command",
                 $"Set-Content -LiteralPath '{pidPath.Replace("'", "''", StringComparison.Ordinal)}' -Value $PID; " +
