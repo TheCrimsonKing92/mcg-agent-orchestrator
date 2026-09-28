@@ -45,6 +45,10 @@ public sealed partial class BackgroundDispatchRunner
         return resourceAccounting;
     }
 
+    private bool ShouldDeferProcessReconciliationForOperatorCancelIntent(GoalId goalId, TaskSpec task) =>
+        task.LastDispatch is { } dispatch &&
+        IsRequeueRefusedByOperatorCancelIntent(goalId, task, BuildDispatchId(goalId, task.Id, dispatch));
+
     private bool IsRequeueRefusedByOperatorCancelIntent(GoalId goalId, TaskSpec task, string dispatchId)
     {
         if (OperatorIntents is null || task.LastProcess is not { } latest)
@@ -82,7 +86,7 @@ public sealed partial class BackgroundDispatchRunner
             }
 
             if (payload is null || payload.ProcessId != latest.ProcessId ||
-                payload.ProcessStartedAt != latest.StartedAt || payload.DispatchId != dispatchId)
+                payload.ProcessStartedAt != latest.StartedAt)
                 continue;
 
             RequeueRefusalLog($"REQUEUE_REFUSED goal={goalId.Value[..8]} task={task.Id.Value[..8]} " +

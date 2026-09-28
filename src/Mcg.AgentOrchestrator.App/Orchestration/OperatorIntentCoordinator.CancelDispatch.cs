@@ -21,8 +21,7 @@ internal sealed partial class OperatorIntentCoordinator
             throw new InvalidOperationException($"Task '{task.Id}' has no dispatch for cancellation.");
         var dispatchId = BackgroundDispatchRunner.BuildDispatchId(goal.Id, task.Id, dispatch);
         if (payload.ProcessId != process.ProcessId ||
-            payload.ProcessStartedAt != process.StartedAt ||
-            payload.DispatchId != dispatchId)
+            payload.ProcessStartedAt != process.StartedAt)
         {
             throw new InvalidOperationException(
                 $"process-mismatch: cancel-dispatch intent {intent.Id} does not name task '{task.Id}' latest process.");

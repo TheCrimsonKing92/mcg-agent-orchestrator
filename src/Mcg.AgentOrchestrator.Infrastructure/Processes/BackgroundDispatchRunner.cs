@@ -622,7 +622,8 @@ public sealed partial class BackgroundDispatchRunner
                 {
                     continue;
                 }
-
+                if (ShouldDeferProcessReconciliationForOperatorCancelIntent(goal.Id, task))
+                    continue;
                 var recoveryDecision = _recoveryPolicy.Evaluate(process, _recoveryService.AnyTrackedProcessStillRunning(process));
                 if (!_recoveryService.TryCompleteFromExitFile(
                         process,
@@ -637,7 +638,6 @@ public sealed partial class BackgroundDispatchRunner
                 {
                     continue;
                 }
-
                 var outcome = verdict.Kind == DispatchProcessVerdictKind.CompletedFromExitFile
                     ? TryBuildPlannerSampleHold(task, process) ?? BuildCompletedProcessOutcome(
                         kernel,
@@ -648,7 +648,6 @@ public sealed partial class BackgroundDispatchRunner
                         verdict.Diagnostic,
                         verdict.RecoveryDecision)
                     : new DispatchRefreshOutcome(process, null, RecoveryDecision: verdict.RecoveryDecision);
-
                 outcome = DispatchExitSweepEligibility.FenceAutoRequeue(task, outcome);
                 ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome, processInspection.Get);
                 if (outcome.RecoveryDecision?.Action != DispatchRecoveryAction.Hold)
@@ -657,7 +656,6 @@ public sealed partial class BackgroundDispatchRunner
                 }
             }
         }
-
         return reconciled;
     }
 
@@ -723,6 +721,8 @@ public sealed partial class BackgroundDispatchRunner
         {
             return new DispatchRefreshOutcome(processRecord, null);
         }
+        if (ShouldDeferProcessReconciliationForOperatorCancelIntent(goalId, task))
+            return new DispatchRefreshOutcome(processRecord, null);
         var verdict = _recoveryService.ClassifyRefresh(
             task,
             goalId,

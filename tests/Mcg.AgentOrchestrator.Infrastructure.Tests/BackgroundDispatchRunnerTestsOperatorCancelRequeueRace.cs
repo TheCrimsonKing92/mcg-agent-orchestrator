@@ -29,6 +29,24 @@ public sealed class BackgroundDispatchRunnerTestsOperatorCancelRequeueRace
         Xunit.Assert.Contains(refusals, line => line.Contains("reason=operator-cancel-intent", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void ProviderSessionRecordedAfterCancelIntentStillRefusesRequeue()
+    {
+        var (kernel, goal, task) = RunningTask();
+        var store = new CancelDispatchIntentTestStore();
+        store.Add(Intent(goal, task));
+        kernel.RecordDispatchProviderSessionId(goal.Id, task.Id, "session-after-cancel");
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false)
+        {
+            OperatorIntents = store,
+            RequeueRefusalLog = _ => { }
+        };
+
+        Xunit.Assert.Equal(0, runner.RequeueInterruptedDispatches(kernel));
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(false, false)]
     [Xunit.InlineData(true, false)]
@@ -76,13 +94,14 @@ public sealed class BackgroundDispatchRunnerTestsOperatorCancelRequeueRace
             evt.Message.Contains("after conductor loop stop", StringComparison.Ordinal));
     }
 
-    internal static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningTask()
+    internal static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningTask(
+        DateTimeOffset? startedAt = null, AgentRole role = AgentRole.Developer)
     {
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("operator cancel race", [new TaskSpec(TaskId.New(), "developer", AgentRole.Developer)]);
+        var goal = kernel.CreateGoal("operator cancel race", [new TaskSpec(TaskId.New(), "developer", role)]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         var task = goal.Tasks.Single();
-        var now = DateTimeOffset.UtcNow;
+        var now = startedAt ?? DateTimeOffset.UtcNow;
         kernel.RecordTaskDispatch(goal.Id, task.Id,
             new TaskDispatchRecord("worker", "worker command", "C:\\goal", now));
         kernel.RecordTaskProcessStarted(goal.Id, task.Id,
