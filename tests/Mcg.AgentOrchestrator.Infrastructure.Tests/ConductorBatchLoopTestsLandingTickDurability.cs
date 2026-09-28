@@ -160,7 +160,13 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
             });
 
         new ConductorBatchLoop(
-            selfRelaunch: _ => ConductorSelfRelaunchResult.PreparationFailed("fixture", "observed"),
+            selfRelaunch: _ =>
+            {
+                var handoff = new ConductorLoopHandoffResult(
+                    Started: true, ProcessId: null, StdoutPath: null, StderrPath: null,
+                    Reason: "fixture cohort handoff observed");
+                return new ConductorSelfRelaunchResult(true, null, handoff.Reason, handoff);
+            },
             selfRelaunchEnabled: true).Run(
                 kernel, driver, ConductorAutonomyPolicy.Permissive, NoStopPath(),
                 maxIterations: 1,
