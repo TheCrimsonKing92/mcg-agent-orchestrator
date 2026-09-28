@@ -143,10 +143,12 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
             var waiting = CreateVerifiedSimpleGoal(kernel, "Gate with unreadable stop metadata");
             var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 };
             var candidate = ConductorParallelAcceptanceCandidate.Create(waiting, 1, [Scope], Branch, OldMain);
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            var starter = new ConductorParallelAcceptanceAttemptCoordinator(
                 root, isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7109));
-            var started = coordinator.Evaluate(candidate, policy, PassingRun);
+            var started = starter.Evaluate(candidate, policy, PassingRun);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root, runInline: true, isProcessAlive: _ => true);
             var main = OldMain;
             var stopCalls = 0;
             var driver = MakeDriver(
