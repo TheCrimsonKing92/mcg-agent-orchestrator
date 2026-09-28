@@ -18,7 +18,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         {
             var verifier = new GoalAcceptanceVerifier();
             var run = verifier.RunInvocationForOwnerTestsAsync(
-                owner, owner.CreateInvocation(check.Name), check, root, owner.CancellationToken);
+                owner, owner.CreateInvocation(check.Name), check, Path.GetTempPath(), owner.CancellationToken);
             var result = await run.WaitAsync(TimeSpan.FromSeconds(20));
 
             Assert.False(result.Result.Passed);
@@ -52,7 +52,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         try
         {
             run = GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync(
-                LoopingArguments(), root, TimeSpan.FromMinutes(30), CapBytes,
+                LoopingArguments(), Path.GetTempPath(), TimeSpan.FromMinutes(30), CapBytes,
                 GateHeartbeatRunClass.FocusedEvidence, identity => child = identity,
                 cancellation.Token);
             result = await run.WaitAsync(TimeSpan.FromSeconds(20));
@@ -90,7 +90,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
             await using var owner = CreateGateOwner(root);
             var check = LoopingCheck(timeoutMinutes: 1);
             var run = await owner.RunInvocationForTestsAsync(
-                verifier, owner.CreateInvocation(check.Name), check, root);
+                verifier, owner.CreateInvocation(check.Name), check, Path.GetTempPath());
 
             Assert.False(run.Result.Passed);
             Assert.StartsWith("acceptance-check-timeout:", run.Result.Name, StringComparison.Ordinal);
@@ -121,7 +121,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         {
             var verifier = new GoalAcceptanceVerifier();
             var run = await verifier.RunInvocationForOwnerTestsAsync(
-                owner, owner.CreateInvocation(check.Name), check, root, owner.CancellationToken);
+                owner, owner.CreateInvocation(check.Name), check, Path.GetTempPath(), owner.CancellationToken);
 
             Assert.True(run.Result.Passed);
             Assert.Equal(check.Name, run.Result.Name);
