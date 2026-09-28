@@ -95,7 +95,7 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null,
     Func<AcceptanceManifestCheck, string?>? ResolveClosureHash = null);
 
-internal sealed class AcceptancePartitionVerdictCache
+internal sealed partial class AcceptancePartitionVerdictCache
 {
     private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
     private const string PartitionVerdictCacheJournalOperation = "acceptance:partition-verdict-cache";
@@ -236,8 +236,14 @@ internal sealed class AcceptancePartitionVerdictCache
 
     internal AcceptanceCheckResult? TryReuse(AcceptanceManifestCheck check)
     {
-        if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey) || ForceFullRerun)
+        if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey))
         {
+            RecordMiss(check.Name, PartitionVerdictMissReasons.CacheKeyUnavailable);
+            return null;
+        }
+        if (ForceFullRerun)
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.ForcedFullRerun);
             return null;
         }
 
@@ -247,9 +253,16 @@ internal sealed class AcceptancePartitionVerdictCache
         if (cached is null)
         {
             closureHash = ResolveClosureHash(check);
-            if (string.IsNullOrWhiteSpace(closureHash) ||
-                _closureIndex.FindLatest(ManifestIdentity, filterHash, closureHash) is not { } contentVerdict)
+            if (string.IsNullOrWhiteSpace(closureHash))
+            {
+                RecordMiss(partitionId, PartitionVerdictMissReasons.ClosureHashUnavailable);
                 return null;
+            }
+            if (_closureIndex.FindLatest(ManifestIdentity, filterHash, closureHash) is not { } contentVerdict)
+            {
+                RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForClosure, closureHash);
+                return null;
+            }
             cached = new PartitionVerdictRecord(
                 GoalId, contentVerdict.SourceAttemptId, CandidateTreeSha, MainSha, filterHash,
                 partitionId, cacheKey, true, "GREEN", contentVerdict.TestResultPaths,
@@ -257,7 +270,10 @@ internal sealed class AcceptancePartitionVerdictCache
             reuseRule = "closure";
         }
         if (!HasReusableStructuralCoverageEvidence(cached))
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.MissingStructuralCoverageEvidence, closureHash);
             return null;
+        }
 
         RecordReuse(new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey, reuseRule, closureHash));
         return new AcceptanceCheckResult(
@@ -612,6 +628,7 @@ internal sealed class AcceptancePartitionVerdictCache
             _executed.Add(new PartitionVerdictExecutionReceipt(
                 partitionId,
                 result.Passed ? "GREEN" : "RED"));
+            RecordExecutedDuration(result.DurationMilliseconds);
             _freshRecords.Add(new PartitionVerdictRecord(
                 GoalId,
                 AttemptId,
@@ -690,7 +707,7 @@ internal sealed class AcceptancePartitionVerdictCache
             $"effective_manifest_identity={ManifestIdentity} " +
             $"reroll_attempt_count={attemptCount.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"forced_full_rerun={ForceFullRerun.ToString().ToLowerInvariant()} " +
-            "before_reroll_wall_time=20-25m after_reroll_wall_time=2-7m";
+            FormatMeasurementTokens();
         AppendPartitionVerdictJournalEntries(
             JournalPath,
             BuildPartitionVerdictJournalEntries(this, receipt, aggregateVerdict, attemptCount, summaryRecordedAt));

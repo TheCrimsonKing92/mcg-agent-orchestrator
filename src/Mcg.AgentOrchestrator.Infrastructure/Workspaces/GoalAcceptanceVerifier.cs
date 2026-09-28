@@ -2021,6 +2021,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     "acceptance-infrastructure-shards-prebuild", activeToken),
                 _executionContext?.ResolveCancellationProbe(boundary: false),
                 cancellationToken).ConfigureAwait(false);
+            if (prebuild.ContributesToCheck)
+                cacheContext?.RecordSharedPrebuildDuration(cacheContext.AttemptId, prebuild.Run.Result.DurationMilliseconds);
             if (prebuild.Run.Result.Passed)
             {
                 VerifyPrebuiltMtpArtifacts(shardChecks, primaryBuildPhase);
