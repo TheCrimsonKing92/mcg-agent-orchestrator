@@ -602,7 +602,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         if (current is not null && IsReconciled(current))
         {
             if (TryHoldRefusedCarryRelaunch(
-                    current, candidate, policy, dispatchKind, focusedEvidenceRequest, requestContext,
+                    current, candidate, policy, dispatchKind,
                     out var refusedCarryDecision))
                 return refusedCarryDecision;
 

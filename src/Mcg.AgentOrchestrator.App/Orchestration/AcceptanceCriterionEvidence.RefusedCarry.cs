@@ -26,7 +26,7 @@ internal static partial class AcceptanceCriterionEvidence
     private static string FormatRefusedCarryHold(
         Goal goal, string candidateSha, CriterionEvidenceObligation obligation, string? refusal)
     {
-        var prefix = $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {obligation.ExpectedCandidateSha ?? "no candidate"}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: {refusal ?? "reason=not-eligible"}.";
+        var prefix = FormatRefusedCarryDiagnostic(candidateSha, obligation, refusal);
         var commands = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
             .Where(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
                 !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
@@ -35,6 +35,10 @@ internal static partial class AcceptanceCriterionEvidence
             .Select(item => $"criterion-evidence-map --goal {goal.Id.Value} {item.CriterionIndex} {item.CriterionVersion} acceptance {item.RequiredScope} {item.FindingStableId ?? item.Id} {candidateSha}");
         return $"{prefix} Operator rebind: {string.Join("; ", commands)}";
     }
+
+    private static string FormatRefusedCarryDiagnostic(
+        string candidateSha, CriterionEvidenceObligation obligation, string? refusal) =>
+        $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {obligation.ExpectedCandidateSha ?? "no candidate"}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: {refusal ?? "reason=not-eligible"}.";
 
     private static bool TryPlanPatchEquivalentBindings(
         Goal goal, string candidateSha, string? executionDirectory,

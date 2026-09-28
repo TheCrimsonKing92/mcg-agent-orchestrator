@@ -10,14 +10,14 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         string dispatchKind,
-        string? focusedEvidenceRequest,
-        ConductorFocusedEvidenceRequestContext? requestContext,
         out ConductorParallelAcceptanceAttemptDecision decision)
     {
         decision = null!;
         if (current.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed ||
             !string.Equals(dispatchKind, GateDispatchKind, StringComparison.Ordinal) ||
-            !MatchesCandidate(current, candidate, dispatchKind, focusedEvidenceRequest, requestContext) ||
+            !string.Equals(current.Kind, GateDispatchKind, StringComparison.Ordinal) ||
+            !string.Equals(current.BranchHeadSha, candidate.BranchHeadSha, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(current.MainHeadSha, candidate.MainHeadSha, StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(candidate.BranchHeadSha))
             return false;
 
