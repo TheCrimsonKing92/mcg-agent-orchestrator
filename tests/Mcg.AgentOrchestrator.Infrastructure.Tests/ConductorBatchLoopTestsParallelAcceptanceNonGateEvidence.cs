@@ -173,6 +173,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceNonGateEvidence : C
         public (BatchLoopSummary Summary, BatchTickSummary Tick) Tick()
         {
             BatchTickSummary? tick = null;
+            Driver.BeginTick(Kernel, 0);
             var summary = new ConductorBatchLoop().Run(
                 Kernel, Driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
                 maxIterations: 1, onTick: value => tick = value);

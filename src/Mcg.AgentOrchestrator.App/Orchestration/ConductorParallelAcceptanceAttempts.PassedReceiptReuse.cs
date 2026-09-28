@@ -24,6 +24,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             string.IsNullOrWhiteSpace(candidate.BranchHeadSha) ||
             string.IsNullOrWhiteSpace(candidate.MainHeadSha) ||
             !MatchesCandidate(attempt, candidate, dispatchKind, focusedEvidenceRequest, requestContext) ||
+            candidate.Goal.AuthoritativeRefinedSpecVersion is null ||
             candidate.Goal.GetOutstandingCriterionEvidenceObligations(attempt.BranchHeadSha)
                 .Any(obligation =>
                     obligation.Owner is not (CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Worker) ||
