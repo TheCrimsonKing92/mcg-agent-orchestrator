@@ -59,8 +59,11 @@ public static class DeveloperDeferredTestClassNames
     private static readonly Regex LeadingConnective = new(
         @"^(?:naming|for|of)(?=$|[\s:\-\u2014\u2013])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    private static readonly Regex ClassListSeparator = new(
-        @"\s*,\s*(?:and\s+)?|\s+and\s+",
+    private static readonly Regex CommaListSeparator = new(
+        @"\s*,\s*(?:and\s+)?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex AndListSeparator = new(
+        @"\s+and\s+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly char[] DeclarationSeparators = [' ', ':', '-', '\u2014', '\u2013'];
 
@@ -77,16 +80,19 @@ public static class DeveloperDeferredTestClassNames
             declaration = declaration[connective.Length..].TrimStart(DeclarationSeparators);
         var names = new List<string>();
         var barePrefix = true;
-        foreach (var part in ClassListSeparator.Split(declaration).Select(value => value.Trim()))
+        foreach (var commaPart in CommaListSeparator.Split(declaration).Select(value => value.Trim()))
         {
-            var wrapped = QuotedClassToken.Matches(part);
+            var wrapped = QuotedClassToken.Matches(commaPart);
             if (wrapped.Count > 0)
             {
                 names.AddRange(wrapped.Select(match => match.Groups["name"].Value));
                 continue;
             }
-            if (barePrefix && IsValid(part)) names.Add(part);
-            else barePrefix = false;
+            foreach (var part in AndListSeparator.Split(commaPart).Select(value => value.Trim()))
+            {
+                if (barePrefix && IsValid(part)) names.Add(part);
+                else barePrefix = false;
+            }
         }
         return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }

@@ -11,6 +11,8 @@ public sealed class DeveloperDeferredTestClassNamesFormsTests
     [InlineData("deferred naming: A", new[] { "A" })]
     [InlineData("deferred of A, B and C", new[] { "A", "B", "C" })]
     [InlineData("deferred `A` and `B`", new[] { "A", "B" })]
+    [InlineData("deferred - `ATests` and its fixtures, BTests", new[] { "ATests", "BTests" })]
+    [InlineData("deferred - A, and B", new[] { "A", "B" })]
     public void ParsesNamedClasses(string field, string[] expected) =>
         Assert.Equal(expected, DeveloperDeferredTestClassNames.Parse(field));
 
