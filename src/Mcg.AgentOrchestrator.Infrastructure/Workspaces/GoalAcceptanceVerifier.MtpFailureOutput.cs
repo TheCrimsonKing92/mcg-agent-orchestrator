@@ -10,8 +10,8 @@ public sealed partial class GoalAcceptanceVerifier
         AcceptanceShardCompletionDecision completionDecision)
     {
         var details = new List<string>();
-        var commandOutput = result.TimedOut
-            ? BuildTimeoutOutput(result)
+        var commandOutput = IsInterrupted(result)
+            ? BuildInterruptedOutput(result)
             : TailOutput(result.Output);
         if (!string.IsNullOrWhiteSpace(commandOutput))
         {
@@ -59,7 +59,7 @@ public sealed partial class GoalAcceptanceVerifier
         TrxCompletionEvidence trxEvidence,
         AcceptanceShardCompletionDecision completionDecision)
     {
-        if (!result.TimedOut &&
+        if (!IsInterrupted(result) &&
             trxEvidence.ExecutedTestCount is > 0 &&
             trxEvidence.Passed &&
             string.Equals(

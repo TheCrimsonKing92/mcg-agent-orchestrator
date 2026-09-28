@@ -412,7 +412,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         long StderrBytes = 0,
         string? Stderr = null,
         int? ChildProcessId = null,
-        DateTimeOffset? ChildProcessStartedAt = null);
+        DateTimeOffset? ChildProcessStartedAt = null,
+        bool CaptureLimited = false,
+        long? CaptureLimitBytes = null);
 
     private static readonly Regex TestAttrPattern = new(
         @"^\s*\[\s*(?:Xunit\.)?(?:Fact|Theory)\s*(?:\(|,|\])",
@@ -1649,8 +1651,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var summary = failed is null
             ? $"{checks.Count} check(s) passed; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
             : disposition == FindingEvidenceArmDisposition.ApparatusFailure
-                ? $"focused selection apparatus failure: {failed.Name}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
-            : $"{failed.Name} exit {failed.ExitCode}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
+                ? $"focused selection apparatus failure: {failed.Name}{CaptureLimitDetail(failed)}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
+            : $"{failed.Name}{CaptureLimitDetail(failed)} exit {failed.ExitCode}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
         return new FocusedEvidenceArmRunResult(
             arm,
             sha,
@@ -2442,7 +2444,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var predicate = result.FailureClassification ??
-            (result.Name.StartsWith("acceptance-check-timeout:", StringComparison.Ordinal)
+            (result.Name.StartsWith("acceptance-check-timeout:", StringComparison.Ordinal) ||
+             IsCaptureLimitFailureName(result.Name)
                 ? AcceptanceShardCompletionPredicates.TimedOut
                 : result.ExitCode != 0
                     ? AcceptanceShardCompletionPredicates.NonzeroExit
@@ -4139,13 +4142,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
             CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
             cancellationToken).ConfigureAwait(false);
-        if (result.TimedOut)
+        if (IsInterrupted(result))
         {
             return (new AcceptanceCheckResult(
-                BuildTimeoutFailureName(check, result),
+                BuildInterruptedFailureName(check, result),
                 false,
                 result.ExitCode,
-                BuildTimeoutOutput(result),
+                BuildInterruptedOutput(result),
                 ResultSummary: BuildGenericCommandResultSummary(result),
                 Advisory: check.Advisory), false);
         }
@@ -4313,7 +4316,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken, isMtpLane: true).ConfigureAwait(false);
 
         elapsed.Stop();
-        var processPassed = !result.TimedOut && result.ExitCode == 0;
+        var processPassed = !IsInterrupted(result) && result.ExitCode == 0;
         EmitMissingTrxReceiptIfNeeded(processPassed, telemetry);
         var trxEvidence = InspectTrxCompletionEvidence(telemetry.Paths);
         var executedTestCount = trxEvidence.ExecutedTestCount;
@@ -4358,7 +4361,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 BuildGenericCommandResultSummary(result))
             : BuildGenericCommandResultSummary(result);
         return (new AcceptanceCheckResult(
-            result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
+            IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
             passed,
             result.ExitCode,
             outputTail,
@@ -4764,8 +4767,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // block a green goal, while never masking a build/compile failure and still surfacing the tail.
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             var reportedAllPassed = telemetry is not null &&
-                !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-            EmitMissingTrxReceiptIfNeeded(!result.TimedOut && (result.ExitCode == 0 || reportedAllPassed), telemetry);
+                !IsInterrupted(result) && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+            EmitMissingTrxReceiptIfNeeded(!IsInterrupted(result) && (result.ExitCode == 0 || reportedAllPassed), telemetry);
             var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
             var completionDecision = telemetry is null
                 ? DecideNonTestCommandCompletion(result)
@@ -4783,11 +4786,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
             return (new AcceptanceCheckResult(
-                result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
+                IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
-                result.TimedOut
-                    ? BuildTimeoutOutput(result)
+                IsInterrupted(result)
+                    ? BuildInterruptedOutput(result)
                     : passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
                 environment.ArtifactsPath,
                 "goal-acceptance-verifier",
@@ -4852,8 +4855,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             elapsed.Stop();
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             var reportedAllPassed = telemetry is not null &&
-                !result.TimedOut && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-            EmitMissingTrxReceiptIfNeeded(!result.TimedOut && (result.ExitCode == 0 || reportedAllPassed), telemetry);
+                !IsInterrupted(result) && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
+            EmitMissingTrxReceiptIfNeeded(!IsInterrupted(result) && (result.ExitCode == 0 || reportedAllPassed), telemetry);
             var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
             var completionDecision = telemetry is null
                 ? DecideNonTestCommandCompletion(result)
@@ -4871,11 +4874,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
             return (new AcceptanceCheckResult(
-                result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
+                IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
-                result.TimedOut
-                    ? BuildTimeoutOutput(result)
+                IsInterrupted(result)
+                    ? BuildInterruptedOutput(result)
                     : passed && result.ExitCode == 0 ? null : TailOutput(result.Output),
                 environment.ArtifactsPath,
                 "goal-acceptance-verifier",
@@ -5341,7 +5344,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         out BuildLockAttribution attribution)
     {
         attribution = null!;
-        if (result.TimedOut || result.ExitCode == 0 || DotnetTestRunReportsCompleted(result.Output))
+        if (IsInterrupted(result) || result.ExitCode == 0 || DotnetTestRunReportsCompleted(result.Output))
         {
             return false;
         }
@@ -7560,7 +7563,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 AcceptanceShardCompletionPredicates.MissingTrx,
                 StringComparison.Ordinal);
         var failedPredicate = policyFailure;
-        if (failedPredicate is null && result.TimedOut)
+        if (failedPredicate is null && IsInterrupted(result))
             failedPredicate = AcceptanceShardCompletionPredicates.TimedOut;
         if (failedPredicate is null && !missingTrxCompatibility && trx.FailedPredicate is not null)
             failedPredicate = trx.FailedPredicate;
@@ -7583,7 +7586,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new AcceptanceShardCompletionDecision(
             failedPredicate is null,
             failedPredicate,
-            result.TimedOut,
+            IsInterrupted(result),
             result.ExitCode,
             trx.DiscoveredTestCount,
             trx.ExecutedTestCount,
@@ -7594,7 +7597,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static AcceptanceShardCompletionDecision DecideNonTestCommandCompletion(CommandResult result)
     {
-        var failedPredicate = result.TimedOut
+        var failedPredicate = IsInterrupted(result)
             ? AcceptanceShardCompletionPredicates.TimedOut
             : result.ExitCode != 0
                 ? AcceptanceShardCompletionPredicates.NonzeroExit
@@ -7602,7 +7605,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new AcceptanceShardCompletionDecision(
             failedPredicate is null,
             failedPredicate,
-            result.TimedOut,
+            IsInterrupted(result),
             result.ExitCode,
             null,
             null,
@@ -7863,7 +7866,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 gateInvocationId: _executionContext?.RunId,
                 apparatusReceiptPath: _executionContext?.ApparatusReceiptPath,
                 heartbeatInterval: _testOverrides.HeartbeatInterval, progressInterval: _testOverrides.ProgressInterval,
-                capturePublicationInterval: _testOverrides.CapturePublicationInterval).ConfigureAwait(false)
+                capturePublicationInterval: _testOverrides.CapturePublicationInterval,
+                stopOnCaptureLimit: StopsOnCaptureLimit(heartbeatContext)).ConfigureAwait(false)
             : await _runner(arguments, workingDirectory, timeout, cancellationToken).ConfigureAwait(false);
     }
     private GateHeartbeatContext CreateGateHeartbeatContext(
@@ -8364,7 +8368,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? gateInvocationId = null,
         string? apparatusReceiptPath = null,
         TimeSpan? heartbeatInterval = null, TimeSpan? progressInterval = null,
-        TimeSpan? capturePublicationInterval = null)
+        TimeSpan? capturePublicationInterval = null,
+        bool stopOnCaptureLimit = false)
     {
         engineSettings ??= new AcceptanceGateEngineSettings();
         // Keep the shell command semantics, but own the capture file offsets in this process. The
@@ -8374,6 +8379,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
+        using var captureLimitStop = new CaptureLimitStop(stopOnCaptureLimit);
         var elapsed = Stopwatch.StartNew();
         CancellationTokenSource? heartbeatCts = null;
         Task? heartbeatTask = null;
@@ -8434,7 +8440,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         stdoutPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: null,
+                        onLimitReached: captureLimitStop.OnLimitReached,
                         captureDrainCts.Token, capturePublicationInterval),
                     ConnectAndDrainCappedCaptureAsync(
                         stderrPipe,
@@ -8442,7 +8448,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         stderrPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: null,
+                        onLimitReached: captureLimitStop.OnLimitReached,
                         captureDrainCts.Token, capturePublicationInterval)
                 ];
             }
@@ -8474,14 +8480,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         stdoutPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: null,
+                        onLimitReached: captureLimitStop.OnLimitReached,
                         cancellationToken: captureDrainCts.Token, publicationInterval: capturePublicationInterval),
                     DrainCappedCaptureAsync(
                         captureSources[1],
                         stderrPath,
                         engineSettings.OutputCaptureLimitBytes,
                         () => DateTimeOffset.UtcNow,
-                        onLimitReached: null,
+                        onLimitReached: captureLimitStop.OnLimitReached,
                         cancellationToken: captureDrainCts.Token, publicationInterval: capturePublicationInterval)
                 ];
             }
@@ -8503,8 +8509,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             using var timeoutCts = timeoutSignal.CanBeCanceled
-                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSignal)
-                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSignal, captureLimitStop.Token)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, captureLimitStop.Token);
             if (!timeoutSignal.CanBeCanceled)
             {
                 timeoutCts.CancelAfter(commandTimeout);
@@ -8520,7 +8526,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 if (cancellationToken.IsCancellationRequested)
                     throw;
 
-                timedOut = true;
+                timedOut = !captureLimitStop.Stopped;
+                if (captureLimitStop.Stopped)
+                    await process.WaitForExitAsync(CancellationToken.None).WaitAsync(CaptureDrainTimeout).ConfigureAwait(false);
             }
 
             var captureResults = await CompleteCaptureDrainsAsync(
@@ -8556,7 +8564,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var stdoutBytes = TryGetFileLength(stdoutPath);
             var stderrBytes = TryGetFileLength(stderrPath);
             elapsed.Stop();
-            var exitCode = timedOut ? -1 : process.ExitCode;
+            var captureLimited = captureLimitStop.Stopped;
+            timedOut &= !captureLimited;
+            var exitCode = timedOut || captureLimited ? -1 : process.ExitCode;
             await commandIdentityTracker.DisposeAsync().ConfigureAwait(false);
             completedProcessId = commandIdentityTracker.Identity?.ProcessId ?? completedProcessId;
             completedProcessStartedAt = commandIdentityTracker.Identity?.StartedAt ?? completedProcessStartedAt;
@@ -8578,7 +8588,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     }
 
                     heartbeatFinalized = true;
-                    heartbeat.WriteFinal(timedOut ? "timed-out" : "completed", childPid: process.Id, exitCode: exitCode);
+                    heartbeat.WriteFinal(timedOut ? "timed-out" : captureLimited ? "failed" : "completed", childPid: process.Id, exitCode: exitCode);
                     ObserveProcessCleanup(cleanupObserver, process.Id, process, "heartbeat-final");
                     heartbeat = null;
                     heartbeatCts?.Dispose();
@@ -8625,7 +8635,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stderrBytes,
                 stderr,
                 completedProcessId,
-                completedProcessStartedAt);
+                completedProcessStartedAt,
+                captureLimited,
+                captureLimited ? engineSettings.OutputCaptureLimitBytes : null);
         }
         finally
         {
