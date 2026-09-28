@@ -1530,6 +1530,8 @@ internal sealed partial class GoalRefinementService
     {
         var acceptanceGateOwnedCriteria = new List<string>();
         var claimedOwners = new Dictionary<int, string>();
+        var declaredOwners = ClaimDeclaredEvidenceOwners(
+            acceptanceCriteria, operatorOwnedCriteria, acceptanceGateOwnedCriteria, claimedOwners);
         var persistedOperatorIndexes = new HashSet<int>();
         foreach (var criterion in operatorOwnedCriteria.ToArray())
         {
@@ -1575,6 +1577,7 @@ internal sealed partial class GoalRefinementService
             }
         }
 
+        var overriddenIndexes = new HashSet<int>();
         foreach (var requested in requestedOwners.Where(item =>
                      item.Owner is "acceptance-gate" or "operator"))
         {
@@ -1587,6 +1590,10 @@ internal sealed partial class GoalRefinementService
                     $"Spec refiner owner dropped: {requested.Owner} for '{PreviewCriterion(requested.Text)}' matched no declared criterion");
                 continue;
             }
+
+            if (TryApplyDeclaredOwnerOverride(
+                    criterionIndex, requested.Owner, declaredOwners, overriddenIndexes, diagnostics))
+                continue;
 
             if (claimedOwners.TryGetValue(criterionIndex, out var existingOwner))
             {

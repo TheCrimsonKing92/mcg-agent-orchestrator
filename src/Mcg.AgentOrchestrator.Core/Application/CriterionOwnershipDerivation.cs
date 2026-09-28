@@ -24,17 +24,19 @@ public static class CriterionOwnershipDerivation
                 continue;
 
             var marker = AcceptanceCriterionOwnershipMarker.Classify(criterion);
+            var declared = AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion);
             var operatorOwnedByMarker = marker.Classification is
                 AcceptanceCriterionOwnershipClassification.OperatorOwned or
                 AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal;
             var gateOwnedByMarker = !operatorOwnedByMarker &&
                 AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion);
-            if (priorOperator.Contains(criterion) ||
+            if ((priorOperator.Contains(criterion) && declared.Kind == DeclaredEvidenceOwnerKind.None) ||
                 operatorOwnedByMarker)
             {
                 operatorOwned.Add(criterion);
             }
-            else if (priorGate.Contains(criterion) || gateOwnedByMarker)
+            else if (priorGate.Contains(criterion) || gateOwnedByMarker ||
+                     declared.Kind == DeclaredEvidenceOwnerKind.AcceptanceGate)
             {
                 gateOwned.Add(criterion);
             }
