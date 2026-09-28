@@ -12,6 +12,7 @@ public sealed class PostLandingCanaryOperatorItemOwnershipTests
         var entered = Signal();
         var cancelled = Signal();
         var release = Signal();
+        var finished = Signal();
         var inFlight = 0;
         var store = new FakeCollaborationItemStore
         {
@@ -28,6 +29,7 @@ public sealed class PostLandingCanaryOperatorItemOwnershipTests
                 finally
                 {
                     Interlocked.Decrement(ref inFlight);
+                    finished.TrySetResult();
                 }
             }
         };
@@ -36,12 +38,19 @@ public sealed class PostLandingCanaryOperatorItemOwnershipTests
 
         var read = Task.Run(() => circuit.Read());
         await entered.Task;
-        await cancelled.Task;
-        var returnedBeforeWriteFinished = read.IsCompleted;
-        release.TrySetResult();
+        try
+        {
+            var firstCompleted = await Task.WhenAny(read, cancelled.Task);
+            Xunit.Assert.Same(cancelled.Task, firstCompleted);
+            Xunit.Assert.False(read.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await finished.Task;
+        }
         var actual = await read;
 
-        Xunit.Assert.False(returnedBeforeWriteFinished);
         Xunit.Assert.Equal(0, Volatile.Read(ref inFlight));
         Xunit.Assert.Equal(expected.Health, actual.Health);
         Xunit.Assert.Equal(expected.FailureReason, actual.FailureReason);
