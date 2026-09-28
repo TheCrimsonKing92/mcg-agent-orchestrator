@@ -1696,6 +1696,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalId? baselineEnvironmentId = null;
         try
         {
+            if (TryLabelFocusedEvidenceBaselineWorktree(baselinePath) is { } integrityFailure)
+            {
+                return InconclusiveBaseline(integrityFailure, baselineSha);
+            }
+
             var sourcePlan = SelectBaselineFocusedChecks(
                 focusedChecks, baselineSha, baselinePath,
                 classifyMissingSelectionsAsAbsent, partitionCandidateOnlySelections);
