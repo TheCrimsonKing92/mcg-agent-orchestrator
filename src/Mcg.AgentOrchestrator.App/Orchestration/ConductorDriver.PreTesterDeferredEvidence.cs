@@ -97,6 +97,9 @@ internal sealed partial class ConductorDriver
                 if (TryEscalatePreTesterRedLoop(goal, goalPrefix, policy, fromState, out result)) return true;
                 throw new InvalidDataException("Actionable pre-Tester RED has no Developer retry or escalation.");
             }
+            RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
+                PreTesterDeferredEvidenceExit.PriorOutcomeNotStarted, prior.Outcome,
+                DeveloperDeferredTestClassNames.Parse(testsField));
             return false;
         }
         var declaration = DeveloperDeferredTestSelections.Resolve(worktreePath, testsField);
@@ -104,6 +107,8 @@ internal sealed partial class ConductorDriver
         {
             if (prior?.Outcome == "started")
                 throw new InvalidDataException("Started pre-Tester evidence lost all selectable classes.");
+            RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
+                PreTesterDeferredEvidenceExit.NoResolvedClasses, prior?.Outcome, declaration.NotRun);
             return false;
         }
 
@@ -124,6 +129,8 @@ internal sealed partial class ConductorDriver
         {
             if (prior?.Outcome == "started")
                 throw new InvalidDataException("Started pre-Tester evidence lost its normalized selection.");
+            RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
+                PreTesterDeferredEvidenceExit.NoNormalizedClasses, prior?.Outcome, notRun);
             return false;
         }
 

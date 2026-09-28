@@ -24,6 +24,8 @@ internal static class SdlcRolePromptRequirements
 
     private const string ReviewerDefectContract =
         "- `REVIEW DEFECT` is a later-round blocker demonstrably present in an earlier reviewed complete candidate diff. Self-check for it; absent historical comparison evidence prevents this label, not current-diff review.";
+    private const string DeveloperDeferredTestsExactForm =
+        "- Format: `tests: deferred - ClassA, ClassB` or backticked names.";
 
     public static IReadOnlyList<string> Build(AgentRole role)
     {
@@ -72,6 +74,7 @@ internal static class SdlcRolePromptRequirements
                 "## Developer Requirements",
                 "- First honor eligible typed convergence for this candidate: return fresh passed focused receipts; clean worktree, no replay or invented edits.",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
+                DeveloperDeferredTestsExactForm,
                 "- Implement only the requested behavior and keep edits scoped.",
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Report changed files and the behavior each change enables.",
@@ -235,6 +238,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Developer Requirements",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
+                DeveloperDeferredTestsExactForm,
                 "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
                 "- Before editing, name the failing test and quote its assertion output.",
