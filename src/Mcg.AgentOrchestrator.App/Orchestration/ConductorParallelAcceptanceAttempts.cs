@@ -147,7 +147,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     int? ConductorGenerationId = null,
     int? AdoptedByGenerationId = null,
     bool FocusedEvidenceRunsBaselineArm = false,
-    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null)
+    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null,
+    string? SupersedingMainHeadSha = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -486,6 +487,12 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         {
             throw new InvalidDataException(
                 $"Acceptance attempt identity changed at canonical metadata path '{attempt.MetadataPath}'.");
+        }
+
+        if (current.SupersedingMainHeadSha is not null)
+        {
+            return TryCompleteSupersededAttempt(current, candidate) ??
+                ConductorParallelAcceptanceAttemptDecision.Running(current);
         }
 
         if (IsCapacityReservingInvalidatedAttempt(current))
@@ -966,13 +973,15 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         !IsHeartbeatStale(attempt);
 
     private bool IsLiveInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
-        attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
-        attempt.ReconciledAt.HasValue &&
         !File.Exists(attempt.ExitCodePath) &&
         _isProcessAlive(attempt.OwnerProcessId) &&
-        !IsHeartbeatStale(attempt);
+        (attempt.SupersedingMainHeadSha is not null && !attempt.ReconciledAt.HasValue ||
+         attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
+         attempt.ReconciledAt.HasValue && !IsHeartbeatStale(attempt));
 
     private bool IsCapacityReservingAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.SupersedingMainHeadSha is not null && !attempt.ReconciledAt.HasValue &&
+        !File.Exists(attempt.ExitCodePath) && _isProcessAlive(attempt.OwnerProcessId) ||
         attempt switch
         {
             { Outcome: ConductorParallelAcceptanceAttemptOutcome.Running, ReconciledAt: null } =>
