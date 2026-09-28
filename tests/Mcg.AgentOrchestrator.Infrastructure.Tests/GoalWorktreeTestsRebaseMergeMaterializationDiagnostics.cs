@@ -83,7 +83,8 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterializationDiagnostics : Goa
                     rewritten = true;
                     return new GitCli.GitResult(0, string.Empty, string.Empty);
                 }
-                if (args.Length >= 2 && args[0] == "ls-files" && (args[1] == "--eol" || args[1] == "--debug"))
+                if (args.SequenceEqual(["ls-files", "--eol", "--", "fixture.txt"]) ||
+                    args.SequenceEqual(["ls-files", "--debug", "--", "fixture.txt"]))
                     diagnosticProbeCount++;
                 return GitCli.Run(directory, args);
             }
