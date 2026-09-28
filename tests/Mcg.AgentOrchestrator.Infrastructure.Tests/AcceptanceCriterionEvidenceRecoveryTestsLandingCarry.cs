@@ -58,18 +58,19 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTestsLandingCarry : CliCo
                 mergeTrainAcceptanceStore: store);
 
             Assert.Equal(writeCarry ? GoalStatus.Completed : GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            var recoveredObligation = Assert.Single(kernel.GetGoal(goal.Id).CriterionEvidenceObligations);
             Assert.Equal(writeCarry ? CriterionEvidenceState.Satisfied : CriterionEvidenceState.Pending,
-                obligation.State);
-            Assert.Equal(writeCarry ? newHead : oldHead, obligation.ExpectedCandidateSha);
+                recoveredObligation.State);
+            Assert.Equal(writeCarry ? newHead : oldHead, recoveredObligation.ExpectedCandidateSha);
             if (writeCarry)
             {
-                Assert.Equal(newHead, obligation.CandidateSha);
+                Assert.Equal(newHead, recoveredObligation.CandidateSha);
                 Assert.Contains(Assert.Single(result.Goals).Repairs, repair =>
                     repair.Evidence.Contains("recovery=landing-carry-record", StringComparison.Ordinal));
             }
             else
             {
-                Assert.Null(obligation.CandidateSha);
+                Assert.Null(recoveredObligation.CandidateSha);
             }
         }
         finally

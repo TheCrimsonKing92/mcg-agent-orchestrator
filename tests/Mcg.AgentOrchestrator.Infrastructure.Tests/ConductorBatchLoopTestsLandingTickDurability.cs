@@ -86,7 +86,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                     return ConductorSelfRelaunchResult.PreparationFailed("fixture", "reload observed");
                 },
                 selfRelaunchEnabled: true).Run(
-                    kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                    kernel, driver, ConductorAutonomyPolicy.Permissive, NoStopPath(),
                     maxIterations: 3,
                     persistGoalTick: (checkpoint, changedIds) =>
                     {
