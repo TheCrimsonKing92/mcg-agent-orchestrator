@@ -138,7 +138,7 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
         Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _databasePath, Mode = SqliteOpenMode.ReadWriteCreate
+            DataSource = _databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
         }.ToString());
         connection.Open();
         using var command = connection.CreateCommand();
@@ -161,7 +161,7 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _databasePath, Mode = SqliteOpenMode.ReadOnly
+            DataSource = _databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false
         }.ToString());
         connection.Open();
         return connection;
