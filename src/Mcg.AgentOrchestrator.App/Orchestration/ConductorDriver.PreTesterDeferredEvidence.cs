@@ -81,14 +81,10 @@ internal sealed partial class ConductorDriver
     {
         result = default!;
         var prior = PreTesterEvidenceIndexLines.Latest(goal, tester.Id, candidateSha);
-        if (!_focusedEvidenceRunnerConfigured ||
-            !ConductorGitRevisionReader.IsValid(candidateSha) ||
-            !ConductorGitRevisionReader.IsValid(developer.LastDispatch?.BaseCommit) ||
-            string.Equals(candidateSha, developer.LastDispatch.BaseCommit, StringComparison.OrdinalIgnoreCase) ||
-            !WorkerResultBlockers.TryGetTestsStatus(developer.LastVerification, out var status) ||
-            status != WorkerResultBlockers.TestsStatus.Deferred ||
-            !WorkerResultBlockers.TryFindTests(developer.LastVerification, out var testsField))
+        var decline = EvaluatePreTesterDeferredEvidenceGuard(developer, candidateSha, out var testsField);
+        if (decline != PreTesterDeferredEvidenceDeclineClause.None)
         {
+            RecordPreTesterDeferredEvidenceDecline(goal, developer, decline, candidateSha);
             if (prior?.Outcome == "started")
                 throw new InvalidDataException("Started pre-Tester evidence lost its Developer declaration or candidate binding.");
             return false;
