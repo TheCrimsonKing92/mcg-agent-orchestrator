@@ -12,6 +12,13 @@ public static class OperatorIntentVerbs
     public const string CriterionEvidenceMap = "criterion-evidence-map";
     public const string CriterionEvidenceRecord = "criterion-evidence-record";
     public const string CriterionEvidenceRepair = "criterion-evidence-repair";
+    public const string LessonRecord = "lesson-record";
+    public const string LessonRetire = "lesson-retire";
+}
+
+public static class OperatorIntentScopes
+{
+    public const string Workspace = "@workspace";
 }
 
 public enum OperatorActorKind

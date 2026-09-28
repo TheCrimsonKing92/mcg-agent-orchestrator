@@ -89,7 +89,19 @@ internal sealed partial class OperatorIntentCoordinator
                 {
                     return null;
                 }
-            });
+            })
+        {
+            Lessons = new OperatorLessonIntentServices(
+                new SqliteOperatorLessonStore(workspace.OperatorLessonsStorePath),
+                new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
+                goalId =>
+                {
+                    if (!File.Exists(workspace.SqliteStatePath)) return null;
+                    var loaded = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                        .LoadGoalsAsync([new GoalId(goalId)]).GetAwaiter().GetResult();
+                    return loaded.Goals.FirstOrDefault();
+                })
+        };
     }
 
     public IReadOnlyList<string> ListActionableGoalIds() =>

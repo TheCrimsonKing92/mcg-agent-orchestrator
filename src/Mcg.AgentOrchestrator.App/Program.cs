@@ -172,6 +172,11 @@ if (CliOwnerDigestCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliOwnerDigestCommand.Run(startupArgs, workspace));
 }
 
+if (CliLessonCommands.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliLessonCommands.Run(startupArgs, workspace));
+}
+
 if (CliContextUsageCommand.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliContextUsageCommand.Run(startupArgs, workspace));

@@ -147,6 +147,8 @@ public sealed record OrchestratorWorkspace(
 
     public string BacklogStorePath => Path.Combine(OrchestratorDirectory, "backlog.db");
 
+    public string OperatorLessonsStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorLessonStore.DatabaseFileName);
+
     public string PortfolioStorePath => Path.Combine(OrchestratorDirectory, "portfolio.db");
 
     public string DogfoodLogStorePath => Path.Combine(OrchestratorDirectory, "dogfood-log.db");
