@@ -1013,7 +1013,7 @@ internal sealed partial class ConductorBatchLoop
                             : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
-                        : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
+                        : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
                         RunJanitorialPhase(
@@ -1642,10 +1642,11 @@ internal sealed partial class ConductorBatchLoop
 
                 var sleepResult = sleepFunc is not null
                     ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
-                    : SleepUntilNextTick(fallbackInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
+                    : SleepUntilNextTick(fallbackInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId));
 
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
+                    EmitProgress(FormatWatchWake(totalTicks, stopFilePath, wakeSignal));
                     RunJanitorialPhase(
                         "wake-sweep",
                         totalTicks,
@@ -5100,13 +5101,15 @@ internal sealed partial class ConductorBatchLoop
     private static bool IsStopRequested(string stopFilePath) =>
         !string.IsNullOrEmpty(stopFilePath) && File.Exists(stopFilePath);
 
-    private static WatchSleepResult SleepUntilNextTick(
+    internal static WatchSleepResult SleepUntilNextTick(
         TimeSpan interval,
         string stopFilePath,
         IConductorWakeSignal? wakeSignal,
-        IReadOnlyList<string> trackedExitCodePaths)
+        IReadOnlyList<string> trackedExitCodePaths,
+        IReadOnlyList<string>? runningAttemptExitCodePaths = null)
     {
         wakeSignal?.UpdateTrackedExitArtifacts(trackedExitCodePaths);
+        if (wakeSignal is IConductorAttemptExitWakeSignal attemptWake) attemptWake.UpdateTrackedAttemptExitArtifacts(runningAttemptExitCodePaths ?? []);
         var remaining = interval;
         var poll = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
         while (remaining > TimeSpan.Zero)
