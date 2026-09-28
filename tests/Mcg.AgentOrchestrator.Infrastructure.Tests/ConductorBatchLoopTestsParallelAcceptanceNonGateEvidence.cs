@@ -16,16 +16,22 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceNonGateEvidence : C
     public void ReconciledPassWithOnlyOperatorEvidenceHoldsAcrossTwoTicksWithoutReservingASlot()
     {
         using var scenario = CreateScenario();
+        string? holdIdentity = null;
 
         for (var tick = 0; tick < 2; tick++)
         {
             var (summary, tickSummary) = scenario.Tick();
             Assert.Equal(1, summary.Held);
             Assert.Equal(GoalStatus.Verified, scenario.Goal.Status);
-            Assert.Equal(scenario.Hold.StableIdentity,
-                AcceptanceCriterionEvidence.HoldIdentity(scenario.Goal, CandidateSha));
-            Assert.Contains(tickSummary.ProgressLines ?? [], line =>
-                line.Contains(ConductorBatchLoop.SanitizeReason(scenario.Hold.Reason), StringComparison.Ordinal));
+            var recordedHold = Assert.IsType<GoalHoldState>(scenario.Goal.CurrentHold);
+            Assert.Equal(GoalLifecycleState.Verified.ToString(), recordedHold.State);
+            Assert.Equal(scenario.Hold.Reason, recordedHold.Blocker);
+            var expectedIdentity = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes($"{recordedHold.State}\0{scenario.Hold.StableIdentity}")))
+                .ToLowerInvariant();
+            Assert.Equal(expectedIdentity, recordedHold.Identity);
+            holdIdentity ??= recordedHold.Identity;
+            Assert.Equal(holdIdentity, recordedHold.Identity);
             Assert.DoesNotContain(tickSummary.ProgressLines ?? [], line =>
                 line.Contains("result=started", StringComparison.Ordinal) ||
                 line.Contains("result=running", StringComparison.Ordinal));
