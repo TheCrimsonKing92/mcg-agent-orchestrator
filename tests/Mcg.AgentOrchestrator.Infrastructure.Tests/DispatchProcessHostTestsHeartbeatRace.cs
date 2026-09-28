@@ -228,6 +228,31 @@ public sealed class DispatchProcessHostTestsHeartbeatRace
         }
     }
 
+    [Xunit.Fact]
+    public void HeartbeatHasChild_LockedReadyFileIsNotReadyUntilReleased()
+    {
+        var dir = NewDirectory();
+        var readyPath = Path.Combine(dir, "child-ready");
+        var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+        var pid = Environment.ProcessId;
+        try
+        {
+            File.WriteAllText(readyPath, pid.ToString(System.Globalization.CultureInfo.InvariantCulture), new UTF8Encoding(false));
+            File.WriteAllText(heartbeatPath, JsonSerializer.Serialize(new { childPid = pid }));
+
+            using (var readyLock = new FileStream(readyPath, FileMode.Open, FileAccess.Write, FileShare.None))
+            {
+                Assert.False(HeartbeatHasChild(heartbeatPath, readyPath));
+            }
+
+            Assert.True(HeartbeatHasChild(heartbeatPath, readyPath));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     private static DispatchProcessHost.DispatchRunParameters Parameters(string dir, string command, string heartbeatPath, string diagnosticPath) =>
         new(command, dir, Path.Combine(dir, "out.log"), Path.Combine(dir, "err.log"),
             Path.Combine(dir, "exit.txt"), heartbeatPath, DisableSharedCompilation: false,
@@ -248,10 +273,10 @@ public sealed class DispatchProcessHostTestsHeartbeatRace
 
     private static bool HeartbeatHasChild(string heartbeatPath, string readyPath)
     {
-        if (!File.Exists(heartbeatPath) || !File.Exists(readyPath) ||
-            !int.TryParse(File.ReadAllText(readyPath), out var readyPid)) return false;
+        if (!File.Exists(heartbeatPath) || !File.Exists(readyPath)) return false;
         try
         {
+            if (!int.TryParse(File.ReadAllText(readyPath), out var readyPid)) return false;
             using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
             var childPid = heartbeat.RootElement.GetProperty("childPid");
             return childPid.ValueKind == JsonValueKind.Number && childPid.GetInt32() == readyPid;
