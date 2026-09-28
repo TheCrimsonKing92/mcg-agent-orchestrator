@@ -27,8 +27,10 @@ public sealed class ConductorBatchLoopTestsOperatorCancelDispatchIntent : Conduc
         var dispatchStarts = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            dispatchAndStart: _ =>
+            dispatchAndStart: candidate =>
             {
+                if (!candidate.Tasks.Any(item => item.Status == WorkTaskStatus.Assigned))
+                    return DispatchStartOutcome.EmptyBatch("No assigned tasks remain.");
                 dispatchStarts++;
                 return DispatchStartOutcome.Started();
             });
