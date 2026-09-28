@@ -8453,7 +8453,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ];
             }
 
-            process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
+            process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader, stopOnCaptureLimit);
             commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
             commandIdentityTracker.Start();
             startedProcessId = process.Id;
@@ -8735,7 +8735,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static RegisteredOwnedProcess StartAcceptanceProcess(
         ProcessStartInfo startInfo,
         string workingDirectory,
-        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader)
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader,
+        bool stopOnCaptureLimit)
     {
         if (OperatingSystem.IsWindows() &&
             string.Equals(
@@ -8769,7 +8770,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return WorkerProcessJobs.StartRegisteredOwnedOrThrow(
             startInfo,
             $"acceptance:{workingDirectory}",
-            registrationIdentityReader);
+            registrationIdentityReader,
+            containDescendants: stopOnCaptureLimit);
     }
 
     private static async Task WriteGateHeartbeatLoopAsync(

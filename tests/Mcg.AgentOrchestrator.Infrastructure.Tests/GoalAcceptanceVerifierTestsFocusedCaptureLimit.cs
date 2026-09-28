@@ -46,22 +46,20 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
     {
         var root = CreateRoot();
         using var cancellation = new CancellationTokenSource();
-        SpawnProcessIdentity? child = null;
         GoalAcceptanceVerifier.CommandResult? result = null;
         Task<GoalAcceptanceVerifier.CommandResult>? run = null;
         try
         {
             run = GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync(
                 LoopingArguments(), Path.GetTempPath(), TimeSpan.FromMinutes(30), CapBytes,
-                GateHeartbeatRunClass.FocusedEvidence, identity => child = identity,
-                cancellation.Token);
+                GateHeartbeatRunClass.FocusedEvidence, cancellationToken: cancellation.Token);
             result = await run.WaitAsync(TimeSpan.FromSeconds(20));
 
             Assert.True(result.CaptureLimited);
             Assert.False(result.TimedOut);
             Assert.Equal(CapBytes, result.CaptureLimitBytes);
-            Assert.NotNull(child);
-            AssertProcessExited(child!.ProcessId);
+            Assert.NotNull(result.ChildProcessId);
+            AssertProcessExited(result.ChildProcessId!.Value);
             Assert.Equal(1, CountOccurrences(result.Output, "ACCEPTANCE_CAPTURE_LIMIT_REACHED"));
         }
         finally

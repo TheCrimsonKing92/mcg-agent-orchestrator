@@ -598,7 +598,8 @@ public static class WorkerProcessJobs
     internal static RegisteredOwnedProcess StartRegisteredOwnedOrThrow(
         ProcessStartInfo startInfo,
         string? ownerId = null,
-        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null)
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null,
+        bool containDescendants = false)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         var lifecycleAuthority = new object();
@@ -620,7 +621,9 @@ public static class WorkerProcessJobs
         }
 
         return StartRegisteredOwnedWindows(
-            () => OwnedProcessGroup.StartSuspended(startInfo),
+            () => containDescendants
+                ? OwnedProcessGroup.StartSuspendedContained(startInfo)
+                : OwnedProcessGroup.StartSuspended(startInfo),
             startInfo,
             lifecycleAuthority,
             registrationIdentityReader,
