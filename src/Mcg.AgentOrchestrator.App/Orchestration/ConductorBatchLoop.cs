@@ -344,7 +344,7 @@ internal sealed partial class ConductorBatchLoop
         driver.SuccessfulLandingSink = receipt =>
         {
             RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
-            NoteLandingForTick(receipt.GoalId);
+            NoteLandingAndStopSupersededAttempts(kernel, driver, receipt.GoalId);
             var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
             if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
             {
