@@ -344,6 +344,10 @@ internal sealed partial class OperatorIntentCoordinator
 
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.CancelDispatch:
+                ApplyCancelDispatch(kernel, goal, task, intent);
+                break;
+
             case OperatorIntentVerbs.Progress:
                 var progress = Deserialize<ProgressOperatorIntentPayload>(intent);
                 var observedCandidate = progress.Status == WorkTaskStatus.Completed &&

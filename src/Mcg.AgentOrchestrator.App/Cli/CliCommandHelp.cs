@@ -610,7 +610,7 @@ internal static class CliCommandHelp
             ["start-dispatches"] = BatchStartFlags(includeGoal: true),
             ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
             ["logs"] = GoalScopedTaskFlags(),
-            ["cancel-dispatch"] = GoalScopedTaskFlags(),
+            ["cancel-dispatch"] = Flags("--goal", "--idempotency-key", "--operator-actor", "--actor-kind"),
             ["accept"] = Flags(
                 "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
         };

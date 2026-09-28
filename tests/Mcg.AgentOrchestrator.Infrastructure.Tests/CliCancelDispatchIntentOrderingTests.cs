@@ -1,0 +1,59 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+public sealed class CliCancelDispatchIntentOrderingTests
+{
+    [Xunit.Fact]
+    public async Task CommandAppendsIntentBeforeStoppingWithoutWritingCancelledState()
+    {
+        var (context, goal, task) = CreateContext();
+        var calls = new List<string>();
+        var store = new CancelDispatchIntentTestStore { BeforeEnqueue = () => calls.Add("append") };
+
+        var shouldSave = CliCommandHandlers.ExecuteCancelDispatch(
+            ["cancel-dispatch", "1"], context, store, _ => calls.Add("stop"));
+
+        Xunit.Assert.Equal(["append", "stop"], calls);
+        Xunit.Assert.False(shouldSave);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.False(task.LastProcess!.WasCancelled);
+        var intent = Xunit.Assert.Single(await store.ListForGoalAsync(goal.Id.Value));
+        Xunit.Assert.Equal(OperatorIntentVerbs.CancelDispatch, intent.Verb);
+        Xunit.Assert.Equal(task.Id.Value, intent.TaskId);
+        var payload = JsonSerializer.Deserialize<CancelDispatchOperatorIntentPayload>(intent.PayloadJson)!;
+        Xunit.Assert.Equal(task.LastProcess.ProcessId, payload.ProcessId);
+        Xunit.Assert.Equal(task.LastProcess.StartedAt, payload.ProcessStartedAt);
+        Xunit.Assert.Equal(BackgroundDispatchRunner.BuildDispatchId(goal.Id, task.Id, task.LastDispatch!), payload.DispatchId);
+        Xunit.Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskCancelled);
+    }
+
+    [Xunit.Fact]
+    public void FailedAppendLeavesWorkerRunningAndStateUntouched()
+    {
+        var (context, _, task) = CreateContext();
+        var stopped = false;
+        var store = new CancelDispatchIntentTestStore { ThrowOnEnqueue = true };
+
+        var error = Xunit.Assert.Throws<IOException>(() => CliCommandHandlers.ExecuteCancelDispatch(
+            ["cancel-dispatch", "1"], context, store, _ => stopped = true));
+
+        Xunit.Assert.Contains("intent append failed", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.False(stopped);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.False(task.LastProcess!.WasCancelled);
+    }
+
+    private static (CliExecutionContext Context, Goal Goal, TaskSpec Task) CreateContext()
+    {
+        var (kernel, goal, task) = BackgroundDispatchRunnerTestsOperatorCancelRequeueRace.RunningTask();
+        var workspace = OrchestratorWorkspace.ForDirectory(
+            Path.Combine(Path.GetTempPath(), $"cancel-dispatch-test-{Guid.NewGuid():N}"));
+        var context = new CliExecutionContext(kernel, workspace,
+            new InMemoryModelProviderRegistry([]), AgentCatalog.Default().Agents,
+            WorkerProfileCatalog.Default(), goal);
+        return (context, goal, task);
+    }
+}

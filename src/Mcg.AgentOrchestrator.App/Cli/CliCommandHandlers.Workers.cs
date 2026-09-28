@@ -460,10 +460,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return false;
 
         case "cancel-dispatch":
-            var cancelTask = ResolveDispatchCommandTask(parts, context, "cancel-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
-            new BackgroundDispatchRunner().CancelLatestProcess(context.Kernel, context.CurrentGoal!.Id, cancelTask.Id);
-            ConsoleViews.PrintTask(context.CurrentGoal!, cancelTask);
-            return true;
+            return ExecuteCancelDispatch(parts, context);
 
         default:
             return null;

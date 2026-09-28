@@ -1622,7 +1622,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         loopPolicy),
                     remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory)
                         .TryGetGoalBranchTip(remedy.GoalId));
-                var loopReaper = new BackgroundDispatchRunner();
+                var loopReaper = new BackgroundDispatchRunner
+                {
+                    OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
+                        context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
+                };
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
@@ -1902,7 +1906,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchMaxDurationDeferralCeiling = AcceptanceGateEngineSettings
                     .Load(context.Workspace.ExecutionDirectory)
                     .ResolveCheckTimeout(null);
-                var watchReaper = new BackgroundDispatchRunner();
+                var watchReaper = new BackgroundDispatchRunner
+                {
+                    OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
+                        context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
+                };
                 var suppressWatchRefinementForMaxDurationDeferral = false;
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {

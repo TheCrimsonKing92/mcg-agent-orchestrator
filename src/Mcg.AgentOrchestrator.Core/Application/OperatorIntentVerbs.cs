@@ -4,6 +4,7 @@ public static class OperatorIntentVerbs
 {
     public const string Progress = "progress";
     public const string Retry = "retry";
+    public const string CancelDispatch = "cancel-dispatch";
     public const string Answer = "answer";
     public const string VerifyManual = "verify-manual";
     public const string Adjudicate = "adjudicate";
@@ -53,6 +54,11 @@ public sealed record AdjudicationPreconditionFacts(
     string? GoalCandidateCommit);
 
 public sealed record ApprovePolicyChangeOperatorIntentPayload(string CandidateSha, string Reason);
+
+public sealed record CancelDispatchOperatorIntentPayload(
+    int ProcessId,
+    DateTimeOffset ProcessStartedAt,
+    string DispatchId);
 
 // These payloads state an operator's attributed request. They do not mutate a
 // goal until the conductor has durably applied the intent.

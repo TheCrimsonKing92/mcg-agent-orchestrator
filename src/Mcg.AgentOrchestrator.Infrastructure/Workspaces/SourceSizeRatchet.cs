@@ -145,7 +145,8 @@ internal static class SourceSizeRatchet
             // fail and checkpoint before releasing the worker start gate when any owned process cannot
             // detach. 2707 is the measured size after integrating that handoff with the rows above; the
             // branch measured 2678 against a main that has since grown this file to 2684.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2707),
+            // Goal 5077a6b8 extracted process reaping for the typed operator cancel path.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and

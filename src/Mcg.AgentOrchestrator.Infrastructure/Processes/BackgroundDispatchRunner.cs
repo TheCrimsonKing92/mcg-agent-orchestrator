@@ -2162,35 +2162,7 @@ public sealed partial class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to cancel.");
 
-        TaskProcessResourceAccounting? resourceAccounting = null;
-        if (processRecord.IsRunning)
-        {
-            if (bypassTrackedJobRegistry)
-            {
-                resourceAccounting = _recoveryService.SnapshotTrackedProcessAccounting(processRecord);
-                _recoveryService.TryKillTrackedProcesses(processRecord, waitForExit: true, bypassTrackedJobRegistry: true);
-                if (resourceAccounting is not null)
-                {
-                    resourceAccounting = resourceAccounting with { Reaped = true };
-                }
-            }
-            else
-            {
-                try
-                {
-                    resourceAccounting = _recoveryService.ReapTrackedProcessJobs(processRecord, waitForExit: true);
-                }
-                catch (ArgumentException)
-                {
-                    // Process already exited; still record the user-requested cancellation.
-                }
-            }
-        }
-
-        if (!bypassTrackedJobRegistry)
-        {
-            resourceAccounting ??= _recoveryService.ReleaseTrackedProcessJobs(processRecord);
-        }
+        var resourceAccounting = ReapForCancellation(processRecord, bypassTrackedJobRegistry);
         var cancelledAt = _clock.UtcNow;
         var cancelled = processRecord with
         {
@@ -2373,6 +2345,9 @@ public sealed partial class BackgroundDispatchRunner
         {
             return false;
         }
+
+        if (IsRequeueRefusedByOperatorCancelIntent(goalId, currentTask, dispatchId))
+            return false;
 
         if (TryReadAutoRequeueBlocker(
                 kernel,
