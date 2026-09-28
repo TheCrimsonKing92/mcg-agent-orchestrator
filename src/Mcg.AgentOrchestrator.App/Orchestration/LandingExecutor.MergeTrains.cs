@@ -86,7 +86,8 @@ internal static partial class LandingExecutor
             goals,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
             kernel,
-            $"merge-train-receipt:{receipt.ReceiptId}");
+            $"merge-train-receipt:{receipt.ReceiptId}",
+            executionDirectory);
         if (evidenceDiagnostic is not null)
         {
             return new AcceptanceCohortLandingResult(

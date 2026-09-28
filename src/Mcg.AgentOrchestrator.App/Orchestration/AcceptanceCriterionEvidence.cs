@@ -74,7 +74,8 @@ internal static partial class AcceptanceCriterionEvidence
         IReadOnlyList<Goal> goals,
         Func<GoalId, string?> resolveCandidateSha,
         AgentOrchestratorKernel? kernel,
-        string evidenceSource)
+        string evidenceSource,
+        string? executionDirectory)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(resolveCandidateSha);
@@ -85,7 +86,8 @@ internal static partial class AcceptanceCriterionEvidence
                 goal,
                 resolveCandidateSha(goal.Id),
                 kernel,
-                evidenceSource);
+                evidenceSource,
+                executionDirectory);
             if (diagnostic is not null)
             {
                 diagnostics.Add($"goal {goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}: {diagnostic}");
@@ -99,7 +101,8 @@ internal static partial class AcceptanceCriterionEvidence
         Goal goal,
         string? candidateSha,
         AgentOrchestratorKernel? kernel,
-        string evidenceSource)
+        string evidenceSource,
+        string? executionDirectory)
     {
         if (kernel is null || string.IsNullOrWhiteSpace(candidateSha))
         {
@@ -107,26 +110,9 @@ internal static partial class AcceptanceCriterionEvidence
         }
 
         var normalizedCandidate = candidateSha.Trim();
-        var acceptanceObligations = goal.OutstandingCriterionEvidenceObligations.Where(item =>
-                item.Owner == CriterionEvidenceOwner.Acceptance &&
-                item.State == CriterionEvidenceState.Pending &&
-                string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
-            .ToArray();
-        foreach (var obligation in acceptanceObligations)
-        {
-            if (!string.Equals(obligation.ExpectedCandidateSha, normalizedCandidate, StringComparison.OrdinalIgnoreCase))
-            {
-                kernel.MapCriterionEvidenceOwner(
-                    goal.Id,
-                    obligation.CriterionIndex,
-                    obligation.CriterionVersion,
-                    CriterionEvidenceOwner.Acceptance,
-                    "conductor deterministic full acceptance",
-                    obligation.RequiredScope,
-                    obligation.FindingStableId,
-                    normalizedCandidate);
-            }
-        }
+        var rebindDiagnostic = TryRebindPendingAcceptanceObligations(
+            goal, normalizedCandidate, kernel, executionDirectory);
+        if (rebindDiagnostic is not null) return rebindDiagnostic;
 
         var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, executionDirectory: null);
         if (diagnostic is not null) return diagnostic;
@@ -168,7 +154,8 @@ internal static partial class AcceptanceCriterionEvidence
             kernel,
             passedOutcome is null
                 ? "landing-executor current deterministic acceptance outcome"
-                : $"goal-operation:{passedOutcome.Operation}");
+                : $"goal-operation:{passedOutcome.Operation}",
+            executionDirectory);
     }
 
     private static string? RecordFullAcceptanceEvidence(

@@ -49,6 +49,14 @@ public static partial class GoalWorktrees
         if (!TryVerifyIntegrationMergesClean(executionDirectory, oldBase, oldHead, out refusalReason) ||
             !TryVerifyIntegrationMergesClean(executionDirectory, newBase, newHead, out refusalReason))
         {
+            if (refusalReason.StartsWith("integration-merge-not-clean;", StringComparison.Ordinal) &&
+                TryReadGit(executionDirectory, ["rev-parse", "--verify", "refs/heads/main"], out var currentMain) &&
+                TryCompareGoalOwnedLines(executionDirectory, oldBase, oldHead, currentMain, newHead))
+            {
+                evidence = $"goal-owned lines {oldBase}..{oldHead} vs {currentMain}..{newHead}: zero-context added and removed lines per file are identical";
+                refusalReason = string.Empty;
+                return true;
+            }
             return false;
         }
         if (!TryReadCommitCount(executionDirectory, oldBase, oldHead, out var oldCount) ||

@@ -677,7 +677,8 @@ internal static partial class LandingExecutor
             goals,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
             kernel,
-            $"cohort-receipt:{receipt.ReceiptId}");
+            $"cohort-receipt:{receipt.ReceiptId}",
+            executionDirectory);
         if (evidenceDiagnostic is not null)
         {
             return new AcceptanceCohortLandingResult(

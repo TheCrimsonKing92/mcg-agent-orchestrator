@@ -33,10 +33,13 @@ public static partial class GoalWorktrees
     }
 
     private static bool TryReadChangedLines(string directory, string commit, out string[] changedLines)
+        => TryReadChangedLines(directory, $"{commit}^", commit, out changedLines);
+
+    private static bool TryReadChangedLines(string directory, string from, string to, out string[] changedLines)
     {
         changedLines = [];
         var result = GitCli.Run(directory, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
-            "--no-color", "-U0", $"{commit}^", commit, "--");
+            "--no-color", "-U0", from, to, "--");
         if (!result.Succeeded || result.DrainTimedOut || result.Output.Contains('\uFFFD')) return false;
 
         var lines = new List<string>();
