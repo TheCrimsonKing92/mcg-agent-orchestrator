@@ -31,6 +31,7 @@ public sealed class GoalWorktreeTests
             var output = CaptureConsole(() => CliCommandHandlers.Execute(
                 ["lifecycle-simple-goal", "Ship a small echo change", "--confirm-batch-start", "--confirm-large-paid-subscription-start"],
                 context));
+            AssertCollaborationStoreReleased(root);
 
             var goal = context.CurrentGoal!;
             Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
@@ -97,6 +98,7 @@ public sealed class GoalWorktreeTests
                     context));
                 Xunit.Assert.Contains("acceptance", ex.Message);
             });
+            AssertCollaborationStoreReleased(root);
 
             var goal = context.CurrentGoal!;
             Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
@@ -522,6 +524,37 @@ public sealed class GoalWorktreeTests
         if (!Directory.Exists(path))
             return;
 
-        Directory.Delete(path, recursive: true);
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+            catch (IOException) when (attempt < 9)
+            {
+                Thread.Sleep(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 9)
+            {
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    private static void AssertCollaborationStoreReleased(string root)
+    {
+        var databasePath = Path.Combine(
+            OrchestratorWorkspace.ForDirectory(root).OrchestratorDirectory,
+            "collaboration-items.db");
+        if (File.Exists(databasePath))
+        {
+            using var exclusive = new FileStream(databasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            Xunit.Assert.True(exclusive.CanRead);
+        }
     }
 }

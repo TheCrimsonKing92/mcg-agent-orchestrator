@@ -525,7 +525,7 @@ internal sealed class PostLandingCanaryUnparseableReceiptException : Exception
     }
 }
 
-internal sealed class AcceptanceEngineCircuitBreaker
+internal sealed partial class AcceptanceEngineCircuitBreaker
 {
     private const string StateUnavailableFailureReason = "state-unavailable";
     private const string StateReadBudgetExpiredFailureReason = "state-read-budget-expired";
@@ -535,7 +535,7 @@ internal sealed class AcceptanceEngineCircuitBreaker
     internal const int StateReadAttemptBusyTimeoutMilliseconds = 50;
     private static readonly TimeSpan StateReadRetryDelay = TimeSpan.FromMilliseconds(20);
     private static readonly TimeSpan DefaultStateReadTotalBudget = TimeSpan.FromMilliseconds(250);
-    private static readonly TimeSpan OperatorItemWriteBudget = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan DefaultOperatorItemWriteBudget = TimeSpan.FromMilliseconds(250);
     private static readonly ConcurrentDictionary<string, byte> PendingStateUnavailableItemResolutions =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly PostLandingCanaryEventStore _events;
@@ -544,6 +544,7 @@ internal sealed class AcceptanceEngineCircuitBreaker
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Action<string>? _stateUnavailableFallback;
     private readonly TimeSpan _stateReadTotalBudget;
+    private readonly TimeSpan _operatorItemWriteBudget;
 
     internal AcceptanceEngineCircuitBreaker(
         PostLandingCanaryEventStore events,
@@ -551,7 +552,8 @@ internal sealed class AcceptanceEngineCircuitBreaker
         Func<DateTimeOffset>? utcNow = null,
         IAcceptanceEngineStateReader? stateReader = null,
         Action<string>? stateUnavailableFallback = null,
-        TimeSpan? stateReadTotalBudget = null)
+        TimeSpan? stateReadTotalBudget = null,
+        TimeSpan? operatorItemWriteBudget = null)
     {
         var effectiveStateReadTotalBudget = stateReadTotalBudget ?? DefaultStateReadTotalBudget;
         if (effectiveStateReadTotalBudget < TimeSpan.Zero &&
@@ -563,12 +565,23 @@ internal sealed class AcceptanceEngineCircuitBreaker
                 "State read total budget must be non-negative or Timeout.InfiniteTimeSpan.");
         }
 
+        var effectiveOperatorItemWriteBudget = operatorItemWriteBudget ?? DefaultOperatorItemWriteBudget;
+        if (effectiveOperatorItemWriteBudget < TimeSpan.Zero &&
+            effectiveOperatorItemWriteBudget != Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(operatorItemWriteBudget),
+                effectiveOperatorItemWriteBudget,
+                "Operator item write budget must be non-negative or Timeout.InfiniteTimeSpan.");
+        }
+
         _events = events;
         _stateReader = stateReader ?? events;
         _operatorItems = operatorItems;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _stateUnavailableFallback = stateUnavailableFallback;
         _stateReadTotalBudget = effectiveStateReadTotalBudget;
+        _operatorItemWriteBudget = effectiveOperatorItemWriteBudget;
     }
 
     internal AcceptanceEngineHealthSnapshot Read(
@@ -583,7 +596,7 @@ internal sealed class AcceptanceEngineCircuitBreaker
                 .WaitAsync(budget.Token)
                 .GetAwaiter()
                 .GetResult();
-            ScheduleStateUnavailableItemResolution();
+            ResolveStateUnavailableItem();
             return snapshot;
         }
         catch (Exception ex)
@@ -714,85 +727,6 @@ internal sealed class AcceptanceEngineCircuitBreaker
         return AcceptanceEngineHealthSnapshot.Healthy(
             clear?.OccurredAt ?? _utcNow(),
             clear?.Payload.OperatorNote);
-    }
-
-    private void RaiseStateUnavailableItem(
-        Exception exception,
-        AcceptanceEngineAcceptanceDecision decision,
-        string failureReason)
-    {
-        if (_operatorItems is null)
-        {
-            return;
-        }
-
-        var detail = $"{exception.GetType().Name}: {exception.Message}";
-        var body = failureReason == StateReadBudgetExpiredFailureReason
-            ? FormattableString.Invariant(
-                $"Canary state read exceeded its total budget of {_stateReadTotalBudget.TotalMilliseconds:0.###}ms before all {StateReadMaxAttempts} attempts completed; {decision.Reason}.\n{detail}")
-            : $"Canary state could not be read after {StateReadMaxAttempts} attempts; {decision.Reason}.\n{detail}";
-        try
-        {
-            using var cancellation = new CancellationTokenSource(OperatorItemWriteBudget);
-            _operatorItems.RaiseAsync(
-                    CollaborationItemType.Verify,
-                    goalId: null,
-                    subject: "Post-landing canary state is unavailable",
-                    body: body,
-                    correlationKey: StateUnavailableOperatorItemCorrelationKey,
-                    cancellationToken: cancellation.Token)
-                .WaitAsync(OperatorItemWriteBudget)
-                .GetAwaiter()
-                .GetResult();
-        }
-        catch (Exception itemException)
-        {
-            var fallback =
-                $"CANARY_GATE result=operator-item-error reason={failureReason} " +
-                $"decision=\"{decision.Reason}\" item-error={itemException.GetType().Name}: {itemException.Message}";
-            try
-            {
-                _stateUnavailableFallback?.Invoke(fallback);
-            }
-            catch
-            {
-                // Stderr below remains the final non-database operator channel.
-            }
-
-            Console.Error.WriteLine(fallback);
-            Console.Error.Flush();
-        }
-    }
-
-    private void ScheduleStateUnavailableItemResolution()
-    {
-        if (_operatorItems is null ||
-            !PendingStateUnavailableItemResolutions.TryAdd(_events.Identity, 0))
-        {
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                using var cancellation = new CancellationTokenSource(OperatorItemWriteBudget);
-                await _operatorItems.TryResolveAsync(
-                        StateUnavailableOperatorItemCorrelationKey,
-                        "Post-landing canary state is readable again.",
-                        cancellation.Token)
-                    .WaitAsync(OperatorItemWriteBudget)
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                // Operator-item cleanup is advisory and cannot change circuit health.
-            }
-            finally
-            {
-                PendingStateUnavailableItemResolutions.TryRemove(_events.Identity, out _);
-            }
-        });
     }
 
     internal async Task RaiseUnhealthyEpisodeItemAsync(

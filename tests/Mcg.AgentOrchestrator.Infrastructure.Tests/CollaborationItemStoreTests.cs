@@ -794,6 +794,8 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
 
     public IReadOnlyList<CollaborationItem> Items => _items;
     public Task<CollaborationItem>? PendingRaise { get; init; }
+    public Func<CancellationToken, Task<CollaborationItem>>? RaiseOverride { get; init; }
+    public Func<CancellationToken, Task<bool>>? ResolveOverride { get; init; }
 
     public void Add(CollaborationItem item) => _items.Add(item);
 
@@ -805,6 +807,11 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
         string? correlationKey = null,
         CancellationToken cancellationToken = default)
     {
+        if (RaiseOverride is not null)
+        {
+            return RaiseOverride(cancellationToken);
+        }
+
         if (PendingRaise is not null)
         {
             return PendingRaise;
@@ -852,6 +859,11 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
         CancellationToken cancellationToken = default,
         int? briefVersion = null)
     {
+        if (ResolveOverride is not null)
+        {
+            return ResolveOverride(cancellationToken);
+        }
+
         for (var i = 0; i < _items.Count; i++)
         {
             var item = _items[i];
