@@ -40,8 +40,10 @@ public sealed record ConductorAutonomyPolicy(
     int ReviewAutoRetryWarningRound = 4,
     int ReviewAutoRetryStopRound = 7,
     int PlannerSampleCount = 1,
-    int AcceptanceWidth = 2)
+    int AcceptanceWidth = 2,
+    int AcceptanceCohortGatherWindowSeconds = 480)
 {
+    public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
     public const int MinimumAcceptanceWidth = 1;
     public const int MaximumAcceptanceWidth = 4;
 
@@ -170,6 +172,9 @@ public sealed record ConductorAutonomyPolicy(
         if (AcceptanceWidth is < MinimumAcceptanceWidth or > MaximumAcceptanceWidth)
             errors.Add($"acceptanceWidth must be between {MinimumAcceptanceWidth} and {MaximumAcceptanceWidth} (got {AcceptanceWidth}).");
 
+        if (AcceptanceCohortGatherWindowSeconds < 0)
+            errors.Add($"acceptanceCohortGatherWindowSeconds must be zero or greater (got {AcceptanceCohortGatherWindowSeconds}).");
+
         foreach (var state in AllStates)
         {
             if (!TransitionMap.ContainsKey(state))
@@ -196,6 +201,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
         sb.AppendLine($"  \"plannerSampleCount\": {PlannerSampleCount},");
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
+        sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -269,6 +275,15 @@ public sealed record ConductorAutonomyPolicy(
             var acceptanceWidth = root.TryGetProperty("acceptanceWidth", out _)
                 ? RequireInt(root, "acceptanceWidth", src)
                 : 2;
+            var gatherWindowSeconds = DefaultAcceptanceCohortGatherWindowSeconds;
+            if (root.TryGetProperty("acceptanceCohortGatherWindowSeconds", out var gatherWindowElement) &&
+                gatherWindowElement.ValueKind != JsonValueKind.Null)
+            {
+                if (gatherWindowElement.ValueKind != JsonValueKind.Number)
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: acceptanceCohortGatherWindowSeconds must be an integer.");
+                gatherWindowSeconds = Math.Max(0, RequireInt(root, "acceptanceCohortGatherWindowSeconds", src));
+            }
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
                 && thresholdEl.ValueKind != JsonValueKind.Null)
@@ -317,7 +332,8 @@ public sealed record ConductorAutonomyPolicy(
                 reviewAutoRetryWarningRound,
                 reviewAutoRetryStopRound,
                 plannerSampleCount,
-                acceptanceWidth);
+                acceptanceWidth,
+                gatherWindowSeconds);
 
             var errors = policy.Validate();
             if (errors.Count > 0)
