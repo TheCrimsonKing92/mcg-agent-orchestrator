@@ -59,6 +59,12 @@ public sealed class PostLandingCanaryCollection;
 [Xunit.CollectionDefinition(TestCollections.ProcessSpawning, DisableParallelization = true)]
 public sealed class ProcessSpawningCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
+// Thread-pool saturation and test hooks are confined to this runner process; child environments
+// and file writes use per-child settings and unique temporary roots, with no nested builds.
+[Xunit.CollectionDefinition("ProcessSpawningProcessLocal", DisableParallelization = true)]
+[ProcessLocalTestCollection("Thread-pool saturation and test hooks are process-local; child environments and scratch roots are isolated, with no nested builds.")]
+public sealed class ProcessSpawningProcessLocalCollection;
+
 // Process-spawning tests that only need the isolated dotnet root may overlap other collections.
 [Xunit.CollectionDefinition("IsolatedProcessSpawning")]
 public sealed class IsolatedProcessSpawningCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;

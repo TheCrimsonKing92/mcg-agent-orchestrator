@@ -3,7 +3,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serialized: these facts launch probe processes that own their own bounded thread-pool capacity.
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningProcessLocal")]
 public sealed class PipeDrainThreadPoolSaturationTests
 {
     [Xunit.Fact(DisplayName = "PipeDrain_reads_to_end_while_pool_dependent_async_read_is_starved")]

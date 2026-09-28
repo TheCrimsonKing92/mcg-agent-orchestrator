@@ -73,10 +73,17 @@
       },
       {
         "name": "Process spawning",
-        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~OwnedProcessExitObservationTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~GitCliThreadPoolSaturationTests|FullyQualifiedName~PipeDrainThreadPoolSaturationTests|FullyQualifiedName~ChildOutputDrainAdoptionSaturationTests|FullyQualifiedName~HermesAcpTrialTests|FullyQualifiedName~HermesExecutableIdentityTests|FullyQualifiedName~IcaclsIntegrityLabelerTests|FullyQualifiedName~ConsoleIoPreservationTests|FullyQualifiedName~MtpNoBuildReceiptIdentityTests|FullyQualifiedName~RunGoalServiceProcessContractTests|FullyQualifiedName~PostLandingCanaryCaptureAvailabilityTests",
+        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~OwnedProcessExitObservationTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~GitCliThreadPoolSaturationTests|FullyQualifiedName~HermesAcpTrialTests|FullyQualifiedName~HermesExecutableIdentityTests|FullyQualifiedName~IcaclsIntegrityLabelerTests|FullyQualifiedName~ConsoleIoPreservationTests|FullyQualifiedName~MtpNoBuildReceiptIdentityTests|FullyQualifiedName~RunGoalServiceProcessContractTests|FullyQualifiedName~PostLandingCanaryCaptureAvailabilityTests",
         "ownedCollections": [ "ProcessSpawning" ],
         "estimatedSerialSeconds": 392.7,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
+      },
+      {
+        "name": "Process spawning process-local",
+        "filter": "FullyQualifiedName~ChildOutputDrainAdoptionSaturationTests|FullyQualifiedName~PipeDrainThreadPoolSaturationTests",
+        "ownedCollections": [ "ProcessSpawningProcessLocal" ],
+        "estimatedSerialSeconds": 60.9,
+        "exclusiveResourceKeys": [ "xunit:ProcessSpawningProcessLocal" ]
       },
       {
         "name": "Mtp managed project rebuild",
@@ -159,7 +166,7 @@
       {
         "name": "Conductor",
         "description": "Conductor watch, build-slot, and process-spawning coverage.",
-        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Mtp managed project rebuild", "Process spawning parallel" ]
+        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Process spawning process-local", "Mtp managed project rebuild", "Process spawning parallel" ]
       },
       {
         "name": "ChaosGate",
