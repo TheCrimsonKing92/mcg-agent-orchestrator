@@ -58,6 +58,31 @@ public sealed class TempRootJanitorLeakedArtifactReapTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
+    [Fact]
+    public void ReapsOldDigestFolderContainingReadOnlyFile()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), $"artifact-reap-{Guid.NewGuid():N}");
+        var parent = Path.Combine(temp, "mcg-run", "tmp");
+        var digests = Path.Combine(parent, "worktree-digest");
+        Directory.CreateDirectory(digests);
+        var now = DateTimeOffset.UtcNow.AddDays(2);
+        var old = now.AddHours(-3).UtcDateTime;
+        var digest = SeedFolder(digests, "mcg-worktree-digest-" + Guid.NewGuid().ToString("N"), "read-only", old);
+        var content = Path.Combine(digest, "content");
+        File.SetAttributes(content, FileAttributes.ReadOnly);
+        File.SetLastWriteTimeUtc(content, old);
+        try
+        {
+            var result = TempRootJanitor.ReapLeakedTempArtifacts(temp, parent, new FixedClock(now));
+            Assert.Equal(1, result.RemovedFolders);
+            Assert.Equal(9, result.BytesReclaimed);
+            Assert.Equal(0, result.RetainedHeld);
+            Assert.Equal(0, result.Failed);
+            Assert.False(Directory.Exists(digest));
+        }
+        finally { TempRootJanitor.DeleteTree(temp); }
+    }
+
     private static string SeedFile(string parent, string name, string contents, DateTime timestamp)
     {
         var path = Path.Combine(parent, name);

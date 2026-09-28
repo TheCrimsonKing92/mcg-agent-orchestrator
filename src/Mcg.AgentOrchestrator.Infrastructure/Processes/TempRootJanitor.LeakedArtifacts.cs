@@ -87,18 +87,25 @@ internal static partial class TempRootJanitor
                         try
                         {
                             foreach (var file in files)
-                                leases.Add(new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None));
+                                leases.Add(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None));
                         }
                         finally
                         {
                             foreach (var lease in leases) lease.Dispose();
                         }
-                        Directory.Delete(path, recursive: true);
-                        removedFolders++;
-                        bytes += folderBytes;
+                        var deletion = DeleteTree(path);
+                        if (deletion.Status == TempRootJanitorDeleteStatus.Deleted)
+                        {
+                            removedFolders++;
+                            bytes += folderBytes;
+                        }
+                        else if (deletion.Status == TempRootJanitorDeleteStatus.Failed)
+                        {
+                            if (IsSharingViolation(deletion.ExceptionHResult)) held++;
+                            else failed++;
+                        }
                     }
-                    catch (IOException) { held++; }
-                    catch (UnauthorizedAccessException) { held++; }
+                    catch (IOException ex) when (IsSharingViolation(ex.HResult)) { held++; }
                     catch (Exception) { failed++; }
                 }
             }
@@ -108,6 +115,9 @@ internal static partial class TempRootJanitor
     }
 
     private static DateTime NewestTime(params DateTime[] times) => times.Max();
+
+    private static bool IsSharingViolation(int? hresult) =>
+        hresult is { } value && (value & 0xffff) is 32 or 33;
 
     private static IEnumerable<string> EnumerateSafeDescendants(string root)
     {
