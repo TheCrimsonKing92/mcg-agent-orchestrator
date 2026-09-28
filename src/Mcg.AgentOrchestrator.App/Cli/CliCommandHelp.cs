@@ -74,7 +74,7 @@ internal static class CliCommandHelp
     public const string StateDatabaseMaintenanceUsage = "Usage: state-db-maintenance plan | state-db-maintenance execute --confirm-offline | state-db-maintenance convert-copy --output <path> --confirm-offline | state-db-maintenance convert-live --confirm-offline --confirm-live-replacement";
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
     public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
-    public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json]";
+    public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
 
@@ -518,7 +518,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry OwnerDigest = new(
         OwnerDigestUsage,
         "Report interventions, landings, escapes, tail time and mechanical hours.",
-        ["--since", "--until", "--json", "--help", "-h"]);
+        ["--since", "--until", "--json", "--rounds", "--help", "-h"]);
 
     private static readonly CommandHelpEntry ContextUsage = new(
         ContextUsageUsage,
