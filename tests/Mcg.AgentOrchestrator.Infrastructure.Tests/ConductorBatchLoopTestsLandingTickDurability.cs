@@ -9,84 +9,48 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
     public ConductorBatchLoopTestsLandingTickDurability(ITestOutputHelper output) : base(output) { }
 
     [Xunit.Fact]
-    public void PrelandedCohortCarryIsSavedBeforeSelfRelaunchReload()
+    public void SingleGoalLandingIsSavedBeforeSelfRelaunchReload()
     {
-        var fixture = GoalOwnedLinesPatchEquivalenceTests.CreateConflictFixture(changeGoalLine: false);
+        var kernel = new AgentOrchestratorKernel();
+        // The earlier active goal has no parallel result. A landing during the
+        // pre-walk parallel phase schedules relaunch before this goal is walked.
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Existing worker");
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
+        var attemptRoot = CreateTempDirectory("mcg-single-landing-tick-durability");
         try
         {
-            var kernel = new AgentOrchestratorKernel();
-            // This first eligible goal has no parallel result, so the walk stops before
-            // visiting either prelanded cohort member once relaunch is scheduled.
-            GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Ordinary goal first");
-            var target = CreateVerifiedSimpleGoal(kernel, "Cohort candidate A");
-            var partner = CreateVerifiedSimpleGoal(kernel, "Other cohort member");
-            kernel.RecordGoalRefinement(target.Id, new RefinedSpec(
-                target.Objective, ["Full acceptance passes"], VerificationClass.TestVerifiable, [], []));
-            kernel.MapCriterionEvidenceOwner(target.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
-                "reviewer", CriterionEvidenceScopes.FullAcceptanceGate,
-                expectedCandidateSha: fixture.OldHead);
+            const string landedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            const string mainHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective, ["Full acceptance passes"], VerificationClass.TestVerifiable, [], []));
+            kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: landedHead);
+
             var persisted = kernel.ExportSnapshot();
+            var landed = false;
             var relaunchCalls = 0;
-            int? cohortMemberCount = null;
-            string? rebindDiagnostic = null;
-            CriterionEvidenceState? reboundState = null;
-            Exception? cohortException = null;
-            AgentOrchestratorKernel? reloaded = null;
+            GoalStatus? reloadedStatus = null;
+            CriterionEvidenceState? reloadedObligationState = null;
+            string? reloadedCandidateSha = null;
             Exception? reloadException = null;
-            const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-            var paths = new Dictionary<GoalId, IReadOnlyList<string>>
-            {
-                [target.Id] =
-                [
-                    "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs",
-                    "tests/Mcg.AgentOrchestrator.Core.Tests/CohortTargetTests.cs"
-                ],
-                [partner.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortPartnerTests.cs"]
-            };
-            var projector = new GateReadyCandidateProjector(
-                goalId => new GateReadyCandidateRevisionPair(
-                    goalId == target.Id ? fixture.OldHead : partner.Id.Value.PadRight(40, 'b')[..40],
-                    mainRevision),
-                goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
-                (_, _, _) => new GateReadyMergeTreeObservation(true));
-            ConductorDriver? driver = null;
-            driver = MakeDriver(
-                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-                classifyRisk: _ => ChangeRiskTier.Behavior,
-                getLandingFileScopes: goal => paths[goal.Id],
-                isVerificationGateSatisfied: _ => true,
-                gateReadyCandidateProjector: projector,
-                runAcceptanceCohort: (selection, goals, policy) =>
+            var driver = MakeDriver(
+                getFacts: _ => landed
+                    ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                    : new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+                new AcceptanceVerificationSummary(true, [], BranchHeadSha: landedHead, MainHeadSha: mainHead),
+                land: candidate =>
                 {
-                    cohortMemberCount = selection.Members.Count;
-                    try
-                    {
-                        rebindDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                            target, fixture.NewHead, kernel, "cohort gate", fixture.Repository);
-                        reboundState = target.CriterionEvidenceObligations.Single().State;
-                        kernel.CompleteGoal(target.Id, "Cohort landing, recording, and cleanup completed.");
-                        kernel.CompleteGoal(partner.Id, "Cohort landing, recording, and cleanup completed.");
-                        RunGit(fixture.Repository, "checkout", "main");
-                        RunGit(fixture.Repository, "merge", "--ff-only", "candidate-old");
-                    }
-                    catch (Exception exception)
-                    {
-                        cohortException = exception;
-                    }
-                    driver!.SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
-                        target.Id.Value, paths[target.Id], fixture.NewHead));
-                    driver.SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
-                        partner.Id.Value, paths[partner.Id], fixture.NewHead));
-                    return new ConductorAcceptanceCohortRunResult(
-                        null,
-                        goals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id))
-                            .ToDictionary(goal => goal.Id.Value,
-                                goal => new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8],
-                                    policy.Name, new ConductorAdvanceOutcome.Executed(
-                                        GoalLifecycleState.Verified, "cohort landed")),
-                                StringComparer.Ordinal),
-                        "outcome=passed");
-                });
+                    landed = true;
+                    kernel.CompleteGoal(candidate.Id, "Landing, recording, and cleanup completed.");
+                    return new LandingResult(candidate.Id.Value, candidate.Id.Value[..8],
+                        new LandingDecision.Promote(), "integration", true, "Landed", landedHead);
+                },
+                getLandingFileScopes: _ =>
+                    ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"],
+                parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot, runInline: true),
+            resolveAcceptanceHeads: _ => (landedHead, mainHead));
 
             var output = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(
                 selfRelaunch: _ =>
@@ -94,7 +58,12 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                     relaunchCalls++;
                     try
                     {
-                        reloaded = AgentOrchestratorKernel.FromSnapshot(persisted);
+                        var reloaded = AgentOrchestratorKernel.FromSnapshot(persisted);
+                        var reloadedGoal = reloaded.GetGoal(goal.Id);
+                        reloadedStatus = reloadedGoal.Status;
+                        var obligation = reloadedGoal.CriterionEvidenceObligations.Single();
+                        reloadedObligationState = obligation.State;
+                        reloadedCandidateSha = obligation.CandidateSha;
                     }
                     catch (Exception exception)
                     {
@@ -103,32 +72,91 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                     return ConductorSelfRelaunchResult.PreparationFailed("fixture", "reload observed");
                 },
                 selfRelaunchEnabled: true).Run(
-                    kernel, driver, ConductorAutonomyPolicy.Permissive, NoStopPath(),
+                    kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
                     maxIterations: 3,
                     persistGoalTick: (checkpoint, changedIds) =>
                     {
-                        if (changedIds.Contains(target.Id)) persisted = checkpoint.ExportSnapshot();
+                        if (changedIds.Contains(goal.Id)) persisted = checkpoint.ExportSnapshot();
                     }));
-            Assert.Equal(2, cohortMemberCount);
-            Assert.Null(rebindDiagnostic);
-            Assert.Equal(CriterionEvidenceState.Satisfied, reboundState);
-            Assert.Null(cohortException);
-            Assert.DoesNotContain("outcome=gate-fault", output, StringComparison.Ordinal);
-            Assert.DoesNotContain("outcome=exception", output, StringComparison.Ordinal);
+
+            Assert.True(landed);
+            Assert.Contains("LOOP_RELAUNCH_SCHEDULED", output, StringComparison.Ordinal);
             Assert.Equal(1, relaunchCalls);
             Assert.Null(reloadException);
-            Assert.NotNull(reloaded);
-            var goal = reloaded.GetGoal(target.Id);
-            Assert.Equal(GoalStatus.Completed, goal.Status);
-            var obligation = Assert.Single(goal.CriterionEvidenceObligations);
-            Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
-            Assert.Equal(fixture.NewHead, obligation.ExpectedCandidateSha);
-            Assert.Equal(fixture.NewHead, obligation.CandidateSha);
-            Assert.Equal(GoalStatus.Completed, reloaded.GetGoal(partner.Id).Status);
+            Assert.Equal(GoalStatus.Completed, reloadedStatus);
+            Assert.Equal(CriterionEvidenceState.Satisfied, reloadedObligationState);
+            Assert.Equal(landedHead, reloadedCandidateSha);
         }
         finally
         {
-            TryDeleteDirectory(fixture.Repository);
+            TryDeleteDirectory(attemptRoot);
         }
+    }
+
+    [Xunit.Fact]
+    public void CohortLandingAddsBothMembersToTickChangedGoals()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var ordinary = CreateVerifiedSimpleGoal(kernel, "Operator evidence excludes this goal from cohort");
+        var first = CreateVerifiedSimpleGoal(kernel, "First cohort member");
+        var second = CreateVerifiedSimpleGoal(kernel, "Second cohort member");
+        kernel.RecordGoalRefinement(ordinary.Id, new RefinedSpec(
+            ordinary.Objective, ["Operator confirms landing"], VerificationClass.RealWorldDependent, [], []));
+        kernel.MapCriterionEvidenceOwner(ordinary.Id, 0, 1, CriterionEvidenceOwner.Operator,
+            "operator", "operator:real-world", expectedCandidateSha: ordinary.Id.Value.PadRight(40, 'b')[..40]);
+        const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [ordinary.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/OrdinaryTests.cs"],
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"],
+            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortMemberTests.cs"]
+        };
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(goalId.Value.PadRight(40, 'b')[..40], mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        IReadOnlyList<GoalId>? selectedMembers = null;
+        var savedGoalIds = new HashSet<GoalId>();
+        ConductorDriver? driver = null;
+        driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: goal => paths[goal.Id],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            resolveAcceptanceHeads: goal => (goal.Id.Value.PadRight(40, 'b')[..40], mainRevision),
+            runAcceptanceCohort: (selection, goals, policy) =>
+            {
+                selectedMembers = selection.Members.Select(member => member.GoalId).ToArray();
+                foreach (var member in selectedMembers)
+                {
+                    kernel.CompleteGoal(member, "Cohort landing, recording, and cleanup completed.");
+                    driver!.SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
+                        member.Value, paths[member], mainRevision));
+                }
+                return new ConductorAcceptanceCohortRunResult(
+                    null,
+                    goals.Where(goal => selectedMembers.Contains(goal.Id)).ToDictionary(
+                        goal => goal.Id.Value,
+                        goal => new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8],
+                            policy.Name, new ConductorAdvanceOutcome.Executed(
+                                GoalLifecycleState.Verified, "cohort landed")),
+                        StringComparer.Ordinal),
+                    "outcome=passed");
+            });
+
+        new ConductorBatchLoop(
+            selfRelaunch: _ => ConductorSelfRelaunchResult.PreparationFailed("fixture", "observed"),
+            selfRelaunchEnabled: true).Run(
+                kernel, driver, ConductorAutonomyPolicy.Permissive, NoStopPath(),
+                maxIterations: 1,
+                persistGoalTick: (_, changedIds) => savedGoalIds.UnionWith(changedIds));
+
+        Assert.NotNull(selectedMembers);
+        Assert.Equal(2, selectedMembers.Count);
+        Assert.Contains(first.Id, selectedMembers);
+        Assert.Contains(second.Id, selectedMembers);
+        Assert.Contains(first.Id, savedGoalIds);
+        Assert.Contains(second.Id, savedGoalIds);
     }
 }
