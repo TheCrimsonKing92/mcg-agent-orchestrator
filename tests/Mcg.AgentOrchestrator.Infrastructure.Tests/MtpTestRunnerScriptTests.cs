@@ -425,6 +425,10 @@ public sealed class MtpTestRunnerScriptTests
                 Filter: item.GetProperty("filter").GetString()!,
                 Arguments: item.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray()))
             .ToArray();
+        foreach (var group in cases.GroupBy(item => item.Filter, StringComparer.Ordinal))
+        {
+            Assert.All(group, item => Assert.Equal(group.First().Arguments, item.Arguments));
+        }
         var universe = DiscoverManagedTestCatalog(allowEmpty: false);
         var signatures = cases.Select(item => MtpFilterArgumentSemantics.KindSignature(item.Arguments))
             .Distinct(StringComparer.Ordinal).ToArray();
@@ -473,7 +477,7 @@ public sealed class MtpTestRunnerScriptTests
         }
 
         IReadOnlyDictionary<string, string> Select(string filter) =>
-            MtpFilterArgumentSemantics.Select(cases.Single(item => item.Filter == filter).Arguments, universe)
+            MtpFilterArgumentSemantics.Select(cases.First(item => item.Filter == filter).Arguments, universe)
                 .ToDictionary(test => test.Uid, test => test.DisplayName, StringComparer.Ordinal);
         var broadClass = Select("FullyQualifiedName~MtpTestRunnerScriptTests");
         var excludedClass = Select("FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild");
