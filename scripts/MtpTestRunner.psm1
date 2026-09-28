@@ -1338,7 +1338,8 @@ function Assert-MtpBuildReceipt {
     )
 
     if ([string]::IsNullOrWhiteSpace($RepairCommand)) {
-        $RepairCommand = "dotnet build `"$ProjectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+        $repairRoot = $RepositoryRoot.TrimEnd([char[]]@('\', '/'))
+        $RepairCommand = "dotnet build `"$ProjectPath`" --configuration $Configuration `"-p:McgIsolatedArtifactsPath=$repairRoot`""
     }
     $receiptPath = Get-MtpBuildReceiptPath -Directory $Directory
     try {
@@ -1987,11 +1988,12 @@ function Select-MtpVerifiedBuildOutput {
     $declaredAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration
     $declaredDirectory = Split-Path -Parent $declaredAssembly
     $evaluatedDirectory = Split-Path -Parent $evaluatedIdentity.TargetPath
+    $repairRoot = $RepositoryRoot.TrimEnd([char[]]@('\', '/'))
     $candidates = @(
         [pscustomobject]@{
             Label = 'declared artifact output'
             Directory = $declaredDirectory
-            Repair = "dotnet build `"$projectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+            Repair = "dotnet build `"$projectPath`" --configuration $Configuration `"-p:McgIsolatedArtifactsPath=$repairRoot`""
         },
         [pscustomobject]@{
             Label = 'evaluated standard output'
@@ -2024,7 +2026,8 @@ function Select-MtpVerifiedBuildOutput {
         }
     }
     if ($verified.Count -eq 0) {
-        throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')"
+        $wrapperCommand = "scripts/Invoke-WorkerBuildDiagnostic.ps1 build `"$projectPath`" `"-p:McgIsolatedArtifactsPath=$repairRoot`" --configuration `"$Configuration`""
+        throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')`nSanctioned wrapper: $wrapperCommand"
     }
     $closureHashes = @($verified | ForEach-Object { [string]$_.ClosureSha256 } | Sort-Object -Unique)
     if ($verified.Count -gt 1 -and $closureHashes.Count -gt 1) {
