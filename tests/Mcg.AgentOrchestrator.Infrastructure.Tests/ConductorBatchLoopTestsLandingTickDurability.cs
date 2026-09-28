@@ -12,6 +12,8 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
     public void SingleGoalLandingIsSavedBeforeSelfRelaunchReload()
     {
         var kernel = new AgentOrchestratorKernel();
+        // The preceding goal stops the walk before the parallel landing result is counted.
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Existing worker");
         var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
         var attemptRoot = CreateTempDirectory("mcg-single-landing-tick-durability");
         var stopFilePath = Path.Combine(attemptRoot, "stop");
@@ -80,15 +82,16 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                 selfRelaunchEnabled: true).Run(
                     kernel, driver, ConductorAutonomyPolicy.Conservative, stopFilePath,
                     maxIterations: 3,
+                    watchInterval: TimeSpan.FromMilliseconds(1),
                     sleepFunc: _ => false,
                     persistGoalTick: (checkpoint, changedIds) =>
                     {
                         if (changedIds.Contains(goal.Id)) persisted = checkpoint.ExportSnapshot();
                     }));
 
-            Assert.True(landed);
+            Assert.True(landed, output);
             Assert.Contains("LOOP_RELAUNCH_SCHEDULED", output, StringComparison.Ordinal);
-            Assert.Equal(1, relaunchCalls);
+            Assert.True(relaunchCalls == 1, $"relaunchCalls={relaunchCalls}{Environment.NewLine}{output}");
             Assert.Null(reloadException);
             Assert.Equal(GoalStatus.Completed, reloadedStatus);
             Assert.Equal(CriterionEvidenceState.Satisfied, reloadedObligationState);
@@ -109,8 +112,8 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstCohortMember.razor"],
-            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortMemberTests.cs"]
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortMember.razor"],
+            [second.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortMember.cs"]
         };
         var projector = new GateReadyCandidateProjector(
             goalId => new GateReadyCandidateRevisionPair(goalId.Value.PadRight(40, 'b')[..40], mainRevision),
@@ -123,6 +126,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             classifyRisk: _ => ChangeRiskTier.DocsOnly,
             getLandingFileScopes: goal => paths[goal.Id],
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
             isVerificationGateSatisfied: _ => true,
             gateReadyCandidateProjector: projector,
             resolveAcceptanceHeads: goal => (goal.Id.Value.PadRight(40, 'b')[..40], mainRevision),
