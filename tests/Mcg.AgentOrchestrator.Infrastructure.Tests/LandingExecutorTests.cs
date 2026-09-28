@@ -217,7 +217,7 @@ public sealed class LandingExecutorTests
                 CriterionEvidenceOwner.Acceptance,
                 "test",
                 CriterionEvidenceScopes.FullAcceptanceGate,
-                expectedCandidateSha: new string('a', 40));
+                expectedCandidateSha: candidateSha);
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
@@ -255,7 +255,7 @@ public sealed class LandingExecutorTests
                 CriterionEvidenceOwner.Acceptance,
                 "test",
                 CriterionEvidenceScopes.FullAcceptanceGate,
-                expectedCandidateSha: new string('a', 40));
+                expectedCandidateSha: candidateSha);
             kernel.MapCriterionEvidenceOwner(
                 goal.Id,
                 1,
