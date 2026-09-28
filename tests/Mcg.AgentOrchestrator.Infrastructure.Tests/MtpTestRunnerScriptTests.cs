@@ -409,7 +409,7 @@ public sealed class MtpTestRunnerScriptTests
         var escapedExtras = JsonSerializer.Serialize(extraFilters).Replace("'", "''", StringComparison.Ordinal);
         var command = $"Import-Module '{module}' -Force; " +
             $"$manifest = Get-Content -LiteralPath '{escapedManifest}' -Raw | ConvertFrom-Json; " +
-            $"$extras = @(ConvertFrom-Json -InputObject '{escapedExtras}'); " +
+            $"$extras = ConvertFrom-Json -InputObject '{escapedExtras}'; " +
             "$filters = @($manifest.engine.infrastructureTestLanes | ForEach-Object { $_.filter }) + " +
             "@($manifest.engine.localTestPartitions | ForEach-Object { @($_.additionalFilters) }) + $extras; " +
             "$result = @($filters | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { " +
@@ -1548,7 +1548,7 @@ public sealed class MtpTestRunnerScriptTests
         var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
         var input = JsonSerializer.Serialize(filters).Replace("'", "''", StringComparison.Ordinal);
         var command = $"Import-Module '{module}' -Force; " +
-            $"$filters = @(ConvertFrom-Json -InputObject '{input}'); " +
+            $"$filters = ConvertFrom-Json -InputObject '{input}'; " +
             "$results = @($filters | ForEach-Object { $filter = $_; " +
             "try { $arguments = @(ConvertTo-MtpFilterArguments -Filter $filter); " +
             "[ordered]@{ filter = $filter; ok = $true; args = $arguments; message = '' } } " +
