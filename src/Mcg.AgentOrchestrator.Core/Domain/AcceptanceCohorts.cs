@@ -263,7 +263,7 @@ public sealed record AcceptanceCohortInvalidation(
     string ManifestIdentity,
     IReadOnlyList<AcceptanceCohortMemberBinding> OrderedMembers);
 
-public sealed record AcceptanceCohortPartitionReceipt(
+public sealed partial record AcceptanceCohortPartitionReceipt(
     string ReceiptId,
     GoalId GoalId,
     int MemberOrdinal,
@@ -275,7 +275,7 @@ public sealed record AcceptanceCohortPartitionReceipt(
     long ElapsedMilliseconds,
     IReadOnlyList<string> TestResultPaths);
 
-public sealed record AcceptanceCohortReceipt(
+public sealed partial record AcceptanceCohortReceipt(
     string ReceiptId,
     AcceptanceCohortIdentity Identity,
     AcceptanceCohortGateOutcome Outcome,

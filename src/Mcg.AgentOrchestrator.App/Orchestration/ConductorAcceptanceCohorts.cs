@@ -15,7 +15,8 @@ internal enum ConductorAcceptanceCohortPairExclusionReason
     MainRevisionMismatch,
     LandingPathOverlap,
     SerializedResourceOverlap,
-    SuppressedInteraction
+    SuppressedInteraction,
+    AttributedMember
 }
 
 internal sealed record ConductorAcceptanceCohortPairExclusion(
@@ -126,7 +127,8 @@ internal static class ConductorAcceptanceCohortSelector
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> orderedCandidates,
         GoalId? forcedCandidate = null,
         IReadOnlySet<string>? suppressedPairFingerprints = null,
-        ConductorAcceptanceCohortFairnessContext? fairnessContext = null)
+        ConductorAcceptanceCohortFairnessContext? fairnessContext = null,
+        IReadOnlySet<string>? attributedMemberKeys = null)
     {
         ArgumentNullException.ThrowIfNull(orderedCandidates);
         var ready = new List<GateReadyCandidateProjection>(orderedCandidates.Count);
@@ -150,6 +152,15 @@ internal static class ConductorAcceptanceCohortSelector
             {
                 throw new InvalidOperationException(
                     $"Cohort candidate {candidate.GoalId.Value} does not match its Ready projection {projected.Projection.GoalId.Value}.");
+            }
+            if (attributedMemberKeys?.Contains(ConductorAcceptanceCohortAttributedMembers.Key(
+                    candidate.GoalId, projected.Projection.CandidateRevision)) == true)
+            {
+                exclusions.Add(new ConductorAcceptanceCohortPairExclusion(
+                    candidate.GoalId, candidate.GoalId,
+                    ConductorAcceptanceCohortPairExclusionReason.AttributedMember,
+                    $"candidate={projected.Projection.CandidateRevision}"));
+                continue;
             }
             ready.Add(projected.Projection);
         }
@@ -523,7 +534,8 @@ internal sealed partial class ConductorBatchLoop
             candidates,
             fairnessPriority?.GoalId,
             driver.ReadSuppressedCohortPairs(),
-            fairnessContext);
+            fairnessContext,
+            driver.ReadCohortAttributedMemberKeys());
         EmitAcceptanceCohortFairnessDecision(decision.FairnessDecision);
         return decision;
     }
