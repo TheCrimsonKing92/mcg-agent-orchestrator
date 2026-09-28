@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record ConductorSelfRelaunchOptions(
+internal sealed partial record ConductorSelfRelaunchOptions(
     string RepositoryRoot,
     string AppProjectPath,
     string AppDllPath,
@@ -32,10 +32,13 @@ internal sealed record ConductorSelfRelaunchOptions(
         DotnetPath,
         PowerShellPath,
         BuildTimeout,
-        SelfCheckTimeout);
+        SelfCheckTimeout)
+    {
+        PrebuiltAppOutputDirectory = PrebuiltAppOutputDirectory
+    };
 }
 
-internal sealed record ConductorSuccessorStagingOptions(
+internal sealed partial record ConductorSuccessorStagingOptions(
     string RepositoryRoot,
     string AppProjectPath,
     string AppDllPath,
@@ -198,21 +201,7 @@ internal static partial class ConductorSelfRelaunch
         FileStream? runDirectoryLease = null;
         try
         {
-        var build = RunProcess(
-            options.DotnetPath,
-            [
-                "build",
-                options.AppProjectPath,
-                "--nologo",
-                "--output",
-                buildOutputDirectory,
-                "-v",
-                "quiet",
-                "-clp:ErrorsOnly"
-            ],
-            options.RepositoryRoot,
-            buildTimeout,
-            cancellationToken);
+        var build = ProduceBuildOutput(options, buildOutputDirectory, buildTimeout, cancellationToken);
         EnsureSucceeded("build", "build merged conductor", build);
 
         var marker = RunPowerShell(
