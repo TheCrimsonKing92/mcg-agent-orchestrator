@@ -43,7 +43,10 @@ public sealed class OwnerProtectedPartitionEquivalenceTests : IDisposable
         var lanes = engine["infrastructureTestLanes"]!.AsArray();
         switch (mutation)
         {
-            case "drop": lanes[1]!["filter"] = "FullyQualifiedName~Beta"; break;
+            case "drop":
+                lanes[1]!["filter"] = "FullyQualifiedName~Beta";
+                lanes[1]!["ownedCollections"] = new JsonArray();
+                break;
             case "duplicate": lanes[0]!["filter"] = "FullyQualifiedName~Alpha|FullyQualifiedName~Beta"; break;
             case "concurrency": engine["maxConcurrentShards"] = 3; break;
             case "timeout": engine["timeouts"]!["defaultMinutes"] = 41; break;
