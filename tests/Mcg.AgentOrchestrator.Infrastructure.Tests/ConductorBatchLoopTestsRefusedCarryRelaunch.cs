@@ -75,8 +75,8 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 Assert.Equal(1, acceptanceRuns);
                 Assert.Equal(GoalStatus.Verified, goal.Status);
                 Assert.Contains(observed!.ProgressLines!, line =>
-                    line.Contains(expectedDiagnostic, StringComparison.Ordinal) &&
-                    line.Contains("criterion-evidence-map --goal", StringComparison.Ordinal));
+                    line.Contains("result=held", StringComparison.Ordinal) &&
+                    line.Contains("Carry-forward_refused:_reason=range-diff-not-identical", StringComparison.Ordinal));
             }
 
             Assert.Single(Directory.GetFiles(Path.Combine(attemptRoot, goal.Id.Value), "*.attempt.json"));

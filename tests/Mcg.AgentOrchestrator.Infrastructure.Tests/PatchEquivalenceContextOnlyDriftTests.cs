@@ -34,9 +34,32 @@ public sealed class PatchEquivalenceContextOnlyDriftTests : HostCapacityBoundTes
     }
 
     [Xunit.Fact]
-    public void ChangedGoalLineStillRefusesCarry()
+    public void ContextOnlyDriftAcrossCleanIntegrationMergeCarriesAcceptanceObligation()
     {
-        var fixture = CreateFixture(changeGoalLineAfterRebase: true);
+        var fixture = CreateFixture(changeGoalLineAfterRebase: false, includeCleanMerge: true);
+        try
+        {
+            Assert.True(GoalWorktrees.TryComputePatchEquivalence(
+                fixture.Repository, fixture.OldHead, fixture.NewHead, out var evidence, out var refusal), refusal);
+            Assert.Contains("zero-context comparison", evidence, StringComparison.Ordinal);
+
+            var (kernel, goal) = BindAcceptance(fixture.OldHead);
+            Assert.Null(AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
+                goal, fixture.NewHead, kernel, fixture.Repository));
+            Assert.Equal(fixture.NewHead, Assert.Single(goal.CriterionEvidenceObligations).ExpectedCandidateSha);
+        }
+        finally
+        {
+            TryDeleteDirectory(fixture.Repository);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ChangedGoalLineStillRefusesCarry(bool includeCleanMerge)
+    {
+        var fixture = CreateFixture(changeGoalLineAfterRebase: true, includeCleanMerge);
         try
         {
             Assert.False(GoalWorktrees.TryComputePatchEquivalence(
@@ -71,7 +94,8 @@ public sealed class PatchEquivalenceContextOnlyDriftTests : HostCapacityBoundTes
         return (kernel, goal);
     }
 
-    private static (string Repository, string OldHead, string NewHead) CreateFixture(bool changeGoalLineAfterRebase)
+    private static (string Repository, string OldHead, string NewHead) CreateFixture(
+        bool changeGoalLineAfterRebase, bool includeCleanMerge = false)
     {
         var repo = CreateGitRepository();
         var file = Path.Combine(repo, "src", "adjacent.txt");
@@ -87,10 +111,17 @@ public sealed class PatchEquivalenceContextOnlyDriftTests : HostCapacityBoundTes
         File.WriteAllLines(file, lines);
         ReadGit(repo, "add", "src/adjacent.txt");
         ReadGit(repo, "commit", "-m", "Edit goal line");
-        var oldHead = ReadGit(repo, "rev-parse", "HEAD");
+        ReadGit(repo, "checkout", "main");
+        if (includeCleanMerge)
+        {
+            AppendCommit(repo, "src/integration.txt", "integrated main change");
+            ReadGit(repo, "checkout", "candidate-old");
+            ReadGit(repo, "merge", "--no-ff", "main", "-m", "Integrate main into goal");
+            ReadGit(repo, "checkout", "main");
+        }
+        var oldHead = ReadGit(repo, "rev-parse", "candidate-old");
         ReadGit(repo, "branch", "old-candidate-anchor", oldHead);
 
-        ReadGit(repo, "checkout", "main");
         lines[9] = "line 10";
         lines[12] = "main line thirteen";
         File.WriteAllLines(file, lines);

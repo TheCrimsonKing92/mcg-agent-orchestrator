@@ -2,7 +2,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class GoalWorktrees
 {
-    // This fallback is deliberately narrower than range-diff: it cannot reason about merge parents.
+    // Clean integration merges were verified by the caller. Compare only goal commits;
+    // a merge has two parents and no unambiguous patch against "its parent".
     private static bool TryCompareZeroContextCommitsInOrder(
         string directory, string oldBase, string oldHead, string newBase, string newHead, int expectedCount)
     {
@@ -18,7 +19,7 @@ public static partial class GoalWorktrees
         string directory, string baseSha, string headSha, int expectedCount, out string[] commits)
     {
         commits = [];
-        var result = GitCli.Run(directory, "rev-list", "--reverse", $"{baseSha}..{headSha}");
+        var result = GitCli.Run(directory, "rev-list", "--reverse", "--no-merges", $"{baseSha}..{headSha}");
         if (!result.Succeeded || result.DrainTimedOut) return false;
         commits = result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
         if (commits.Length != expectedCount || commits.Any(sha => !CommitShaPattern.IsMatch(sha))) return false;
