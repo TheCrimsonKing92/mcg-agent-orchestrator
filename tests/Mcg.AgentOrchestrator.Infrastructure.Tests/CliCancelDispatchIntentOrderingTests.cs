@@ -47,9 +47,34 @@ public sealed class CliCancelDispatchIntentOrderingTests
         Xunit.Assert.False(task.LastProcess!.WasCancelled);
     }
 
-    private static (CliExecutionContext Context, Goal Goal, TaskSpec Task) CreateContext()
+    [Xunit.Theory]
+    [Xunit.InlineData("refresh-dispatch")]
+    [Xunit.InlineData("refresh-dispatches")]
+    public async Task PendingCancelIntentBlocksDirectCliRefresh(string command)
     {
-        var (kernel, goal, task) = BackgroundDispatchRunnerTestsOperatorCancelRequeueRace.RunningTask();
+        var (context, goal, task) = CreateContext(DateTimeOffset.UtcNow.AddHours(-2));
+        var store = SqliteOperatorIntentStore.ForDirectories(
+            context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory);
+        await store.EnqueueAsync(BackgroundDispatchRunnerTestsOperatorCancelRequeueRace.Intent(goal, task));
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "1");
+
+        try
+        {
+            CliCommandHandlers.Execute(command == "refresh-dispatch"
+                ? [command, "1"] : [command], context);
+
+            Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+            Xunit.Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
+        }
+        finally
+        {
+            File.Delete(task.LastProcess.ExitCodePath);
+        }
+    }
+
+    private static (CliExecutionContext Context, Goal Goal, TaskSpec Task) CreateContext(DateTimeOffset? startedAt = null)
+    {
+        var (kernel, goal, task) = BackgroundDispatchRunnerTestsOperatorCancelRequeueRace.RunningTask(startedAt);
         var workspace = OrchestratorWorkspace.ForDirectory(
             Path.Combine(Path.GetTempPath(), $"cancel-dispatch-test-{Guid.NewGuid():N}"));
         var context = new CliExecutionContext(kernel, workspace,

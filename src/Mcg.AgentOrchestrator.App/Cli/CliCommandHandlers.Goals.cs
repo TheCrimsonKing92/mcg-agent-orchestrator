@@ -1978,12 +1978,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 throw new ArgumentException("--poll-seconds requires --watch.");
             }
 
-            var scopedReaper = new BackgroundDispatchRunner();
+            var scopedReaper = OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace);
             var scopedReconciled = scopedReaper.SweepExitedProcesses(context.Kernel, context.CurrentGoal.Id);
             var refreshedGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             try
             {
-                new GoalDispatchOperations().RefreshDispatches(context.Kernel, refreshedGoal);
+                new GoalDispatchOperations().RefreshDispatches(context.Kernel, refreshedGoal, scopedReaper);
                 refreshedGoal = context.Kernel.GetGoal(refreshedGoal.Id);
             }
             catch

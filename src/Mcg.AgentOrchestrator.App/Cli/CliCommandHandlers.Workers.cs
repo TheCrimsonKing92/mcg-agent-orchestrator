@@ -438,7 +438,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             var refreshPolicy = ResolveCliAutonomyPolicy(parts);
             var refreshTask = ResolveDispatchCommandTask(refreshOptions.TargetParts, context, refreshUsage);
             EnsurePolicyAllows(context, context.CurrentGoal!, refreshPolicy, AutonomyAction.Refresh, "refresh-dispatch");
-            new BackgroundDispatchRunner().RefreshLatestProcess(context.Kernel, context.CurrentGoal!.Id, refreshTask.Id);
+            OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace)
+                .RefreshLatestProcess(context.Kernel, context.CurrentGoal!.Id, refreshTask.Id);
             ConsoleViews.PrintRefreshDispatchResult(context.CurrentGoal!, refreshTask, refreshOptions);
             return true;
 
@@ -446,7 +447,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             var refreshBatchPolicy = ResolveCliAutonomyPolicy(parts);
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
             EnsurePolicyAllows(context, context.CurrentGoal, refreshBatchPolicy, AutonomyAction.Refresh, "refresh-dispatches");
-            var refreshed = new GoalDispatchOperations().RefreshDispatches(context.Kernel, context.CurrentGoal);
+            var refreshed = new GoalDispatchOperations().RefreshDispatches(context.Kernel, context.CurrentGoal,
+                OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace));
             ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, refreshed);
             return refreshed.Tasks.Count > 0;
 

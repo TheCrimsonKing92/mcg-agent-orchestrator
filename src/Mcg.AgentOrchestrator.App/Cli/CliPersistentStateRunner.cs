@@ -3840,7 +3840,7 @@ internal static partial class CliPersistentStateRunner
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
 
         var candidates = CaptureRunningProcessIdentities(kernel);
-        var runner = new BackgroundDispatchRunner();
+        var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
 
         switch (command)
         {
@@ -3854,7 +3854,7 @@ internal static partial class CliPersistentStateRunner
             case "refresh-dispatches":
                 var refreshGoal = ResolveDispatchCommandGoal(args, kernel, currentGoal, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
                 currentGoal = refreshGoal;
-                var refreshed = new GoalDispatchOperations().RefreshDispatches(kernel, refreshGoal);
+                var refreshed = new GoalDispatchOperations().RefreshDispatches(kernel, refreshGoal, runner);
                 ConsoleViews.PrintProcessBatchResult(refreshGoal, refreshed);
                 break;
 
@@ -3903,7 +3903,7 @@ internal static partial class CliPersistentStateRunner
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
         var candidates = CaptureRunningProcessIdentities(kernel);
-        var runner = new BackgroundDispatchRunner();
+        var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
         var reconciled = runner.SweepExitedProcesses(kernel);
         cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
         cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);

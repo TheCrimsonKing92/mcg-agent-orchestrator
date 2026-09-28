@@ -38,7 +38,7 @@ public static BatchActionResultDto ApplyGoalBatchAction(
         "subscription-dispatch-ready" => ApplySubscriptionDispatchReady(kernel, workspace, agents, goal, providers),
         "start-subscription-ready" => ApplyStartSubscriptionReady(kernel, workspace, agents, goal, providers),
         "start-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "start-dispatches", dispatches.StartDispatches(kernel, workspace, goal)),
-        "refresh-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "refresh-dispatches", dispatches.RefreshDispatches(kernel, goal)),
+        "refresh-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "refresh-dispatches", dispatches.RefreshDispatches(kernel, workspace, goal)),
         "cancel-dispatches" => DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "cancel-dispatches", dispatches.CancelDispatches(kernel, goal)),
         _ => throw new ArgumentException("Goal batch operation must be profile-dispatch-ready, subscription-dispatch-ready, start-subscription-ready, start-dispatches, refresh-dispatches, or cancel-dispatches.")
     };

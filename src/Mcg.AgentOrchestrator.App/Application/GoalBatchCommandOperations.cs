@@ -44,8 +44,9 @@ public sealed class GoalBatchCommandOperations
         Goal goal) =>
         _dispatch.StartDispatches(kernel, workspace, goal);
 
-    public ProcessBatchExecutionResult RefreshDispatches(AgentOrchestratorKernel kernel, Goal goal) =>
-        _dispatch.RefreshDispatches(kernel, goal);
+    public ProcessBatchExecutionResult RefreshDispatches(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal) =>
+        _dispatch.RefreshDispatches(kernel, goal, OperatorCancelAwareDispatchRunner.ForWorkspace(workspace));
 
     public ProcessBatchExecutionResult CancelDispatches(AgentOrchestratorKernel kernel, Goal goal) =>
         _dispatch.CancelDispatches(kernel, goal);

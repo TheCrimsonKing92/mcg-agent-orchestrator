@@ -94,8 +94,9 @@ public sealed class GoalTaskCommandOperations
             : null;
     }
 
-    public void RefreshProcess(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task) =>
-        new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
+    public void RefreshProcess(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal, TaskSpec task) =>
+        OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     public void CancelProcess(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task) =>
         new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
