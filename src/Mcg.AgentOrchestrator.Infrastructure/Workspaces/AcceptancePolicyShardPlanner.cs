@@ -37,15 +37,8 @@ internal static class AcceptancePolicyShardPlanner
     internal static string? NormalizePath(string? path) =>
         string.IsNullOrWhiteSpace(path) ? path : path.Replace('\\', '/').Trim();
 
-    internal static bool ChangeScopedAcceptanceEnabled()
-    {
-        var value = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
-        return string.IsNullOrWhiteSpace(value) ||
-            value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
-            value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-            value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
-            value.Equals("on", StringComparison.OrdinalIgnoreCase);
-    }
+    internal static bool ChangeScopedAcceptanceEnabled(AcceptanceShardPolicySwitches? switches = null) =>
+        AcceptanceShardPolicySwitches.ResolveChangeScoped(switches);
 
     internal static bool StructuralCoverageApplies(
         AcceptanceGateEngineSettings engineSettings,
@@ -150,7 +143,9 @@ internal static class AcceptancePolicyShardPlanner
         return lanes.Where(lane => !lane.RequiresBuildSystemChange).ToArray();
     }
 
-    internal static PolicyShardPlan BuildPolicyShardPlan(IReadOnlyList<string>? changedFiles)
+    internal static PolicyShardPlan BuildPolicyShardPlan(
+        IReadOnlyList<string>? changedFiles,
+        AcceptanceShardPolicySwitches? switches = null)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return PolicyShardPlan.NotApplicable("no changed files");
@@ -172,7 +167,7 @@ internal static class AcceptancePolicyShardPlanner
             .ToArray();
         var closure = BuildProjectDependencyClosure(changedProjects);
         var evidence = BuildPolicyShardEvidence(changedProjects, closure);
-        var fullShardReason = FullShardReason(normalizedFiles, summary, changedProjects);
+        var fullShardReason = FullShardReason(normalizedFiles, summary, changedProjects, switches);
         return fullShardReason is not null
             ? PolicyShardPlan.Full($"{fullShardReason}; {evidence}", closure)
             : PolicyShardPlan.Scoped(evidence, closure);
@@ -181,12 +176,13 @@ internal static class AcceptancePolicyShardPlanner
     private static string? FullShardReason(
         IReadOnlyList<string> changedFiles,
         RepositoryChangeSummary summary,
-        IReadOnlyList<string> changedProjects)
+        IReadOnlyList<string> changedProjects,
+        AcceptanceShardPolicySwitches? switches)
     {
-        if (FullShardOverrideEnabled())
+        if (FullShardOverrideEnabled(switches))
             return "MCG_ACCEPTANCE_FULL_SHARDS=1";
 
-        if (!ChangeScopedAcceptanceEnabled())
+        if (!ChangeScopedAcceptanceEnabled(switches))
             return "MCG_ACCEPTANCE_CHANGE_SCOPED disabled";
 
         foreach (var path in changedFiles)
@@ -214,15 +210,8 @@ internal static class AcceptancePolicyShardPlanner
         return null;
     }
 
-    private static bool FullShardOverrideEnabled()
-    {
-        var value = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
-        return value is not null &&
-            (value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
-                value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-                value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
-                value.Equals("on", StringComparison.OrdinalIgnoreCase));
-    }
+    private static bool FullShardOverrideEnabled(AcceptanceShardPolicySwitches? switches) =>
+        AcceptanceShardPolicySwitches.ResolveFullShards(switches);
 
     private static HashSet<string> BuildProjectDependencyClosure(IReadOnlyList<string> changedProjects)
     {

@@ -938,8 +938,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_change_scoped_kill_switch_keeps_solution_check")]
     public async Task GoalAcceptanceVerifierChangeScopedKillSwitchKeepsSolutionCheck()
     {
-        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
-        Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
+        var previous = variables.GetValueOrDefault("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "0";
         try
         {
             var root = CreateStandardManifestWorkspace();
@@ -965,15 +967,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = previous;
         }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_full_shards_override_runs_all_policy_shards")]
     public async Task GoalAcceptanceVerifierFullShardsOverrideRunsAllPolicyShards()
     {
-        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
-        Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", "1");
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
+        var previous = variables.GetValueOrDefault("MCG_ACCEPTANCE_FULL_SHARDS");
+        variables["MCG_ACCEPTANCE_FULL_SHARDS"] = "1";
         try
         {
             var root = CreateCheckedInManifestShapeWorkspace();
@@ -1006,7 +1010,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previous);
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = previous;
         }
     }
 

@@ -278,15 +278,13 @@ internal sealed class RegisteredOwnedProcess : IDisposable
     private static extern bool TerminateProcess(SafeFileHandle processHandle, uint exitCode);
 }
 
-public static class WorkerProcessJobs
+public static partial class WorkerProcessJobs
 {
     private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
     private const int IdentityReadAttempts = 10;
     private const int IdentityReadDelayMilliseconds = 25;
     private static readonly TimeSpan StartupReapClaimLease = TimeSpan.FromMinutes(1);
     private static readonly ConcurrentDictionary<int, RegisteredJob> Jobs = new();
-    private static SpawnRegistry? Registry;
-    private static string? RegistryDbPath;
     private static readonly Func<Process, SpawnProcessIdentityReadResult> ProductionRegistrationIdentityReader =
         BuildRegistrationIdentityReader(ReadIdentityOnce, identityReadDelay: null);
 
