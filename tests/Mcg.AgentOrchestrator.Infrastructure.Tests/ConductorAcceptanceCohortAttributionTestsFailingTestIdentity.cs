@@ -75,6 +75,20 @@ public sealed class ConductorAcceptanceCohortAttributionTestsFailingTestIdentity
         }
     }
 
+    [Fact]
+    public void FailedPartitionWithoutFailingTestIdentities_DoesNotAttributeThatMember()
+    {
+        var first = Partition("11111111111111111111111111111111", AcceptanceCohortGateOutcome.Failed, "Tests.T");
+        var second = Partition("22222222222222222222222222222222", AcceptanceCohortGateOutcome.Failed, "Tests.U")
+            with { FailingTestIdentities = [] };
+
+        var result = ConductorAcceptanceCohortFailingTestAttribution.Classify(["Tests.T"], first, second);
+
+        Assert.Equal(AcceptanceCohortAttributionOutcome.FirstMemberFailed, result.Outcome);
+        Assert.Equal(first.GoalId, Assert.Single(result.AttributedMembers).GoalId);
+        Assert.Empty(result.UnrelatedFailures);
+    }
+
     private static AcceptanceCohortPartitionReceipt Partition(string goal, AcceptanceCohortGateOutcome outcome, string test) =>
         new("partition", new GoalId(goal), goal[0] == '1' ? 0 : 1, "revision", "main", "tree", "manifest", outcome, 1, [])
         { FailingTestIdentities = [test] };

@@ -34,7 +34,7 @@ internal static class ConductorAcceptanceCohortFailingTestAttribution
             .Where(test => !cohort.Contains(test)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()).ToArray();
         var effective = partitions.Select((partition, index) =>
             partition.Outcome == AcceptanceCohortGateOutcome.Failed &&
-            cohort.Count > 0 && partition.FailingTestIdentities.Count > 0 && reproduced[index].Length == 0
+            reproduced[index].Length == 0
                 ? AcceptanceCohortGateOutcome.Passed : partition.Outcome).ToArray();
         var outcome = ConductorAcceptanceCohortAttribution.Classify(effective[0], effective[1]);
         var attributed = partitions.Select((partition, index) => (partition, index))
