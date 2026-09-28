@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal static class ProcessTreeGuiSuppression
+internal static partial class ProcessTreeGuiSuppression
 {
     internal const uint FailCriticalErrors = 0x0001;
     internal const uint NoGpFaultErrorBox = 0x0002;
