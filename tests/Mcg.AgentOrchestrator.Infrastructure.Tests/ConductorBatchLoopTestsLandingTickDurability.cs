@@ -83,11 +83,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                 selfRelaunchEnabled: true).Run(
                     kernel, driver, ConductorAutonomyPolicy.Conservative, stopFilePath,
                     maxIterations: 3,
-                    sleepFunc: _ =>
-                    {
-                        File.WriteAllText(stopFilePath, "stop");
-                        return true;
-                    },
+                    sleepFunc: _ => false,
                     persistGoalTick: (checkpoint, changedIds) =>
                     {
                         if (changedIds.Contains(goal.Id)) persisted = checkpoint.ExportSnapshot();
@@ -122,7 +118,9 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
             [ordinary.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/OrdinaryTests.cs"],
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"],
+            [first.Id] = [
+                "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs",
+                "tests/Mcg.AgentOrchestrator.Core.Tests/FirstCohortMemberTests.cs"],
             [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortMemberTests.cs"]
         };
         var projector = new GateReadyCandidateProjector(
