@@ -64,8 +64,6 @@ public sealed class MtpTestRunnerScriptTests
 
     [Xunit.Theory(DisplayName = "Managed_MTP_runner_executes_every_repository_test_project_after_isolated_build")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests")]
-    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests")]
-    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests")]
     public void ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild(string project, string testClass)
     {
         MtpTestRunnerScriptTestSupport.RunManagedProjectContract(project, testClass);
@@ -95,6 +93,59 @@ public sealed class MtpTestRunnerScriptTests
             .ToArray();
 
         Xunit.Assert.Equal(expected.OrderBy(item => item.Project, StringComparer.Ordinal), actual);
+    }
+
+    [Xunit.Fact]
+    public void ManagedProjectTheoriesPlaceOnlyCoreCaseInOrdinaryTheory()
+    {
+        static (string Project, string TestClass)[] Cases(Type type)
+        {
+            var method = type.GetMethod(nameof(ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild))!;
+            return method.CustomAttributes
+                .Where(attribute => attribute.AttributeType == typeof(Xunit.InlineDataAttribute))
+                .Select(InlineDataPair)
+                .OrderBy(item => item.Project, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        var ordinary = Cases(typeof(MtpTestRunnerScriptTests));
+        var rebuild = Cases(typeof(MtpTestRunnerScriptTestsManagedProjectRebuild));
+        (string Project, string TestClass)[] expectedOrdinary =
+        [
+            ("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "RepositoryChangeClassifierTests")
+        ];
+        Xunit.Assert.Equal(expectedOrdinary, ordinary);
+        (string Project, string TestClass)[] expectedRebuild =
+        [
+            ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests"),
+            ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests"),
+            ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests"),
+            ("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "DashboardValidationHarnessTests")
+        ];
+        Xunit.Assert.Equal(expectedRebuild.OrderBy(item => item.Project, StringComparer.Ordinal), rebuild);
+        Xunit.Assert.Equal(ordinary.Length + rebuild.Length,
+            ordinary.Concat(rebuild).Select(item => item.Project).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Xunit.Fact]
+    public void ManagedProjectRebuildCasesRouteOnlyToBuildSystemChangeLane()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(RepositoryRoot()).InfrastructureTestLanes;
+        var descriptors = new[]
+        {
+            new AcceptanceTestClassDescriptor(typeof(MtpTestRunnerScriptTests).FullName!, TestCollections.ProcessSpawning),
+            new AcceptanceTestClassDescriptor(typeof(MtpTestRunnerScriptTestsManagedProjectRebuild).FullName!, TestCollections.ProcessSpawning)
+        };
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
+        var rebuildLane = Xunit.Assert.Single(resolved, lane => lane.Name == "Mtp managed project rebuild");
+        Xunit.Assert.True(rebuildLane.RequiresBuildSystemChange);
+        var rebuildMatches = AcceptanceLaneMembership.LanesIncluding(resolved,
+            typeof(MtpTestRunnerScriptTestsManagedProjectRebuild).FullName!);
+        Xunit.Assert.Contains(rebuildMatches, lane => lane.Name == rebuildLane.Name);
+        Xunit.Assert.DoesNotContain(rebuildMatches, lane => lane.Name == "Process spawning");
+        var ordinaryMatches = AcceptanceLaneMembership.LanesIncluding(resolved, typeof(MtpTestRunnerScriptTests).FullName!);
+        Xunit.Assert.Contains(ordinaryMatches, lane => lane.Name == "Process spawning");
+        Xunit.Assert.DoesNotContain(ordinaryMatches, lane => lane.Name == rebuildLane.Name);
     }
 
     private static (string Project, string TestClass) InlineDataPair(System.Reflection.CustomAttributeData attribute)
@@ -2456,6 +2507,8 @@ public sealed class MtpTestRunnerScriptTestsManagedProjectRebuild
     [Xunit.Theory(DisplayName = "Managed_MTP_runner_executes_large_repository_test_projects_after_isolated_build")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "DashboardValidationHarnessTests")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests")]
     public void ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild(string project, string testClass)
     {
         MtpTestRunnerScriptTestSupport.RunManagedProjectContract(project, testClass);
