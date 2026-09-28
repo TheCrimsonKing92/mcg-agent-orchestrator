@@ -54,6 +54,71 @@ public sealed class ConductorAcceptanceCohortAttributionTestsFailingTestIdentity
     }
 
     [Fact]
+    public void SkippedCohortTestInUnrelatedPartition_DoesNotAttributeThatMember()
+    {
+        var repo = CreateReducedAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "Cohort T member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Unrelated U member", repo);
+            CreateWorktreeCandidate(repo, firstGoal.Id, "src/Mcg.AgentOrchestrator.Infrastructure/First.cs", "first");
+            CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var secondTrx = Path.Combine(repo, "partition-U-with-skipped-T.trx");
+            File.WriteAllText(secondTrx, """
+                <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                  <Results>
+                    <UnitTestResult testId="1" testName="Fails" outcome="Failed" />
+                    <UnitTestResult testId="2" testName="Fails" outcome="NotExecuted" />
+                  </Results>
+                  <TestDefinitions>
+                    <UnitTest id="1" name="Fails"><TestMethod className="Tests.U" name="Fails" /></UnitTest>
+                    <UnitTest id="2" name="Fails"><TestMethod className="Tests.T" name="Fails" /></UnitTest>
+                  </TestDefinitions>
+                  <ResultSummary outcome="Failed">
+                    <Counters total="2" executed="1" passed="0" failed="1" notExecuted="1" />
+                  </ResultSummary>
+                </TestRun>
+                """);
+            var staleTrx = Path.Combine(repo, "passed-check-prior-failure.trx");
+            File.WriteAllText(staleTrx, File.ReadAllText(secondTrx)
+                .Replace("outcome=\"NotExecuted\"", "outcome=\"Failed\"", StringComparison.Ordinal)
+                .Replace("executed=\"1\" passed=\"0\" failed=\"1\" notExecuted=\"1\"",
+                    "executed=\"2\" passed=\"0\" failed=\"2\" notExecuted=\"0\"", StringComparison.Ordinal));
+            var verifier = new SequenceAcceptanceVerifier([
+                FailedVerification(repo, "cohort-T.trx", "cohort") with
+                { Checks = [new AcceptanceCheckResult("cohort", false, 1, "T", FailingTestIdentities: ["Tests.T.Fails"])] },
+                FailedVerification(repo, "partition-T.trx", "first") with
+                { Checks = [new AcceptanceCheckResult("first", false, 1, "T", FailingTestIdentities: ["Tests.T.Fails"])] },
+                FailedVerification(repo, "partition-U.trx", "second") with
+                {
+                    Checks =
+                    [
+                        new AcceptanceCheckResult("second", false, 1, "U", TestResultPaths: [secondTrx]),
+                        new AcceptanceCheckResult("prior attempt", true, 0, null, TestResultPaths: [staleTrx])
+                    ],
+                    TestResultPaths = [secondTrx, staleTrx]
+                }
+            ]);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(kernel, workspace, verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
+
+            var result = driver.RunAcceptanceCohort(
+                ProjectSelection(driver, firstGoal, secondGoal),
+                [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(3, verifier.RunCount);
+            Assert.Equal(AcceptanceCohortAttributionOutcome.FirstMemberFailed, result.Receipt?.Attribution);
+            Assert.Equal(["Tests.T.Fails"], Assert.Single(result.Receipt!.AttributedMembers).ReproducedFailingTests);
+            Assert.Equal(["Tests.U.Fails"], Assert.Single(result.Receipt.UnrelatedFailures).FailingTests);
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
+    [Fact]
     public void BothReproduce_AndInfrastructurePrecedence()
     {
         var first = Partition("11111111111111111111111111111111", AcceptanceCohortGateOutcome.Failed, "Tests.T");

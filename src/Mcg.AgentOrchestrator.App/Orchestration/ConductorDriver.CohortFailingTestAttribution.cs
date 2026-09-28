@@ -20,14 +20,18 @@ internal sealed partial class ConductorDriver
             return fromChecks;
         }
 
-        var paths = result.TestResultPaths ?? result.Checks?
+        var failedCheckPaths = result.Checks?
             .Where(check => !check.Passed && !check.Advisory)
             .SelectMany(check => check.TestResultPaths ?? [])
             .ToArray() ?? [];
+        var paths = failedCheckPaths.Length > 0
+            ? failedCheckPaths
+            : result.TestResultPaths ?? [];
         return paths
             .Select(AcceptanceTrxFailureReader.Read)
             .Where(read => read.Status == AcceptanceTrxReadStatus.Readable)
             .SelectMany(read => read.Failures)
+            .Where(failure => AcceptanceTrxOutcomeTaxonomy.IsFatal(failure.Outcome))
             .Select(failure => failure.TestName)
             .Where(identity => !string.IsNullOrWhiteSpace(identity))
             .Select(identity => identity!)
