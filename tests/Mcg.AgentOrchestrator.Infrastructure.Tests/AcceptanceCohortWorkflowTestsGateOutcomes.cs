@@ -254,10 +254,8 @@ public sealed class AcceptanceCohortWorkflowTestsGateOutcomes : AcceptanceCohort
             _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
             var verifier = new SequenceAcceptanceVerifier(
             [
-                FailedVerification(repo, "combined-red-one-member.trx", "combined") with
-                { Checks = [new AcceptanceCheckResult("combined", false, 1, "combined failed", FailingTestIdentities: ["Fails"])] },
-                FailedVerification(repo, "first-member-red.trx", "first partition") with
-                { Checks = [new AcceptanceCheckResult("first partition", false, 1, "first partition failed", FailingTestIdentities: ["Fails"])] },
+                FailedVerification(repo, "combined-red-one-member.trx", "combined"),
+                FailedVerification(repo, "first-member-red.trx", "first partition"),
                 new AcceptanceVerificationResult(
                     Passed: true,
                     Skipped: false,
