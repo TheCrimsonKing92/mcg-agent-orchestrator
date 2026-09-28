@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 public sealed class OrchestratorTempRootSourceGuardTests
 {
     private sealed record AllowedUse(string Path, string Snippet, int Count, string Reason);
@@ -60,13 +62,15 @@ public sealed class OrchestratorTempRootSourceGuardTests
         Allowed.Any(allowed => allowed.Path == path &&
             line.Contains(allowed.Snippet, StringComparison.Ordinal));
 
-    private static string FindRepositoryRoot()
+    private static string FindRepositoryRoot([CallerFilePath] string sourceFilePath = "")
     {
-        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
-            for (var directory = new DirectoryInfo(start); directory is not null; directory = directory.Parent)
-                if (Directory.Exists(Path.Combine(directory.FullName, "src")) &&
-                    File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln")))
-                    return directory.FullName;
-        throw new DirectoryNotFoundException("Repository root was not found.");
+        for (var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
+             directory is not null;
+             directory = directory.Parent)
+            if ((Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                 File.Exists(Path.Combine(directory.FullName, ".git"))) &&
+                Directory.Exists(Path.Combine(directory.FullName, "src")))
+                return directory.FullName;
+        throw new DirectoryNotFoundException($"Repository root was not found from source path '{sourceFilePath}'.");
     }
 }
