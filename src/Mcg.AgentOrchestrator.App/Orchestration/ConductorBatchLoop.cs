@@ -722,8 +722,8 @@ internal sealed partial class ConductorBatchLoop
             var preWalkClock = Stopwatch.StartNew();
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
-            var preWalkIntentLines = new List<string>();
-            var preWalkIntentProcessed = false;
+            var preWalkIntentLines = ServiceWorkspaceIntents(kernel);
+            var preWalkIntentProcessed = preWalkIntentLines.Count > 0;
             var intentsAwaitingReload = 0;
             if (_operatorIntents is not null)
             {

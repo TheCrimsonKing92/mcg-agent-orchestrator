@@ -1,12 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed class AdjudicationEvidenceResolver(string? orchestratorDirectory = null)
+internal sealed partial class AdjudicationEvidenceResolver(string? orchestratorDirectory = null)
 {
     public bool TryResolve(
         string reference,
@@ -24,15 +23,9 @@ internal sealed class AdjudicationEvidenceResolver(string? orchestratorDirectory
                 case "trx":
                 case "operator-evidence":
                 {
-                    if (string.IsNullOrWhiteSpace(value)) break;
-                    var path = Path.IsPathFullyQualified(value)
-                        ? Path.GetFullPath(value)
-                        : Path.GetFullPath(value, payload.WorkingDirectory);
-                    if (kind == "trx" && !path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase)) break;
-                    if (!File.Exists(path)) break;
-                    if (kind == "trx" && XDocument.Load(path).Root?.Name.LocalName != "TestRun") break;
-                    entry = new EvidenceManifestEntry(reference, Hash(File.ReadAllBytes(path)));
-                    return true;
+                    if (TryResolveFile(reference, kind, value, payload.WorkingDirectory,
+                            allowLineSuffix: false, out entry)) return true;
+                    break;
                 }
                 case "focused-evidence":
                 {

@@ -299,11 +299,12 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         cmd.CommandText = """
             SELECT DISTINCT goal_id
             FROM operator_intents
-            WHERE status IN ($pending, $claimed)
+            WHERE status IN ($pending, $claimed) AND goal_id <> $workspace
             ORDER BY goal_id
             """;
         cmd.Parameters.AddWithValue("$pending", OperatorIntentStatus.Pending.ToString());
         cmd.Parameters.AddWithValue("$claimed", OperatorIntentStatus.Claimed.ToString());
+        cmd.Parameters.AddWithValue("$workspace", OperatorIntentScopes.Workspace);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         var goalIds = new List<string>();
         while (await reader.ReadAsync(cancellationToken))
