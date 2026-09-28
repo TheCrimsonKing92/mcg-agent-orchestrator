@@ -108,7 +108,7 @@ public sealed class RepoProcessCliCommandTests
     public void CommandQuery_ManyIncidentalFailures_EmitsBoundedSummary(int incidentalCount)
     {
         var output = new StringWriter();
-        var snapshots = Enumerable.Range(1000, incidentalCount)
+        var snapshots = SyntheticProcessIds(incidentalCount, lane: 0)
             .Select(processId => new RepoProcessCliCommand.ProcessSnapshot(
                 processId,
                 1,
@@ -138,6 +138,49 @@ public sealed class RepoProcessCliCommandTests
         Assert.DoesNotContain("operation=filter id=1000", text);
         Assert.True(text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Length <= 3, text);
         Assert.DoesNotContain("No matching repo processes found", text);
+    }
+
+    [Xunit.Fact]
+    public void SyntheticProcessIds_SkipCurrentProcessIdAndPreserveRequestedCount()
+    {
+        var ids = SyntheticProcessIds(1_000, lane: 0);
+
+        Assert.Equal(1_000, ids.Count);
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+        Assert.DoesNotContain(Environment.ProcessId, ids);
+        Assert.True(ids.SequenceEqual(ids.Order()));
+
+        var firstCandidate = Environment.ProcessId;
+        var idsWithForcedCollision = SyntheticProcessIdsFrom(firstCandidate, 5);
+
+        Assert.Equal(5, idsWithForcedCollision.Count);
+        Assert.Equal(5, idsWithForcedCollision.Distinct().Count());
+        Assert.DoesNotContain(Environment.ProcessId, idsWithForcedCollision);
+        Assert.Equal(firstCandidate + 5, idsWithForcedCollision[idsWithForcedCollision.Count - 1]);
+    }
+
+    [Xunit.Fact]
+    public void CommandQuery_SyntheticRangeContainsCurrentProcess_SummaryCountIsOneLower()
+    {
+        var ids = SyntheticProcessIds(10, lane: 0).ToArray();
+        ids[^1] = Environment.ProcessId;
+        var snapshots = ids.Select(processId => new RepoProcessCliCommand.ProcessSnapshot(
+            processId,
+            1,
+            $"system-{processId}",
+            null,
+            null,
+            null,
+            ProcessInspectionStatus.AccessDenied)).ToArray();
+        var output = new StringWriter();
+
+        RepoProcessCliCommand.PrintInfo(
+            ["repo-process-info", "--command-contains", "schedule.ps1"],
+            output,
+            _ => snapshots);
+
+        Assert.Contains("PROCESS_QUERY_SUMMARY operation=filter-incidental count=9 statuses=AccessDenied:9", output.ToString());
+        Assert.DoesNotContain($"{Environment.ProcessId}:system-", output.ToString());
     }
 
     [Xunit.Fact]
@@ -252,7 +295,7 @@ public sealed class RepoProcessCliCommandTests
     {
         var output = new StringWriter();
         var parentStartedAt = DateTimeOffset.Parse("2026-09-03T12:00:00Z");
-        var snapshots = Enumerable.Range(200, 10)
+        var snapshots = SyntheticProcessIds(10, lane: 1)
             .Select(processId => new RepoProcessCliCommand.ProcessSnapshot(
                 processId,
                 100,
@@ -327,4 +370,43 @@ public sealed class RepoProcessCliCommandTests
             startedAt,
             "dotnet App.dll conduct --loop",
             ProcessInspectionStatus.Available);
+
+    private const int SyntheticProcessIdBase = 1_000_000_000;
+    private const int SyntheticProcessIdLaneWidth = 1_000_000;
+
+    private static IReadOnlyList<int> SyntheticProcessIds(int count, int lane)
+    {
+        if (lane is < 0 or > 9)
+        {
+            throw new ArgumentOutOfRangeException(nameof(lane));
+        }
+
+        if (count < 0 || count >= SyntheticProcessIdLaneWidth)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        return SyntheticProcessIdsFrom(SyntheticProcessIdBase + lane * SyntheticProcessIdLaneWidth, count);
+    }
+
+    private static IReadOnlyList<int> SyntheticProcessIdsFrom(int firstCandidate, int count)
+    {
+        var ids = new List<int>(count);
+        for (long candidate = firstCandidate; ids.Count < count; candidate++)
+        {
+            if (candidate == Environment.ProcessId)
+            {
+                continue;
+            }
+
+            if (candidate > int.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count));
+            }
+
+            ids.Add((int)candidate);
+        }
+
+        return ids;
+    }
 }
