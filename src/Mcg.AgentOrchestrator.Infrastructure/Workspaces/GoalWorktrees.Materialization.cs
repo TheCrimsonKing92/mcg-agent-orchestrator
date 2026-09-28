@@ -119,6 +119,7 @@ public static partial class GoalWorktrees
         }
 
         var rematerialized = new List<string>(candidates.Count);
+        var attempts = new List<RematerializationAttempt>(candidates.Count);
         foreach (var candidate in candidates)
         {
             if (!TryInvalidateCachedStat(candidate, out failure))
@@ -131,7 +132,10 @@ public static partial class GoalWorktrees
                     preimageDirectory);
             }
 
+            var before = CaptureMaterializationSnapshot(candidate.FullPath);
             var checkout = gitRunner(worktreePath, ["checkout", "--", candidate.RelativePath]);
+            var after = CaptureMaterializationSnapshot(candidate.FullPath);
+            attempts.Add(new RematerializationAttempt(candidate.RelativePath, before, after, checkout));
             if (!checkout.Succeeded || checkout.DrainTimedOut)
             {
                 var attempted = rematerialized.Append(candidate.RelativePath).ToArray();
@@ -146,12 +150,15 @@ public static partial class GoalWorktrees
             rematerialized.Add(candidate.RelativePath);
         }
 
-        if (!TryVerifyAfterWrite(worktreePath, branch, identity, candidates, gitRunner, out failure))
+        if (!TryVerifyAfterWrite(worktreePath, branch, identity, candidates, gitRunner, out failure, out var failureKind, out var dirtyStatus))
         {
+            var evidence = failureKind is AfterWriteFailureKind.StillDirty or AfterWriteFailureKind.BytesMismatch
+                ? DescribeRematerializationEvidence(worktreePath, attempts, dirtyStatus, gitRunner)
+                : string.Empty;
             return Incomplete(
                 branch,
                 goalId,
-                $"guarded rematerialization did not produce a verified usable checkout: {failure}; exact preimages remain at '{preimageDirectory}'",
+                $"guarded rematerialization did not produce a verified usable checkout: {failure}; exact preimages remain at '{preimageDirectory}'{evidence}",
                 rematerialized,
                 preimageDirectory);
         }
@@ -329,27 +336,42 @@ public static partial class GoalWorktrees
         MaterializationIdentity identity,
         IReadOnlyList<MaterializationCandidate> candidates,
         Func<string, string[], GitCli.GitResult> gitRunner,
-        out string failure)
+        out string failure,
+        out AfterWriteFailureKind failureKind,
+        out string dirtyStatus)
     {
+        failureKind = AfterWriteFailureKind.Other;
+        dirtyStatus = string.Empty;
         if (!TryCaptureIdentity(worktreePath, branch, gitRunner, out var currentIdentity, out failure) || currentIdentity != identity)
         {
             failure = failure.Length > 0 ? failure : "repository identity changed during rematerialization";
             return false;
         }
 
+        var status = string.Empty;
         if (!TryEnsureNoGitOperation(worktreePath, gitRunner, out failure) ||
-            !TryReadStatus(worktreePath, gitRunner, out var status, out failure) ||
+            !TryReadStatus(worktreePath, gitRunner, out status, out failure) ||
             status.Length > 0)
         {
+            if (failure.Length == 0 && status.Length > 0)
+            {
+                failureKind = AfterWriteFailureKind.StillDirty;
+                dirtyStatus = status;
+            }
             failure = failure.Length > 0 ? failure : "worktree is still dirty after rematerialization";
             return false;
         }
 
         foreach (var candidate in candidates)
         {
-            if (!TryReadSingleLine(worktreePath, gitRunner, $"rematerialized blob for '{candidate.RelativePath}'", ["hash-object", "--no-filters", "--", candidate.RelativePath], out var workingBlob, out failure) ||
+            var blobRead = TryReadSingleLine(worktreePath, gitRunner, $"rematerialized blob for '{candidate.RelativePath}'", ["hash-object", "--no-filters", "--", candidate.RelativePath], out var workingBlob, out failure);
+            if (!blobRead ||
                 !string.Equals(workingBlob, candidate.CommittedBlob, StringComparison.OrdinalIgnoreCase))
             {
+                if (blobRead && failure.Length == 0)
+                {
+                    failureKind = AfterWriteFailureKind.BytesMismatch;
+                }
                 failure = failure.Length > 0 ? failure : $"rematerialized bytes for '{candidate.RelativePath}' do not match HEAD";
                 return false;
             }
