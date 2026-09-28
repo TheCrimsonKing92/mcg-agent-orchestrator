@@ -8,10 +8,14 @@ internal sealed partial class ConductorBatchLoop
     private readonly HashSet<GoalId> _landedThisTick = [];
     private readonly HashSet<GoalId> _landingTickGoalIds = [];
 
-    private void ResetLandingTickSave()
+    private Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>?
+        ResetLandingTickSave(
+            Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick)
     {
         _landedThisTick.Clear();
         _landingTickGoalIds.Clear();
+        _durableThisTick.Clear();
+        return TrackTickDurableCheckpoints(checkpointGoalTick);
     }
 
     private void NoteLandingForTick(string goalId) => _landedThisTick.Add(new GoalId(goalId));
@@ -25,6 +29,7 @@ internal sealed partial class ConductorBatchLoop
     }
 
     private void SaveLandingTickBeforeRelaunch(
+        bool relaunchPending,
         AgentOrchestratorKernel kernel,
         Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick,
@@ -33,26 +38,38 @@ internal sealed partial class ConductorBatchLoop
         int tick,
         Action<TimeSpan>? busyWriteDelay)
     {
-        if (_landingTickGoalIds.Count == 0) return;
-        var goalIds = _landingTickGoalIds.ToArray();
-        if (checkpointGoalTick is not null)
+        try
         {
-            var durable = ApplyCheckpointOutcomes(
-                checkpointGoalTick(kernel, goalIds), goalIds, checkpointHeldGoals,
-                tick, "landing-state-save", []);
-            if (durable.Count != goalIds.Length)
-                throw new InvalidOperationException("Landing state checkpoint was held; refusing self-relaunch.");
+            if (!relaunchPending || _landingTickGoalIds.Count == 0) return;
+            var goalIds = _landingTickGoalIds.Where(id => !_durableThisTick.Contains(id)).ToArray();
+            if (goalIds.Length == 0)
+            {
+                _landingTickGoalIds.Clear();
+                return;
+            }
+            if (checkpointGoalTick is not null)
+            {
+                var durable = ApplyCheckpointOutcomes(
+                    checkpointGoalTick(kernel, goalIds), goalIds, checkpointHeldGoals,
+                    tick, "landing-state-save", []);
+                if (durable.Count != goalIds.Length)
+                    throw new InvalidOperationException("Landing state checkpoint was held; refusing self-relaunch.");
+            }
+            else if (persistGoalTick is not null)
+            {
+                PersistGoalTickOrThrow(persistGoalTick, kernel, goalIds, tick, [], busyWriteDelay);
+            }
+            else if (!TryPersistTick(
+                         persistTick, kernel, tick, ResolveGoalContext(goalIds, onlyGoalId: null),
+                         "landing-state-save", [], busyWriteDelay))
+            {
+                throw new InvalidOperationException("Landing state save failed; refusing self-relaunch.");
+            }
+            _landingTickGoalIds.Clear();
         }
-        else if (persistGoalTick is not null)
+        finally
         {
-            PersistGoalTickOrThrow(persistGoalTick, kernel, goalIds, tick, [], busyWriteDelay);
+            _durableThisTick.Clear();
         }
-        else if (!TryPersistTick(
-                     persistTick, kernel, tick, ResolveGoalContext(goalIds, onlyGoalId: null),
-                     "landing-state-save", [], busyWriteDelay))
-        {
-            throw new InvalidOperationException("Landing state save failed; refusing self-relaunch.");
-        }
-        _landingTickGoalIds.Clear();
     }
 }
