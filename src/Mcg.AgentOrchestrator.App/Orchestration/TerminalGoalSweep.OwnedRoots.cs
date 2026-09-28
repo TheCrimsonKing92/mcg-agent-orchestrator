@@ -91,12 +91,20 @@ internal static partial class TerminalGoalSweep
 
         var writeFailures = DotnetBuildEnvironmentManager.DrainOwnedRunRootWriteFailures(
             MaxOwnedBuildRootsPerSweep, writeFailureScope);
-        return writeFailures.Count == 0
-            ? result
-            : result with
-            {
-                ObserveOnlyReports = [.. result.ObserveOnlyReports, .. writeFailures]
-            };
+        string artifactReport;
+        try
+        {
+            artifactReport = TempRootJanitor.ReapLeakedTempArtifacts(
+                Path.GetTempPath(), OrchestratorTempRoot.GetParent(), TimeProvider.System).SummaryLine;
+        }
+        catch (Exception ex)
+        {
+            artifactReport = $"temp-artifact-janitor failed={ex.GetType().Name}";
+        }
+        return result with
+        {
+            ObserveOnlyReports = [.. result.ObserveOnlyReports, .. writeFailures, artifactReport]
+        };
     }
 
     internal static TerminalGoalSweepOwnedRootResult ReapOwnedBuildRootsCore(

@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class PostLandingCanaryFixture : IDisposable
@@ -21,8 +23,7 @@ internal sealed class PostLandingCanaryFixture : IDisposable
         }
 
         var root = Path.Combine(
-            Path.GetTempPath(),
-            "mcg-post-landing-canary",
+            OrchestratorTempRoot.GetPurposeDirectory("post-landing-canary"),
             landingSha[..Math.Min(12, landingSha.Length)],
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

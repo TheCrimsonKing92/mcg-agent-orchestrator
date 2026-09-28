@@ -204,8 +204,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
                 System.Security.Cryptography.SHA256.HashData(
                     System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(repositoryRoot))))[..16];
             var appOutputDirectory = Path.Combine(
-                Path.GetTempPath(),
-                "mcg-self-relaunch-build",
+                OrchestratorTempRoot.GetPurposeDirectory("self-relaunch-build"),
                 repositoryBuildKey);
             var stagingOptions = new ConductorSuccessorStagingOptions(
                 RepositoryRoot: repositoryRoot,

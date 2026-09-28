@@ -102,7 +102,7 @@ internal static class HermesAcpCliCommand
         var temporaryHome = string.IsNullOrWhiteSpace(ValueAfter(parts, "--hermes-home"));
         var hermesHome = Path.GetFullPath(
             ValueAfter(parts, "--hermes-home") ??
-            Path.Combine(Path.GetTempPath(), "mcg-hermes-identity", Guid.NewGuid().ToString("N")));
+            Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("hermes-identity"), Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(hermesHome);
         verify ??= (image, directory, home, token) =>
             new HermesAcpLifecycle().VerifyExecutableIdentityAsync(image, directory, home, token);

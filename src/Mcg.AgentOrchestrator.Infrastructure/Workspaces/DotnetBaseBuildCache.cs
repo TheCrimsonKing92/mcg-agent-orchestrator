@@ -183,7 +183,7 @@ internal sealed class DotnetBaseBuildCache
 
     public static string ProjectOutputHash(string artifactsPath, string project)
     {
-        var stagingPath = Path.Combine(Path.GetTempPath(), $"mcg-base-build-hash-{Guid.NewGuid():N}");
+        var stagingPath = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("base-build-hash"), $"mcg-base-build-hash-{Guid.NewGuid():N}");
         try
         {
             foreach (var sourceRoot in ProjectArtifactRoots(artifactsPath, project).Where(Directory.Exists))

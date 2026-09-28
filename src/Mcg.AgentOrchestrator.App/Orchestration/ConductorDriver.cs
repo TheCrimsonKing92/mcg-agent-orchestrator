@@ -1302,12 +1302,12 @@ internal sealed partial class ConductorDriver
             runAcceptanceVerificationWithLease is not null;
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(Path.GetTempPath(), "mcg-conductor-acceptance-attempts", Guid.NewGuid().ToString("N")),
+                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("conductor-acceptance-attempts"), Guid.NewGuid().ToString("N")),
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null);
         _focusedEvidenceAttemptCoordinator = focusedEvidenceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(Path.GetTempPath(), "mcg-conductor-focused-evidence-attempts", Guid.NewGuid().ToString("N")),
+                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("conductor-focused-evidence-attempts"), Guid.NewGuid().ToString("N")),
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null);
     }
