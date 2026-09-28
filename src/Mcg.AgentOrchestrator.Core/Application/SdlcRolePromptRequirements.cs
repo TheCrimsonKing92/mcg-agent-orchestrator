@@ -25,7 +25,7 @@ internal static class SdlcRolePromptRequirements
     private const string ReviewerDefectContract =
         "- `REVIEW DEFECT` is a later-round blocker demonstrably present in an earlier reviewed complete candidate diff. Self-check for it; absent historical comparison evidence prevents this label, not current-diff review.";
     private const string DeveloperDeferredTestsExactForm =
-        "- Deferred tests form: write exactly `tests: deferred - ClassA, ClassB`, with the test class names comma-separated directly after the hyphen, or wrap each name in backticks.";
+        "- Format: `tests: deferred - ClassA, ClassB` or backticked names.";
 
     public static IReadOnlyList<string> Build(AgentRole role)
     {

@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class DeveloperDeferredTestsExactFormPromptTests
 {
     private const string ExactForm =
-        "- Deferred tests form: write exactly `tests: deferred - ClassA, ClassB`, with the test class names comma-separated directly after the hyphen, or wrap each name in backticks.";
+        "- Format: `tests: deferred - ClassA, ClassB` or backticked names.";
 
     [Theory]
     [InlineData(null)]
