@@ -8,11 +8,24 @@ internal interface IConductorStewardModelRound
     Task<string> DispatchAsync(ConductorStewardTrigger trigger, string workingDirectory, CancellationToken cancellationToken);
 }
 
-internal sealed class ClaudeConductorStewardModelRound(string receiptDirectory) : IConductorStewardModelRound
+internal sealed class ClaudeConductorStewardModelRound(
+    string receiptDirectory,
+    Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null,
+    IConductorStewardTrackedFileLister? files = null,
+    Func<string, string, bool>? pathExists = null,
+    Func<Guid>? newSessionId = null) : IConductorStewardModelRound
 {
+    private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync =
+        runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
+    private readonly IConductorStewardTrackedFileLister _files = files ?? new GitConductorStewardTrackedFileLister();
+    private readonly Func<string, string, bool> _pathExists = pathExists ?? ConductorStewardEvidenceBundle.PathExists;
+    private readonly Func<Guid> _newSessionId = newSessionId ?? Guid.NewGuid;
+
     public async Task<string> DispatchAsync(
         ConductorStewardTrigger trigger, string workingDirectory, CancellationToken cancellationToken)
     {
+        var bundle = ConductorStewardEvidenceBundle.Build(trigger, workingDirectory, _files, _pathExists);
+        var sessionId = _newSessionId().ToString("D");
         var prompt = $"""
             You are the conductor Steward. This is a read-only adjudication. Return exactly one fenced JSON object.
             Allowed kinds: route, ask-owner, no-action. A route has fields kind, targetTaskId,
@@ -27,20 +40,21 @@ internal sealed class ClaudeConductorStewardModelRound(string receiptDirectory) 
             Trigger evidence:
             {trigger.Evidence}
             Evidence references: {string.Join(", ", trigger.EvidenceReferences)}
+            {bundle}
             Current refined acceptance criteria:
             {string.Join(Environment.NewLine, trigger.AcceptanceCriteria.Select((criterion, index) => $"{index + 1}. {criterion}"))}
             """;
         WorkerProcessRunResult result;
         try
         {
-            result = await WorkerProcessRunner.RunBufferedAsync(
-                new WorkerProcessRunRequest("claude --model sonnet --permission-mode plan -p",
-                    workingDirectory, TimeSpan.FromMinutes(10), prompt), cancellationToken);
-            WriteReceipt(trigger, result.ExitCode, result.StandardOutput, result.StandardError, null);
+            result = await _runProcessAsync(
+                new WorkerProcessRunRequest($"claude --model sonnet --permission-mode plan --tools 'Read,Grep,Glob' --allowed-tools 'Read,Grep,Glob' --session-id {sessionId} -p",
+                    workingDirectory, TimeSpan.FromMinutes(4), prompt), cancellationToken);
+            WriteReceipt(trigger, sessionId, result.ExitCode, result.StandardOutput, result.StandardError, null);
         }
         catch (Exception ex)
         {
-            WriteReceipt(trigger, null, null, null, $"{ex.GetType().Name}: {ex.Message}");
+            WriteReceipt(trigger, sessionId, null, null, null, $"{ex.GetType().Name}: {ex.Message}");
             throw;
         }
         if (result.ExitCode != 0)
@@ -48,7 +62,7 @@ internal sealed class ClaudeConductorStewardModelRound(string receiptDirectory) 
         return result.StandardOutput;
     }
 
-    private void WriteReceipt(ConductorStewardTrigger trigger, int? exitCode,
+    private void WriteReceipt(ConductorStewardTrigger trigger, string sessionId, int? exitCode,
         string? stdout, string? stderr, string? failure)
     {
         Directory.CreateDirectory(receiptDirectory);
@@ -56,6 +70,7 @@ internal sealed class ClaudeConductorStewardModelRound(string receiptDirectory) 
         File.WriteAllText(path, JsonSerializer.Serialize(new
         {
             trigger = trigger.Identity,
+            sessionId,
             completedAt = DateTimeOffset.UtcNow,
             exitCode,
             stdout,
