@@ -728,7 +728,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "Acceptance execution context was not supplied."));
         var engineSettings = executionOwner.Settings;
         using var laneDurationScope = AcceptanceLaneDurationStore.PushRecordingScope(worktreePath);
-        if (TryClassifyManifestTrust(worktreePath, changedFiles) is { } manifestTrustFailure && !HasOwnerPolicyApproval(worktreePath, goalId, changedFiles))
+        var ownerProtectedDecision = EvaluateOwnerProtectedConfiguration(
+            worktreePath, goalId, changedFiles, executionOwner.OwnerProtectedCohortMembers);
+        if (ownerProtectedDecision.Failure is { } manifestTrustFailure)
         {
             phaseAccountant.MarkCompleted(passed: false);
             return new AcceptanceVerificationResult(
@@ -1021,6 +1023,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks[index] = attributedChecks[index];
         }
 
+        if (ownerProtectedDecision.Pass is { } ownerProtectedPass) checks.Add(ownerProtectedPass);
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = CollectTestResultPaths(checks);
