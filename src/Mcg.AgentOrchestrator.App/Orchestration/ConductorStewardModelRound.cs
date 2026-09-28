@@ -13,7 +13,8 @@ internal sealed class ClaudeConductorStewardModelRound(
     Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null,
     IConductorStewardTrackedFileLister? files = null,
     Func<string, string, bool>? pathExists = null,
-    Func<Guid>? newSessionId = null) : IConductorStewardModelRound
+    Func<Guid>? newSessionId = null,
+    ConductorLessonSelector? lessons = null) : IConductorStewardModelRound
 {
     private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync =
         runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
@@ -24,7 +25,8 @@ internal sealed class ClaudeConductorStewardModelRound(
     public async Task<string> DispatchAsync(
         ConductorStewardTrigger trigger, string workingDirectory, CancellationToken cancellationToken)
     {
-        var bundle = ConductorStewardEvidenceBundle.Build(trigger, workingDirectory, _files, _pathExists);
+        var selected = lessons?.Select(ConductorLessonSelector.StewardTags(trigger.Kind));
+        var bundle = ConductorStewardEvidenceBundle.Build(trigger, workingDirectory, _files, _pathExists, selected);
         var sessionId = _newSessionId().ToString("D");
         var prompt = $"""
             You are the conductor Steward. This is a read-only adjudication. Return exactly one fenced JSON object.
