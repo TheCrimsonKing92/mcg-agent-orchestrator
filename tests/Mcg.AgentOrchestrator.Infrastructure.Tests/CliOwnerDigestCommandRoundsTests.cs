@@ -58,6 +58,8 @@ public sealed class CliOwnerDigestCommandRoundsTests
         var originalJson = Run(fixture, "--json");
         Assert.Equal(0, originalText.Code);
         Assert.Equal(0, originalJson.Code);
+        Assert.Equal(BaselineText, originalText.Output);
+        Assert.Equal(BaselineJson, originalJson.Output);
         await AddRoundsAsync(fixture);
 
         var laterText = Run(fixture);
@@ -74,6 +76,22 @@ public sealed class CliOwnerDigestCommandRoundsTests
         Assert.Equal(CliCommandHelp.OwnerDigestUsage, exception.Message);
         Assert.Contains("--rounds", exception.Message);
     }
+
+    // Fixed expectations for the existing digest fixture and legacy output.
+    // Keep these independent of the candidate command and report implementation.
+    private static readonly string BaselineText = string.Join(Environment.NewLine,
+        "Owner digest [2026-09-24T00:00:00.0000000+00:00, 2026-09-25T00:00:00.0000000+00:00) | reverts=not tracked",
+        "Goal | Landed UTC | Interventions H/A/O | Landing | Tail h | Mechanical h H/A/O",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 2026-09-24T08:00:00.0000000+00:00 | 2/1/0 | correct | 4 | 1.5/1/0",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | 2026-09-24T12:00:00.0000000+00:00 | 0/0/0 | escape | 2 | 0/0/0",
+        "Totals: landed=2 interventions=3 H/A/O=2/1/0 mean=1.5 correct=1 escapes=1 pending=0 correct-rate=0.5 tail-median-h=2 tail-p90-h=4 tail-known=2 tail-unknown=0 mechanical-h=2.5 H/A/O=1.5/1/0 unresolved-h=0",
+        "Non-landed goals with interventions in window: 1", "");
+
+    private static readonly string BaselineJson =
+        "{\"since\":\"2026-09-24T00:00:00+00:00\",\"until\":\"2026-09-25T00:00:00+00:00\",\"reverts\":\"not tracked\",\"goals\":[" +
+        "{\"goalId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"landedAt\":\"2026-09-24T08:00:00+00:00\",\"landingSha\":\"aaaa\",\"interventions\":{\"human\":2,\"agent\":1,\"other\":0,\"total\":3},\"landingStatus\":\"correct\",\"tailHours\":4,\"mechanicalHours\":{\"human\":1.5,\"agent\":1,\"other\":0,\"total\":2.5},\"unresolvedHoldHours\":0,\"observedAfterLandingHours\":16}," +
+        "{\"goalId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"landedAt\":\"2026-09-24T12:00:00+00:00\",\"landingSha\":\"bbbb\",\"interventions\":{\"human\":0,\"agent\":0,\"other\":0,\"total\":0},\"landingStatus\":\"escape\",\"tailHours\":2,\"mechanicalHours\":{\"human\":0,\"agent\":0,\"other\":0,\"total\":0},\"unresolvedHoldHours\":0,\"observedAfterLandingHours\":12}]," +
+        "\"totals\":{\"landedGoals\":2,\"interventions\":{\"human\":2,\"agent\":1,\"other\":0,\"total\":3},\"meanInterventionsPerLanding\":1.5,\"correctLandings\":1,\"escapes\":1,\"pending\":0,\"correctLandingRate\":0.5,\"tailMedianHours\":2,\"tailP90Hours\":4,\"knownTailCount\":2,\"unknownTailCount\":0,\"mechanicalHours\":{\"human\":1.5,\"agent\":1,\"other\":0,\"total\":2.5},\"unresolvedHoldHours\":0},\"nonLandedGoalsWithInterventions\":1,\"malformedLifecycleLines\":0}" + Environment.NewLine;
 
     private static void AssertRows(JsonElement rows,
         params (string Key, int Rounds, long Input, int Unreported)[] expected)
