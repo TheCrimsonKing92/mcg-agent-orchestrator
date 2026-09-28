@@ -17,6 +17,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
         GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Existing worker");
         var goal = CreateVerifiedSimpleGoal(kernel, "Update conductor loop");
         var attemptRoot = CreateTempDirectory("mcg-single-landing-tick-durability");
+        var stopFilePath = Path.Combine(attemptRoot, "stop");
         try
         {
             const string landedHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -56,6 +57,10 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                 selfRelaunch: _ =>
                 {
                     relaunchCalls++;
+                    if (relaunchCalls > 1)
+                    {
+                        throw new InvalidOperationException("Self-relaunch was invoked more than once.");
+                    }
                     try
                     {
                         var reloaded = AgentOrchestratorKernel.FromSnapshot(persisted);
@@ -69,11 +74,20 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                     {
                         reloadException = exception;
                     }
-                    return ConductorSelfRelaunchResult.PreparationFailed("fixture", "reload observed");
+                    var handoff = new ConductorLoopHandoffResult(
+                        Started: true, ProcessId: null, StdoutPath: null, StderrPath: null,
+                        Reason: "fixture reload observed");
+                    return new ConductorSelfRelaunchResult(
+                        handoff.Started, handoff.Started ? null : "handoff", handoff.Reason, handoff);
                 },
                 selfRelaunchEnabled: true).Run(
-                    kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                    kernel, driver, ConductorAutonomyPolicy.Conservative, stopFilePath,
                     maxIterations: 3,
+                    sleepFunc: _ =>
+                    {
+                        File.WriteAllText(stopFilePath, "stop");
+                        return true;
+                    },
                     persistGoalTick: (checkpoint, changedIds) =>
                     {
                         if (changedIds.Contains(goal.Id)) persisted = checkpoint.ExportSnapshot();
