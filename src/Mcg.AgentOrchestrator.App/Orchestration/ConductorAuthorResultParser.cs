@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -12,10 +11,9 @@ internal static class ConductorAuthorResultParser
     internal static ConductorAuthorResult? Parse(string output)
     {
         if (string.IsNullOrWhiteSpace(output)) return null;
-        var fenced = Regex.Matches(output, @"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var fenced = ConductorFencedJsonExtraction.FencedObjects(output);
         if (fenced.Count > 1) return null;
-        var json = fenced.Count == 1 ? fenced[0].Groups[1].Value : output.Trim();
+        var json = fenced.Count == 1 ? fenced[0] : output.Trim();
         try
         {
             using var document = JsonDocument.Parse(json);

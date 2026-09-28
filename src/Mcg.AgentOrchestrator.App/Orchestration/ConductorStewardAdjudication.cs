@@ -19,14 +19,7 @@ internal static class ConductorStewardAdjudicationParser
     {
         try
         {
-            var trimmed = output.Trim();
-            if (trimmed.StartsWith("```", StringComparison.Ordinal))
-            {
-                var firstLine = trimmed.IndexOf('\n');
-                var finalFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
-                if (firstLine < 0 || finalFence <= firstLine) throw new JsonException("Missing JSON fence.");
-                trimmed = trimmed[(firstLine + 1)..finalFence].Trim();
-            }
+            var trimmed = ConductorFencedJsonExtraction.LastFencedOrTrimmed(output);
             using var document = JsonDocument.Parse(trimmed);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException("Expected object.");
