@@ -295,7 +295,7 @@ internal sealed partial class ConductorDriver
         _cohortWorkspace = workspace;
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
-        var dispatchRunner = new BackgroundDispatchRunner();
+        var dispatchRunner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
         _reconcileExitedDispatch = (goal, taskId) =>
         {
             dispatchRunner.RefreshLatestProcessWithOutcome(kernel, goal.Id, taskId);

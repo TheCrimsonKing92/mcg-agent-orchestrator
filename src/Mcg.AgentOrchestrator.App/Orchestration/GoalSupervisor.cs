@@ -127,7 +127,8 @@ public static class GoalSupervisor
             if (proposal.Kind == GoalSupervisorProposalKind.RefreshRunningProcess && proposal.TaskId is { } refreshTaskId)
             {
                 AutonomyPolicyEvidence.Record(kernel, goal, policy, AutonomyAction.Refresh, "supervisor refresh", allowed: true);
-                new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, refreshTaskId);
+                OperatorCancelAwareDispatchRunner.ForWorkspace(workspace)
+                    .RefreshLatestProcess(kernel, goal.Id, refreshTaskId);
                 applied.Add(proposal.SuggestedCommand);
                 continue;
             }

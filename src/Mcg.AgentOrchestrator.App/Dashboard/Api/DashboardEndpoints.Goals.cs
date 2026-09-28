@@ -630,7 +630,7 @@ internal static partial class DashboardEndpoints
             return policyConfirmation;
         }
 
-        var runner = new BackgroundDispatchRunner();
+        var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(services.Workspace);
         var processInspection = new ProcessInspectionSnapshotScope(ProcessInspectionSnapshots.SnapshotOperation);
         var outcome = runner.ReconcileLatestProcess(snapshot, snapshotGoal.Id, snapshotTask.Id);
         return await MutateAsync(
@@ -669,7 +669,7 @@ internal static partial class DashboardEndpoints
         }
 
         var plan = snapshot.BuildProcessBatchPlan(snapshotGoal.Id, ProcessBatchActionKind.RefreshDispatches);
-        var runner = new BackgroundDispatchRunner();
+        var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(services.Workspace);
         var outcomes = new List<(TaskId TaskId, DispatchRefreshOutcome Outcome)>();
         foreach (var item in plan.Items.Where(item => item.Status == ProcessBatchItemStatus.Ready))
         {

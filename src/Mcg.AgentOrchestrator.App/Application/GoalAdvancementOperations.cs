@@ -323,7 +323,7 @@ public sealed class GoalAdvancementOperations
             NextActionAutomationKind.RunAssignedTask =>
                 await AdvanceRunAssignedTaskAsync(kernel, agents, providers, workspace, goal, automation.TaskId!, allowApiExecution),
             NextActionAutomationKind.RefreshRunningProcess =>
-                new GoalAdvanceTaskUpdated(AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!)),
+                new GoalAdvanceTaskUpdated(AdvanceRefreshRunningProcess(kernel, workspace, goal, automation.TaskId!)),
             NextActionAutomationKind.StartRecordedDispatch =>
                 allowProcessStart
                     ? new GoalAdvanceTaskUpdated(AdvanceStartRecordedDispatch(kernel, workspace, goal, automation.TaskId!))
@@ -351,7 +351,7 @@ public sealed class GoalAdvancementOperations
                 new GoalAdvanceDispatchPrepared(ExecuteSubscriptionRunAssignedTask(
                     kernel, agents, profiles, workspace, goal, automation.TaskId!, allowLargePaidSubscriptionStart, providers)),
             NextActionAutomationKind.RefreshRunningProcess =>
-                new GoalAdvanceTaskUpdated(AdvanceRefreshRunningProcess(kernel, goal, automation.TaskId!)),
+                new GoalAdvanceTaskUpdated(AdvanceRefreshRunningProcess(kernel, workspace, goal, automation.TaskId!)),
             NextActionAutomationKind.StartRecordedDispatch =>
                 new GoalAdvanceTaskUpdated(ExecuteSubscriptionStartRecordedDispatch(
                     kernel,
@@ -555,9 +555,10 @@ public sealed class GoalAdvancementOperations
         return null;
     }
 
-    public TaskSpec AdvanceRefreshRunningProcess(AgentOrchestratorKernel kernel, Goal goal, TaskId taskId)
+    public TaskSpec AdvanceRefreshRunningProcess(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal, TaskId taskId)
     {
-        new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, taskId);
+        OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).RefreshLatestProcess(kernel, goal.Id, taskId);
         return goal.Tasks.Single(task => task.Id == taskId);
     }
 

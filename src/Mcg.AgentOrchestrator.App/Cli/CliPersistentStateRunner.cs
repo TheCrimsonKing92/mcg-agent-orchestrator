@@ -252,6 +252,8 @@ internal static partial class CliPersistentStateRunner
         {
             return ExecuteSingleGoalCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
+        if (IsCancelDispatchCommand(args))
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         if (IsGoalScopedTaskMutationCommand(args) || args.Count > 0 && args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
@@ -3838,7 +3840,7 @@ internal static partial class CliPersistentStateRunner
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
 
         var candidates = CaptureRunningProcessIdentities(kernel);
-        var runner = new BackgroundDispatchRunner();
+        var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
 
         switch (command)
         {
@@ -3852,7 +3854,7 @@ internal static partial class CliPersistentStateRunner
             case "refresh-dispatches":
                 var refreshGoal = ResolveDispatchCommandGoal(args, kernel, currentGoal, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
                 currentGoal = refreshGoal;
-                var refreshed = new GoalDispatchOperations().RefreshDispatches(kernel, refreshGoal);
+                var refreshed = new GoalDispatchOperations().RefreshDispatches(kernel, refreshGoal, runner);
                 ConsoleViews.PrintProcessBatchResult(refreshGoal, refreshed);
                 break;
 
@@ -3901,7 +3903,7 @@ internal static partial class CliPersistentStateRunner
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
         var candidates = CaptureRunningProcessIdentities(kernel);
-        var runner = new BackgroundDispatchRunner();
+        var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
         var reconciled = runner.SweepExitedProcesses(kernel);
         cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
         cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);

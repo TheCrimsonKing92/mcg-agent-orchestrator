@@ -106,7 +106,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
                 continue;
             }
 
-            var runner = new BackgroundDispatchRunner();
+            var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace);
             var outcome = runner.ReconcileLatestProcess(context.Kernel, goal.Id, task.Id);
             runner.ApplyRefreshOutcomeAndWriteDiagnostics(
                 context.Kernel,

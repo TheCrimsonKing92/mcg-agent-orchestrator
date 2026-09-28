@@ -84,7 +84,7 @@ public static async Task<object?> ApplyTaskActionAsync(
             return ToDispatchProcessStartFailureDto(goal, startFailure);
 
         case "refresh":
-            commands.RefreshProcess(kernel, goal, task);
+            commands.RefreshProcess(kernel, workspace, goal, task);
             return null;
 
         case "cancel":
