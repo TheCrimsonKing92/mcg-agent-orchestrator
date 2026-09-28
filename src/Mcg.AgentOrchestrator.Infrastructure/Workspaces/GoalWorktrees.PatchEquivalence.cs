@@ -87,6 +87,12 @@ public static partial class GoalWorktrees
                     match.Groups["right"].Value,
                     StringComparison.Ordinal)))
         {
+            if (TryCompareZeroContextCommitsInOrder(
+                    executionDirectory, oldBase, oldHead, newBase, newHead, oldCount))
+            {
+                evidence = $"range-diff {oldBase}..{oldHead} vs {newBase}..{newHead}: patch ids differ only in context; zero-context comparison: {oldCount}/{newCount} commits have identical added and removed lines per file in order";
+                return true;
+            }
             refusalReason = "range-diff-not-identical";
             return false;
         }
