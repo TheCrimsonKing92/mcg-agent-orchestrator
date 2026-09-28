@@ -65,7 +65,7 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute
         Xunit.Assert.Equal(harness.Task.Id.Value, intent.TaskId);
         Xunit.Assert.Equal("ContractClarification", payload.Cause);
         Xunit.Assert.Contains("ExampleTests", payload.Text);
-        Xunit.Assert.Contains("GoalAcceptanceVerifier", payload.Text);
+        Xunit.Assert.Contains("collection 'GoalAcceptanceVerifier'", payload.Text);
         Xunit.Assert.Contains("GoalAcceptanceVerifierTests", payload.Text);
         Xunit.Assert.Equal(0, harness.Model.Calls);
     }
