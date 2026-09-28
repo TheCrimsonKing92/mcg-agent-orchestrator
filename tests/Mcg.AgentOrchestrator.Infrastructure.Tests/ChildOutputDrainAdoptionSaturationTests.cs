@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serialized: every fact deliberately occupies the thread pool while a production child-output path runs.
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningProcessLocal")]
 public sealed class ChildOutputDrainAdoptionSaturationTests
 {
     [Xunit.Fact(DisplayName = "GoalWorktrees_direct_git_returns_complete_output_with_saturated_thread_pool")]
