@@ -30,6 +30,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal bool PartitionVerdictWithinAttemptRerunEnabled { get; set; } = true;
     internal DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
     internal DotnetBuildStorageRoot? BuildStorageRootForTests { get; set; }
+    internal IWorkerIntegrityLabeler? BaselineIntegrityLabelerForTests { get; set; }
 
     internal GoalAcceptanceVerifierTestOverrides Snapshot() => new()
     {
@@ -60,6 +61,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         OnBuildArtifactIoRetryLeaseReleasedForTests = OnBuildArtifactIoRetryLeaseReleasedForTests,
         PartitionVerdictWithinAttemptRerunEnabled = PartitionVerdictWithinAttemptRerunEnabled,
         BaseBuildCacheForTests = BaseBuildCacheForTests,
-        BuildStorageRootForTests = BuildStorageRootForTests
+        BuildStorageRootForTests = BuildStorageRootForTests,
+        BaselineIntegrityLabelerForTests = BaselineIntegrityLabelerForTests
     };
 }
