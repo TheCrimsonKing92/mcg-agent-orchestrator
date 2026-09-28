@@ -79,6 +79,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<string?> _readRelaunchDrainCap;
     private readonly Func<double> _writeJitter;
     private readonly Func<string, ConductorGoalReloadObservation> _goalReloadObservation;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
@@ -121,7 +122,8 @@ internal sealed partial class ConductorBatchLoop
         Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?>? measuredSweepWithCheckpointHolds = null,
         OrchestratorWorkspace? workspace = null,
         Action<string>? janitorialPhaseProbe = null,
-        Func<long>? janitorialTimestamp = null)
+        Func<long>? janitorialTimestamp = null,
+        Func<string?>? readRelaunchDrainCap = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -149,6 +151,7 @@ internal sealed partial class ConductorBatchLoop
         _conductEventLogWriter = conductEventLogWriter;
         _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _readRelaunchDrainCap = readRelaunchDrainCap ?? (() => Environment.GetEnvironmentVariable(RelaunchDrainCapEnvironmentVariable));
         _writeJitter = writeJitter ?? Random.Shared.NextDouble;
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
@@ -286,7 +289,7 @@ internal sealed partial class ConductorBatchLoop
         int? selfRelaunchRetryAfterTick = null;
         DateTimeOffset? selfRelaunchDrainStartedAt = null;
         var selfRelaunchDrainCap = new SelfRelaunchDrainCapState(
-            ResolveRelaunchDrainCap(Environment.GetEnvironmentVariable(RelaunchDrainCapEnvironmentVariable)));
+            ResolveRelaunchDrainCap(_readRelaunchDrainCap()));
         ConductorLoopHandoffResult? selfRelaunchHandoff = null;
         var started = _utcNow();
         var effectiveGoalStallThreshold = goalStallThreshold ?? DefaultGoalStallThreshold;
@@ -399,18 +402,21 @@ internal sealed partial class ConductorBatchLoop
                     kernel, onlyGoalId, excludedGoals, reapedGoals, drainElapsed);
                 if (capDecision.Detach)
                 {
-                    DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                    var detachedBefore = CountGracefullyDetachedRunningDispatches(kernel, onlyGoalId);
+                    var capReapedGoals = new HashSet<string>(reapedGoals, StringComparer.Ordinal);
+                    DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, capReapedGoals);
                     selfRelaunchDrainCap.Detached = true;
-                    EmitProgress($"LOOP_RELAUNCH_DETACH tick={totalTicks} goal={pendingSelfRelaunch!.GoalId} detached={capDecision.Count} capMinutes={selfRelaunchDrainCap.Cap.TotalMinutes:0} admitting=false");
+                    var detached = CountGracefullyDetachedRunningDispatches(kernel, onlyGoalId) - detachedBefore;
+                    EmitProgress($"LOOP_RELAUNCH_DETACH tick={totalTicks} goal={pendingSelfRelaunch!.GoalId} detached={detached} capMinutes={selfRelaunchDrainCap.Cap.TotalMinutes:0} admitting=false");
+                    PersistGracefulDetachCheckpoint(
+                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "self-relaunch-detach", null,
+                        busyWriteDelay, checkpointGoalTick, checkpointHeldGoals);
                 }
                 if (!capDecision.Detach && !capDecision.AlreadyDetached)
                 {
                     if (drainElapsed >= DispatchRecoveryPolicy.DefaultLiveIdleTimeout)
                     {
-                        EmitSelfRelaunchRollback(
-                            totalTicks,
-                            pendingSelfRelaunch!.GoalId,
-                            "drain",
+                        EmitSelfRelaunchRollback(totalTicks, pendingSelfRelaunch!.GoalId, "drain",
                             $"active dispatches did not reach terminal receipts within {(int)DispatchRecoveryPolicy.DefaultLiveIdleTimeout.TotalMinutes} minutes");
                         deferredSelfRelaunch = pendingSelfRelaunch;
                         selfRelaunchRetryAfterTick = totalTicks + 1;

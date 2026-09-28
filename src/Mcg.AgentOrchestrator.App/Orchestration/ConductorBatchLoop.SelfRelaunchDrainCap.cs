@@ -35,29 +35,33 @@ internal sealed partial class ConductorBatchLoop
             HashSet<string> reapedGoals,
             TimeSpan elapsed)
         {
-            if (elapsed < Cap) return new(false, false, string.Empty, 0);
-            if (Detached) return new(false, true, string.Empty, 0);
-            if (DispatchHandlingChanged) return new(false, false, " reason=dispatch-handling-changed", 0);
+            if (elapsed < Cap) return new(false, false, string.Empty);
+            if (Detached) return new(false, true, string.Empty);
+            if (DispatchHandlingChanged) return new(false, false, " reason=dispatch-handling-changed");
 
-            var count = 0;
             foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id.Value == onlyGoalId))
             {
                 foreach (var process in goal.Tasks.Select(task => task.LastProcess).OfType<TaskProcessRecord>()
                              .Where(process => process.IsRunning && !process.WasGracefullyDetachedByConductor))
                 {
-                    if (process.ProcessIdentityStartedAt is null ||
-                        excludedGoals.Contains(goal.Id.Value) || IsTerminalGoal(goal) ||
+                    if (process.ProcessIdentityStartedAt is null)
+                        return new(false, false, " reason=identity-unproven");
+                    if (excludedGoals.Contains(goal.Id.Value) || IsTerminalGoal(goal) ||
                         reapedGoals.Contains(goal.Id.Value))
-                        return new(false, false, " reason=identity-unproven", 0);
-                    count++;
+                        return new(false, false, " reason=goal-ineligible");
                 }
             }
 
-            return new(true, false, string.Empty, count);
+            return new(true, false, string.Empty);
         }
     }
 
-    private readonly record struct SelfRelaunchCapDecision(bool Detach, bool AlreadyDetached, string DrainSuffix, int Count);
+    private readonly record struct SelfRelaunchCapDecision(bool Detach, bool AlreadyDetached, string DrainSuffix);
+
+    private static int CountGracefullyDetachedRunningDispatches(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
+        kernel.Goals.Where(goal => onlyGoalId is null || goal.Id.Value == onlyGoalId)
+            .Sum(goal => goal.Tasks.Count(task => task.LastProcess is
+                { IsRunning: true, WasGracefullyDetachedByConductor: true }));
 
     private static TimeSpan GetWatchFallbackInterval(AgentOrchestratorKernel kernel, string? onlyGoalId, TimeSpan idleInterval) =>
         HasRunningDispatch(kernel, onlyGoalId) ? TimeSpan.FromSeconds(WatchStopPollIntervalSeconds) : idleInterval;
