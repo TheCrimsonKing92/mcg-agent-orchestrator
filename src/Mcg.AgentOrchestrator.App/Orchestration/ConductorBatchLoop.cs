@@ -202,6 +202,7 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
+        ResetLandingTickSave();
         _consecutiveJanitorialFailures.Clear();
         var previousConductEventLogWriter = leaseAcquisition.PreviousConductEventLogWriter;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
@@ -343,6 +344,7 @@ internal sealed partial class ConductorBatchLoop
         driver.SuccessfulLandingSink = receipt =>
         {
             RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
+            NoteLandingForTick(receipt.GoalId);
             var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
             if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
             {
@@ -1483,6 +1485,7 @@ internal sealed partial class ConductorBatchLoop
                 Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
             }
 
+            CaptureLandingTickChanges(changedGoalIds, pendingSelfRelaunch is not null);
             // Durably checkpoint this tick's progress (dispatches started, reconcile results, escalations).
             // Without this the loop's mutations live only in memory until the whole command returns, so a
             // long-running watch loop never persists and a killed loop loses every dispatch on rollback —
@@ -1572,6 +1575,8 @@ internal sealed partial class ConductorBatchLoop
                     CompletePersistedOperatorIntents(changedGoalIds, tickLines);
                 }
             }
+            if (pendingSelfRelaunch is not null)
+                SaveLandingTickBeforeRelaunch(kernel, checkpointGoalTick, persistGoalTick, persistTick, checkpointHeldGoals, totalTicks, busyWriteDelay);
 
             var operatorDispositions = buildOperatorDispositions?.Invoke(kernel) ?? [];
             var tickSummary = new BatchTickSummary(totalTicks, tickAdvanced, tickHeld, tickEscalated, tickRetried, tickDone, WatchSleeping: false)

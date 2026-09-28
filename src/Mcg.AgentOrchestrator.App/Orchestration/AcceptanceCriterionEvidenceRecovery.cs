@@ -8,15 +8,17 @@ internal sealed record AcceptanceCriterionEvidenceRecoveryResult(
     string SourceKind,
     string SourceId,
     string CandidateSha,
-    string? HoldDiagnostic)
+    string? HoldDiagnostic,
+    bool UsedLandingCarryRecord = false)
 {
     public bool CanComplete => HoldDiagnostic is null;
 
     public string AuditDetail =>
-        $"sourceKind={SourceKind}; sourceId={SourceId}; certifiedCandidate={CandidateSha}";
+        $"sourceKind={SourceKind}; sourceId={SourceId}; certifiedCandidate={CandidateSha}" +
+        (UsedLandingCarryRecord ? "; recovery=landing-carry-record" : string.Empty);
 }
 
-internal static class AcceptanceCriterionEvidenceRecovery
+internal static partial class AcceptanceCriterionEvidenceRecovery
 {
     public static AcceptanceCriterionEvidenceRecoveryResult? TryRecord(
         AgentOrchestratorKernel kernel,
@@ -52,7 +54,7 @@ internal static class AcceptanceCriterionEvidenceRecovery
                 "merge-train-receipt",
                 receipt.ReceiptId,
                 member.CandidateRevision,
-                executionDirectory);
+                executionDirectory, mainSha, gitRunner);
         }
 
         foreach (var receipt in cohortStore.ReadPassedReceiptsForGoal(goal.Id))
@@ -69,7 +71,7 @@ internal static class AcceptanceCriterionEvidenceRecovery
                 "cohort-receipt",
                 receipt.ReceiptId,
                 member.CandidateRevision,
-                executionDirectory);
+                executionDirectory, mainSha, gitRunner);
         }
 
         var attempts = GoalTerminalReconciliationEvidenceResolver.ResolveForGoal(
@@ -98,7 +100,7 @@ internal static class AcceptanceCriterionEvidenceRecovery
                 "acceptance-attempt",
                 attempt.AttemptId,
                 attempt.CandidateSha,
-                executionDirectory);
+                executionDirectory, mainSha, gitRunner);
         }
 
         return null;
@@ -110,19 +112,26 @@ internal static class AcceptanceCriterionEvidenceRecovery
         string sourceKind,
         string sourceId,
         string candidateSha,
-        string executionDirectory)
+        string executionDirectory,
+        string mainSha,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
+        var usedLandingCarryRecord = TryApplyRecordedLandingCarry(
+            kernel, goal, candidateSha, mainSha, executionDirectory, gitRunner);
         var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
             goal,
             candidateSha,
             kernel,
-            $"{sourceKind}:{sourceId}",
+            usedLandingCarryRecord
+                ? $"landing-carry-record:{sourceKind}:{sourceId}"
+                : $"{sourceKind}:{sourceId}",
             executionDirectory);
         return new AcceptanceCriterionEvidenceRecoveryResult(
             sourceKind,
             sourceId,
             candidateSha,
-            diagnostic);
+            diagnostic,
+            usedLandingCarryRecord);
     }
 
     private static AcceptanceAttemptCandidate? TryReadAttempt(
