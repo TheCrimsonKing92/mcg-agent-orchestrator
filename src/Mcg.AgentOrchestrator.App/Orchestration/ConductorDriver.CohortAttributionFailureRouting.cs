@@ -49,10 +49,6 @@ internal sealed partial class ConductorDriver
                 receipt, goal, partition, candidate, main, alreadyRecorded,
                 (member, checks, branch, mainHead, attributions) =>
                     _recordAcceptanceFailure(member, checks, branch, mainHead, attributions, null),
-                member => RouteRecordedCohortAttributionFailure(member, member.Id.Value[..8],
-                    policy)
-                    ?? throw new InvalidOperationException(
-                        "Recorded cohort attribution failure could not produce its routing outcome."),
                 held.MemberResults[goal.Id.Value], CohortAttributionVerdictSink);
         }
         return held with { MemberResults = memberResults };

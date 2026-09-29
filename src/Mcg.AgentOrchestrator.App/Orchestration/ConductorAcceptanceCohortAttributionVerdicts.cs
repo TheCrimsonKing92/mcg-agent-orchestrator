@@ -31,13 +31,12 @@ internal static class ConductorAcceptanceCohortAttributionVerdicts
         string? currentMain,
         bool alreadyRecorded,
         Action<Goal, IReadOnlyList<string>, string, string, IReadOnlyList<AcceptanceCheckAttribution>> record,
-        Func<Goal, ConductorAdvanceResult> route,
         ConductorAdvanceResult held,
         Action<string> emit)
     {
-        var verdict = Apply(cohort, goal, partition, currentCandidate, currentMain,
+        Apply(cohort, goal, partition, currentCandidate, currentMain,
             alreadyRecorded, record, emit);
-        return verdict.ShouldRecord || verdict.AlreadyRecorded ? route(goal) : held;
+        return held;
     }
 
     internal static ConductorAcceptanceCohortAttributionVerdict Apply(

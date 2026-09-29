@@ -47,7 +47,6 @@ public sealed class ConductorAcceptanceCohortAttributionVerdictTests
         var innocentResult = ConductorAcceptanceCohortAttributionVerdicts.CompleteMember(cohort, second,
             Partition(second, 1, SecondCandidate, AcceptanceCohortGateOutcome.Passed),
             SecondCandidate, Main, false, Record,
-            _ => throw new Xunit.Sdk.XunitException("Passing partition routed."),
             innocentHeld, _ => { });
         Assert.Same(innocentHeld, innocentResult);
         Assert.Equal(GoalStatus.Draft, first.Status);
@@ -176,7 +175,7 @@ public sealed class ConductorAcceptanceCohortAttributionVerdictTests
     }
 
     [Fact]
-    public void Completion_RoutesAttributedMemberOnTheSameTick_AndReplayDoesNotRouteAgain()
+    public void Completion_HoldsAttributedMember_ThenNextTickRoutesOnceAfterRestart()
     {
         var kernel = new AgentOrchestratorKernel();
         var first = kernel.CreateGoal("Cohort member awaiting acceptance",
@@ -192,7 +191,6 @@ public sealed class ConductorAcceptanceCohortAttributionVerdictTests
         var held = new ConductorAdvanceResult(first.Id.Value, first.Id.Value[..8], "permissive",
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, "Cohort held."));
         var failureRecords = 0;
-        var routes = 0;
         var result = ConductorAcceptanceCohortAttributionVerdicts.CompleteMember(cohort, first,
             partition,
             FirstCandidate, Main, false,
@@ -200,22 +198,11 @@ public sealed class ConductorAcceptanceCohortAttributionVerdictTests
             {
                 failureRecords++;
                 kernel.RecordAcceptanceFailure(goal.Id, checks, branch, main, attributions);
-            }, goal =>
-            {
-                routes++;
-                Assert.True(kernel.RouteRecordedAcceptanceFailure(goal.Id,
-                    "Acceptance verification failed; review and fix before landing."));
-                return held with { Outcome = new ConductorAdvanceOutcome.Escalated(
-                    GoalLifecycleState.AcceptanceFailed,
-                    "Acceptance verification failed; review and fix before landing.",
-                    ConductorEscalationKind.AcceptanceVerificationFailed) };
             }, held, _ => { });
 
-        Assert.Equal(GoalStatus.AcceptanceFailed, first.Status);
+        Assert.Equal(GoalStatus.Verified, first.Status);
         Assert.Equal(1, failureRecords);
-        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
-        Assert.Equal(GoalLifecycleState.AcceptanceFailed, escalated.State);
-        Assert.Equal(ConductorEscalationKind.AcceptanceVerificationFailed, escalated.Kind);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
 
         var resumedKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
         var resumedGoal = Assert.Single(resumedKernel.Goals);
@@ -223,19 +210,17 @@ public sealed class ConductorAcceptanceCohortAttributionVerdictTests
             partition, FirstCandidate, Main,
             ConductorAcceptanceCohortAttributionVerdicts.IsRecordedFailure(
                 resumedGoal, cohort.Identity.Value, partition.ReceiptId),
-            (_, _, _, _, _) => failureRecords++, goal =>
-            {
-                if (goal.Status == GoalStatus.Verified)
-                {
-                    routes++;
-                    Assert.True(resumedKernel.RouteRecordedAcceptanceFailure(goal.Id,
-                        "Acceptance verification failed; review and fix before landing."));
-                }
-                return result;
-            }, held, _ => { });
+            (_, _, _, _, _) => failureRecords++, held, _ => { });
         Assert.Equal(result.Outcome, replay.Outcome);
         Assert.Equal(1, failureRecords);
-        Assert.Equal(1, routes);
+        Assert.Equal(GoalStatus.Verified, resumedGoal.Status);
+
+        // The next tick observes the durable failure and routes without running another gate.
+        var failure = Assert.IsType<AcceptanceFailureSummary>(resumedGoal.LatestAcceptanceFailure);
+        Assert.Contains("cohort-partition=partition-0", failure.CheckAttributions![0].Evidence);
+        Assert.True(resumedKernel.RouteRecordedAcceptanceFailure(resumedGoal.Id,
+            "Acceptance verification failed; review and fix before landing."));
+        Assert.Equal(GoalStatus.AcceptanceFailed, resumedGoal.Status);
     }
 
     private static Goal Goal(string id) => new(new GoalId(id), "Cohort verdict test",
