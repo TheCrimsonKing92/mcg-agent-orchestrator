@@ -3532,7 +3532,7 @@ internal sealed partial class ConductorDriver
             ? CohortOrdinaryFallback(receipt, "deterministic cohort content failure has no member attribution; members remain eligible for ordinary acceptance")
             : ApplyCohortAttributionFailureVerdicts(CohortHeld(goals, policy, receipt, receipt.Outcome == AcceptanceCohortGateOutcome.Failed
                 ? $"deterministic RED; attribution={receipt.Attribution}"
-                : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing"), goals, receipt);
+                : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing"), goals, receipt, policy);
 
         ConductorAcceptanceCohortRunResult MaterializationFallback(
             AcceptanceCohortMaterializationFailureKind outcome,

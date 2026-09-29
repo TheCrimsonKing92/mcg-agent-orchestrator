@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -21,6 +22,23 @@ internal sealed record ConductorAcceptanceCohortAttributionVerdict(
 internal static class ConductorAcceptanceCohortAttributionVerdicts
 {
     internal const string EvidencePrefix = "cohort-attribution=";
+
+    internal static ConductorAdvanceResult CompleteMember(
+        AcceptanceCohortReceipt cohort,
+        Goal goal,
+        AcceptanceCohortPartitionReceipt? partition,
+        string? currentCandidate,
+        string? currentMain,
+        bool alreadyRecorded,
+        Action<Goal, IReadOnlyList<string>, string, string, IReadOnlyList<AcceptanceCheckAttribution>> record,
+        Func<Goal, ConductorAdvanceResult> route,
+        ConductorAdvanceResult held,
+        Action<string> emit)
+    {
+        var verdict = Apply(cohort, goal, partition, currentCandidate, currentMain,
+            alreadyRecorded, record, emit);
+        return verdict.ShouldRecord || verdict.AlreadyRecorded ? route(goal) : held;
+    }
 
     internal static ConductorAcceptanceCohortAttributionVerdict Apply(
         AcceptanceCohortReceipt cohort,

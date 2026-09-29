@@ -11,7 +11,8 @@ internal sealed partial class ConductorDriver
     private ConductorAcceptanceCohortRunResult ApplyCohortAttributionFailureVerdicts(
         ConductorAcceptanceCohortRunResult held,
         IReadOnlyList<Goal> goals,
-        AcceptanceCohortReceipt receipt)
+        AcceptanceCohortReceipt receipt,
+        ConductorAutonomyPolicy policy)
     {
         if (receipt.Outcome != AcceptanceCohortGateOutcome.Failed ||
             receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
@@ -21,6 +22,8 @@ internal sealed partial class ConductorDriver
 
         var partitions = _cohortAcceptanceStore!.ReadPartitionReceipts(receipt.Identity.Value)
             .ToDictionary(partition => partition.GoalId);
+        var memberResults = held.MemberResults.ToDictionary(pair => pair.Key, pair => pair.Value,
+            StringComparer.Ordinal);
         foreach (var suppliedGoal in goals)
         {
             var goal = GetCurrentGoal(suppliedGoal);
@@ -42,13 +45,17 @@ internal sealed partial class ConductorDriver
             var alreadyRecorded = partition is not null &&
                 ConductorAcceptanceCohortAttributionVerdicts.IsRecordedFailure(
                     goal, receipt.Identity.Value, partition.ReceiptId);
-            ConductorAcceptanceCohortAttributionVerdicts.Apply(
+            memberResults[goal.Id.Value] = ConductorAcceptanceCohortAttributionVerdicts.CompleteMember(
                 receipt, goal, partition, candidate, main, alreadyRecorded,
                 (member, checks, branch, mainHead, attributions) =>
                     _recordAcceptanceFailure(member, checks, branch, mainHead, attributions, null),
-                CohortAttributionVerdictSink);
+                member => RouteRecordedCohortAttributionFailure(member, member.Id.Value[..8],
+                    policy)
+                    ?? throw new InvalidOperationException(
+                        "Recorded cohort attribution failure could not produce its routing outcome."),
+                held.MemberResults[goal.Id.Value], CohortAttributionVerdictSink);
         }
-        return held;
+        return held with { MemberResults = memberResults };
     }
 
     private ConductorAdvanceResult? RouteRecordedCohortAttributionFailure(
@@ -79,7 +86,13 @@ internal sealed partial class ConductorDriver
         }
         var reason = $"Acceptance verification failed; review and fix before landing. " +
             failure.CheckAttributions![0].Evidence;
-        if (_cohortKernel is not null && !_cohortKernel.RouteRecordedAcceptanceFailure(goal.Id, reason))
+        if (goal.Status == GoalStatus.AcceptanceFailed)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.AcceptanceFailed, reason,
+                    ConductorEscalationKind.AcceptanceVerificationFailed));
+        }
+        if (_cohortKernel is null || !_cohortKernel.RouteRecordedAcceptanceFailure(goal.Id, reason))
         {
             throw new InvalidOperationException("Recorded cohort acceptance failure could not route its Verified member.");
         }
