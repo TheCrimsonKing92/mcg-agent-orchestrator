@@ -68,19 +68,22 @@ public sealed class GoalWorktreeTestsRemoveCleanupProcessProtection : GoalWorktr
         {
             var repo = CreateSeededRepository();
             var originalKill = WorkerProcessJobs.TryKillPidTree;
+            var originalStartTicksReader = WorkerProcessJobs.ReadProtectedProcessStartTicks;
             var originalAcl = CleanupHooks.SandboxAclHelper;
             var originalShutdown = CleanupHooks.BuildServerShutdown;
             var originalProtectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
             var originalProtectedTicks = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable);
             try
             {
-                using var protectedProcess = Process.GetCurrentProcess();
-                var protectedPid = protectedProcess.Id;
+                const int protectedPid = 111;
+                const long protectedStartTicks = 123;
+                WorkerProcessJobs.ReadProtectedProcessStartTicks = pid =>
+                    pid == protectedPid ? protectedStartTicks : null;
                 Environment.SetEnvironmentVariable(
                     CliProtectedProcessEnvironment.ProtectedPidVariable,
                     protectedPid.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable,
-                    protectedProcess.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    protectedStartTicks.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 var kernel = new AgentOrchestratorKernel();
                 var goal = kernel.CreateGoal("Remove protected worker process", [
                     new TaskSpec(TaskId.New(), "Developer task", AgentRole.Developer)
@@ -114,6 +117,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupProcessProtection : GoalWorktr
             finally
             {
                 WorkerProcessJobs.TryKillPidTree = originalKill;
+                WorkerProcessJobs.ReadProtectedProcessStartTicks = originalStartTicksReader;
                 CleanupHooks.SandboxAclHelper = originalAcl;
                 CleanupHooks.BuildServerShutdown = originalShutdown;
                 Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, originalProtectedPid);

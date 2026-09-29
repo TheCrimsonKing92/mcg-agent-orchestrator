@@ -5,6 +5,16 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class ConductorBatchLoopTestsParallelAcceptance
 {
+    private static void AssertProtectedBoundaryEscalation(string faultMessage, string escalation)
+    {
+        Assert.Equal(WorkerProcessJobs.BuildProtectedBoundaryRegistrationFailure(
+            4001, new ProtectedProcessIdentity(4001, 100)), faultMessage);
+        Assert.Equal(WorkerRegistrationFaultDisposition.Terminal,
+            ConductorParallelAcceptanceAttemptCoordinator.ClassifyWorkerRegistrationFault(faultMessage));
+        Assert.Contains("pid=4001", escalation);
+        Assert.Contains("protected=4001@100", escalation);
+    }
+
     [Xunit.Fact]
     public void ExhaustedBackgroundBuildLockPersistsTypedEscalation()
     {

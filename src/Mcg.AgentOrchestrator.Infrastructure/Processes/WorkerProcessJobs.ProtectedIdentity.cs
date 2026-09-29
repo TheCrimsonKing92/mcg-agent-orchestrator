@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static partial class WorkerProcessJobs
 {
     internal enum KillProtection { NotProtected, Protected, Unverifiable }
+    internal static Func<int, long?> ReadProtectedProcessStartTicks = ProtectedProcessIdentity.ReadLiveStartTicks;
 
     internal static bool IsProtectedRegistrationBoundary(
         int candidatePid, long? candidateStartTicks, ProtectedProcessIdentity? identity,
@@ -57,11 +58,11 @@ public static partial class WorkerProcessJobs
 
     private static KillProtection EvaluateLiveSweepProtection(int processId) =>
         EvaluateSweepProtection(processId, ReadProtectedIdentity(), ReadRawProtectedPid(),
-            ProtectedProcessIdentity.ReadLiveStartTicks, ReadProcessAncestryFacts);
+            ReadProtectedProcessStartTicks, ReadProcessAncestryFacts);
 
     private static KillProtection EvaluateLiveCanKillProtection(int processId, bool allowProtectedDescendant) =>
         EvaluateCanKillProtection(processId, allowProtectedDescendant, ReadProtectedIdentity(),
-            ReadRawProtectedPid(), ProtectedProcessIdentity.ReadLiveStartTicks, ReadProcessAncestryFacts);
+            ReadRawProtectedPid(), ReadProtectedProcessStartTicks, ReadProcessAncestryFacts);
 
     private static void LogUnverifiableIdentity(int processId) =>
         Console.Error.WriteLine($"protected-identity-unverifiable pid={processId}");
