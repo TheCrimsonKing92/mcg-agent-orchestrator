@@ -47,13 +47,12 @@ public sealed class MtpTestRunnerScriptTestsRepairHintWrapper
         startInfo.Environment["MCG_ISOLATED_DOTNET_MTP_PROBE_PATH"] = argvPath;
         startInfo.Environment["MCG_DOTNET_ISOLATED_ROOT"] = Path.Combine(sandbox.Root, "diagnostic-artifacts");
 
-        using var process = Process.Start(startInfo)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var result = TestChildProcessCapture.Run(startInfo);
+        var stdout = result.Stdout;
+        var stderr = result.Stderr;
 
         Assert.DoesNotContain("parameter name 'p' is ambiguous", stdout + stderr, StringComparison.OrdinalIgnoreCase);
-        Assert.True(process.ExitCode == 0, stdout + stderr);
+        Assert.True(result.ExitCode == 0, stdout + stderr);
         Assert.Contains("DIAGNOSTIC build: exit=0", stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("TIMEOUT", stdout + stderr, StringComparison.Ordinal);
         var argv = File.ReadAllLines(argvPath);

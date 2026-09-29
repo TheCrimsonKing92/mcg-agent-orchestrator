@@ -867,14 +867,12 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start {fileName}.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(10000), $"{fileName} did not exit within 10 seconds.");
+        var result = TestChildProcessCapture.Run(startInfo);
+        var stdout = result.Stdout;
+        var stderr = result.Stderr;
         Assert.True(
-            process.ExitCode == 0,
-            $"{fileName} {string.Join(' ', arguments)} exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+            result.ExitCode == 0,
+            $"{fileName} {string.Join(' ', arguments)} exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
         return stdout;
     }
 

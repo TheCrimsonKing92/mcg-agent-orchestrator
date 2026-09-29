@@ -40,16 +40,15 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
             leaseWaitSeconds,
             projectFile,
             testFilter);
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start focused runner.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        using var capture = TestChildProcessCapture.Start(startInfo);
         // Supervision includes a fixed conservative cleanup allowance in addition to the
         // focused runner's total budget. It is a ceiling, not a measured latency percentile.
         var outerDeadline = TimeSpan.FromSeconds(checked(budgetSeconds + 7));
         Assert.True(
-            process.WaitForExit(outerDeadline),
+            capture.TryWaitForExit(outerDeadline),
             $"Focused runner did not exit within {outerDeadline.TotalSeconds} seconds for a {budgetSeconds}-second budget.");
-        return (process.ExitCode, stdout, stderr);
+        var result = capture.Complete(outerDeadline);
+        return (result.ExitCode, result.Stdout, result.Stderr);
     }
 
     private static ProcessStartInfo CreateFocusedStartInfo(
@@ -244,13 +243,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
             startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
             startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start PowerShell.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(10000), "Focused invalid-filter invocation did not exit within 10 seconds.");
+            var result = TestChildProcessCapture.Run(startInfo);
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
 
-            Assert.Equal(4, process.ExitCode);
+            Assert.Equal(4, result.ExitCode);
             using var receipt = JsonDocument.Parse(stdout);
             Assert.Equal("INVALID", receipt.RootElement.GetProperty("outcome").GetString());
             Assert.Equal("invalid-focused-request", receipt.RootElement.GetProperty("reason").GetString());
@@ -410,14 +407,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
             startInfo.Environment[DispatchProcessHost.StartGatePathVariable] = startGatePath;
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start PowerShell.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(60000), "Focused PASS invocation did not exit within 60 seconds.");
+            var result = TestChildProcessCapture.Run(startInfo, TimeSpan.FromSeconds(60));
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
             Assert.True(
-                process.ExitCode == 0,
-                $"Focused invocation exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+                result.ExitCode == 0,
+                $"Focused invocation exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
 
             using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
             var rootElement = receipt.RootElement;
@@ -527,11 +522,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 "FullyQualifiedName~FocusedProcessFixtureTests");
             startInfo.Environment["FOCUSED_STARTED_MARKER"] = startedPath;
             startInfo.Environment["FOCUSED_RELEASE"] = Path.Combine(root, "never-release");
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start budget fixture.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(30000), "Budget fixture did not exit within 30 seconds.");
-            var result = (ExitCode: process.ExitCode, Stdout: stdout, Stderr: stderr);
+            var capture = TestChildProcessCapture.Run(startInfo);
+            var result = (ExitCode: capture.ExitCode, Stdout: capture.Stdout, Stderr: capture.Stderr);
 
             var diagnostics = BuildFocusedRunnerFailureDiagnostics(result, receiptPath, isolatedRoot);
             if (result.ExitCode != 2)

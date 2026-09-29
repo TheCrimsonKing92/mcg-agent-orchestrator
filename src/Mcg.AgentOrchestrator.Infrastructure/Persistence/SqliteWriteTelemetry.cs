@@ -17,6 +17,7 @@ internal sealed class SqliteWriteTelemetryOptions
     public Func<DateTimeOffset> UtcNow { get; init; } = () => DateTimeOffset.UtcNow;
     public Func<long> MonotonicMilliseconds { get; init; } = () => Environment.TickCount64;
     public Func<int, TimeSpan, CancellationToken, Task>? RetryDelay { get; init; }
+    public Func<string, Func<TimeSpan>>? HoldDurationSource { get; init; }
 
     public static SqliteWriteTelemetryOptions FromEnvironment() =>
         new()
@@ -331,7 +332,8 @@ internal sealed class SqliteWriteTelemetry
     public sealed class WriteTelemetryScope
     {
         private readonly SqliteWriteTelemetry _telemetry;
-        private readonly Stopwatch _holdStopwatch = Stopwatch.StartNew();
+        private readonly Stopwatch? _holdStopwatch;
+        private readonly Func<TimeSpan>? _holdElapsed;
         private long _rowsWritten;
         private long _serializedBytes;
         private bool _emitted;
@@ -341,6 +343,9 @@ internal sealed class SqliteWriteTelemetry
             _telemetry = telemetry;
             Operation = operation;
             AcquisitionWait = acquisitionWait;
+            _holdElapsed = telemetry._options.HoldDurationSource?.Invoke(operation);
+            if (_holdElapsed is null)
+                _holdStopwatch = Stopwatch.StartNew();
         }
 
         public string Operation { get; }
@@ -363,12 +368,12 @@ internal sealed class SqliteWriteTelemetry
                 return;
 
             _emitted = true;
-            _holdStopwatch.Stop();
+            _holdStopwatch?.Stop();
             _telemetry.EmitCompletedScope(
                 Operation,
                 disposition,
                 AcquisitionWait,
-                _holdStopwatch.Elapsed,
+                _holdElapsed?.Invoke() ?? _holdStopwatch!.Elapsed,
                 _rowsWritten,
                 _serializedBytes,
                 exception);

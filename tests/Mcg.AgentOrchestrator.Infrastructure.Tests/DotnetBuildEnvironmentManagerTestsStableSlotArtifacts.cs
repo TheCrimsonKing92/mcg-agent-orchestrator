@@ -168,7 +168,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                 $stream.Dispose()
             }
             """;
-        using var process = Process.Start(new ProcessStartInfo
+        var startInfo = new ProcessStartInfo
         {
             FileName = WorkerShell.Executable,
             UseShellExecute = false,
@@ -182,14 +182,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                 "-EncodedCommand",
                 EncodePowerShell(script)
             }
-        }) ?? throw new InvalidOperationException("Failed to start script lease probe.");
+        };
 
-        Assert.True(process.WaitForExit(5000), "Script lease probe did not exit.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        var result = TestChildProcessCapture.Run(startInfo);
+        var stdout = result.Stdout;
+        var stderr = result.Stderr;
         Assert.True(
-            process.ExitCode == 0,
-            $"Script lease probe exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+            result.ExitCode == 0,
+            $"Script lease probe exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
         Assert.Contains("busy", stdout, StringComparison.OrdinalIgnoreCase);
     }
 
