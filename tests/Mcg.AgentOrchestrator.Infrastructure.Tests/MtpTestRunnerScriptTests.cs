@@ -703,9 +703,10 @@ public sealed class MtpTestRunnerScriptTests
     {
         using var sandbox = ScriptSandbox.Create("hang");
 
-        var result = sandbox.RunPartition("GoalWorktree", testHostTimeoutSeconds: 1);
+        var result = sandbox.RunPartitionWithTimeoutSignal("GoalWorktree", skipGrace: true);
 
         Assert.True(result.ExitCode == 29, result.Stdout + result.Stderr);
+        Assert.Contains("TEST HOST TIMEOUT - owned PID", result.Stdout, StringComparison.Ordinal);
         Assert.True(File.Exists(sandbox.ReadyPath), result.Stdout + result.Stderr);
         var terminal = TerminalSummary(result);
         Assert.Equal("timed-out", terminal.GetProperty("outcome").GetString());
@@ -727,11 +728,7 @@ public sealed class MtpTestRunnerScriptTests
     {
         using var sandbox = ScriptSandbox.Create("root-exits-descendant-locks");
 
-        var result = sandbox.RunPartitionAfterStdoutGate(
-            "GoalWorktree",
-            "TEST HOST TIMEOUT - owned PID",
-            sandbox.ReleasePath,
-            testHostTimeoutSeconds: 1);
+        var result = sandbox.RunPartitionWithTimeoutSignal("GoalWorktree", skipGrace: false, releaseAfterTimeout: true);
 
         Assert.True(result.ExitCode == 29, result.Stdout + result.Stderr);
         Assert.True(File.Exists(sandbox.ReadyPath), result.Stdout + result.Stderr);
@@ -1959,12 +1956,15 @@ public sealed class MtpTestRunnerScriptTests
     private static ProcessResult RunAfterStdoutGate(
         ProcessStartInfo startInfo,
         string stdoutGate,
-        string releasePath)
+        string releasePath,
+        string? nextStdoutGate = null,
+        string? nextReleasePath = null)
     {
         using var process = new Process { StartInfo = startInfo };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
         var outputGate = new object();
+        var firstGateReached = false;
         process.OutputDataReceived += (_, args) =>
         {
             if (args.Data is null)
@@ -1975,9 +1975,19 @@ public sealed class MtpTestRunnerScriptTests
             {
                 stdout.AppendLine(args.Data);
             }
-            if (args.Data.Contains(stdoutGate, StringComparison.Ordinal) && !File.Exists(releasePath))
+            lock (outputGate)
             {
-                File.WriteAllText(releasePath, "release");
+                if (!firstGateReached && args.Data.Contains(stdoutGate, StringComparison.Ordinal))
+                {
+                    File.WriteAllText(releasePath, "release");
+                    firstGateReached = true;
+                }
+                else if (firstGateReached && nextStdoutGate is not null &&
+                    args.Data.Contains(nextStdoutGate, StringComparison.Ordinal) &&
+                    nextReleasePath is not null && !File.Exists(nextReleasePath))
+                {
+                    File.WriteAllText(nextReleasePath, "release");
+                }
             }
         };
         process.ErrorDataReceived += (_, args) =>
@@ -2394,14 +2404,28 @@ public sealed class MtpTestRunnerScriptTests
             return startInfo;
         }
 
-        public ProcessResult RunPartitionAfterStdoutGate(
+        public ProcessResult RunPartitionWithTimeoutSignal(
             string partition,
-            string stdoutGate,
-            string releasePath,
-            int testHostTimeoutSeconds)
+            bool skipGrace,
+            bool releaseAfterTimeout = false)
         {
-            var startInfo = PartitionStartInfo(partition, testHostTimeoutSeconds: testHostTimeoutSeconds);
-            return RunAfterStdoutGate(startInfo, stdoutGate, releasePath);
+            var startInfo = PartitionStartInfo(partition);
+            var signalPath = Path.Combine(Root, $"timeout-signal-{Guid.NewGuid():N}");
+            startInfo.Environment["MCG_MTP_TEST_TIMEOUT_SIGNAL_PATH"] = signalPath;
+            if (skipGrace)
+            {
+                startInfo.Environment["MCG_MTP_TEST_GRACEFUL_EXIT_SECONDS"] = "0";
+            }
+            else
+            {
+                startInfo.Environment.Remove("MCG_MTP_TEST_GRACEFUL_EXIT_SECONDS");
+            }
+            return RunAfterStdoutGate(
+                startInfo,
+                "hang descendant ready",
+                signalPath,
+                releaseAfterTimeout ? "TEST HOST TIMEOUT - owned PID" : null,
+                releaseAfterTimeout ? ReleasePath : null);
         }
 
         public ProcessResult RunSummaryPartition(string partition)
