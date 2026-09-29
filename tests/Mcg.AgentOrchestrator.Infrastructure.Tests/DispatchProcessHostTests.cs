@@ -2368,7 +2368,7 @@ public sealed class DispatchProcessHostTests
                 artifactWriteAttempted = true;
                 try
                 {
-                    var measurementArtifact = WriteReceiptHitMeasurementArtifact(warmup, receiptHitMeasurements);
+                    var measurementArtifact = WriteReceiptHitMeasurementArtifact(root, warmup, receiptHitMeasurements);
                     Console.WriteLine($"receipt-hit measurement artifact: {measurementArtifact}");
                 }
                 catch (Exception exception)
@@ -2389,13 +2389,18 @@ public sealed class DispatchProcessHostTests
                     WorkerSandboxPreparer.ProtectGitMetadataPhase,
                     warmup.SandboxPrepEvents.Select(evt => evt.Phase));
 
-                for (var attempt = 1; attempt <= 5; attempt++)
+                for (var attempt = 1; attempt <= 2; attempt++)
                 {
                     var measurement = RunMeasuredDispatch(root, worktree, logs, $"receipt-hit-{attempt}");
                     receiptHitMeasurements.Add(measurement);
                 }
 
                 WriteMeasurementArtifactBestEffort();
+
+                Assert.Equal(2, receiptHitMeasurements.Count);
+                Assert.Equal(
+                    ["receipt-hit-1.dispatch.json", "receipt-hit-2.dispatch.json", "warmup.dispatch.json"],
+                    Directory.GetFiles(logs, "*.dispatch.json").Select(Path.GetFileName).OrderBy(name => name));
 
                 Assert.All(receiptHitMeasurements, measurement =>
                 {
@@ -2543,21 +2548,12 @@ public sealed class DispatchProcessHostTests
         return result.StandardOutput.Trim();
     }
 
-    private static string WriteReceiptHitMeasurementArtifact(
+    internal static string WriteReceiptHitMeasurementArtifact(
+        string ownedRoot,
         MeasuredDispatch warmup,
         IReadOnlyCollection<MeasuredDispatch> receiptHitMeasurements)
     {
-        var artifactPath = Environment.GetEnvironmentVariable("MCG_RECEIPT_HIT_MEASUREMENT_PATH");
-        if (string.IsNullOrWhiteSpace(artifactPath))
-        {
-            artifactPath = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-receipt-hit-measurement-latest.json");
-        }
-
-        var directory = Path.GetDirectoryName(artifactPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        var artifactPath = Path.Combine(ownedRoot, "receipt-hit-measurement.json");
 
         var artifact = new
         {
@@ -2967,7 +2963,7 @@ public sealed class DispatchProcessHostTests
         throw new TimeoutException($"Timed out waiting for pid file '{path}'.");
     }
 
-    private sealed record MeasuredDispatch(
+    internal sealed record MeasuredDispatch(
         string Phase,
         long SandboxPrepElapsedMs,
         long DispatchElapsedMs,
@@ -2975,7 +2971,7 @@ public sealed class DispatchProcessHostTests
         string StdoutPath,
         IReadOnlyCollection<SandboxPrepEvent> SandboxPrepEvents);
 
-    private sealed record SandboxPrepEvent(string Phase, DateTimeOffset StartedAt, long? ElapsedMs);
+    internal sealed record SandboxPrepEvent(string Phase, DateTimeOffset StartedAt, long? ElapsedMs);
 
     private static string EscapePowerShellSingleQuoted(string value)
         => value.Replace("'", "''", StringComparison.Ordinal);
