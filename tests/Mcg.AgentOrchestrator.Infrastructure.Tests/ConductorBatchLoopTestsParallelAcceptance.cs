@@ -72,7 +72,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                     }
 
                     bothStarted.Signal();
-                    Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                    Assert.True(release.Wait(TestHangGuard.Bound), "acceptance release did not happen");
                     lock (gate)
                     {
                         running--;
@@ -97,7 +97,6 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             BatchTickSummary? startTick = null;
-            var startClock = Stopwatch.StartNew();
             var startSummary = new ConductorBatchLoop().Run(
                 kernel,
                 driver,
@@ -105,15 +104,15 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 NoStopPath(),
                 maxIterations: 1,
                 onTick: t => startTick = t);
-            startClock.Stop();
 
             Assert.Equal(0, startSummary.Advanced);
             Assert.Equal(2, startSummary.Held);
             Assert.Equal(GoalStatus.Verifying, goalA.Status);
             Assert.Equal(GoalStatus.Verifying, goalB.Status);
-            Assert.True(bothStarted.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(bothStarted.Wait(TestHangGuard.Bound), "both acceptance attempts did not start");
             release.Set();
-            Assert.True(bothFinished.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(bothFinished.Wait(TestHangGuard.Bound), "both acceptance attempts did not finish");
+            waitForAttempts();
 
             BatchTickSummary? reconcileTick = null;
             var totalAdvanced = 0;
@@ -127,7 +126,6 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                     maxIterations: 1,
                     onTick: t => reconcileTick = t);
                 totalAdvanced += reconcileSummary.Advanced;
-                Thread.Sleep(50);
             }
 
             Assert.Equal(2, totalAdvanced);
@@ -4279,7 +4277,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var threads = new ConcurrentBag<Thread>();
         waitForAttempts = () =>
         {
-            var deadline = DateTime.UtcNow.AddSeconds(5);
+            var deadline = DateTime.UtcNow.Add(TestHangGuard.Bound);
             foreach (var thread in threads)
             {
                 var remaining = deadline - DateTime.UtcNow;

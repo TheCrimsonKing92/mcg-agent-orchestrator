@@ -11,7 +11,8 @@ public sealed partial class GoalAcceptanceVerifier
         Func<DateTimeOffset> utcNow,
         Action? onLimitReached,
         CancellationToken cancellationToken,
-        TimeSpan? publicationInterval = null)
+        TimeSpan? publicationInterval = null,
+        Func<TimeSpan, CancellationToken, Task>? publicationDelaySource = null)
     {
         var buffer = new byte[64 * 1024];
         long writtenBytes = 0;
@@ -98,9 +99,9 @@ public sealed partial class GoalAcceptanceVerifier
                             {
                                 publicationDelayCancellation =
                                     CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                                publicationDelay = Task.Delay(
-                                    effectivePublicationInterval,
-                                    publicationDelayCancellation.Token);
+                                publicationDelay = publicationDelaySource is null
+                                    ? Task.Delay(effectivePublicationInterval, publicationDelayCancellation.Token)
+                                    : publicationDelaySource(effectivePublicationInterval, publicationDelayCancellation.Token);
                             }
                         }
                     }

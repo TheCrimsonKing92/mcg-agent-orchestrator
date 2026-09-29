@@ -8,6 +8,7 @@ public sealed class StewardDispatcher
     private readonly StewardDispatchOptions _options;
     private readonly StewardBypassPolicy _bypassPolicy;
     private readonly StewardShadowAdjudicator? _shadowAdjudicator;
+    private readonly TimeProvider _timeProvider;
 
     public StewardDispatcher(
         IStewardTriageEngine engine,
@@ -15,7 +16,8 @@ public sealed class StewardDispatcher
         IControlPlaneMessageTransport transport,
         StewardDispatchOptions? options = null,
         StewardBypassPolicy? bypassPolicy = null,
-        StewardShadowAdjudicator? shadowAdjudicator = null)
+        StewardShadowAdjudicator? shadowAdjudicator = null,
+        TimeProvider? timeProvider = null)
     {
         _engine = engine;
         _receiptStore = receiptStore;
@@ -23,6 +25,7 @@ public sealed class StewardDispatcher
         _options = options ?? StewardDispatchOptions.Default;
         _bypassPolicy = bypassPolicy ?? new StewardBypassPolicy();
         _shadowAdjudicator = shadowAdjudicator;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<StewardDispatchResult> DispatchAsync(
@@ -54,7 +57,7 @@ public sealed class StewardDispatcher
         try
         {
             var batchTask = _engine.TriageAsync(triageBundle, now, triageCancellation.Token);
-            var completed = await Task.WhenAny(batchTask, Task.Delay(_options.FailOpenTimeout, cancellationToken));
+            var completed = await Task.WhenAny(batchTask, Task.Delay(_options.FailOpenTimeout, _timeProvider, cancellationToken));
             if (completed != batchTask)
             {
                 cancellationToken.ThrowIfCancellationRequested();
