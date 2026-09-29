@@ -20,6 +20,7 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal
 {
     private HashSet<string> _trackedAttemptExitPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _signaledAttemptExitPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pendingAttemptExitWakes = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<FileSystemWatcher> _attemptWatchers = [];
     private int _lastWakeReason;
     private int _attemptWatcherWarningEmitted;
@@ -37,6 +38,7 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal
         {
             _trackedAttemptExitPaths = tracked;
             _signaledAttemptExitPaths.IntersectWith(tracked);
+            _pendingAttemptExitWakes.IntersectWith(tracked);
         }
 
         DisposeAttemptWatchers();
@@ -69,21 +71,40 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal
 
     private void SignalIfTrackedAttemptExit(string path)
     {
+        lock (_trackedGate)
+        {
+            if (TryMarkAttemptExitSignaled(path))
+                Signal();
+        }
+    }
+
+    private bool TryMarkAttemptExitSignaled(string path)
+    {
         var normalized = NormalizePath(path);
         lock (_trackedGate)
         {
             if (!_trackedAttemptExitPaths.Contains(normalized) || !_signaledAttemptExitPaths.Add(normalized))
-                return;
-        }
+                return false;
 
-        Volatile.Write(ref _lastWakeReason, (int)ConductorWakeReason.AttemptExit);
-        Signal();
+            _pendingAttemptExitWakes.Add(normalized);
+            Volatile.Write(ref _lastWakeReason, (int)ConductorWakeReason.AttemptExit);
+            return true;
+        }
     }
 
     private bool TryConsumeExistingAttemptExit()
     {
         lock (_trackedGate)
         {
+            if (_pendingAttemptExitWakes.Count != 0)
+            {
+                _pendingAttemptExitWakes.Clear();
+                Volatile.Write(ref _lastWakeReason, (int)ConductorWakeReason.AttemptExit);
+                if (_signal.Wait(0))
+                    Interlocked.Exchange(ref _signaled, 0);
+                return true;
+            }
+
             foreach (var path in _trackedAttemptExitPaths)
             {
                 if (_signaledAttemptExitPaths.Contains(path) || !File.Exists(path))
@@ -96,6 +117,19 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal
         }
 
         return false;
+    }
+
+    private void ConsumePendingAttemptExitWakesAfterSignal()
+    {
+        lock (_trackedGate)
+        {
+            Interlocked.Exchange(ref _signaled, 0);
+            if (_pendingAttemptExitWakes.Count == 0)
+                return;
+
+            _pendingAttemptExitWakes.Clear();
+            Volatile.Write(ref _lastWakeReason, (int)ConductorWakeReason.AttemptExit);
+        }
     }
 
     private void WarnAttemptWatcher(Exception ex)

@@ -1021,13 +1021,15 @@ public sealed class AcceptanceGateEngineSettingsTests
     [Xunit.Fact]
     public void ChangeScopedSelectionDropsExpensiveMtpLaneExceptForBuildSystemChanges()
     {
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
         var root = InfrastructureTestSupport.FindRepositoryRoot();
-        var previousChangeScoped = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
-        var previousFullShards = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
+        var previousChangeScoped = variables.GetValueOrDefault("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        var previousFullShards = variables.GetValueOrDefault("MCG_ACCEPTANCE_FULL_SHARDS");
         try
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", null);
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = null;
             var ordinaryChange = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
                 root,
                 ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/WorkspaceConsolidator.cs"]);
@@ -1053,8 +1055,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previousChangeScoped);
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previousFullShards);
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = previousChangeScoped;
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = previousFullShards;
         }
     }
 
@@ -1464,6 +1466,8 @@ public sealed class AcceptanceGateEngineSettingsTests
     [Xunit.Fact]
     public void EffectivePlanIdentityBindsScopeAndEnvironmentExpansion()
     {
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
         var root = CreateWorkspace("""
             {
               "version": 1,
@@ -1474,17 +1478,17 @@ public sealed class AcceptanceGateEngineSettingsTests
               }]
             }
             """);
-        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        var previous = variables.GetValueOrDefault("MCG_ACCEPTANCE_CHANGE_SCOPED");
         try
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
             var scoped = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
                 root,
                 ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
             var differentScope = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
                 root,
                 ["src/Mcg.AgentOrchestrator.Core/Domain/AcceptanceCohorts.cs"]);
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "0";
             var full = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
                 root,
                 ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
@@ -1495,7 +1499,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = previous;
             Directory.Delete(root, recursive: true);
         }
     }
@@ -1503,6 +1507,8 @@ public sealed class AcceptanceGateEngineSettingsTests
     [Xunit.Fact]
     public void EffectivePlanIdentityBindsChangeScopedModeWhenChecksMatch()
     {
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
         var root = CreateWorkspace("""
             {
               "version": 1,
@@ -1515,10 +1521,10 @@ public sealed class AcceptanceGateEngineSettingsTests
             }
             """);
         var changedFiles = new[] { "Directory.Build.props" };
-        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        var previous = variables.GetValueOrDefault("MCG_ACCEPTANCE_CHANGE_SCOPED");
         try
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
             Xunit.Assert.True(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
             var scopedChecks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
                 root,
@@ -1527,7 +1533,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 root,
                 changedFiles);
 
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "0";
             Xunit.Assert.False(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
             var fullChecks = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
                 root,
@@ -1562,7 +1568,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = previous;
             Directory.Delete(root, recursive: true);
         }
     }

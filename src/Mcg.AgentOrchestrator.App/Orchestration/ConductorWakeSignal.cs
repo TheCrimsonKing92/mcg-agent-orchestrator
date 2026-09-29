@@ -108,7 +108,7 @@ internal sealed partial class FileSystemWatcherConductorWakeSignal : IConductorW
             return TryConsumeExistingAttemptExit() || HasExistingTrackedExitArtifact();
         }
 
-        Interlocked.Exchange(ref _signaled, 0);
+        ConsumePendingAttemptExitWakesAfterSignal();
         return true;
     }
 
