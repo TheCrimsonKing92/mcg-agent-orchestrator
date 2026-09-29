@@ -1271,7 +1271,7 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
     [Xunit.Fact]
     public void UnresolvedSampleTimesOutAndPrimarySucceeds()
     {
-        WorkerProcessJobs.ClearRegistryForTests();
+        using var registryScope = WorkerProcessJobs.UseRegistryScopeForTests(dbPath: null);
         var root = CreateSeededDispatchRepository();
         var logRoot = Path.Combine(root, "logs");
         SeedFixtureCitationTargets(root);
@@ -1365,7 +1365,6 @@ public sealed class PlannerSamplingDispatchTests : WorkerDispatchTestSupport
                 try { WorkerProcessJobs.TryKillOrFallback(processId); } catch { }
             foreach (var process in processes)
                 try { process.Dispose(); } catch { }
-            WorkerProcessJobs.ClearRegistryForTests();
         }
     }
 
