@@ -72,7 +72,8 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string observedMainRevision,
         IReadOnlyList<MergeTrainMemberBinding> members,
-        GoalWorktreeCleanupHooks? cleanupHooks = null)
+        GoalWorktreeCleanupHooks? cleanupHooks = null,
+        DateTimeOffset? committerDate = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(members);
@@ -129,11 +130,20 @@ public static partial class GoalWorktrees
                         $"merge base unavailable: {mergeBase.Error}"));
                     continue;
                 }
-                var rebase = GitCli.Run(
-                    workspacePath,
-                    "-c", "user.name=mcg-orchestrator",
-                    "-c", "user.email=mcg-orchestrator@localhost",
-                    "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), member.CandidateRevision);
+                var rebase = committerDate is null
+                    ? GitCli.Run(
+                        workspacePath,
+                        "-c", "user.name=mcg-orchestrator",
+                        "-c", "user.email=mcg-orchestrator@localhost",
+                        "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), member.CandidateRevision)
+                    : GitCli.RunWithEnvironment(workspacePath,
+                        new Dictionary<string, string>
+                        {
+                            ["GIT_COMMITTER_DATE"] = FormattableString.Invariant($"@{committerDate.Value.ToUnixTimeSeconds()} +0000")
+                        },
+                        "-c", "user.name=mcg-orchestrator",
+                        "-c", "user.email=mcg-orchestrator@localhost",
+                        "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), member.CandidateRevision);
                 if (rebase.ExitCode != 0)
                 {
                     var conflicts = ReadMergeTrainConflictPaths(workspacePath);

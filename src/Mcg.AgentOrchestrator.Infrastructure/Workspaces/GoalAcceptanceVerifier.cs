@@ -5349,16 +5349,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsBuildArtifactIoException(Exception ex) =>
         ex is IOException or UnauthorizedAccessException;
 
-    private static BuildLockAttribution AttributeBuildLock(
+    private BuildLockAttribution AttributeBuildLock(
         string path,
         string? ownershipHint,
         string? phase,
         string? operation)
     {
-        var elapsed = Stopwatch.StartNew();
+        var started = _timeProvider.GetTimestamp();
         var attribution = LockAttribution.Attribute(path, ownershipHint, phase, operation);
-        elapsed.Stop();
-        return attribution with { ProbeElapsed = elapsed.Elapsed };
+        return attribution with { ProbeElapsed = _timeProvider.GetElapsedTime(started) };
     }
 
     private bool IsBuildLockFailure(

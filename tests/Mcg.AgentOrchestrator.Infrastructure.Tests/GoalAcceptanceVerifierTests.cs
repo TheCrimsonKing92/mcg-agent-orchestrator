@@ -682,9 +682,10 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var previousWindow = TestOverrides.TransientNoHolderBuildLockWaitWindow;
         var previousPoll = TestOverrides.TransientNoHolderBuildLockPollInterval;
         var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
+        var timeProvider = new RecordingTimeProvider();
         LockAttribution.AttributeForTests = (path, _) =>
         {
-            Thread.Sleep(120);
+            timeProvider.Advance(TimeSpan.FromMilliseconds(120));
             return new BuildLockAttribution(
                 path,
                 [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
@@ -696,7 +697,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            Func<string[], string, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner = (args, _, _) =>
             {
                 if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]))
                 {
@@ -706,7 +707,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     1,
                     $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
-            });
+            };
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, runner, timeProvider);
 
             BuildLockBlockedException? blocked = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
@@ -721,6 +723,10 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
             Assert.Contains("verdict=wait-exhausted", output, StringComparison.Ordinal);
             Assert.Contains("build-lock=true", output, StringComparison.Ordinal);
+            var systemVerifier = new GoalAcceptanceVerifier(TestOverrides, runner, TimeProvider.System);
+            var systemOutput = AsyncLocalConsoleRouter.Capture(() =>
+                Assert.ThrowsAsync<BuildLockBlockedException>(() => systemVerifier.RunAsync(root)).GetAwaiter().GetResult());
+            Assert.Matches(@"probe-ms=\d+", systemOutput);
         }
         finally
         {
