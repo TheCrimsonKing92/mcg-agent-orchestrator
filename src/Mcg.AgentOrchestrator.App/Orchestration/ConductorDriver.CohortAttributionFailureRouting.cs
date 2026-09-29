@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     internal Action<string> CohortAttributionVerdictSink { get; set; } = Console.WriteLine;
+    internal Func<Goal, GateReadyCandidateRevisionPair?>? CohortAttributionRevisionReader { get; set; }
 
     private ConductorAcceptanceCohortRunResult ApplyCohortAttributionFailureVerdicts(
         ConductorAcceptanceCohortRunResult held,
@@ -67,14 +68,8 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        var path = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
-        if (path is null)
-        {
-            return null;
-        }
-        GateReadyCandidateRevisionPair current;
-        try { current = ConductorGitRevisionReader.ReadRequiredPair(path); }
-        catch (InvalidOperationException) { return null; }
+        var current = ReadCurrentCohortAttributionRevisions(goal);
+        if (current is null) return null;
         if (current.BranchRevision != failure.BranchHeadSha ||
             current.MainRevision != failure.MainHeadSha)
         {
@@ -88,11 +83,23 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.AcceptanceFailed, reason,
                     ConductorEscalationKind.AcceptanceVerificationFailed));
         }
-        if (_cohortKernel is null || !_cohortKernel.RouteRecordedAcceptanceFailure(goal.Id, reason))
+        if ((_cohortKernel ?? _conductorTickKernel)?.RouteRecordedAcceptanceFailure(goal.Id, reason) != true)
         {
             throw new InvalidOperationException("Recorded cohort acceptance failure could not route its Verified member.");
         }
         return Escalate(goal, goalPrefix, policy, GoalLifecycleState.AcceptanceFailed, reason,
             ConductorEscalationKind.AcceptanceVerificationFailed);
+    }
+
+    private GateReadyCandidateRevisionPair? ReadCurrentCohortAttributionRevisions(Goal goal)
+    {
+        if (CohortAttributionRevisionReader is not null)
+        {
+            return CohortAttributionRevisionReader(goal);
+        }
+        var path = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
+        if (path is null) return null;
+        try { return ConductorGitRevisionReader.ReadRequiredPair(path); }
+        catch (InvalidOperationException) { return null; }
     }
 }

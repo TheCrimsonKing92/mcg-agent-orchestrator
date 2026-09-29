@@ -215,12 +215,33 @@ public sealed class ConductorAcceptanceCohortAttributionVerdictTests
         Assert.Equal(1, failureRecords);
         Assert.Equal(GoalStatus.Verified, resumedGoal.Status);
 
-        // The next tick observes the durable failure and routes without running another gate.
+        // The next driver tick observes the durable failure before it can run a solo gate.
         var failure = Assert.IsType<AcceptanceFailureSummary>(resumedGoal.LatestAcceptanceFailure);
         Assert.Contains("cohort-partition=partition-0", failure.CheckAttributions![0].Evidence);
-        Assert.True(resumedKernel.RouteRecordedAcceptanceFailure(resumedGoal.Id,
-            "Acceptance verification failed; review and fix before landing."));
+        var acceptanceRuns = 0;
+        var routingWrites = 0;
+        var driver = ConductorDriverTests.MakeDriver(
+            runAcceptanceSummary: _ =>
+            {
+                acceptanceRuns++;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            writeEscalation: (_, state, _) =>
+            {
+                Assert.Equal(GoalLifecycleState.AcceptanceFailed, state);
+                routingWrites++;
+            });
+        driver.CohortAttributionRevisionReader = _ => new GateReadyCandidateRevisionPair(FirstCandidate, Main);
+        driver.BeginTick(resumedKernel, 2);
+
+        var nextTick = driver.AdvanceOnce(resumedGoal, ConductorAutonomyPolicy.Permissive);
+
+        var routed = Assert.IsType<ConductorAdvanceOutcome.Escalated>(nextTick.Outcome);
+        Assert.Equal(GoalLifecycleState.AcceptanceFailed, routed.State);
         Assert.Equal(GoalStatus.AcceptanceFailed, resumedGoal.Status);
+        Assert.Equal(0, acceptanceRuns);
+        Assert.Equal(1, routingWrites);
+        Assert.Equal(1, failureRecords);
     }
 
     private static Goal Goal(string id) => new(new GoalId(id), "Cohort verdict test",
