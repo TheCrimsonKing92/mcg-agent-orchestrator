@@ -70,9 +70,25 @@ public sealed class AssemblyTempRootChildProcessTests
         Assert.Equal(expected, fixture.WaitForHandshake(Process.GetCurrentProcess(), writer.Dispose));
     }
 
+    [Fact]
+    public void ChildFloodingBothStreamsExitsWithinExistingWaitAndIsCapturedInFull()
+    {
+        using var fixture = new ChildFixture();
+        var child = fixture.Start(holdForRelease: false, floodBytes: 1_048_576);
+        fixture.WaitForHandshake(child);
+        Assert.True(child.WaitForExit(15_000), fixture.ReadFailure(child));
+        Assert.Equal(0, child.ExitCode);
+        var capture = fixture.Capture(child);
+        Assert.True(capture.StdoutBytes >= 1_048_576, fixture.ReadFailure(child));
+        Assert.True(capture.StderrBytes >= 1_048_576, fixture.ReadFailure(child));
+        Assert.Contains(ChildControlOutputFlood.OutputMarker, capture.Stdout);
+        Assert.Contains(ChildControlOutputFlood.ErrorMarker, capture.Stderr);
+    }
+
     private sealed class ChildFixture : IDisposable
     {
         private readonly List<Process> children = [];
+        private readonly Dictionary<Process, ChildProcessOutputCapture> captures = [];
 
         internal ChildFixture()
         {
@@ -92,7 +108,7 @@ public sealed class AssemblyTempRootChildProcessTests
             .Select(Path.GetFileName)
             .Count(name => AssemblyTempRootOwnership.TryParseProcessTempRootName(name, out _));
 
-        internal Process Start(bool holdForRelease)
+        internal Process Start(bool holdForRelease, int floodBytes = 0)
         {
             var processPath = Environment.ProcessPath
                 ?? throw new InvalidOperationException("The managed test host process path is unavailable.");
@@ -116,6 +132,10 @@ public sealed class AssemblyTempRootChildProcessTests
 
             startInfo.Environment[AssemblyTempRedirect.FixtureParentEnvironmentVariable] = Root;
             startInfo.Environment[AssemblyTempRedirect.ChildHandshakeEnvironmentVariable] = HandshakePath;
+            if (floodBytes > 0)
+                startInfo.Environment[ChildControlOutputFlood.EnvironmentVariable] = floodBytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            else
+                startInfo.Environment.Remove(ChildControlOutputFlood.EnvironmentVariable);
             if (holdForRelease)
             {
                 startInfo.Environment[AssemblyTempRedirect.ChildReleaseEnvironmentVariable] = ReleasePath;
@@ -127,6 +147,7 @@ public sealed class AssemblyTempRootChildProcessTests
 
             var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start the Core.Tests child control process.");
+            captures.Add(process, new ChildProcessOutputCapture(process));
             children.Add(process);
             return process;
         }
@@ -178,13 +199,27 @@ public sealed class AssemblyTempRootChildProcessTests
 
         internal string ReadFailure(Process child)
         {
+            if (!captures.TryGetValue(child, out var capture))
+                return "child has no redirected stream capture";
+            var joined = child.HasExited && capture.JoinAfterExit();
+            var (stdout, stderr, stdoutBytes, stderrBytes) = capture.Snapshot();
             if (!child.HasExited)
             {
-                return "child did not exit before the bounded wait";
+                return $"child did not exit before the bounded wait; stdoutBytes={stdoutBytes}; stderrBytes={stderrBytes}; stdout={Tail(stdout)}; stderr={Tail(stderr)}";
             }
 
-            return $"exit={child.ExitCode}; stdout={child.StandardOutput.ReadToEnd()}; stderr={child.StandardError.ReadToEnd()}";
+            return $"exit={child.ExitCode}; captureComplete={joined}; stdoutBytes={stdoutBytes}; stderrBytes={stderrBytes}; stdout={Tail(stdout)}; stderr={Tail(stderr)}";
         }
+
+        internal (string Stdout, string Stderr, int StdoutBytes, int StderrBytes) Capture(Process child)
+        {
+            Assert.True(child.HasExited);
+            var capture = captures[child];
+            Assert.True(capture.JoinAfterExit(), "Child output capture did not complete within 5 seconds.");
+            return capture.Snapshot();
+        }
+
+        private static string Tail(string value) => value.Length <= 8192 ? value : value[^8192..];
 
         public void Dispose()
         {
@@ -203,6 +238,8 @@ public sealed class AssemblyTempRootChildProcessTests
                 }
                 finally
                 {
+                    if (captures.TryGetValue(child, out var capture) && child.HasExited)
+                        _ = capture.JoinAfterExit();
                     child.Dispose();
                 }
             }

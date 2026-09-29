@@ -309,7 +309,7 @@ public sealed class LaneTimingMeasurementScriptTests
                 "-GitPath", _gitExecutablePath
             };
             arguments.AddRange(extraArguments);
-            return RunProcess(Path.GetTempPath(), "pwsh", arguments);
+            return RunProcess(Path.GetTempPath(), TestPowerShell.Executable, arguments);
         }
 
         private void InitializeRepository()

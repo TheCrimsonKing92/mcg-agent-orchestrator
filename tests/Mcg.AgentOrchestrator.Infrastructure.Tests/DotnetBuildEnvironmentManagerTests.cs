@@ -1002,30 +1002,10 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
 
     internal static string ResolvePowerShell()
     {
-        foreach (var name in new[] { "pwsh", "powershell" })
-        {
-            try
-            {
-                using var process = Process.Start(new ProcessStartInfo
-                {
-                    FileName = name,
-                    Arguments = "-NoProfile -NonInteractive -Command \"$PSVersionTable.PSVersion.Major\"",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                });
-                if (process is not null && process.WaitForExit(5000) && process.ExitCode == 0)
-                {
-                    return ResolveExecutablePath(name) ?? name;
-                }
-            }
-            catch
-            {
-            }
-        }
-
-        return "powershell";
+        var executable = TestPowerShell.Executable;
+        if (!Path.IsPathFullyQualified(executable) || !File.Exists(executable))
+            throw new InvalidOperationException($"Install a real pwsh 7; resolved shell is unavailable: {executable}");
+        return executable;
     }
 
     internal static void ConfigureTimeoutProbeForTests()

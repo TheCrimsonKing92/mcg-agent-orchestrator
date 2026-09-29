@@ -3810,56 +3810,7 @@ private static void AssertOpenAiModelOrderIsCostAware(string text)
 
 private static string RunGit(string workingDirectory, params string[] arguments)
 {
-    var startInfo = new ProcessStartInfo
-    {
-        FileName = "git",
-        WorkingDirectory = workingDirectory,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true
-    };
-    foreach (var argument in arguments)
-    {
-        startInfo.ArgumentList.Add(argument);
-    }
-
-    using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start git.");
-    var outputTask = process.StandardOutput.ReadToEndAsync();
-    var errorTask = process.StandardError.ReadToEndAsync();
-    if (!process.WaitForExit(30000))
-    {
-        string termination;
-        try
-        {
-            process.Kill(entireProcessTree: true);
-            termination = process.WaitForExit(5000)
-                ? "process tree terminated"
-                : "process tree did not exit within 5 seconds after termination";
-        }
-        catch (InvalidOperationException)
-        {
-            termination = "process exited before termination";
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            termination = $"process termination failed: {ex.Message}";
-        }
-
-        var timedOutOutput = outputTask.IsCompletedSuccessfully ? outputTask.Result : "<stream still open>";
-        var timedOutError = errorTask.IsCompletedSuccessfully ? errorTask.Result : "<stream still open>";
-        throw new TimeoutException(
-            $"git {string.Join(' ', arguments)} did not exit within 30 seconds; {termination}: stdout={timedOutOutput} stderr={timedOutError}");
-    }
-
-    var output = outputTask.GetAwaiter().GetResult();
-    var error = errorTask.GetAwaiter().GetResult();
-    if (process.ExitCode != 0)
-    {
-        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {process.ExitCode}: {output}{error}");
-    }
-
-    return output;
+    return DashboardTestGit.Run(workingDirectory, arguments);
 }
 
 private static void WriteHeartbeat(
