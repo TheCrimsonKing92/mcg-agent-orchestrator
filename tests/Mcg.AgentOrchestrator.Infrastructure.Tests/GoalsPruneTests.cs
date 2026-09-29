@@ -233,22 +233,9 @@ public sealed class GoalsPruneTests : HostCapacityBoundTestBase
 
     private static int RunGitExitCode(string workingDirectory, string[] arguments, out string error)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        foreach (var arg in arguments)
-            startInfo.ArgumentList.Add(arg);
-        using var process = Process.Start(startInfo)!;
-        process.StandardOutput.ReadToEnd();
-        error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        return process.ExitCode;
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+        error = result.StandardError;
+        return result.ExitCode ?? throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit null: {error}; {result}");
     }
 
     private static void DeleteDirectory(string path)

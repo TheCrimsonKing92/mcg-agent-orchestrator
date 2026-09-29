@@ -900,31 +900,14 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
 
     private protected static string RunGitOutput(string workingDirectory, params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+        InfrastructureTestSupport.RequireCompleteGitOutput(result);
+        if (!result.Succeeded)
         {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {result.ExitCode}: {result.StandardError}; {result}");
         }
 
-        using var process = Process.Start(startInfo)!;
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
-        }
-
-        return output.Trim();
+        return result.StandardOutput.Trim();
     }
 
     private protected static int RunGitExitCode(string workingDirectory, params string[] arguments)

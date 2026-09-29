@@ -3121,43 +3121,16 @@ public sealed class LauncherScriptTests
 
     private static void RunGit(string workingDirectory, params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        var result = RunProcess(startInfo, $"git {string.Join(' ', arguments)}");
-        Assert.Equal(0, result.ExitCode);
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+        Assert.True(result.Succeeded, $"git {string.Join(' ', arguments)} exit={result.ExitCode}: {result.StandardError}; {result}");
     }
 
     private static string RunGitForOutput(string workingDirectory, params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        var result = RunProcess(startInfo, $"git {string.Join(' ', arguments)}");
-        Assert.Equal(0, result.ExitCode);
-        return result.Stdout;
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+        InfrastructureTestSupport.RequireCompleteGitOutput(result);
+        Assert.True(result.Succeeded, $"git {string.Join(' ', arguments)} exit={result.ExitCode}: {result.StandardError}; {result}");
+        return result.StandardOutput;
     }
 
     private static ProcessResult RunProcess(ProcessStartInfo startInfo, string description)

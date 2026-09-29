@@ -937,34 +937,11 @@ public sealed class CliHelpTests
 
     private static void InitializeGitRepository(string root)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = root,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        startInfo.ArgumentList.Add("init");
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git init.");
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(10000))
-        {
-            var termination = TryTerminateProcess(process);
-            throw new TimeoutException(
-                $"git init did not exit within 10 seconds; {termination}. stdout={CompletedOutput(outputTask)} stderr={CompletedOutput(errorTask)}");
-        }
-
-        var output = outputTask.GetAwaiter().GetResult();
-        var error = errorTask.GetAwaiter().GetResult();
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"git init failed. stdout={output} stderr={error}");
-        }
+        var result = InfrastructureTestSupport.RunGitProbe(root, ["init"]);
+        if (result.TimedOut)
+            throw new TimeoutException($"git init did not exit within 60 seconds. stdout={result.StandardOutput} stderr={result.StandardError}; {result}");
+        if (!result.Succeeded)
+            throw new InvalidOperationException($"git init failed with exit {result.ExitCode}. stdout={result.StandardOutput} stderr={result.StandardError}; {result}");
     }
 
     private static (int ExitCode, string StandardOutput, string StandardError) RunAppCli(

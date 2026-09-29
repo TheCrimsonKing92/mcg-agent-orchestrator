@@ -1677,43 +1677,14 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
 
 protected static string ReadGit(string workingDirectory, string[] arguments)
 {
-    var startInfo = new ProcessStartInfo
+    var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+    InfrastructureTestSupport.RequireCompleteGitOutput(result);
+    if (!result.Succeeded)
     {
-        FileName = "git",
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        WorkingDirectory = workingDirectory
-    };
-    RemoveAmbientGitRepositoryEnvironment(startInfo);
-
-    foreach (var argument in arguments)
-    {
-        startInfo.ArgumentList.Add(argument);
+        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {result.ExitCode}: {result.StandardError}; {result}");
     }
 
-    using var process = Process.Start(startInfo)
-        ?? throw new InvalidOperationException("Failed to start git.");
-    var output = process.StandardOutput.ReadToEnd();
-    var error = process.StandardError.ReadToEnd();
-    process.WaitForExit(60000);
-    if (process.ExitCode != 0)
-    {
-        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
-    }
-
-    return output.Trim();
-}
-
-private static void RemoveAmbientGitRepositoryEnvironment(ProcessStartInfo startInfo)
-{
-    startInfo.Environment.Remove("GIT_DIR");
-    startInfo.Environment.Remove("GIT_WORK_TREE");
-    startInfo.Environment.Remove("GIT_INDEX_FILE");
-    startInfo.Environment.Remove("GIT_OBJECT_DIRECTORY");
-    startInfo.Environment.Remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
-    startInfo.Environment.Remove("GIT_COMMON_DIR");
+    return result.StandardOutput.Trim();
 }
 
 protected static (int ExitCode, string StandardOutput, string StandardError) RunPowerShellCommand(string workingDirectory, string command)

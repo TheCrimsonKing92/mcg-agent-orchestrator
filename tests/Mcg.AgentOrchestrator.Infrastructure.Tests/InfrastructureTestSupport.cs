@@ -9,7 +9,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
-internal static class InfrastructureTestSupport
+internal static partial class InfrastructureTestSupport
 {
 private static readonly SemaphoreSlim ProtectedPidEnvironmentLock = new(1, 1);
 
@@ -99,6 +99,9 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     Action<string, string>? beforeOwnedCaptureRead = null,
     Action<OwnedProcessGroup.SuspendedProcessStart>? beforeOwnedExitObservation = null)
 {
+    var seam = GitProbeSeamScope.Value;
+    inheritedEnvironment ??= seam?.InheritedEnvironment;
+    startProcess ??= seam?.StartProcess;
     var executable = ResolveNativeGitExecutable(inheritedEnvironment);
     var effectiveArguments = new[]
     {

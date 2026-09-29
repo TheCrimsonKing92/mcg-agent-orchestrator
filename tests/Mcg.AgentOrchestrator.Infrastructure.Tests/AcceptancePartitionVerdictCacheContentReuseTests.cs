@@ -139,18 +139,7 @@ public sealed class AcceptancePartitionVerdictCacheContentReuseTests : GoalAccep
 
     private void RunGit(params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo("git")
-        {
-            WorkingDirectory = _root,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start git.");
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
+        var result = InfrastructureTestSupport.RunGitProbe(_root, arguments);
+        Assert.True(result.Succeeded, $"git {string.Join(' ', arguments)} exit={result.ExitCode}: {result.StandardError}; {result}");
     }
 }
