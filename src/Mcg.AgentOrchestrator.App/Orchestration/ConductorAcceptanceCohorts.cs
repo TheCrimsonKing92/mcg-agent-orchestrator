@@ -609,10 +609,11 @@ internal sealed partial class ConductorBatchLoop
         int tick,
         List<string> changedGoalLines)
     {
-        var transient = IsTransientCohortGateFault(fault.Fault);
+        var protectedBoundary = IsProtectedBoundaryRegistrationFault(fault.Fault);
+        var transient = !protectedBoundary && IsTransientCohortGateFault(fault.Fault);
         var failureCount = transient ? driver.RecordCohortGateTransientFault(fault.MemberPairKey) : 0;
         var escalate = !transient || failureCount >= ParallelAcceptanceTransientFailureCap;
-        var classification = transient ? "transient" : "non-transient";
+        var classification = protectedBoundary ? "terminal" : transient ? "transient" : "non-transient";
         var memberResults = new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal);
         foreach (var goal in cohortEligible.Where(goal => fault.MemberGoalIds.Contains(goal.Id.Value)))
         {
@@ -621,7 +622,7 @@ internal sealed partial class ConductorBatchLoop
                     driver,
                     goal,
                     policy,
-                    $"acceptance cohort gate fault ({classification} " +
+                    $"infrastructure-hold acceptance cohort gate fault ({classification} " +
                     $"{failureCount}/{ParallelAcceptanceTransientFailureCap}): " +
                     $"{fault.FaultType}: {SanitizeReason(fault.Message)}")
                 : ParallelAcceptanceHeld(

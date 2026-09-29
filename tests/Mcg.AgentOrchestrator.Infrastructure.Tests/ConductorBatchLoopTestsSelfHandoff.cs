@@ -829,6 +829,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     public void ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-stdout-handoff");
+        ConductorSupervisorProcessIdentity? successorIdentity = null;
         int? processId = null;
         var suppressionScopeActive = false;
         try
@@ -865,6 +866,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             Assert.Contains("breakawaySucceeded=true", result.LaunchDetail, StringComparison.Ordinal);
             Assert.Matches("residualJobMembership=(true|false)", result.LaunchDetail);
             Assert.False(suppressionScopeActive);
+            successorIdentity = result.SuccessorIdentity;
             processId = result.ProcessId;
             var conductEventsPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
             Assert.True(File.Exists(conductEventsPath), "Windows handoff did not journal its pre-spawn diagnostic.");
@@ -885,10 +887,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         }
         finally
         {
-            if (processId is { } pid)
-            {
-                TryKillProcess(pid);
-            }
+            TestOwnedProcessStop.StopTreeIfSame(successorIdentity);
 
             TryDeleteDirectory(root);
         }
@@ -900,7 +899,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     public void ConductorLoopHandoffSuppressionFailureStillStartsSuccessor()
     {
         var root = CreateTempDirectory("mcg-conduct-loop-suppression-failure");
-        int? processId = null;
+        ConductorSupervisorProcessIdentity? successorIdentity = null;
         try
         {
             var stdoutPath = Path.Combine(root, "successor.out.log");
@@ -920,7 +919,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             Assert.True(result.ProcessId > 0);
             Assert.Contains("breakawaySucceeded=true", result.LaunchDetail, StringComparison.Ordinal);
             Assert.Matches("residualJobMembership=(true|false)", result.LaunchDetail);
-            processId = result.ProcessId;
+            successorIdentity = result.SuccessorIdentity;
             Assert.True(WaitUntil(
                 () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(marker, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10)),
@@ -934,10 +933,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         }
         finally
         {
-            if (processId is { } pid)
-            {
-                TryKillProcess(pid);
-            }
+            TestOwnedProcessStop.StopTreeIfSame(successorIdentity);
 
             TryDeleteDirectory(root);
         }
@@ -955,6 +951,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         PipeDrain? stdoutDrain = null;
         PipeDrain? stderrDrain = null;
         int? successorPid = null;
+        ConductorSupervisorProcessIdentity? successorIdentity = null;
         try
         {
             var startInfo = new ProcessStartInfo("dotnet")
@@ -1026,6 +1023,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             }
             Assert.True(parent.ExitCode == 0, $"Parent conductor exited {parent.ExitCode}. stdout={stdout} stderr={stderr}");
             successorPid = ParseHandoffProcessId(stdout);
+            successorIdentity = TestOwnedProcessStop.TryIdentify(successorPid.Value);
 
             Assert.True(IsProcessRunning(successorPid.Value), $"Successor pid {successorPid.Value} did not survive parent job close. stdout={stdout} stderr={stderr}");
             Assert.Contains("guard=incumbent-held-until-successor-ready", stdout, StringComparison.Ordinal);
@@ -1051,12 +1049,12 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             File.WriteAllText(Path.Combine(root, ConductorBatchLoop.StopFileName), "stop");
             if (successorPid is { } pid && !WaitUntil(() => !IsProcessRunning(pid), TimeSpan.FromSeconds(10)))
             {
-                TryKillProcess(pid);
+                TestOwnedProcessStop.StopTreeIfSame(successorIdentity);
             }
 
             if (parent is not null)
             {
-                TryKillProcess(parent.Id);
+                TryKillOwned(parent);
                 parent.Dispose();
             }
 
@@ -1106,7 +1104,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         {
             if (parent is not null)
             {
-                TryKillProcess(parent.Id);
+                TryKillOwned(parent);
                 parent.Dispose();
             }
 
@@ -1268,11 +1266,10 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         return predicate();
     }
 
-    private static void TryKillProcess(int processId)
+    private static void TryKillOwned(Process process)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);

@@ -45,6 +45,7 @@ internal sealed partial class ConductorContinuitySupervisor
             throw;
         }
 
+        RebindProtectedIdentity(seam.Self);
         RecordSupervisorBuild("handoff");
         return record;
     }
@@ -71,6 +72,7 @@ internal sealed partial class ConductorContinuitySupervisor
         var token = Guid.NewGuid().ToString("N");
         var readyPath = Path.Combine(outputDirectory, $"supervisor-ready-{token}.json");
         int launchedPid = 0;
+        ConductorSupervisorProcessIdentity? launchedIdentity = null;
         try
         {
             var appDll = target.CommandPrefix is { Count: > 1 }
@@ -95,7 +97,9 @@ internal sealed partial class ConductorContinuitySupervisor
                 {
                     [SystemConductorSupervisorHandoffSeam.InboundEnvironmentVariable] = recordPath
                 });
-            launchedPid = seam.Launch(request).ProcessId;
+            var launched = seam.Launch(request);
+            launchedPid = launched.ProcessId;
+            launchedIdentity = launched.SuccessorIdentity;
             var deadline = _timeProvider.GetUtcNow() + supervisorHandoff.Timeout;
             ConductorSupervisorReadyRecord? ready;
             while ((ready = seam.ReadReady(readyPath)) is null)
@@ -130,9 +134,9 @@ internal sealed partial class ConductorContinuitySupervisor
         {
             if (!seam.IsOwner(seam.Self))
                 throw new InvalidOperationException("Supervisor lease left incumbent during failed handoff.", ex);
-            if (launchedPid > 0)
+            if (launchedIdentity is not null)
             {
-                try { seam.StopPending(launchedPid); }
+                try { seam.StopPending(launchedIdentity); }
                 catch (Exception stopEx)
                 {
                     RecordSupervisorEvent("supervisor-handoff", "failed", "SUPERVISOR_HANDOFF_FAILED",

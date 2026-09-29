@@ -574,8 +574,11 @@ public static IDisposable ClearProtectedPidEnvironment()
 {
     ProtectedPidEnvironmentLock.Wait();
     var previous = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+    var previousTicks = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable);
     Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, null);
-    return new EnvironmentRestore(CliProtectedProcessEnvironment.ProtectedPidVariable, previous, ProtectedPidEnvironmentLock);
+    Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable, null);
+    return new EnvironmentRestore(CliProtectedProcessEnvironment.ProtectedPidVariable, previous,
+        ProtectedPidEnvironmentLock, CliProtectedProcessEnvironment.ProtectedStartTicksVariable, previousTicks);
 }
 
 public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
@@ -714,7 +717,8 @@ public static string FindRepositoryRoot()
 
 }
 
-internal sealed class EnvironmentRestore(string variableName, string? previousValue, SemaphoreSlim gate) : IDisposable
+internal sealed class EnvironmentRestore(string variableName, string? previousValue, SemaphoreSlim gate,
+    string? secondVariableName = null, string? secondPreviousValue = null) : IDisposable
 {
     private bool _disposed;
 
@@ -726,6 +730,8 @@ internal sealed class EnvironmentRestore(string variableName, string? previousVa
         }
 
         Environment.SetEnvironmentVariable(variableName, previousValue);
+        if (secondVariableName is not null)
+            Environment.SetEnvironmentVariable(secondVariableName, secondPreviousValue);
         gate.Release();
         _disposed = true;
     }

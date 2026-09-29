@@ -269,7 +269,7 @@ internal sealed record ConductLoopHandoffOptions(
     Func<ConductLoopHandoffOptions, long, bool>? LoopStartProbe = null,
     Func<ConductLoopLaunchResult, ConductLoopLaunchRequest, bool>? SuccessorReadyProbe = null,
     Action? ReacquireCurrentLease = null,
-    Action<int>? StopFailedSuccessor = null,
+    Action<ConductorSupervisorProcessIdentity>? StopFailedSuccessor = null,
     IReadOnlyList<string>? SuccessorCommandPrefix = null);
 
 internal sealed record ConductLoopLaunchRequest(
@@ -291,7 +291,12 @@ internal sealed record ConductLoopLaunchResult(
     int ProcessId,
     string StdoutPath,
     string StderrPath,
-    string LaunchDetail = "");
+    string LaunchDetail = "",
+    DateTimeOffset? StartedAt = null)
+{
+    public ConductorSupervisorProcessIdentity SuccessorIdentity =>
+        new(ProcessId, StartedAt ?? DateTimeOffset.MinValue);
+}
 
 internal sealed record ConductLoopHandoffVerification(
     bool ProcessAlive,
@@ -483,7 +488,7 @@ internal static partial class ConductorLoopHandoff
         {
             try
             {
-                (options.StopFailedSuccessor ?? StopFailedSuccessor).Invoke(launched.ProcessId);
+                (options.StopFailedSuccessor ?? StopFailedSuccessor).Invoke(launched.SuccessorIdentity);
             }
             catch (Exception ex)
             {
@@ -492,7 +497,7 @@ internal static partial class ConductorLoopHandoff
                 {
                     try
                     {
-                        StopFailedSuccessor(launched.ProcessId);
+                        StopFailedSuccessor(launched.SuccessorIdentity);
                         stopFailure = null;
                     }
                     catch (Exception fallbackEx)
@@ -609,7 +614,7 @@ internal static partial class ConductorLoopHandoff
             terminalReason);
     }
 
-    private static bool HasSuccessorReadySignal(
+    internal static bool HasSuccessorReadySignal(
         ConductLoopLaunchResult result,
         ConductLoopLaunchRequest request)
     {
@@ -861,16 +866,14 @@ internal static partial class ConductorLoopHandoff
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start conduct loop successor.");
         var pidText = process.StandardOutput.ReadLine();
+        // Capture identity while the launcher is still completing its spawn.
+        ConductLoopLaunchResult? launched = null;
+        if (int.TryParse(pidText, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+            launched = CreateDetachedLauncherResult(request, pidText, ReadSuccessorStartTime);
         if (!process.WaitForExit(5000) || process.ExitCode != 0)
             throw new InvalidOperationException("Detached conduct loop launcher did not exit cleanly.");
-        if (!int.TryParse(pidText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid))
-            throw new InvalidOperationException("Detached conduct loop launcher did not report a successor pid.");
-
-        return new ConductLoopLaunchResult(
-            pid,
-            request.StdoutPath,
-            request.StderrPath,
-            "spawnPath=posix-shell-detached breakawayRequested=false breakawaySucceeded=not-applicable");
+        return launched ?? throw new InvalidOperationException(
+            "Detached conduct loop launcher did not report a successor pid.");
     }
 
     internal static ConductLoopLaunchResult LaunchDetachedWindows(
@@ -965,12 +968,8 @@ internal static partial class ConductorLoopHandoff
                         // kill-on-close job but remains in a longer-lived host job.
                         var residualJobMembership = ProbeProcessJobMembership(processInformation.hProcess);
 
-                        return new ConductLoopLaunchResult(
-                            (int)processInformation.dwProcessId,
-                            request.StdoutPath,
-                            request.StderrPath,
-                            "spawnPath=windows-createprocess hostResolution=native-executable " +
-                            $"breakawayRequested=true breakawaySucceeded=true residualJobMembership={residualJobMembership}");
+                        return CreateBreakawayLaunchResult(request, (int)processInformation.dwProcessId,
+                            residualJobMembership, ReadSuccessorStartTimeFromHandle(processInformation.hProcess));
                     }
                     finally
                     {
@@ -1303,34 +1302,6 @@ internal static partial class ConductorLoopHandoff
         catch
         {
             return false;
-        }
-    }
-
-    internal static void StopFailedSuccessor(int processId)
-    {
-        if (processId == Environment.ProcessId)
-        {
-            throw new InvalidOperationException("Refusing to stop the incumbent conductor process.");
-        }
-
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            if (process.HasExited)
-            {
-                return;
-            }
-
-            process.Kill(entireProcessTree: true);
-            if (!process.WaitForExit(5000) || !process.HasExited)
-            {
-                throw new InvalidOperationException(
-                    $"Conduct loop successor pid {processId} did not terminate within 5 seconds.");
-            }
-        }
-        catch (ArgumentException)
-        {
-            // The exact successor pid is already gone.
         }
     }
 

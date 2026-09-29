@@ -1188,6 +1188,9 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Environment.SetEnvironmentVariable(
                 "MCG_ORCHESTRATOR_PROTECTED_PID",
                 Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            using (var self = Process.GetCurrentProcess())
+                Environment.SetEnvironmentVariable(ProtectedProcessIdentity.StartTicksVariable,
+                    self.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
             WorkerProcessJobs.ConfigureRegistry(dbPath);
 
             registeredChild = StartLongRunningShell();
@@ -1217,6 +1220,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         {
             WorkerProcessJobs.ClearRegistryForTests();
             Environment.SetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID", null);
+            Environment.SetEnvironmentVariable(ProtectedProcessIdentity.StartTicksVariable, null);
             foreach (var process in new[] { registeredChild, sweptChild, deadOwner })
             {
                 if (process is null)

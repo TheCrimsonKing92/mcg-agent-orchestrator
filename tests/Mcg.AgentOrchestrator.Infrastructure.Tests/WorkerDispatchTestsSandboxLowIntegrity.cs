@@ -23,11 +23,15 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
 
         var protectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
         Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), protectedPid);
+        var ownTicks = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable);
+        Assert.False(string.IsNullOrWhiteSpace(ownTicks));
 
         Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, "12345");
+        Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable, null);
         CliProtectedProcessEnvironment.EnsureProtectedPid();
 
-        Assert.Equal("12345", Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
+        Assert.Equal(protectedPid, Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable));
+        Assert.Equal(ownTicks, Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable));
     }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_claude_cli_only_auth_via_sandbox_credential_seeding")]

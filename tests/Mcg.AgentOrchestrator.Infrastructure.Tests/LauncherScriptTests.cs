@@ -2157,6 +2157,7 @@ public sealed class LauncherScriptTests
             };
             startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.DotnetShimPath;
             startInfo.Environment["DOTNET_STATUS_SENTINEL"] = sandbox.SentinelPath;
+            startInfo.Environment["DOTNET_STATUS_STARTED_AT"] = sandbox.StartedAtPath;
             startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-ExecutionPolicy");
             startInfo.ArgumentList.Add("Bypass");
@@ -3101,7 +3102,7 @@ public sealed class LauncherScriptTests
             @echo off
             if "%~3"=="hang" (
               echo partial hang
-              powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds {SnapshotShimSentinelDelaySeconds}; Set-Content -LiteralPath $env:DOTNET_STATUS_SENTINEL -Value $PID; Start-Sleep -Seconds 60"
+              powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds {SnapshotShimSentinelDelaySeconds}; Set-Content -LiteralPath $env:DOTNET_STATUS_STARTED_AT -Value (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o'); Set-Content -LiteralPath $env:DOTNET_STATUS_SENTINEL -Value $PID; Start-Sleep -Seconds 60"
               exit /b 0
             )
             if "%~3"=="cleanup" (
@@ -3116,7 +3117,8 @@ public sealed class LauncherScriptTests
         return new SnapshotStatusSandbox(
             repositoryRoot,
             dotnetShimPath,
-            Path.Combine(repositoryRoot, "status-child.pid"));
+            Path.Combine(repositoryRoot, "status-child.pid"),
+            Path.Combine(repositoryRoot, "status-child.started-at"));
     }
 
     private static void RunGit(string workingDirectory, params string[] arguments)
@@ -3189,15 +3191,17 @@ public sealed class LauncherScriptTests
     private sealed class SnapshotStatusSandbox(
         string repositoryRoot,
         string dotnetShimPath,
-        string sentinelPath) : IDisposable
+        string sentinelPath,
+        string startedAtPath) : IDisposable
     {
         public string RepositoryRoot { get; } = repositoryRoot;
         public string DotnetShimPath { get; } = dotnetShimPath;
         public string SentinelPath { get; } = sentinelPath;
+        public string StartedAtPath { get; } = startedAtPath;
 
         public void KillRecordedChild()
         {
-            if (!File.Exists(SentinelPath))
+            if (!File.Exists(SentinelPath) || !File.Exists(StartedAtPath))
             {
                 return;
             }
@@ -3207,20 +3211,10 @@ public sealed class LauncherScriptTests
                 return;
             }
 
-            try
-            {
-                using var process = Process.GetProcessById(pid);
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (ArgumentException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
+            if (DateTimeOffset.TryParse(File.ReadAllText(StartedAtPath).Trim(),
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var startedAt))
+                TestOwnedProcessStop.StopTreeIfSame(new(pid, startedAt));
         }
 
         public void Dispose()

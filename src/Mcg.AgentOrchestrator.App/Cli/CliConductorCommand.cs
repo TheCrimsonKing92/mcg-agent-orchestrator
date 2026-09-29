@@ -83,7 +83,8 @@ internal static class CliConductorCommand
                 "--poll-seconds", "120", "--max-duration", "43200"],
             workspace.ExecutionDirectory,
             new Dictionary<string, string> { ["MCG_DISPATCH_MAX_RUNTIME_MIN"] = "120" },
-            [CliProtectedProcessEnvironment.ProtectedPidVariable]);
+            [CliProtectedProcessEnvironment.ProtectedPidVariable,
+                CliProtectedProcessEnvironment.ProtectedStartTicksVariable]);
         var result = launcher.Launch(request);
         if (result.ExitCode != 0)
         {

@@ -283,15 +283,33 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         using var first = await PostLandingCanarySerializationLease.AcquireAsync(
             fixture.DbPath,
             CancellationToken.None);
+        var contended = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondTask = PostLandingCanarySerializationLease.AcquireAsync(
             fixture.DbPath,
-            CancellationToken.None);
-
-        await Task.Delay(250);
-        Assert.False(secondTask.IsCompleted);
-
-        first.Dispose();
-        using var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(5));
+            CancellationToken.None,
+            (interval, token) =>
+            {
+                contended.TrySetResult(interval);
+                return resume.Task.WaitAsync(token);
+            });
+        try
+        {
+            var observedInterval = await TestHangGuard.WaitAsync(contended.Task,
+                "the second canary lease acquisition reporting the lock held");
+            Assert.Equal(TimeSpan.FromMilliseconds(100), PostLandingCanarySerializationLease.RetryInterval);
+            Assert.Equal(PostLandingCanarySerializationLease.RetryInterval, observedInterval);
+            Assert.False(secondTask.IsCompleted);
+            first.Dispose();
+            resume.TrySetResult();
+            using var second = await TestHangGuard.WaitAsync(secondTask,
+                "the second canary lease acquisition after the first lease was disposed");
+        }
+        finally
+        {
+            first.Dispose();
+            resume.TrySetResult();
+        }
         Assert.False(File.ReadAllText(Path.Combine(
                 FindRepoRoot(),
                 "src",
@@ -373,6 +391,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         using var fixture = new CanaryTestFixture();
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondContended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumeSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = new ConcurrentQueue<string>();
         var runner = new FakeRunner(async (request, cancellationToken) =>
         {
@@ -385,20 +405,35 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
             return PostLandingCanaryOutcome.Passed(1, request.LandingSha);
         });
-        var (coordinator, _) = fixture.CreateCoordinator(runner);
+        var (coordinator, _) = fixture.CreateCoordinator(runner, leaseRetryWait: (_, token) =>
+        {
+            secondContended.TrySetResult();
+            return resumeSecond.Task.WaitAsync(token);
+        });
 
         var first = coordinator.RunAsync(
             new PostLandingCanaryRequest("sha-one", ["engine/one"]),
             CancellationToken.None);
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestHangGuard.WaitAsync(firstStarted.Task, "the first canary run starting");
         var second = coordinator.RunAsync(
             new PostLandingCanaryRequest("sha-two", ["engine/two"]),
             CancellationToken.None);
 
-        await Task.Delay(150);
-        Assert.Equal(["sha-one"], calls.ToArray());
-        releaseFirst.TrySetResult();
-        await Task.WhenAll(first, second);
+        try
+        {
+            await TestHangGuard.WaitAsync(secondContended.Task,
+                "the second landing request reporting the canary lease held");
+            Assert.Equal(["sha-one"], calls.ToArray());
+            releaseFirst.TrySetResult();
+            resumeSecond.TrySetResult();
+            await TestHangGuard.WaitAsync(Task.WhenAll(first, second),
+                "both queued landing requests completing");
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            resumeSecond.TrySetResult();
+        }
 
         Assert.Equal(["sha-one", "sha-two"], calls.ToArray());
         var receipts = (await fixture.RawStore.ReadSinceAsync())
@@ -2002,7 +2037,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 Func<DateTimeOffset>? utcNow = null,
                 Func<TimeSpan, CancellationToken, Task>? delay = null,
                 Action<string>? progress = null,
-                TimeSpan? stateReadTotalBudget = null)
+                TimeSpan? stateReadTotalBudget = null,
+                Func<TimeSpan, CancellationToken, Task>? leaseRetryWait = null)
         {
             var circuit = new AcceptanceEngineCircuitBreaker(
                 _events,
@@ -2022,7 +2058,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                     OperatorItems,
                     utcNow: utcNow,
                     delay: delay,
-                    progress: progress),
+                    progress: progress,
+                    leaseRetryWait: leaseRetryWait),
                 circuit);
         }
 
