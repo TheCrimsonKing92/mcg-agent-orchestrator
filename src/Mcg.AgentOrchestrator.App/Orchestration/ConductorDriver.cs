@@ -2968,6 +2968,11 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         int slotIndex)
     {
+        if (HasRoutableRecordedCohortAttributionFailure(goal))
+        {
+            return null;
+        }
+
         if (policy.GetTransitionDecision(GoalLifecycleState.Verified) == ConductorTransitionDecision.Escalate)
         {
             return null;

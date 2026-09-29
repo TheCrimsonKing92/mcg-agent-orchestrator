@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    internal Action<string> CohortAttributionVerdictSink { get; set; } = Console.WriteLine;
+    internal Action<string> CohortAttributionVerdictSink { get; set; } =
+        line => ConductorBatchLoop.EmitProgress(line);
     internal Func<Goal, GateReadyCandidateRevisionPair?>? CohortAttributionRevisionReader { get; set; }
 
     private ConductorAcceptanceCohortRunResult ApplyCohortAttributionFailureVerdicts(
@@ -60,21 +61,8 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy)
     {
-        var failure = goal.LatestAcceptanceFailure;
-        if (failure?.CheckAttributions?.Any(attribution =>
-                attribution.Evidence.StartsWith(ConductorAcceptanceCohortAttributionVerdicts.EvidencePrefix,
-                    StringComparison.Ordinal)) != true)
-        {
-            return null;
-        }
-
-        var current = ReadCurrentCohortAttributionRevisions(goal);
-        if (current is null) return null;
-        if (current.BranchRevision != failure.BranchHeadSha ||
-            current.MainRevision != failure.MainHeadSha)
-        {
-            return null;
-        }
+        if (!HasRoutableRecordedCohortAttributionFailure(goal)) return null;
+        var failure = goal.LatestAcceptanceFailure!;
         var reason = $"Acceptance verification failed; review and fix before landing. " +
             failure.CheckAttributions![0].Evidence;
         if (goal.Status == GoalStatus.AcceptanceFailed)
@@ -89,6 +77,22 @@ internal sealed partial class ConductorDriver
         }
         return Escalate(goal, goalPrefix, policy, GoalLifecycleState.AcceptanceFailed, reason,
             ConductorEscalationKind.AcceptanceVerificationFailed);
+    }
+
+    internal bool HasRoutableRecordedCohortAttributionFailure(Goal goal)
+    {
+        var failure = goal.LatestAcceptanceFailure;
+        if (failure?.CheckAttributions?.Any(attribution =>
+                attribution.Evidence.StartsWith(ConductorAcceptanceCohortAttributionVerdicts.EvidencePrefix,
+                    StringComparison.Ordinal)) != true)
+        {
+            return false;
+        }
+
+        var current = ReadCurrentCohortAttributionRevisions(goal);
+        return current is not null &&
+            current.BranchRevision == failure.BranchHeadSha &&
+            current.MainRevision == failure.MainHeadSha;
     }
 
     private GateReadyCandidateRevisionPair? ReadCurrentCohortAttributionRevisions(Goal goal)
