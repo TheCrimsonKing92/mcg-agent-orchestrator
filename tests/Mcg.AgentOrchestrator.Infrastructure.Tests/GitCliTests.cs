@@ -327,24 +327,9 @@ public sealed class GitCliTests
 
     private static void RunGit(string workingDirectory, params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
-        };
-        foreach (var argument in arguments)
-            startInfo.ArgumentList.Add(argument);
-
-        using var process = Process.Start(startInfo)!;
-        process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(30000);
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+        if (!result.Succeeded)
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {result.ExitCode}: {result.StandardError}; {result}");
     }
 
     private static void DeleteDirectory(string path)

@@ -363,7 +363,7 @@ public sealed class AcceptanceFailureCensusScriptTests
                 ?? throw new InvalidOperationException("Failed to launch PowerShell fixture.");
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
-            Xunit.Assert.True(process.WaitForExit(30_000), "PowerShell fixture exceeded its 30-second failsafe.");
+            ScriptFixtureProcessRunner.AssertExited(process, "PowerShell fixture exceeded its 30-second failsafe.");
             return new ProcessResult(
                 process.ExitCode,
                 stdout.GetAwaiter().GetResult(),

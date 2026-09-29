@@ -145,26 +145,10 @@ public sealed class PostLandingCanaryBuildLifecycleTests
 
     private static string Git(string repository, params string[] arguments)
     {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo("git.exe")
-        {
-            WorkingDirectory = repository,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        process.StartInfo.ArgumentList.Add("-C");
-        process.StartInfo.ArgumentList.Add(repository);
-        foreach (var argument in arguments)
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
-        process.Start();
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30000));
-        Assert.True(process.ExitCode == 0, $"git {string.Join(' ', arguments)} failed: {error}");
-        return output;
+        var result = InfrastructureTestSupport.RunGitProbe(repository, ["-C", repository, .. arguments]);
+        InfrastructureTestSupport.RequireCompleteGitOutput(result);
+        Assert.True(!result.TimedOut, $"git {string.Join(' ', arguments)} timed out: {result}");
+        Assert.True(result.Succeeded, $"git {string.Join(' ', arguments)} failed with exit {result.ExitCode}: {result.StandardError}; {result}");
+        return result.StandardOutput;
     }
 }

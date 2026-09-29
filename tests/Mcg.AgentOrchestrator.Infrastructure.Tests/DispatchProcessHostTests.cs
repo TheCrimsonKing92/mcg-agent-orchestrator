@@ -2531,36 +2531,16 @@ public sealed class DispatchProcessHostTests
 
     private static string RunGit(string workingDirectory, params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
+        InfrastructureTestSupport.RequireCompleteGitOutput(result);
+        if (result.TimedOut)
+            throw new TimeoutException($"git {string.Join(' ', arguments)} timed out: {result}");
+        if (!result.Succeeded)
         {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {result.ExitCode}: {result.StandardError}; {result}");
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        if (!process.WaitForExit(30_000))
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw new TimeoutException($"git {string.Join(' ', arguments)} timed out.");
-        }
-
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {process.ExitCode}: {stderr}");
-        }
-
-        return stdout.Trim();
+        return result.StandardOutput.Trim();
     }
 
     private static string WriteReceiptHitMeasurementArtifact(
