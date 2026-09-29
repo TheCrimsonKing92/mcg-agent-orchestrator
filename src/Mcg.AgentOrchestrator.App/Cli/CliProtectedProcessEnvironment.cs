@@ -1,18 +1,18 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliProtectedProcessEnvironment
 {
-    internal const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
+    internal const string ProtectedPidVariable = ProtectedProcessIdentity.PidVariable;
+    internal const string ProtectedStartTicksVariable = ProtectedProcessIdentity.StartTicksVariable;
 
     internal static void EnsureProtectedPid()
     {
-        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ProtectedPidVariable)))
-        {
-            return;
-        }
-
-        Environment.SetEnvironmentVariable(
-            ProtectedPidVariable,
-            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var resolved = ProtectedProcessIdentity.ResolveAtStartup(
+            Environment.GetEnvironmentVariable(ProtectedPidVariable),
+            Environment.GetEnvironmentVariable(ProtectedStartTicksVariable),
+            ProtectedProcessIdentity.Current(), ProtectedProcessIdentity.ReadLiveStartTicks);
+        ProtectedProcessIdentity.Bind(resolved, Environment.ProcessId);
     }
 }

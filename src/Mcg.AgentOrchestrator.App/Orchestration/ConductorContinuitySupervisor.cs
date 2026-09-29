@@ -22,7 +22,8 @@ internal sealed record ConductorSupervisorProcessRequest(
     string StderrPath,
     IReadOnlyList<string>? CommandPrefix = null,
     Action<string>? OnStandardOutputLine = null,
-    Action<int>? OnProcessStarted = null);
+    Action<int>? OnProcessStarted = null,
+    IReadOnlyDictionary<string, string>? AdditionalEnvironment = null);
 
 internal sealed record ConductorSupervisorProcessResult(
     int ExitCode,
@@ -90,7 +91,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Func<TimeSpan, CancellationToken, Task>? tickStallDelay = null,
     IConductorDiagnosticDumpCapture? dumpCapture = null,
     ConductorSupervisorHandoffOptions? supervisorHandoff = null,
-    TimeSpan? outputSilenceBudget = null)
+    TimeSpan? outputSilenceBudget = null,
+    Action<ProtectedProcessIdentity>? bindProtectedIdentity = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -239,7 +241,13 @@ internal sealed partial class ConductorContinuitySupervisor(
                         readiness?.TrySetResult();
                     }
                 },
-                pid => Interlocked.Exchange(ref liveProcessId, pid));
+                pid => Interlocked.Exchange(ref liveProcessId, pid),
+                _supervisorProtectedIdentity is { } identity
+                    ? new Dictionary<string, string>
+                    {
+                        [ProtectedProcessIdentity.PidVariable] = identity.ProcessId.ToString(CultureInfo.InvariantCulture),
+                        [ProtectedProcessIdentity.StartTicksVariable] = identity.StartTimeUtcTicks.ToString(CultureInfo.InvariantCulture)
+                    } : null);
             try
             {
                 if (activeChild is not null)
@@ -788,6 +796,9 @@ internal sealed class SystemConductorSupervisorProcessHost(
         startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = request.WorkingDirectory;
         startInfo.Environment[ConductorContinuitySupervisor.StdoutLogPathEnvironmentVariable] = request.StdoutPath;
         startInfo.Environment[ConductorContinuitySupervisor.StderrLogPathEnvironmentVariable] = request.StderrPath;
+        if (request.AdditionalEnvironment is not null)
+            foreach (var pair in request.AdditionalEnvironment)
+                startInfo.Environment[pair.Key] = pair.Value;
 
         using var stdoutWriter = CreateOutputWriter(request.StdoutPath);
         using var stderrWriter = CreateOutputWriter(request.StderrPath);

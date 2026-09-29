@@ -71,12 +71,16 @@ public sealed class GoalWorktreeTestsRemoveCleanupProcessProtection : GoalWorktr
             var originalAcl = CleanupHooks.SandboxAclHelper;
             var originalShutdown = CleanupHooks.BuildServerShutdown;
             var originalProtectedPid = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable);
+            var originalProtectedTicks = Environment.GetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable);
             try
             {
-                var protectedPid = 111;
+                using var protectedProcess = Process.GetCurrentProcess();
+                var protectedPid = protectedProcess.Id;
                 Environment.SetEnvironmentVariable(
                     CliProtectedProcessEnvironment.ProtectedPidVariable,
                     protectedPid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable,
+                    protectedProcess.StartTime.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 var kernel = new AgentOrchestratorKernel();
                 var goal = kernel.CreateGoal("Remove protected worker process", [
                     new TaskSpec(TaskId.New(), "Developer task", AgentRole.Developer)
@@ -113,6 +117,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupProcessProtection : GoalWorktr
                 CleanupHooks.SandboxAclHelper = originalAcl;
                 CleanupHooks.BuildServerShutdown = originalShutdown;
                 Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedPidVariable, originalProtectedPid);
+                Environment.SetEnvironmentVariable(CliProtectedProcessEnvironment.ProtectedStartTicksVariable, originalProtectedTicks);
                 DeleteDirectory(repo);
             }
         });
