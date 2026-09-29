@@ -15,49 +15,55 @@ public sealed class ProcessStartInfoSourceGuardTests
 
             var relativePath = Path.GetRelativePath(testRoot, file);
             var lines = File.ReadAllLines(file);
-            for (var index = 0; index < lines.Length; index++)
-            {
-                if (IntroducesStartProcessCommand(lines[index]))
-                {
-                    var startProcessEnd = Math.Min(lines.Length, index + 8);
-                    var startProcessWindow = string.Join('\n', lines[index..startProcessEnd]);
-                    if (!startProcessWindow.Contains("MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE", StringComparison.Ordinal) &&
-                        !startProcessWindow.Contains("-NoNewWindow", StringComparison.Ordinal) &&
-                        !startProcessWindow.Contains("-WindowStyle Hidden", StringComparison.Ordinal))
-                    {
-                        offenders.Add($"{relativePath}:{index + 1} (Start-Process)");
-                    }
-                }
-
-                if (!IntroducesProcessStartInfo(lines[index]))
-                {
-                    continue;
-                }
-
-                var end = Math.Min(lines.Length, index + 30);
-                var sourceWindow = string.Join('\n', lines[index..end]);
-                if (sourceWindow.Contains("MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!sourceWindow.Contains("CreateNoWindow", StringComparison.Ordinal))
-                {
-                    offenders.Add($"{relativePath}:{index + 1}");
-                }
-            }
+            offenders.AddRange(FindOffenders(relativePath, lines));
         }
 
         Assert.True(
             offenders.Count == 0,
-            "Test-side process starts must set CreateNoWindow=true or request a hidden/no-new PowerShell window. Offenders: " + string.Join(", ", offenders));
+            "Test-side process starts must set CreateNoWindow=true or request a hidden/no-new PowerShell window. Offenders: " + string.Join(", ", offenders) +
+            " C# launch code that a test compiles and runs must live in a real .cs file under the test tree; launch patterns inside string literals or comments are not scanned.");
     }
 
-    private static bool IntroducesProcessStartInfo(string line)
+    internal static IEnumerable<string> FindOffenders(string relativePath, IReadOnlyList<string> lines)
     {
-        return line.Contains("new ProcessStartInfo", StringComparison.Ordinal)
+        var codeMasks = CSharpSourceLaunchPatternScanner.ClassifyCode(lines);
+        for (var index = 0; index < lines.Count; index++)
+        {
+            if (IntroducesStartProcessCommand(lines[index]))
+            {
+                var startProcessEnd = Math.Min(lines.Count, index + 8);
+                var startProcessWindow = string.Join('\n', lines.Skip(index).Take(startProcessEnd - index));
+                if (!startProcessWindow.Contains("MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE", StringComparison.Ordinal) &&
+                    !startProcessWindow.Contains("-NoNewWindow", StringComparison.Ordinal) &&
+                    !startProcessWindow.Contains("-WindowStyle Hidden", StringComparison.Ordinal))
+                {
+                    yield return $"{relativePath}:{index + 1} (Start-Process)";
+                }
+            }
+
+            if (!IntroducesProcessStartInfo(lines[index], codeMasks[index]))
+            {
+                continue;
+            }
+
+            var end = Math.Min(lines.Count, index + 30);
+            var sourceWindow = string.Join('\n', lines.Skip(index).Take(end - index));
+            if (sourceWindow.Contains("MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!sourceWindow.Contains("CreateNoWindow", StringComparison.Ordinal))
+            {
+                yield return $"{relativePath}:{index + 1}";
+            }
+        }
+    }
+
+    private static bool IntroducesProcessStartInfo(string line, bool[] isCode)
+    {
+        return CSharpSourceLaunchPatternScanner.ContainsCSharpLaunchInCode(line, isCode)
             || line.Contains("ProcessStartInfo]::new", StringComparison.Ordinal)
-            || line.Contains("UseShellExecute = false", StringComparison.Ordinal)
             || line.Contains("UseShellExecute = $false", StringComparison.Ordinal);
     }
 
