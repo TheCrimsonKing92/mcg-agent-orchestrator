@@ -71,7 +71,7 @@ public sealed class ConductorLoopHandoffTests
         {
             var legacyTimeout = TimeSpan.FromMilliseconds(100);
             var loopStartDelay = TimeSpan.FromMilliseconds(450);
-            var stopwatch = Stopwatch.StartNew();
+            var clock = new FakeVerificationClock();
             ConductorLoopHandoffResult? result = null;
 
             var output = AsyncLocalConsoleRouter.Capture(() =>
@@ -81,7 +81,9 @@ public sealed class ConductorLoopHandoffTests
                         root,
                         verificationTimeout: legacyTimeout,
                         verificationHardTimeout: TimeSpan.FromSeconds(2),
-                        loopStartProbe: (_, _) => stopwatch.Elapsed >= loopStartDelay),
+                        loopStartProbe: (_, _) => clock.Elapsed >= loopStartDelay,
+                        verificationClock: clock.Now,
+                        verificationPollWait: clock.PollWait),
                     new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                     request =>
                     {
@@ -173,6 +175,7 @@ public sealed class ConductorLoopHandoffTests
         var root = CreateTempDirectory("mcg-conduct-loop-handoff-hard-timeout");
         try
         {
+            var clock = new FakeVerificationClock();
             ConductorLoopHandoffResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
             {
@@ -183,9 +186,11 @@ public sealed class ConductorLoopHandoffTests
                         verificationHardTimeout: TimeSpan.FromMilliseconds(300),
                         loopStartProbe: (_, _) =>
                         {
-                            Thread.Sleep(probeDelayMilliseconds);
+                            clock.Advance(TimeSpan.FromMilliseconds(probeDelayMilliseconds));
                             return false;
-                        }),
+                        },
+                        verificationClock: clock.Now,
+                        verificationPollWait: clock.PollWait),
                     new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                     request =>
                     {
@@ -299,7 +304,9 @@ public sealed class ConductorLoopHandoffTests
         bool useProtocolReady = false,
         Action? releaseCurrentLease = null,
         Action? reacquireCurrentLease = null,
-        Action<int>? stopFailedSuccessor = null) =>
+        Action<int>? stopFailedSuccessor = null,
+        Func<DateTimeOffset>? verificationClock = null,
+        Action<TimeSpan>? verificationPollWait = null) =>
         new(
             Args: ["conduct", "--loop", "--watch", "--max-duration", "14400"],
             ExecutionDirectory: root,
@@ -315,7 +322,26 @@ public sealed class ConductorLoopHandoffTests
             LoopStartProbe: loopStartProbe,
             SuccessorReadyProbe: useProtocolReady ? null : (_, _) => true,
             ReacquireCurrentLease: reacquireCurrentLease,
-            StopFailedSuccessor: stopFailedSuccessor is null ? null : identity => stopFailedSuccessor(identity.ProcessId));
+            StopFailedSuccessor: stopFailedSuccessor is null ? null : identity => stopFailedSuccessor(identity.ProcessId),
+            VerificationClock: verificationClock,
+            VerificationPollWait: verificationPollWait);
+
+    private sealed class FakeVerificationClock
+    {
+        private DateTimeOffset current = DateTimeOffset.UnixEpoch;
+        private int pollCount;
+
+        public TimeSpan Elapsed => current - DateTimeOffset.UnixEpoch;
+        public DateTimeOffset Now() => current;
+        public void Advance(TimeSpan interval) => current += interval;
+
+        public void PollWait(TimeSpan interval)
+        {
+            if (++pollCount > 100_000)
+                throw new InvalidOperationException("Loop-start probe or hard deadline was never observed after 100000 fake polls.");
+            Advance(interval);
+        }
+    }
 
     private static IReadOnlyList<RunEventRecord> ReadHandoffRecords(string root) =>
         new SqliteRunEventStore(Path.Combine(root, ".orchestrator", "run-events.db"))

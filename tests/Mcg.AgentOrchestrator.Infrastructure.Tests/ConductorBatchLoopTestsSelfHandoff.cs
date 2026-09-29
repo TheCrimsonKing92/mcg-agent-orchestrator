@@ -284,7 +284,9 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         Action? release = null,
         TimeSpan verificationTimeout = default,
         Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
-        bool useProtocolReady = false) =>
+        bool useProtocolReady = false,
+        Func<DateTimeOffset>? verificationClock = null,
+        Action<TimeSpan>? verificationPollWait = null) =>
         new(
             Args: args ?? ["conduct", "--loop", "--watch", "--max-duration", "14400"],
             ExecutionDirectory: root,
@@ -297,7 +299,27 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             ReleaseCurrentLease: release ?? (() => { }),
             VerificationTimeout: verificationTimeout,
             LoopStartProbe: loopStartProbe,
-            SuccessorReadyProbe: useProtocolReady ? null : (_, _) => true);
+            SuccessorReadyProbe: useProtocolReady ? null : (_, _) => true,
+            VerificationClock: verificationClock,
+            VerificationPollWait: verificationPollWait);
+
+    private sealed class FakeVerificationClock
+    {
+        private readonly DateTimeOffset origin = DateTimeOffset.UnixEpoch;
+        private DateTimeOffset current = DateTimeOffset.UnixEpoch;
+
+        public TimeSpan Elapsed => current - origin;
+        public List<TimeSpan> PollWaits { get; } = [];
+        public DateTimeOffset Now() => current;
+
+        public void PollWait(TimeSpan interval)
+        {
+            if (PollWaits.Count >= 100_000)
+                throw new InvalidOperationException("Loop-start probe or hard deadline was never observed after 100000 fake polls.");
+            PollWaits.Add(interval);
+            current += interval;
+        }
+    }
 
     [Xunit.Fact(DisplayName = "BatchLoop_max_duration_starts_handoff")]
     public void BatchLoopMaxDurationStartsHandoff()
@@ -631,13 +653,15 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
                 {
                     var scaledOldTimeout = TimeSpan.FromMilliseconds(500);
                     var scaledLoopStartDelay = TimeSpan.FromMilliseconds(750);
-                    var stopwatch = Stopwatch.StartNew();
+                    var clock = new FakeVerificationClock();
                     var attempts = 0;
                     var result = ConductorLoopHandoff.TryStartSuccessor(
                         HandoffOptions(
                             root,
                             verificationTimeout: scaledOldTimeout,
-                            loopStartProbe: (_, _) => stopwatch.Elapsed >= scaledLoopStartDelay),
+                            loopStartProbe: (_, _) => clock.Elapsed >= scaledLoopStartDelay,
+                            verificationClock: clock.Now,
+                            verificationPollWait: clock.PollWait),
                         new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                         request =>
                         {
@@ -672,13 +696,15 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         {
             var oldFixedStartupWindow = TimeSpan.FromSeconds(10);
             var loopStartDelay = TimeSpan.FromMilliseconds(10250);
-            var stopwatch = Stopwatch.StartNew();
+            var clock = new FakeVerificationClock();
             var attempts = 0;
             var result = ConductorLoopHandoff.TryStartSuccessor(
                 HandoffOptions(
                     root,
                     verificationTimeout: TimeSpan.FromSeconds(12),
-                    loopStartProbe: (_, _) => stopwatch.Elapsed >= loopStartDelay),
+                    loopStartProbe: (_, _) => clock.Elapsed >= loopStartDelay,
+                    verificationClock: clock.Now,
+                    verificationPollWait: clock.PollWait),
                 new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                 request =>
                 {
@@ -690,9 +716,61 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
             Assert.True(result.Started);
             Assert.Equal(1, attempts);
             Assert.Equal(Environment.ProcessId, result.ProcessId);
-            Assert.True(stopwatch.Elapsed > oldFixedStartupWindow);
+            Assert.True(clock.Elapsed > oldFixedStartupWindow);
             Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
             Assert.Contains("terminalReason=loop-start", result.VerificationOutcome, StringComparison.Ordinal);
+            Assert.Equal(41, clock.PollWaits.Count);
+            Assert.All(clock.PollWaits, interval => Assert.Equal(TimeSpan.FromMilliseconds(250), interval));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorLoopHandoff_fake_clock_slow_boot_pends_at_timeout_then_starts")]
+    public void ConductorLoopHandoffFakeClockSlowBootPendsAtTimeoutThenStarts()
+    {
+        var root = CreateTempDirectory("mcg-conduct-loop-fake-slow-handoff");
+        try
+        {
+            var clock = new FakeVerificationClock();
+            var attempts = 0;
+            string outText = "";
+            var errorText = CaptureConsoleError(() =>
+            {
+                outText = CaptureConsole(() =>
+                {
+                    var result = ConductorLoopHandoff.TryStartSuccessor(
+                        HandoffOptions(
+                            root,
+                            verificationTimeout: TimeSpan.FromSeconds(10),
+                            loopStartProbe: (_, _) => clock.Elapsed >= TimeSpan.FromMilliseconds(10250),
+                            verificationClock: clock.Now,
+                            verificationPollWait: clock.PollWait),
+                        new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
+                        request =>
+                        {
+                            attempts++;
+                            File.WriteAllText(request.StdoutPath, "successor booting");
+                            return new ConductLoopLaunchResult(Environment.ProcessId, request.StdoutPath, request.StderrPath);
+                        });
+
+                    Assert.True(result.Started);
+                    Assert.Equal(1, attempts);
+                    Assert.Equal(Environment.ProcessId, result.ProcessId);
+                    Assert.Contains("processAlive=true", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("loopStartJournaled=true", result.VerificationOutcome, StringComparison.Ordinal);
+                    Assert.Contains("terminalReason=loop-start", result.VerificationOutcome, StringComparison.Ordinal);
+                });
+            });
+
+            Assert.Contains("LOOP_HANDOFF_PENDING", outText, StringComparison.Ordinal);
+            Assert.Contains("elapsedSeconds=10", outText, StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", outText, StringComparison.Ordinal);
+            Assert.DoesNotContain("LOOP_HANDOFF_FAILED", errorText, StringComparison.Ordinal);
+            Assert.Equal(41, clock.PollWaits.Count);
+            Assert.All(clock.PollWaits, interval => Assert.Equal(TimeSpan.FromMilliseconds(250), interval));
         }
         finally
         {

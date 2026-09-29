@@ -270,7 +270,9 @@ internal sealed record ConductLoopHandoffOptions(
     Func<ConductLoopLaunchResult, ConductLoopLaunchRequest, bool>? SuccessorReadyProbe = null,
     Action? ReacquireCurrentLease = null,
     Action<ConductorSupervisorProcessIdentity>? StopFailedSuccessor = null,
-    IReadOnlyList<string>? SuccessorCommandPrefix = null);
+    IReadOnlyList<string>? SuccessorCommandPrefix = null,
+    Func<DateTimeOffset>? VerificationClock = null,
+    Action<TimeSpan>? VerificationPollWait = null);
 
 internal sealed record ConductLoopLaunchRequest(
     string Name,
@@ -561,7 +563,8 @@ internal static partial class ConductorLoopHandoff
         if (hardTimeout < timeout)
             hardTimeout = timeout;
 
-        var started = DateTimeOffset.UtcNow;
+        var (clock, pollWait) = ResolveVerificationTiming(options);
+        var started = clock();
         var pendingDeadline = started.Add(timeout);
         var hardDeadline = started.Add(hardTimeout);
         var pendingEmitted = false;
@@ -572,7 +575,7 @@ internal static partial class ConductorLoopHandoff
 
         while (true)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = clock();
             elapsed = now - started;
             processAlive = IsProcessAlive(result.ProcessId);
             ready = readyProbe(result, request);
@@ -601,7 +604,7 @@ internal static partial class ConductorLoopHandoff
                     $"elapsedSeconds={(int)Math.Max(0, elapsed.TotalSeconds)}");
             }
 
-            Thread.Sleep(VerificationPollInterval);
+            pollWait(VerificationPollInterval);
         }
 
         return new ConductLoopHandoffVerification(
@@ -1216,7 +1219,8 @@ internal static partial class ConductorLoopHandoff
         if (hardTimeout < timeout)
             hardTimeout = timeout;
 
-        var started = DateTimeOffset.UtcNow;
+        var (clock, pollWait) = ResolveVerificationTiming(options);
+        var started = clock();
         var pendingDeadline = started.Add(timeout);
         var hardDeadline = started.Add(hardTimeout);
         var processAlive = false;
@@ -1228,7 +1232,7 @@ internal static partial class ConductorLoopHandoff
 
         while (true)
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = clock();
             elapsed = now - started;
             processAlive = IsProcessAlive(result.ProcessId);
             stdoutLogExists = File.Exists(result.StdoutPath);
@@ -1262,7 +1266,7 @@ internal static partial class ConductorLoopHandoff
                     hardTimeout));
             }
 
-            Thread.Sleep(VerificationPollInterval);
+            pollWait(VerificationPollInterval);
         }
 
         var detail = FormatVerificationDetail(
