@@ -45,6 +45,7 @@ internal sealed partial class ConductorContinuitySupervisor
             throw;
         }
 
+        RebindProtectedIdentity(seam.Self);
         RecordSupervisorBuild("handoff");
         return record;
     }

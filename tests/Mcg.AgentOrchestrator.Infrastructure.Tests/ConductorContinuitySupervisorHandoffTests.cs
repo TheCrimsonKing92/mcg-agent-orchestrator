@@ -62,10 +62,11 @@ internal sealed class SupervisorHandoffFixture
     private int _stageCalls;
 
     internal SupervisorHandoffFixture(string ownRunDirectory = "C:\\run-a", int stopAtIndex = 2,
-        bool holdAdoptedChild = false)
+        bool holdAdoptedChild = false, bool inbound = false)
     {
         _ownRunDirectory = ownRunDirectory;
         Seam = new FakeHandoffSeam(new ConductorSupervisorBuildIdentity("commit-a", ownRunDirectory));
+        if (inbound) Seam.PrepareInbound(ownRunDirectory);
         Host = new ScriptedHost(stopAtIndex, holdAdoptedChild);
     }
 
@@ -73,6 +74,7 @@ internal sealed class SupervisorHandoffFixture
     internal ScriptedHost Host { get; }
     internal RecordingEvents Events { get; } = new();
     internal List<string> ConductEvents { get; } = [];
+    internal Action<ProtectedProcessIdentity>? BindProtectedIdentity { get; set; }
 
     internal Task<int> RunAsync()
     {
@@ -84,7 +86,8 @@ internal sealed class SupervisorHandoffFixture
             dotnetPath: "dotnet-test",
             supervisorHandoff: new ConductorSupervisorHandoffOptions(Seam,
                 new ConductorSupervisorBuildIdentity("commit-a", _ownRunDirectory),
-                TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)));
+                TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)),
+            bindProtectedIdentity: BindProtectedIdentity);
         return supervisor.RunAsync(["conduct", "--loop", "--max-duration", "60"],
             "C:\\repo", Path.Combine(Path.GetTempPath(), $"mcg-handoff-{Guid.NewGuid():N}"),
             "default", "default");
@@ -159,6 +162,19 @@ internal sealed class SupervisorHandoffFixture
         public string? IncomingRecordPath { get; set; }
         public ConductorSupervisorProcessIdentity Self { get; } =
             new(800, new DateTimeOffset(2026, 9, 26, 0, 0, 0, TimeSpan.Zero));
+
+        internal void PrepareInbound(string runDirectory)
+        {
+            IncomingRecordPath = "inbound.json";
+            Owner = Self;
+            _record = new ConductorSupervisorHandoffRecord(
+                "test-token", new ConductorSupervisorProcessIdentity(700,
+                    new DateTimeOffset(2026, 9, 25, 0, 0, 0, TimeSpan.Zero)),
+                new ConductorSupervisorBuildIdentity("commit-prior", runDirectory),
+                new ConductorSupervisorBuildSnapshot("commit-a", runDirectory,
+                    Path.Combine(runDirectory, "Mcg.AgentOrchestrator.App.dll")),
+                null, 0, null, 0, "ready.json");
+        }
 
         public void Acquire(ConductorSupervisorBuildIdentity build)
         {

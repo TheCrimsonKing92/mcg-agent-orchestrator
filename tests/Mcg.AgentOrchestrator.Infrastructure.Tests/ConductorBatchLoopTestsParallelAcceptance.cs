@@ -2235,6 +2235,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("worker-process-registration-failed: pid=4001; stage=protected-process-boundary; cleanup=refused-protected-process; protected=4001@100", true)]
     [Xunit.InlineData("worker-process-registration-failed: pid=1; stage=protected-process-boundary; cleanup=refused-protected-process", true)]
     [Xunit.InlineData("worker-process-registration-failed: pid=1; stage=unknown-stage; cleanup=process-tree-termination-requested", true)]
     [Xunit.InlineData("worker-process-registration-failed: pid=1; cleanup=process-tree-termination-requested", true)]
@@ -2279,6 +2280,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(0, latest.TransientFailureCount);
             Assert.Equal(isRegistrationFault ? GoalStatus.Verifying : GoalStatus.AcceptanceFailed, goal.Status);
             Assert.Equal(isRegistrationFault, goal.LatestAcceptanceFailure is null);
+            if (faultMessage.Contains("protected=4001@100", StringComparison.Ordinal)) AssertProtectedBoundaryEscalation(faultMessage, escalations[0]);
 
             new ConductorBatchLoop().Run(
                 kernel,

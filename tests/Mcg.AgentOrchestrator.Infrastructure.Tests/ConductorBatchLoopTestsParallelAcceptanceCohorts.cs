@@ -660,6 +660,37 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         Assert.Equal(control.StopReason, faulted.StopReason);
     }
 
+    [Xunit.Fact]
+    public void StructuredProtectedBoundaryFaultHoldsWholeCohortWithoutRetry()
+    {
+        var identity = new ProtectedProcessIdentity(4001, 100);
+        var detail = WorkerProcessJobs.BuildProtectedBoundaryRegistrationFailure(4001, identity);
+        Exception CaptureFault()
+        {
+            try { throw new InvalidOperationException(detail); }
+            catch (InvalidOperationException exception)
+            {
+                return AcceptanceGateEngineException.Capture(exception,
+                    new AcceptanceGateDiagnosticSnapshot("check-execution", "focused cohort tests"));
+            }
+        }
+
+        var faulted = RunCohortFaultTicks(CaptureFault, runs: 1);
+        Assert.Null(faulted.LoopException);
+        Assert.Equal(faulted.StatusesBefore, faulted.StatusesAfter);
+        foreach (var goalId in faulted.MemberGoalIds)
+        {
+            var line = faulted.Lines.Single(record =>
+                record.Detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal) &&
+                record.Detail.Contains($"goal={goalId[..8]}", StringComparison.Ordinal));
+            Assert.Contains("result=escalated", line.Detail, StringComparison.Ordinal);
+            Assert.Contains("classification=terminal", line.Detail, StringComparison.Ordinal);
+            Assert.Contains("failures=0/3", line.Detail, StringComparison.Ordinal);
+            Assert.Contains("pid=4001", line.Detail, StringComparison.Ordinal);
+            Assert.Contains("protected=4001@100", line.Detail, StringComparison.Ordinal);
+        }
+    }
+
     // The 2026-09-15 daemon exits: the exception was raised on the cohort gate's background thread and
     // reached a later tick through the driver's completion. This drives that arrival end to end.
     [Xunit.Fact]

@@ -280,7 +280,6 @@ internal sealed class RegisteredOwnedProcess : IDisposable
 
 public static partial class WorkerProcessJobs
 {
-    private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
     private const int IdentityReadAttempts = 10;
     private const int IdentityReadDelayMilliseconds = 25;
     private static readonly TimeSpan StartupReapClaimLease = TimeSpan.FromMinutes(1);
@@ -377,11 +376,15 @@ public static partial class WorkerProcessJobs
 
             using (process)
             {
-                if (IsProtectedProcessOrAncestor(entry.ProcessId) || IsProtectedDescendant(entry.ProcessId))
+                var protection = EvaluateLiveSweepProtection(entry.ProcessId);
+                if (protection != KillProtection.NotProtected)
                 {
+                    if (protection == KillProtection.Unverifiable) LogUnverifiableIdentity(entry.ProcessId);
                     registry.RecordDiagnostic(
                         entry.Id,
-                        BuildSweepDiagnostic("refused-protected", entry, ownerLiveness, ownerEvidence, sweeper));
+                        BuildSweepDiagnostic(protection == KillProtection.Unverifiable
+                            ? "refused-protected protected-identity-unverifiable"
+                            : "refused-protected", entry, ownerLiveness, ownerEvidence, sweeper));
                     continue;
                 }
 
@@ -937,12 +940,15 @@ public static partial class WorkerProcessJobs
         ArgumentNullException.ThrowIfNull(readOwnerIdentity);
         registrationFailure = string.Empty;
 
-        if (IsProtectedProcessOrAncestor(process.Id))
+        var protectedIdentity = ReadProtectedIdentity();
+        long? candidateStartTicks;
+        try { candidateStartTicks = process.HasExited ? null : process.StartTime.ToUniversalTime().Ticks; }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        { candidateStartTicks = null; }
+        if (IsProtectedRegistrationBoundary(process.Id, candidateStartTicks, protectedIdentity,
+            ProtectedProcessIdentity.ReadLiveStartTicks, ReadProcessAncestryFacts))
         {
-            registrationFailure = BuildRegistrationFailure(
-                process.Id,
-                "protected-process-boundary",
-                "refused-protected-process");
+            registrationFailure = BuildProtectedBoundaryRegistrationFailure(process.Id, protectedIdentity!.Value);
             return false;
         }
 
@@ -2400,12 +2406,6 @@ public static partial class WorkerProcessJobs
 
     internal delegate bool ProcessAncestryLookup(int processId, out ProcessAncestryFacts facts);
 
-    private static bool IsProtectedProcessOrAncestor(int processId)
-    {
-        return TryGetProtectedPid(out var protectedPid) &&
-            IsProtectedProcessOrAncestor(processId, protectedPid, ReadProcessAncestryFacts);
-    }
-
     internal static bool IsProtectedProcessOrAncestor(
         int processId,
         int protectedProcessId,
@@ -2423,38 +2423,9 @@ public static partial class WorkerProcessJobs
             return false;
         }
 
-        if (IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId))
-        {
-            return false;
-        }
-
-        return allowProtectedDescendant || !IsProtectedDescendant(processId);
-    }
-
-    private static bool IsProtectedProcess(int processId)
-    {
-        return TryGetProtectedPid(out var protectedPid) && processId == protectedPid;
-    }
-
-    private static bool IsProtectedDescendant(int processId)
-    {
-        return TryGetProtectedPid(out var protectedPid) && IsDescendantOf(processId, protectedPid);
-    }
-
-    private static bool ProtectedPidIsDescendantOf(int processId)
-    {
-        return TryGetProtectedPid(out var protectedPid) && IsDescendantOf(protectedPid, processId);
-    }
-
-    private static bool TryGetProtectedPid(out int processId)
-    {
-        var raw = Environment.GetEnvironmentVariable(ProtectedPidVariable);
-        return int.TryParse(
-            raw,
-            System.Globalization.NumberStyles.Integer,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out processId) &&
-            processId > 0;
+        var protection = EvaluateLiveCanKillProtection(processId, allowProtectedDescendant);
+        if (protection == KillProtection.Unverifiable) LogUnverifiableIdentity(processId);
+        return protection == KillProtection.NotProtected;
     }
 
     private static bool IsProcessRunning(int processId)
