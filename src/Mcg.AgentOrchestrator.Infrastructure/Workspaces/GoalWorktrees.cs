@@ -133,8 +133,14 @@ public sealed record GoalWorktreeCleanupHooks
             .ResetSandboxAcl(path, timeout);
     public Func<int, bool> TryKillRecordedProcess { get; init; } = GoalWorktrees.DefaultTryKillRecordedProcess;
     public Func<string, bool> DeleteDirectory { get; init; } = GoalWorktrees.DeleteDirectoryWithRetry;
-    internal Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; init; } =
-        GoalWorktrees.DeleteDirectoryWithReason;
+    internal Action<string, int, TimeSpan>? DeleteRetryWait { get; init; }
+    private Func<string, GoalWorktreeDeleteResult>? DeleteDirectoryForCleanupOverride { get; init; }
+    internal Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup
+    {
+        get => DeleteDirectoryForCleanupOverride ??
+            (path => GoalWorktrees.DeleteDirectoryWithReason(path, DeleteRetryWait));
+        init => DeleteDirectoryForCleanupOverride = value;
+    }
     internal Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; init; } =
         GoalWorktrees.DefaultRunWorktreeRemove;
     internal Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; init; } =

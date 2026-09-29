@@ -1302,6 +1302,7 @@ public sealed class GoalWorktreeReducedFixtureTests : GoalWorktreeTestBase
 internal sealed class GoalWorktreeCleanupHooksBuilder
 {
     private readonly GoalWorktreeCleanupHooks defaults = new();
+    private readonly Func<string, GoalWorktreeDeleteResult> defaultDeleteForCleanup;
 
     public Action<string, int> BuildServerShutdown { get; set; }
     public DotnetBuildStorageRoot? BuildStorageRoot { get; set; }
@@ -1309,6 +1310,7 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
     public Func<int, bool> TryKillRecordedProcess { get; set; }
     public Func<string, bool> DeleteDirectory { get; set; }
     public Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; set; }
+    public Action<string, int, TimeSpan>? DeleteRetryWait { get; set; }
     public Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; set; }
     public Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; set; }
     public Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; }
@@ -1332,6 +1334,7 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
         TryKillRecordedProcess = defaults.TryKillRecordedProcess;
         DeleteDirectory = defaults.DeleteDirectory;
         DeleteDirectoryForCleanup = defaults.DeleteDirectoryForCleanup;
+        defaultDeleteForCleanup = DeleteDirectoryForCleanup;
         RunWorktreeRemove = defaults.RunWorktreeRemove;
         RunWorktreePrune = defaults.RunWorktreePrune;
         FindLockHoldersForCleanup = defaults.FindLockHoldersForCleanup;
@@ -1354,14 +1357,14 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
         var budgetBackoff = CleanupBudgetExhaustedBackoffDuration;
         var options = CleanupOptions;
         var attentionDirectory = CleanupAttentionStoreDirectory;
-        return defaults with
+        var hooks = defaults with
         {
             BuildServerShutdown = BuildServerShutdown,
             BuildStorageRoot = BuildStorageRoot,
             ResetSandboxAcl = acl.ResetSandboxAcl,
             TryKillRecordedProcess = TryKillRecordedProcess,
             DeleteDirectory = DeleteDirectory,
-            DeleteDirectoryForCleanup = DeleteDirectoryForCleanup,
+            DeleteRetryWait = DeleteRetryWait,
             RunWorktreeRemove = RunWorktreeRemove,
             RunWorktreePrune = RunWorktreePrune,
             FindLockHoldersForCleanup = FindLockHoldersForCleanup,
@@ -1373,6 +1376,9 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
             CleanupOptions = () => options,
             CleanupAttentionStoreDirectory = () => attentionDirectory
         };
+        return ReferenceEquals(DeleteDirectoryForCleanup, defaultDeleteForCleanup)
+            ? hooks
+            : hooks with { DeleteDirectoryForCleanup = DeleteDirectoryForCleanup };
     }
 
     public void ConfigureCleanup(GoalWorktreeCleanupOptions options, string? attentionStoreDirectory = null)
