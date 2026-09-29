@@ -518,7 +518,7 @@ public sealed class LaneTimingMeasurementScriptTests
             ?? throw new InvalidOperationException($"Failed to start {executable}.");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
-        Xunit.Assert.True(process.WaitForExit(30_000), $"{executable} did not exit within the 30-second failsafe.");
+        ScriptFixtureProcessRunner.AssertExited(process, $"{executable} did not exit within the 30-second failsafe.");
         return new ProcessResult(
             process.ExitCode,
             stdout.GetAwaiter().GetResult(),

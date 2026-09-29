@@ -396,30 +396,15 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
 
     private static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
     {
-        var startInfo = new ProcessStartInfo
+        var commandEnvironment = new Dictionary<string, string>
         {
-            FileName = "git",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
+            ["GIT_AUTHOR_DATE"] = commitTime.ToString("O"),
+            ["GIT_COMMITTER_DATE"] = commitTime.ToString("O")
         };
-        startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
-        startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
-        foreach (var argument in arguments)
+        var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments, commandEnvironment);
+        if (!result.Succeeded)
         {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start git.");
-        process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        process.WaitForExit(60000);
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {error}");
+            throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed with exit {result.ExitCode}: {result.StandardError}; {result}");
         }
     }
 }

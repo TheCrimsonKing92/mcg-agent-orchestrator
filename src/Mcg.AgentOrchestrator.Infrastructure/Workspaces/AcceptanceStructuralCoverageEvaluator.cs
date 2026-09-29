@@ -26,6 +26,13 @@ internal sealed record AcceptanceStructuralCoverageEvaluation(
     TestCoverageInvariantResult? Coverage,
     bool BaselineLockRemediationApplied);
 
+internal sealed record AcceptanceStructuralCoveragePrepared(
+    GoalAcceptanceVerifier.CommandResult CandidateDiscovery,
+    GoalAcceptanceVerifier.CommandResult? BaselineDiscovery,
+    Exception? BaselineDiscoveryIoException,
+    TestDiscoverySnapshot? BaselineSnapshot,
+    bool BaselineLockRemediationApplied);
+
 internal sealed class AcceptanceStructuralCoverageEvaluator
 {
     private readonly Func<
@@ -64,6 +71,14 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
         AcceptanceStructuralCoverageRequest request,
         CancellationToken cancellationToken)
     {
+        var prepared = await PrepareAsync(request, cancellationToken).ConfigureAwait(false);
+        return await CompareAsync(request, prepared, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<AcceptanceStructuralCoveragePrepared> PrepareAsync(
+        AcceptanceStructuralCoverageRequest request,
+        CancellationToken cancellationToken)
+    {
         var candidateDiscovery = await _discoveryRunner(
             request.CandidateDiscoveryArguments,
             request.CandidateWorktreePath,
@@ -71,7 +86,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             cancellationToken).ConfigureAwait(false);
         if (candidateDiscovery.ExitCode != 0)
         {
-            return new AcceptanceStructuralCoverageEvaluation(
+            return new AcceptanceStructuralCoveragePrepared(
                 candidateDiscovery,
                 null,
                 null,
@@ -94,7 +109,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             }
             catch (Exception ex) when (_isBaselineDiscoveryIoException(ex))
             {
-                return new AcceptanceStructuralCoverageEvaluation(
+                return new AcceptanceStructuralCoveragePrepared(
                     candidateDiscovery,
                     null,
                     ex,
@@ -104,7 +119,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
 
             if (baselineDiscovery.TimedOut || baselineDiscovery.ExitCode != 0)
             {
-                return new AcceptanceStructuralCoverageEvaluation(
+                return new AcceptanceStructuralCoveragePrepared(
                     candidateDiscovery,
                     baselineDiscovery,
                     null,
@@ -116,6 +131,29 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
                 baselineDiscovery.Output,
                 baseline.BareTestList,
                 baseline.RepositoryRoot);
+        }
+
+        return new AcceptanceStructuralCoveragePrepared(
+            candidateDiscovery,
+            baselineDiscovery,
+            null,
+            baselineSnapshot,
+            baseline?.LockRemediationApplied == true);
+    }
+
+    internal async Task<AcceptanceStructuralCoverageEvaluation> CompareAsync(
+        AcceptanceStructuralCoverageRequest request,
+        AcceptanceStructuralCoveragePrepared prepared,
+        CancellationToken cancellationToken)
+    {
+        var candidateDiscovery = prepared.CandidateDiscovery;
+        var baselineDiscovery = prepared.BaselineDiscovery;
+        var baselineSnapshot = prepared.BaselineSnapshot;
+        if (candidateDiscovery.ExitCode != 0 || prepared.BaselineDiscoveryIoException is not null ||
+            baselineDiscovery is { } discovery && (discovery.TimedOut || discovery.ExitCode != 0))
+        {
+            return new AcceptanceStructuralCoverageEvaluation(candidateDiscovery, baselineDiscovery,
+                prepared.BaselineDiscoveryIoException, null, prepared.BaselineLockRemediationApplied);
         }
 
         var partitions = request.ResolvePartitions();
@@ -181,7 +219,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             baselineDiscovery,
             null,
             coverage,
-            baseline?.LockRemediationApplied == true);
+            prepared.BaselineLockRemediationApplied);
     }
 
     private async Task<TestDiscoverySnapshot?> DiscoverContainedBaselineAsync(
