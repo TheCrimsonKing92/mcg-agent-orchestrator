@@ -8699,13 +8699,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private void EmitGateProgress(AcceptanceGateProgress progress)
+    private void EmitGateProgress(AcceptanceGateProgress progress) => EmitGateProgress(progress, null);
+
+    private void EmitGateProgress(AcceptanceGateProgress progress, string? trailingTokens)
     {
         var line =
             $"PHASE_PROGRESS goal={FormatNullableToken(progress.GoalId, 8)} phase={progress.Phase} elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} " +
             $"target={QuoteProgressToken(progress.CurrentTarget)} child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
             $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)} {GateLoadContextProbe.FormatProgressTokens(progress.LoadContext)}";
-        Console.WriteLine($"{line} ts={progress.LastObservedAt:O}");
+        Console.WriteLine($"{line}{(trailingTokens is null ? "" : " " + trailingTokens)} ts={progress.LastObservedAt:O}");
         Console.Out.Flush();
         _executionContext?.ReportProgress(progress);
     }

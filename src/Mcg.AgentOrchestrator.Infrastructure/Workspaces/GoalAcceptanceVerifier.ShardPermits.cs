@@ -4,6 +4,15 @@ public sealed partial class GoalAcceptanceVerifier
 {
     private GateShardPermitPool? _shardPermitPool;
 
+    private GateShardLaneClass ShardPermitLaneClass => ClassifyShardPermitLaneClass(_executionContext);
+
+    internal GateShardLaneClass ShardPermitLaneClassForTests => ShardPermitLaneClass;
+
+    internal static GateShardLaneClass ClassifyShardPermitLaneClass(IAcceptanceRunExecutionContext? context) =>
+        GateHeartbeatRunClass.Classify(context) == GateHeartbeatRunClass.FocusedEvidence
+            ? GateShardLaneClass.Evidence
+            : GateShardLaneClass.Gate;
+
     private async Task<CommandResult> RunLaneTestHostWithShardPermitAsync(
         string[] arguments,
         string workingDirectory,
@@ -24,7 +33,8 @@ public sealed partial class GoalAcceptanceVerifier
         var pool = _shardPermitPool ??= GateShardPermitPool.ForRoot(
             _testOverrides.ShardPermitRootForTests ?? _storageRoot.RootPath,
             _testOverrides.ResolveGateShardBudgetForTests?.Invoke() ??
-                GateShardPermitPool.ResolveBudget(Environment.GetEnvironmentVariable(GateShardPermitPool.GateShardBudgetVariable)));
+                GateShardPermitPool.ResolveBudget(Environment.GetEnvironmentVariable(GateShardPermitPool.GateShardBudgetVariable)),
+            GateShardProcessFacts.System, _timeProvider);
         AcceptanceGatePhaseAccountant.RecordCurrentShardPermitBudget(pool.Budget);
         var started = _timeProvider.GetTimestamp();
         var waiting = false;
@@ -33,12 +43,15 @@ public sealed partial class GoalAcceptanceVerifier
         GateShardPermit permit;
         try
         {
-            permit = await pool.AcquireAsync(() =>
+            permit = await pool.AcquireAsync(ShardPermitLaneClass, outcome =>
             {
-                waiting = true;
-                _testOverrides.OnShardPermitWaitingForTests?.Invoke(heartbeatContext.CurrentTarget);
+                if (outcome != GateShardPollOutcome.AcquiredAfterForcedYield)
+                {
+                    waiting = true;
+                    _testOverrides.OnShardPermitWaitingForTests?.Invoke(heartbeatContext.CurrentTarget);
+                }
                 var now = _timeProvider.GetUtcNow();
-                if (now < nextProgress)
+                if (now < nextProgress && outcome != GateShardPollOutcome.AcquiredAfterForcedYield)
                     return;
                 var elapsed = _timeProvider.GetElapsedTime(started);
                 GateHeartbeatArtifacts.TryWrite(heartbeatContext.HeartbeatPath,
@@ -48,7 +61,8 @@ public sealed partial class GoalAcceptanceVerifier
                 EmitGateProgress(new AcceptanceGateProgress(
                     heartbeatContext.GoalId, "shard-permit-wait", heartbeatContext.CurrentTarget,
                     heartbeatContext.SlotIndex, Environment.ProcessId, null,
-                    now - elapsed, now, now, elapsed, 0, heartbeatContext.HeartbeatPath));
+                    now - elapsed, now, now, elapsed, 0, heartbeatContext.HeartbeatPath),
+                    GateShardLanePriorityProgress.Format(ShardPermitLaneClass, outcome));
                 nextProgress = now + progressInterval;
             }, _testOverrides.ShardPermitPollInterval ?? TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
         }
