@@ -14,6 +14,7 @@ public sealed record AcceptanceCohortUnrelatedFailure(
 public sealed partial record AcceptanceCohortPartitionReceipt
 {
     public IReadOnlyList<string> FailingTestIdentities { get; init; } = [];
+    public IReadOnlyList<string> FailedChecks { get; init; } = [];
 }
 
 public sealed partial record AcceptanceCohortReceipt

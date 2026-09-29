@@ -3530,9 +3530,9 @@ internal sealed partial class ConductorDriver
         var shouldUseOrdinaryFallback = receipt.Outcome == AcceptanceCohortGateOutcome.Failed && receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable;
         return shouldUseOrdinaryFallback
             ? CohortOrdinaryFallback(receipt, "deterministic cohort content failure has no member attribution; members remain eligible for ordinary acceptance")
-            : CohortHeld(goals, policy, receipt, receipt.Outcome == AcceptanceCohortGateOutcome.Failed
+            : ApplyCohortAttributionFailureVerdicts(CohortHeld(goals, policy, receipt, receipt.Outcome == AcceptanceCohortGateOutcome.Failed
                 ? $"deterministic RED; attribution={receipt.Attribution}"
-                : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing");
+                : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing"), goals, receipt);
 
         ConductorAcceptanceCohortRunResult MaterializationFallback(
             AcceptanceCohortMaterializationFailureKind outcome,
@@ -3714,6 +3714,7 @@ internal sealed partial class ConductorDriver
         var partitionManifest = identity.ManifestIdentity;
         IReadOnlyList<string> testResultPaths = [];
         IReadOnlyList<string> failingTestIdentities = [];
+        IReadOnlyList<string> failedChecks = [];
         AcceptanceCohortGateOutcome outcome;
         try
         {
@@ -3730,6 +3731,9 @@ internal sealed partial class ConductorDriver
                 verifier, partition.Path, member, identity, gateProgressEventWriter, cancellationToken);
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             failingTestIdentities = CohortFailingTestIdentities(result);
+            failedChecks = result.Checks?
+                .Where(check => !check.Advisory && !check.Passed)
+                .Select(check => check.Name).ToArray() ?? [];
             partition.AssertGoalBranchesUnchanged();
             outcome = ClassifyCohortVerification(result);
         }
@@ -3755,7 +3759,7 @@ internal sealed partial class ConductorDriver
             partitionManifest,
             outcome,
             checked((long)clock.Elapsed.TotalMilliseconds),
-            testResultPaths) { FailingTestIdentities = failingTestIdentities };
+            testResultPaths) { FailingTestIdentities = failingTestIdentities, FailedChecks = failedChecks };
     }
 
     private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>

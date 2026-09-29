@@ -3277,7 +3277,7 @@ internal sealed partial class ConductorBatchLoop
                 }
                 foreach (var pair in cohortRun.MemberResults)
                 {
-                    results[pair.Key] = new ParallelLandingOutcome(pair.Value, SlotIndex: 0);
+                    results[pair.Key] = TrackCohortAttributionFailure(cohortRun, pair, kernel, changedGoalIds);
                 }
                 if (cohortRun.Detail.Contains("outcome=inflight", StringComparison.Ordinal))
                 {
