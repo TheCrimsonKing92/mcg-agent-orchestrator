@@ -1604,11 +1604,7 @@ internal static partial class TerminalGoalSweep
             using var process = System.Diagnostics.Process.GetProcessById(processId);
             return !process.HasExited;
         }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
         {
             return false;
         }

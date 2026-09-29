@@ -1447,24 +1447,8 @@ internal sealed partial class ConductorBatchLoop
                 || totalTicks % QuietSummaryEveryTicks == 0;
             if (watchInterval is not null)
             {
-                foreach (var goal in eligible)
-                {
-                    var activeTask = ConductorWatchProgressReporter.GetActiveTask(goal);
-                    var cachedLiveChanges = activeTask?.LastDispatch is { } dispatch &&
-                        liveChangeSnapshots.TryGetValue((dispatch.WorkingDirectory, dispatch.BaseCommit), out var snapshot)
-                            ? snapshot
-                            : null;
-                    foreach (var line in _watchProgressReporter.BuildLines(
-                        goal,
-                        quiet,
-                        policy,
-                        watchInterval,
-                        stallWarningThreshold,
-                        cachedLiveChanges))
-                    {
-                        EmitProgress(line, tickLines);
-                    }
-                }
+                EmitWatchProgress(eligible, quiet, policy, watchInterval, stallWarningThreshold,
+                    liveChangeSnapshots, totalTicks, tickLines);
             }
 
             if (emitTickSummary)
@@ -1703,6 +1687,7 @@ internal sealed partial class ConductorBatchLoop
         {
             stopReason ??= "unintended-exit";
             var detail = $"exception={Sanitize(ex.GetType().Name)} message={SanitizeReason(ex.Message)}";
+            var diagnosticLocation = RecordUnintendedExitDiagnostic(totalTicks, ex);
             try
             {
                 lifecycleSession?.Stop("unintended-exit", totalTicks, detail);
@@ -1715,7 +1700,7 @@ internal sealed partial class ConductorBatchLoop
             try
             {
                 EmitProgress(
-                    $"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason=unintended-exit {detail}");
+                    $"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason=unintended-exit {detail} diagnostic={diagnosticLocation}");
             }
             catch (Exception diagnosticException)
             {

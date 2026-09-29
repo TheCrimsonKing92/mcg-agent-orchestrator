@@ -89,12 +89,25 @@ internal static class DispatchProcessIdentityEvidence
         candidateProcessIds
             .Where(processId => processId > 0)
             .Distinct()
-            .Where(isProcessRunning)
-            .Where(processId => IsRecordedOwner(
-                processId,
-                recordedIdentities,
+            .Where(processId => IsLiveRecordedOwner(processId, recordedIdentities, isProcessRunning,
                 readCurrentIdentity ?? ReadCurrent))
             .ToArray();
+
+    private static bool IsLiveRecordedOwner(
+        int processId,
+        IReadOnlyList<SpawnProcessIdentity>? recordedIdentities,
+        Func<int, bool> isProcessRunning,
+        Func<int, SpawnProcessIdentity?> readCurrentIdentity)
+    {
+        try
+        {
+            return isProcessRunning(processId) && IsRecordedOwner(processId, recordedIdentities, readCurrentIdentity);
+        }
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
+        {
+            return false;
+        }
+    }
 
     internal static IReadOnlyList<SpawnProcessIdentity> Read(JsonElement root)
     {
