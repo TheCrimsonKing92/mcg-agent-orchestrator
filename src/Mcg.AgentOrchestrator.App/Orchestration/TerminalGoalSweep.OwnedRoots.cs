@@ -11,7 +11,8 @@ internal sealed record TerminalGoalSweepOwnedRootResult(
     IReadOnlyList<string> ObserveOnlyReports,
     string? DeferredReason = null,
     IReadOnlyList<string>? ReclaimedGoalRoots = null,
-    IReadOnlyList<string>? GoalRootReclaimFailures = null)
+    IReadOnlyList<string>? GoalRootReclaimFailures = null,
+    IReadOnlyList<string>? OrphanFixtureEvents = null)
 {
     internal IReadOnlyList<string> OperatorEvents
     {
@@ -28,6 +29,8 @@ internal sealed record TerminalGoalSweepOwnedRootResult(
             if (GoalRootReclaimFailures is not null)
                 events.AddRange(GoalRootReclaimFailures.Select(failure =>
                     $"SWEEP_GOAL_ROOT_RECLAIM_FAILED detail=\"{Sanitize(failure)}\""));
+            if (OrphanFixtureEvents is not null)
+                events.AddRange(OrphanFixtureEvents);
             return events;
         }
     }
@@ -67,7 +70,11 @@ internal static partial class TerminalGoalSweep
         {
             artifactReport = $"temp-artifact-janitor failed={ex.GetType().Name}";
         }
-        return result with { ObserveOnlyReports = [.. result.ObserveOnlyReports, artifactReport] };
+        return result with
+        {
+            ObserveOnlyReports = [.. result.ObserveOnlyReports, artifactReport],
+            OrphanFixtureEvents = ReapOrphanFixtures(stateDbPath)
+        };
     }
 
     // A temporary or scoped store cannot prove that a root in the shared folder is orphaned.
