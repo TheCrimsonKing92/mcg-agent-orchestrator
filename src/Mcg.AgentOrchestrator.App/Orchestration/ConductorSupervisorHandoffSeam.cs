@@ -53,7 +53,7 @@ internal interface IConductorSupervisorHandoffSeam
     ConductorSupervisorProcessIdentity Identify(int processId);
     Task<ConductorSupervisorProcessResult> ObserveChildAsync(
         ConductorSupervisorActiveChild child, CancellationToken cancellationToken);
-    void StopPending(int processId);
+    void StopPending(ConductorSupervisorProcessIdentity identity);
 }
 
 internal sealed record ConductorSupervisorHandoffOptions(
@@ -150,9 +150,9 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
     public ConductLoopLaunchResult Launch(ConductLoopLaunchRequest request)
     {
         var launched = ConductorLoopHandoff.LaunchDetached(request);
-        using var process = Process.GetProcessById(launched.ProcessId);
-        _launched[launched.ProcessId] = new DateTimeOffset(
-            process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        if (launched.StartedAt is not { } startedAt)
+            throw new InvalidOperationException("Launched successor start time was unavailable.");
+        _launched[launched.ProcessId] = startedAt;
         return launched;
     }
 
@@ -208,9 +208,9 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
         }
     }
 
-    public void StopPending(int processId)
+    public void StopPending(ConductorSupervisorProcessIdentity identity)
     {
-        if (IsRunning(processId)) ConductorLoopHandoff.StopFailedSuccessor(processId);
+        ConductorLoopHandoff.StopFailedSuccessor(identity);
     }
 
     private FileStream OpenLease() => new(_leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
