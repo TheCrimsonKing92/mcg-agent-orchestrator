@@ -9,6 +9,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class MtpTestRunnerScriptTests
 {
+    private static int _discoveryInvocations;
+    private static int _powerShellInvocations;
     // The same unchanged case passed in 00:06:02.49 on 2026-08-21; this budget is a hang guard, not a performance assertion.
     internal static readonly TimeSpan NativeMtpRealProcessHangGuard = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan ProcessControlReadinessHangGuard = TimeSpan.FromSeconds(30);
@@ -259,38 +261,66 @@ public sealed class MtpTestRunnerScriptTests
     [Xunit.Fact]
     public void BooleanGrammar_PreservesRepresentableOperatorsAndRejectsLoss()
     {
+        var launchesBefore = _powerShellInvocations;
+        using var cases = TranslateMtpFilterCases(
+        [
+            "FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests",
+            "FullyQualifiedName~AlphaTests&Name~SelectsOne",
+            "(FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests)&Category!=HostIntegration",
+            "FullyQualifiedName~AlphaTests|Name~SelectsOne",
+            "FullyQualifiedName~AlphaTests&FullyQualifiedName~BetaTests",
+            "DisplayName~Selects one test",
+            "(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild",
+            "(Name~Alpha&Name!~Beta)|Name~Gamma"
+        ]);
+        Assert.Equal(8, cases.RootElement.GetArrayLength());
+        JsonElement Find(string filter) => cases.RootElement.EnumerateArray()
+            .Single(item => item.GetProperty("filter").GetString() == filter);
+        string[] Translated(string filter)
+        {
+            var item = Find(filter);
+            Assert.True(item.GetProperty("ok").GetBoolean(), item.GetProperty("message").GetString());
+            return item.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
+        }
+        string Rejected(string filter)
+        {
+            var item = Find(filter);
+            Assert.False(item.GetProperty("ok").GetBoolean());
+            return item.GetProperty("message").GetString()!;
+        }
         Assert.Equal(
             ["--filter-class", "*AlphaTests*", "--filter-class", "*BetaTests*"],
-            TranslateMtpFilter("FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests"));
+            Translated("FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests"));
         Assert.Equal(
             ["--filter-class", "*AlphaTests*", "--filter-method", "*SelectsOne*"],
-            TranslateMtpFilter("FullyQualifiedName~AlphaTests&Name~SelectsOne"));
+            Translated("FullyQualifiedName~AlphaTests&Name~SelectsOne"));
         Assert.Equal(
             ["--filter-class", "*AlphaTests*", "--filter-class", "*BetaTests*", "--filter-not-trait", "Category=HostIntegration"],
-            TranslateMtpFilter("(FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests)&Category!=HostIntegration"));
+            Translated("(FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests)&Category!=HostIntegration"));
 
-        var crossKind = RejectMtpFilter("FullyQualifiedName~AlphaTests|Name~SelectsOne");
+        var crossKind = Rejected("FullyQualifiedName~AlphaTests|Name~SelectsOne");
         Assert.Contains("joins different predicate kinds", crossKind, StringComparison.Ordinal);
         Assert.Contains("FullyQualifiedName~AlphaTests|Name~SelectsOne", crossKind, StringComparison.Ordinal);
         Assert.Contains("Supported syntax:", crossKind, StringComparison.Ordinal);
 
-        var sameKindAnd = RejectMtpFilter("FullyQualifiedName~AlphaTests&FullyQualifiedName~BetaTests");
+        var sameKindAnd = Rejected("FullyQualifiedName~AlphaTests&FullyQualifiedName~BetaTests");
         Assert.Contains("joins two positive class predicates", sameKindAnd, StringComparison.Ordinal);
         Assert.Contains("repeated positive arguments of one kind are ORed", sameKindAnd, StringComparison.Ordinal);
 
-        var displayName = RejectMtpFilter("DisplayName~Selects one test");
+        var displayName = Rejected("DisplayName~Selects one test");
         Assert.Contains("filters method symbols", displayName, StringComparison.Ordinal);
         Assert.Contains("use Name~Method", displayName, StringComparison.Ordinal);
 
-        var unsafeHoist = RejectMtpFilter(
+        var unsafeHoist = Rejected(
             "(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild");
         Assert.Contains("alternative-local exclusion", unsafeHoist, StringComparison.Ordinal);
         Assert.Contains("would become global", unsafeHoist, StringComparison.Ordinal);
         Assert.Contains("silently narrowing the requested union", unsafeHoist, StringComparison.Ordinal);
 
-        var unsupportedAlternative = RejectMtpFilter("(Name~Alpha&Name!~Beta)|Name~Gamma");
+        var unsupportedAlternative = Rejected("(Name~Alpha&Name!~Beta)|Name~Gamma");
         Assert.Contains("each alternative must be one positive predicate", unsupportedAlternative, StringComparison.Ordinal);
         Assert.DoesNotContain("negative predicates may not be alternatives", unsupportedAlternative, StringComparison.Ordinal);
+        Assert.Equal(1, _powerShellInvocations - launchesBefore);
     }
 
     [Xunit.Fact]
@@ -352,6 +382,8 @@ public sealed class MtpTestRunnerScriptTests
     [Xunit.Fact]
     public void ManifestFilters_TranslateAndKeepExclusionSemantics()
     {
+        var discoveriesBefore = _discoveryInvocations;
+        var launchesBefore = _powerShellInvocations;
         var root = RepositoryRoot();
         var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
         using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
@@ -361,25 +393,76 @@ public sealed class MtpTestRunnerScriptTests
                 .EnumerateArray()
                 .Sum(partition => partition.TryGetProperty("additionalFilters", out var filters) ? filters.GetArrayLength() : 0);
 
+        string[] extraFilters =
+        [
+            "FullyQualifiedName~ConductorDriverTestsStaleFindingRouting&Name~StaleTesterFinding",
+            "FullyQualifiedName~ConductorDriverTestsStaleFindingRouting&Name!~StaleTesterFinding",
+            "FullyQualifiedName~MtpTestRunnerScriptTests",
+            "FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild",
+            "FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild",
+            "FullyQualifiedName~ConductorCrossTickTests",
+            "FullyQualifiedName~ConductorCrossTickTests&Category!=CrossTick"
+        ];
+
         var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
         var escapedManifest = manifestPath.Replace("'", "''", StringComparison.Ordinal);
+        var escapedExtras = JsonSerializer.Serialize(extraFilters).Replace("'", "''", StringComparison.Ordinal);
         var command = $"Import-Module '{module}' -Force; " +
             $"$manifest = Get-Content -LiteralPath '{escapedManifest}' -Raw | ConvertFrom-Json; " +
+            $"$extras = ConvertFrom-Json -InputObject '{escapedExtras}'; " +
             "$filters = @($manifest.engine.infrastructureTestLanes | ForEach-Object { $_.filter }) + " +
-            "@($manifest.engine.localTestPartitions | ForEach-Object { @($_.additionalFilters) }); " +
+            "@($manifest.engine.localTestPartitions | ForEach-Object { @($_.additionalFilters) }) + $extras; " +
             "$result = @($filters | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { " +
             "[ordered]@{ filter = $_; args = @(ConvertTo-MtpFilterArguments -Filter $_) } }); " +
-            "$result | ConvertTo-Json -Depth 4 -Compress";
+            "ConvertTo-Json -InputObject $result -Depth 4 -Compress";
         var result = RunPowerShellCommand(root, command);
 
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         using var translated = JsonDocument.Parse(result.Stdout.Trim());
-        Assert.Equal(configuredCount, translated.RootElement.GetArrayLength());
-        var universe = DiscoverManagedTestCatalog(allowEmpty: false);
-        foreach (var item in translated.RootElement.EnumerateArray())
+        Assert.Equal(configuredCount + extraFilters.Length, translated.RootElement.GetArrayLength());
+        var cases = translated.RootElement.EnumerateArray()
+            .Select(item => (
+                Filter: item.GetProperty("filter").GetString()!,
+                Arguments: item.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray()))
+            .ToArray();
+        foreach (var group in cases.GroupBy(item => item.Filter, StringComparer.Ordinal))
         {
-            var filter = item.GetProperty("filter").GetString()!;
-            var arguments = item.GetProperty("args").EnumerateArray().Select(value => value.GetString()!).ToArray();
+            Assert.All(group, item => Assert.Equal(group.First().Arguments, item.Arguments));
+        }
+        var universe = DiscoverManagedTestCatalog(allowEmpty: false);
+        var signatures = cases.Select(item => MtpFilterArgumentSemantics.KindSignature(item.Arguments))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var representatives = cases.GroupBy(item => MtpFilterArgumentSemantics.KindSignature(item.Arguments), StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var representative = group.FirstOrDefault(item => MtpFilterArgumentSemantics.IsNonVacuous(item.Arguments, universe));
+                if (representative.Arguments is null)
+                {
+                    representative = group.First();
+                }
+                Assert.NotNull(representative.Arguments);
+                return (Signature: group.Key, representative.Filter, representative.Arguments);
+            }).ToArray();
+        Assert.True(representatives.Length < configuredCount, "Discovery representatives must be fewer than manifest filters.");
+        Assert.Empty(MtpFilterArgumentSemantics.UncoveredSignatures(signatures, representatives.Select(item => item.Signature)));
+        foreach (var requiredKind in new[]
+                 { "--filter-class", "--filter-not-class", "--filter-method", "--filter-not-method", "--filter-not-trait" })
+        {
+            Assert.Contains(representatives, item => item.Arguments.Contains(requiredKind, StringComparer.Ordinal));
+        }
+        Assert.Contains(representatives, item => item.Signature.Contains("|nested", StringComparison.Ordinal));
+        foreach (var representative in representatives)
+        {
+            var expectedReal = MtpFilterArgumentSemantics.Select(representative.Arguments, universe)
+                .Select(test => test.Uid).Order(StringComparer.Ordinal);
+            var actualReal = DiscoverManagedTests(allowEmpty: true, representative.Arguments)
+                .Keys.Order(StringComparer.Ordinal);
+            Assert.Equal(expectedReal, actualReal);
+        }
+        foreach (var item in cases.Take(configuredCount))
+        {
+            var filter = item.Filter;
+            var arguments = item.Arguments;
             Assert.NotEmpty(arguments);
             Assert.True(arguments.Length % 2 == 0, filter);
 
@@ -387,27 +470,29 @@ public sealed class MtpTestRunnerScriptTests
                 .Where(test => ManagedFilterExpressionEvaluator.Evaluate(filter, test))
                 .Select(test => test.Uid)
                 .Order(StringComparer.Ordinal);
-            var actual = DiscoverManagedTests(allowEmpty: true, arguments)
-                .Keys
+            var actual = MtpFilterArgumentSemantics.Select(arguments, universe)
+                .Select(test => test.Uid)
                 .Order(StringComparer.Ordinal);
             Assert.Equal(expected, actual);
         }
 
-        var broadClass = DiscoverManagedTests("--filter-class", "*MtpTestRunnerScriptTests*");
-        var excludedClass = DiscoverManagedTests("--filter-class", "*MtpTestRunnerScriptTestsManagedProjectRebuild*");
-        var withoutRebuild = DiscoverManagedTests(TranslateMtpFilter(
-            "FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild"));
+        IReadOnlyDictionary<string, string> Select(string filter) =>
+            MtpFilterArgumentSemantics.Select(cases.First(item => item.Filter == filter).Arguments, universe)
+                .ToDictionary(test => test.Uid, test => test.DisplayName, StringComparer.Ordinal);
+        var broadClass = Select("FullyQualifiedName~MtpTestRunnerScriptTests");
+        var excludedClass = Select("FullyQualifiedName~MtpTestRunnerScriptTestsManagedProjectRebuild");
+        var withoutRebuild = Select("FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild");
         Assert.NotEmpty(excludedClass);
         Assert.Equal(
             broadClass.Keys.Except(excludedClass.Keys).Order(StringComparer.Ordinal),
             withoutRebuild.Keys.Order(StringComparer.Ordinal));
 
-        var crossTick = DiscoverManagedTests("--filter-class", "*ConductorCrossTickTests*");
+        var crossTick = Select("FullyQualifiedName~ConductorCrossTickTests");
         Assert.NotEmpty(crossTick);
-        var withoutCrossTickTrait = DiscoverManagedTests(
-            allowEmpty: true,
-            TranslateMtpFilter("FullyQualifiedName~ConductorCrossTickTests&Category!=CrossTick"));
+        var withoutCrossTickTrait = Select("FullyQualifiedName~ConductorCrossTickTests&Category!=CrossTick");
         Assert.Empty(withoutCrossTickTrait);
+        Assert.Equal(1 + representatives.Length, _discoveryInvocations - discoveriesBefore);
+        Assert.Equal(1, _powerShellInvocations - launchesBefore);
     }
 
     [Xunit.Fact]
@@ -1458,10 +1543,28 @@ public sealed class MtpTestRunnerScriptTests
 
     private static ProcessResult RunPowerShellCommand(string workingDirectory, string command)
     {
+        Interlocked.Increment(ref _powerShellInvocations);
         var startInfo = PowerShellStartInfo(workingDirectory);
         startInfo.ArgumentList.Add("-Command");
         startInfo.ArgumentList.Add(command);
         return Run(startInfo);
+    }
+
+    private static JsonDocument TranslateMtpFilterCases(string[] filters)
+    {
+        var root = RepositoryRoot();
+        var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);
+        var input = JsonSerializer.Serialize(filters).Replace("'", "''", StringComparison.Ordinal);
+        var command = $"Import-Module '{module}' -Force; " +
+            $"$filters = ConvertFrom-Json -InputObject '{input}'; " +
+            "$results = @($filters | ForEach-Object { $filter = $_; " +
+            "try { $arguments = @(ConvertTo-MtpFilterArguments -Filter $filter); " +
+            "[ordered]@{ filter = $filter; ok = $true; args = $arguments; message = '' } } " +
+            "catch { [ordered]@{ filter = $filter; ok = $false; args = @(); message = $_.Exception.Message } } }); " +
+            "ConvertTo-Json -InputObject $results -Depth 4 -Compress";
+        var result = RunPowerShellCommand(root, command);
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        return JsonDocument.Parse(result.Stdout.Trim());
     }
 
     private static string[] TranslateMtpFilter(string filter)
@@ -1500,6 +1603,7 @@ public sealed class MtpTestRunnerScriptTests
         bool allowEmpty,
         params string[] filterArguments)
     {
+        Interlocked.Increment(ref _discoveryInvocations);
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -1549,7 +1653,7 @@ public sealed class MtpTestRunnerScriptTests
         return tests;
     }
 
-    private sealed record ManagedTestDescriptor(
+    internal sealed record ManagedTestDescriptor(
         string Uid,
         string DisplayName,
         string TypeName,
