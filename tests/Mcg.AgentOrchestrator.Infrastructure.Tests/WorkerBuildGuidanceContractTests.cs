@@ -61,6 +61,9 @@ public sealed class WorkerBuildGuidanceContractTests
 
     private static string FindRepositoryRoot([CallerFilePath] string sourcePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return verifiedRoot;
+
         var directory = new DirectoryInfo(Path.GetDirectoryName(sourcePath)!);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln")))
         {

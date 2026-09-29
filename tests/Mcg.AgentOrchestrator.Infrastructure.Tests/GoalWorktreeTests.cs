@@ -1120,6 +1120,9 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
 
     private protected static string FindCurrentSourceRoot([CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return verifiedRoot;
+
         var directory = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(sourceFilePath))
             ?? throw new DirectoryNotFoundException($"Could not resolve source directory from '{sourceFilePath}'."));
         while (directory is not null)

@@ -41,7 +41,9 @@ public sealed class TestProcessStopIdentityGuardTests
 
     private static HashSet<string> FindOffenders([System.Runtime.CompilerServices.CallerFilePath] string thisFile = "")
     {
-        var root = Path.GetDirectoryName(thisFile)!;
+        var root = VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? Path.Combine(verifiedRoot, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests")
+            : Path.GetDirectoryName(thisFile)!;
         var offenders = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
         {

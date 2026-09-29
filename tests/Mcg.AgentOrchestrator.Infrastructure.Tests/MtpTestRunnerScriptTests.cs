@@ -2020,7 +2020,9 @@ public sealed class MtpTestRunnerScriptTests
     }
 
     internal static string RepositoryRoot([CallerFilePath] string sourceFile = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "..", ".."));
+        VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? verifiedRoot
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "..", ".."));
 
     internal sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 

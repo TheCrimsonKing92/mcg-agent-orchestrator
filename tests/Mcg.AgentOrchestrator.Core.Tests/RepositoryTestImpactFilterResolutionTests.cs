@@ -1152,6 +1152,9 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         out string root,
         [CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out root))
+            return true;
+
         var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
         while (directory is not null)
         {

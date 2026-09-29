@@ -1565,8 +1565,11 @@ internal static class AcceptanceManifestTestDefaults
             return candidate.ToJsonString();
         }
 
-        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath) ?? AppContext.BaseDirectory);
-        while (directory is not null &&
+        var hasVerifiedRoot = VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot);
+        var directory = hasVerifiedRoot
+            ? new DirectoryInfo(verifiedRoot)
+            : new DirectoryInfo(Path.GetDirectoryName(sourceFilePath) ?? AppContext.BaseDirectory);
+        while (!hasVerifiedRoot && directory is not null &&
             !File.Exists(Path.Combine(directory.FullName, "config", "acceptance-manifest.json")))
         {
             directory = directory.Parent;
