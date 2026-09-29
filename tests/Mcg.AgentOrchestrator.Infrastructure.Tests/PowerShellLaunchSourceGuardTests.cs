@@ -37,11 +37,11 @@ public sealed class PowerShellLaunchSourceGuardTests
     [Fact]
     public void DetectorFindsLaunchesWithoutFlaggingInspectionData()
     {
-        var source = "class C { void M() { var p = new ProcessStartInfo { FileName = \"pwsh\" }; " +
+        var source = "class C { void M() { var p = new " + "ProcessStartInfo { FileName = \"pwsh\" }; " +
             "RunProcess(root, \"pwsh\", args); Run(root, path, \"pwsh\", body); " +
             "foreach (var n in new[] { \"pwsh\" }) Process.Start(n); " +
             "var shells = new[] { \"pwsh\" }; foreach (var n in shells) Process.Start(n); " +
-            "var direct = new ProcessStartInfo(\"pwsh\"); " +
+            "var direct = new " + "ProcessStartInfo(\"pwsh\"); " +
             "Assert.Equal(\"pwsh\", name); } }";
         Assert.Equal(6, FindLaunches(source).Count());
     }
