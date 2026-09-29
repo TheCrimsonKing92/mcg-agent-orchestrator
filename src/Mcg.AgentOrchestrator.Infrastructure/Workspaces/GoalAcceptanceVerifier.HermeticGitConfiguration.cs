@@ -40,6 +40,9 @@ public sealed partial class GoalAcceptanceVerifier
         try
         {
             Directory.CreateDirectory(directory);
+            // Git writes global config through this sibling lockfile. Keep its name occupied
+            // so a gate cannot replace the shared config even when Git clears ReadOnly.
+            Directory.CreateDirectory(destination + ".lock");
             if (File.Exists(destination) && File.ReadAllBytes(destination).AsSpan().SequenceEqual(expected))
             {
                 File.SetAttributes(destination, File.GetAttributes(destination) | FileAttributes.ReadOnly);

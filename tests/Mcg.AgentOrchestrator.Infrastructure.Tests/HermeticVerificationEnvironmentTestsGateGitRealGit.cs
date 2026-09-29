@@ -38,6 +38,13 @@ public sealed class HermeticVerificationEnvironmentTestsGateGitRealGit : GoalAcc
             Assert.Equal(1, lfs.ExitCode);
             Assert.Empty(lfs.Stdout);
 
+            var gateConfigPath = environment["GIT_CONFIG_GLOBAL"]!;
+            var pinnedContent = File.ReadAllBytes(gateConfigPath);
+            Assert.True(Directory.Exists(gateConfigPath + ".lock"));
+            var globalWrite = await RunGitAsync(root, environment, "config", "--global", "core.autocrlf", "false");
+            Assert.NotEqual(0, globalWrite.ExitCode);
+            Assert.Equal(pinnedContent, File.ReadAllBytes(gateConfigPath));
+
             var localWrite = await RunGitAsync(root, environment, "config", "core.autocrlf", "false");
             Assert.Equal(0, localWrite.ExitCode);
             var local = await RunGitAsync(root, environment, "config", "--show-origin", "--get", "core.autocrlf");
