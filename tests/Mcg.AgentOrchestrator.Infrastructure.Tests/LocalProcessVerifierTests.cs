@@ -234,13 +234,11 @@ public sealed class LocalProcessVerifierTests : LocalProcessVerifierTestBase
     {
         var previous = SetAcceptanceTimeoutEnvironment("0.001");
         var calls = new List<(string FileName, IReadOnlyList<string> Arguments, TimeSpan Timeout)>();
-        var verifier = new LocalProcessVerifier(async (fileName, args, _, timeout, cancellationToken) =>
+        var verifier = new LocalProcessVerifier((fileName, args, _, timeout, cancellationToken) =>
         {
             calls.Add((fileName, args, timeout));
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(timeout);
-            await Task.Delay(TimeSpan.FromSeconds(5), timeoutCts.Token);
-            return new LocalProcessVerifier.CommandResult(0, "unexpected completion", "");
+            Assert.False(cancellationToken.IsCancellationRequested);
+            return Task.FromException<LocalProcessVerifier.CommandResult>(new OperationCanceledException());
         });
 
         try

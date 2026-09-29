@@ -511,7 +511,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             BusyRetryBudget = TimeSpan.FromMilliseconds(250),
             MaxBusyRetries = 1,
             BeginImmediateCommandTimeoutSeconds = 1,
-            MirrorToConductEventStream = false
+            MirrorToConductEventStream = false,
+            HoldDurationSource = operation => operation == "slow-holder-test"
+                ? () => TimeSpan.FromSeconds(3)
+                : () => TimeSpan.Zero
         };
         ITransactionalOrchestratorStateRepository holderRepo =
             new SqliteOrchestratorStateRepository(db, statementObserver: null, telemetryOptions);
@@ -522,14 +525,13 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var holderStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var holderTask = holderRepo.TransactAsync(
             "slow-holder-test",
-            async (kernel, _) =>
+            (kernel, _) =>
             {
                 holderStarted.SetResult();
-                await Task.Delay(TimeSpan.FromSeconds(3));
-                return (ShouldSave: false, Result: kernel.Goals.Count);
+                return Task.FromResult((ShouldSave: false, Result: kernel.Goals.Count));
             });
 
-        await holderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await TestHangGuard.WaitAsync(holderStarted.Task, "slow-holder-test transaction start");
         await holderTask;
 
         using (var holder = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite))
@@ -555,6 +557,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("slow-holder-test", criticalHold["operation"]?.GetValue<string>());
         Assert.Equal("commit", criticalHold["disposition"]?.GetValue<string>());
         Assert.True(criticalHold["holdMs"]?.GetValue<double>() >= 2_000, criticalHold.ToJsonString());
+        Assert.Equal(3_000d, criticalHold["holdMs"]!.GetValue<double>());
         Assert.NotEmpty(criticalHold["stackSummary"]!.AsArray());
 
         var busyFailure = Assert.Single(receipts, receipt =>

@@ -123,14 +123,27 @@ public sealed class GoalWorktreeTestsRemoveCleanupDebt : GoalWorktreeTestBase
             GoalWorktreeRemoveResult result;
             if (OperatingSystem.IsWindows())
             {
-                // Hold the file exclusively then release it partway through the retry window so
-                // that a single Remove() call succeeds without requiring a second invocation.
+                // Release the lock only after deletion reports its first failed attempt.
                 var fs = new FileStream(lockedFile, FileMode.Open, FileAccess.Read, FileShare.None);
-                _ = Task.Delay(150).ContinueWith(_ => fs.Dispose());
-
-                result = RemoveWorktree(repo, goalId);
-
-                Assert.True(result.IsComplete);
+                var waits = new List<(string Path, int Attempt, TimeSpan Delay)>();
+                CleanupHooks.DeleteDirectory = p => GoalWorktrees.DeleteDirectoryWithReason(p,
+                    (waitPath, attempt, delay) =>
+                    {
+                        waits.Add((waitPath, attempt, delay));
+                        if (waits.Count == 1)
+                            fs.Dispose();
+                    }).Succeeded;
+                try
+                {
+                    result = RemoveWorktree(repo, goalId);
+                    Assert.True(result.IsComplete);
+                    Assert.NotEmpty(waits);
+                    Assert.Equal((path, 1, TimeSpan.FromMilliseconds(100)), waits[0]);
+                }
+                finally
+                {
+                    fs.Dispose();
+                }
             }
             else
             {

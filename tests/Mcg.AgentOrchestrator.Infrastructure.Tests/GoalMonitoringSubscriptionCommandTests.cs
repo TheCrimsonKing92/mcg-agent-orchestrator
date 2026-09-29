@@ -1520,7 +1520,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         var goal = kernel.CreateGoal("Monitor stream promptly", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         await using var stream = new RecordingStream();
         using var cts = new CancellationTokenSource();
-        var pollInterval = TimeSpan.FromSeconds(30);
+        var pollInterval = TimeSpan.FromHours(1);
 
         var streamTask = GoalMonitoringStream.StreamAsync(
             stream,
@@ -1533,12 +1533,25 @@ public sealed class GoalMonitoringSubscriptionCommandTests
             pollInterval,
             cts.Token);
 
-        var completed = await Task.WhenAny(stream.FirstWrite, Task.Delay(TimeSpan.FromSeconds(1)));
-
-        Xunit.Assert.Same(stream.FirstWrite, completed);
-        Assert.Contains("event: goal.snapshot", stream.Text);
-        cts.Cancel();
-        await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => streamTask);
+        var snapshotObserved = false;
+        try
+        {
+            var firstWrite = await TestHangGuard.WaitAsync(
+                stream.FirstWriteText, "initial goal.snapshot write before the first poll interval");
+            Assert.Contains("event: goal.snapshot", firstWrite);
+            snapshotObserved = true;
+        }
+        finally
+        {
+            cts.Cancel();
+            if (snapshotObserved)
+                await Xunit.Assert.ThrowsAnyAsync<OperationCanceledException>(() => streamTask);
+            else
+            {
+                try { await streamTask; }
+                catch { /* Preserve the missing-snapshot assertion after awaiting cleanup. */ }
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "Goal_monitoring_stream_emits_monitor_error_when_goal_disappears_during_repoll")]
@@ -1620,14 +1633,17 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     private sealed class RecordingStream : MemoryStream
     {
         private readonly TaskCompletionSource _firstWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string> _firstWriteText = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task FirstWrite => _firstWrite.Task;
+        public Task<string> FirstWriteText => _firstWriteText.Task;
 
         public string Text => Encoding.UTF8.GetString(ToArray());
 
         public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
             await base.WriteAsync(buffer, cancellationToken);
+            _firstWriteText.TrySetResult(Encoding.UTF8.GetString(buffer.Span));
             _firstWrite.TrySetResult();
         }
     }

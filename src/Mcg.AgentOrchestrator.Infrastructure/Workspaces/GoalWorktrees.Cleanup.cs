@@ -669,6 +669,11 @@ public static partial class GoalWorktrees
     }
 
     internal static GoalWorktreeDeleteResult DeleteDirectoryWithReason(string path)
+        => DeleteDirectoryWithReason(path, retryWait: null);
+
+    internal static GoalWorktreeDeleteResult DeleteDirectoryWithReason(
+        string path,
+        Action<string, int, TimeSpan>? retryWait)
     {
         var deletionPath = ToExtendedLengthPath(path);
         if (!Directory.Exists(deletionPath))
@@ -707,7 +712,10 @@ public static partial class GoalWorktrees
                     attemptedReadOnlyClear = true;
                 }
 
-                Thread.Sleep(delay);
+                if (retryWait is null)
+                    Thread.Sleep(delay);
+                else
+                    retryWait(path, attempt, delay);
                 delay += delay;
             }
         }
