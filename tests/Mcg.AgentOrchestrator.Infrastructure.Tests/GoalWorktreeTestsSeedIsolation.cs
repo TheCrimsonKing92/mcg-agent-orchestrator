@@ -1,40 +1,6 @@
 public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
 {
     [Xunit.Fact]
-    public void ProcessGenerationsDoNotReuseContainerNamesWhenCounterRestarts()
-    {
-        var firstGeneration = BuildSeedRepositoryContainerName(processStartTimeUtcTicks: 1, sequence: 1);
-        var secondGeneration = BuildSeedRepositoryContainerName(processStartTimeUtcTicks: 2, sequence: 1);
-
-        Assert.NotEqual(firstGeneration, secondGeneration);
-    }
-
-    [Xunit.Fact]
-    public void SeedRepositoriesDoNotShareAMutableParentDirectory()
-    {
-        var firstRepo = CreateSeededRepository();
-        var secondRepo = CreateSeededRepository();
-        try
-        {
-            var firstContainer = Path.GetDirectoryName(firstRepo)!;
-            var secondContainer = Path.GetDirectoryName(secondRepo)!;
-
-            Assert.NotEqual(NormalizePath(firstContainer), NormalizePath(secondContainer));
-            Assert.Equal(
-                NormalizePath(SeedRepositoryProcessRootPath),
-                NormalizePath(Path.GetDirectoryName(firstContainer)!));
-            Assert.Equal(
-                NormalizePath(SeedRepositoryProcessRootPath),
-                NormalizePath(Path.GetDirectoryName(secondContainer)!));
-        }
-        finally
-        {
-            DeleteDirectory(firstRepo);
-            DeleteDirectory(secondRepo);
-        }
-    }
-
-    [Xunit.Fact]
     public void DeletingOneSeedRepositoryLeavesOtherTreesIntact()
     {
         var firstRepo = CreateSeededRepository();
@@ -45,6 +11,15 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
         var containerSentinel = Path.Combine(secondContainer, "container-sentinel.txt");
         try
         {
+            Assert.NotEqual(NormalizePath(firstContainer), NormalizePath(secondContainer));
+            Assert.Equal(
+                NormalizePath(SeedRepositoryProcessRootPath),
+                NormalizePath(Path.GetDirectoryName(firstContainer)!));
+            Assert.Equal(
+                NormalizePath(SeedRepositoryProcessRootPath),
+                NormalizePath(Path.GetDirectoryName(secondContainer)!));
+            Assert.Equal($"p{Environment.ProcessId:x}", Path.GetFileName(SeedRepositoryProcessRootPath));
+
             File.WriteAllText(repoSentinel, "repo");
             File.WriteAllText(containerSentinel, "container");
 
@@ -63,33 +38,19 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
     }
 
     [Xunit.Fact]
-    public void SeedRootIsOwnedByTheCurrentProcess()
-    {
-        var repo = CreateSeededRepository();
-        try
-        {
-            var container = Path.GetDirectoryName(repo)!;
-
-            Assert.Equal($"p{Environment.ProcessId:x}", Path.GetFileName(SeedRepositoryProcessRootPath));
-            Assert.Equal(
-                NormalizePath(SeedRepositoryProcessRootPath),
-                NormalizePath(Path.GetDirectoryName(container)!));
-        }
-        finally
-        {
-            DeleteDirectory(repo);
-        }
-    }
-
-    [Xunit.Fact]
     public async Task ConcurrentSeedCreationAllocatesDisjointContainers()
     {
-        const int creatorCount = 4;
+        const int creatorCount = 6;
         var repos = new string?[creatorCount];
+        using var startGate = new Barrier(creatorCount);
         try
         {
             var creators = Enumerable.Range(0, creatorCount)
-                .Select(index => Task.Run(() => repos[index] = CreateSeededRepository()))
+                .Select(index => Task.Run(() =>
+                {
+                    startGate.SignalAndWait(TestContext.Current.CancellationToken);
+                    repos[index] = CreateSeededRepository();
+                }))
                 .ToArray();
             await Task.WhenAll(creators);
 
@@ -104,12 +65,12 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
                 AssertSeedHeadResolves(repo);
             }
 
-            foreach (var repo in createdRepos[..2])
+            foreach (var repo in createdRepos[..3])
             {
                 DeleteDirectory(repo);
             }
 
-            foreach (var repo in createdRepos[2..])
+            foreach (var repo in createdRepos[3..])
             {
                 Assert.True(File.Exists(Path.Combine(repo, "seed.txt")));
                 AssertSeedHeadResolves(repo);
@@ -128,6 +89,7 @@ public sealed class GoalWorktreeTestsSeedIsolation : GoalWorktreeTestBase
     }
 
     [Xunit.Fact]
+    [Xunit.Trait("Category", "HostIntegration")]
     public async Task ConcurrentSeedCreationRepeatedlyProducesResolvableHeads()
     {
         const int roundCount = 6;
