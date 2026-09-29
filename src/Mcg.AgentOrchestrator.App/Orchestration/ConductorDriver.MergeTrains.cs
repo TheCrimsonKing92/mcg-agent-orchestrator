@@ -32,7 +32,8 @@ internal sealed partial class ConductorDriver
         Action? onGateAdmitted = null,
         bool runGateInBackground = false,
         bool gateOnly = false,
-        bool landFromReceiptOnly = false)
+        bool landFromReceiptOnly = false,
+        string? expectedGateIdentity = null)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
@@ -63,7 +64,8 @@ internal sealed partial class ConductorDriver
         var trainKey = $"train:{string.Join('+', selectedGoalIds.Order(StringComparer.Ordinal))}";
         if (runGateInBackground)
         {
-            if (TryGetActiveCohortGateRun(selectedGoalIds, out var activeRun))
+            if (_groupedGateAttempts is null &&
+                TryGetActiveCohortGateRun(selectedGoalIds, out var activeRun))
             {
                 return InFlight(activeRun!);
             }
@@ -132,7 +134,22 @@ internal sealed partial class ConductorDriver
                 selection.Members[0].MainRevision,
                 workspace.TreeRevision,
                 manifest);
+            if (gateOnly && attempt == 0 && expectedGateIdentity is not null &&
+                identity.Value != expectedGateIdentity)
+                throw new InvalidOperationException("Grouped train gate identity changed before child execution.");
             var receipt = _mergeTrainAcceptanceStore.TryReadReceipt(identity.Value);
+            if (runGateInBackground && _groupedGateAttempts is not null)
+            {
+                var recovered = RecoverGroupedGateAttempt("train", selection.Members,
+                    selection.Members[0].MainRevision, workspace.TreeRevision,
+                    trainKey, receipt is not null);
+                if (recovered.Running is not null) return InFlight(recovered.Running);
+                if (recovered.DeadWithoutReceipt)
+                    receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
+                        $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}",
+                        identity, MergeTrainGateOutcome.InfrastructureFailure, _utcNow(), 0,
+                        ["infrastructure:grouped-gate-owner-dead"], null, []));
+            }
             if (receipt is null && landFromReceiptOnly)
             {
                 return Fallback("outcome=replay-miss receipt=none");
@@ -142,6 +159,14 @@ internal sealed partial class ConductorDriver
             {
                 if (runGateInBackground)
                 {
+                    if (_groupedGateAttempts is not null)
+                    {
+                        var ownedRun = StartGroupedGateAttempt("train", selection.Members,
+                            selection.Members[0].MainRevision, workspace.TreeRevision,
+                            manifest, identity.Value, trainKey, policy);
+                        onGateAdmitted?.Invoke();
+                        return InFlight(ownedRun);
+                    }
                     var run = new CohortGateRun(
                         _utcNow(), selectedGoalIds, $"train:{identity.Value}",
                         new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));

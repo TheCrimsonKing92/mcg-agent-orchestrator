@@ -1561,6 +1561,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
                     recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
                     cleanupHooks: context.CleanupHooks);
+                if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
+                    loopDriver.EnableOwnedGroupedGateAttempts();
                 var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
                     context.Workspace,
                     line =>
@@ -1890,8 +1892,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         goalId,
                         taskId),
                     runAcceptanceAttemptsInCurrentProcess: context.RunInjectedAcceptanceVerifierInCurrentProcess,
-                    recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
-                    cleanupHooks: context.CleanupHooks);
+                     recordDurableGoalBaseline: context.RecordDurableGoalBaseline,
+                     cleanupHooks: context.CleanupHooks);
+            if (!context.RunInjectedAcceptanceVerifierInCurrentProcess)
+                conductDriver.EnableOwnedGroupedGateAttempts();
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other

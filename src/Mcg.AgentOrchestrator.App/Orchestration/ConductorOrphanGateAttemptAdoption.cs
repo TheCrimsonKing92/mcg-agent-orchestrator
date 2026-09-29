@@ -41,6 +41,25 @@ internal static class ConductorOrphanGateAttemptAdoption
                IsForeignGeneration(attempt, currentGenerationId, isProcessAlive);
     }
 
+    internal static bool ShouldAdopt(
+        ConductorGroupedGateAttempt attempt,
+        int currentGenerationId,
+        Func<int, bool> isProcessAlive,
+        Func<string, bool> artifactExists)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        ArgumentNullException.ThrowIfNull(isProcessAlive);
+        ArgumentNullException.ThrowIfNull(artifactExists);
+        return string.Equals(attempt.Outcome, "Running", StringComparison.Ordinal) &&
+               attempt.ReconciledAt is null &&
+               !artifactExists(attempt.ResultPath) &&
+               !artifactExists(attempt.ExitCodePath) &&
+               attempt.OwnerProcessId > 0 &&
+               isProcessAlive(attempt.OwnerProcessId) &&
+               attempt.LaunchingGenerationId != currentGenerationId &&
+               !isProcessAlive(attempt.LaunchingGenerationId);
+    }
+
     /// <summary>
     /// True when the current generation has not already recorded itself as this attempt's adopter,
     /// so the adoption is written exactly once per generation rather than on every tick.
