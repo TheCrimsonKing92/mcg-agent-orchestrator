@@ -21,7 +21,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
 
         var result = RunProcessWithAmbientOverrides(
             Directory.GetCurrentDirectory(),
-            "pwsh",
+            TestPowerShell.Executable,
             ambientOverrides,
             "-NoProfile",
             "-Command",
@@ -456,7 +456,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
                 "-TaskMetadataSnapshot", _metadata,
                 "-TaskMetadataSnapshotSha256", _metadataDigest,
                 "-OutputDirectory", output]);
-            return RunProcess(Root, "pwsh", [.. arguments]);
+            return RunProcess(Root, TestPowerShell.Executable, [.. arguments]);
         }
 
         public void RefreshFirstJournalDigest()

@@ -115,7 +115,7 @@ public sealed class MtpTestRunnerScriptTestsCompilerBoundary
             }
             finally { if ($null -ne $script:compilerLock) { $script:compilerLock.Dispose() } }
             """.Replace("FAILURE_FLAG", compilerFails.ToString().ToLowerInvariant(), StringComparison.Ordinal);
-        var result = Run(sandbox, tempRoot, "pwsh", body);
+        var result = Run(sandbox, tempRoot, TestPowerShell.Executable, body);
         Xunit.Assert.Equal(0, result.ExitCode);
         using var output = JsonDocument.Parse(result.Stdout);
         if (compilerFails)
@@ -142,7 +142,7 @@ public sealed class MtpTestRunnerScriptTestsCompilerBoundary
         MtpTestRunnerScriptTests.ScriptSandbox sandbox, string tempRoot, string executable, string body, bool publishWinner = false)
     {
         var start = sandbox.SandboxPowerShellStartInfo();
-        start.FileName = executable;
+        start.FileName = TestPowerShell.ForTheoryToken(executable);
         start.Environment["TEMP"] = tempRoot;
         start.Environment["TMP"] = tempRoot;
         var module = Path.Combine(sandbox.Root, "scripts", "MtpTestRunner.psm1").Replace("'", "''", StringComparison.Ordinal);

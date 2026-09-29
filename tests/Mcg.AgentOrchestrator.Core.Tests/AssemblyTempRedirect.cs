@@ -245,6 +245,7 @@ internal static class AssemblyTempRedirect
         {
             Directory.CreateDirectory(Path.GetDirectoryName(handshakePath)!);
             File.WriteAllText(handshakePath, selectedRoot);
+            ChildControlOutputFlood.WriteIfRequested();
             var releasePath = Environment.GetEnvironmentVariable(ChildReleaseEnvironmentVariable);
             if (string.IsNullOrWhiteSpace(releasePath))
             {

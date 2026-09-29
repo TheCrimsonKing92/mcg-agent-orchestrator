@@ -325,7 +325,7 @@ public sealed class AcceptanceFailureCensusScriptTests
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = "pwsh",
+                FileName = TestPowerShell.Executable,
                 WorkingDirectory = Root,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
