@@ -11,6 +11,28 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
     private const int SecondChild = 92002;
 
     [Fact]
+    public void OwnedChildUsesConductorBuildStorageRootAfterEnvironmentScrub()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"grouped-launch-{Guid.NewGuid():N}");
+        var storageRoot = new DotnetBuildStorageRoot(Path.Combine(root, "build-storage"));
+        var attempt = new ConductorGroupedGateAttempt(
+            "attempt", "cohort", [], new string('a', 40), new string('b', 40),
+            "manifest", "identity", DateTimeOffset.UnixEpoch, 0, FirstGeneration,
+            Path.Combine(root, "attempt.json"), Path.Combine(root, "result.json"),
+            Path.Combine(root, "exit"), Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"), root, ConductorAutonomyPolicy.Permissive.ToJson());
+
+        var startInfo = ConductorGroupedGateAttemptCoordinator.BuildOwnedProcessStartInfo(
+            attempt, storageRoot, "dotnet", ["app.dll"]);
+
+        Assert.Equal(storageRoot.RootPath,
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable]);
+        Assert.Equal(ConductorGroupedGateAttemptCoordinator.OwnedProcessSubcommandName,
+            startInfo.ArgumentList[1]);
+        Assert.Equal(attempt.MetadataPath, startInfo.ArgumentList[2]);
+    }
+
+    [Fact]
     public void ReconciledLaunchCannotBeClaimedByLateChild()
     {
         var root = Path.Combine(Path.GetTempPath(), $"grouped-claim-{Guid.NewGuid():N}");
@@ -181,6 +203,49 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
             }
             Assert.All(goals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
             Assert.Equal(0, launches);
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AdoptedAttemptIsNotReinspectedAfterMainMoves(bool train)
+    {
+        var (repo, kernel, goals) = CreateReadyMembers(train ? 3 : 2);
+        var cleanup = CreateIsolatedCleanupContext(repo);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var first = CreateDriver(kernel, workspace, new SequenceAcceptanceVerifier([]), cleanup.Hooks);
+            first.EnableOwnedGroupedGateAttempts(Coordinator(workspace, FirstGeneration,
+                _ => new ConductorGroupedGateLaunchResult(FirstChild, DateTimeOffset.UnixEpoch, "C:\\dotnet.exe"),
+                pid => pid == FirstChild));
+            Run(first, goals, train ? null : ProjectSelection(first, goals[0], goals[1]),
+                train ? ProjectTrainSelection(first, goals) : null);
+            var record = Assert.Single(Records(workspace));
+
+            var stops = 0;
+            var launches = 0;
+            var events = new List<string>();
+            var second = CreateDriver(kernel, workspace, new SequenceAcceptanceVerifier([]), cleanup.Hooks);
+            second.EnableOwnedGroupedGateAttempts(Coordinator(workspace, SecondGeneration,
+                _ => { launches++; return new ConductorGroupedGateLaunchResult(SecondChild, null, null); },
+                pid => pid == FirstChild,
+                _ => { stops++; return true; }, events.Add));
+            Assert.Equal(goals.Length, second.GetActiveCohortGateMemberGoalIds().Count);
+            Assert.Equal(SecondGeneration,
+                ConductorGroupedGateAttemptCoordinator.Read(record.MetadataPath).AdoptedByGenerationId);
+
+            File.WriteAllText(Path.Combine(repo, "unrelated-main-change.txt"), "new main revision");
+            RunGit(repo, "add", "unrelated-main-change.txt");
+            RunGit(repo, "commit", "-m", "Move main after grouped gate adoption");
+            Assert.Equal(goals.Length, second.GetActiveCohortGateMemberGoalIds().Count);
+            Assert.Equal(goals.Length, second.GetActiveCohortGateMemberGoalIds().Count);
+            Assert.Equal(0, stops);
+            Assert.Equal(0, launches);
+            Assert.Single(events, line => line.StartsWith("ACCEPTANCE_COHORT_ADOPTED ", StringComparison.Ordinal));
+            Assert.Null(ConductorGroupedGateAttemptCoordinator.Read(record.MetadataPath).ReconciledAt);
         }
         finally { DeleteDirectory(repo); }
     }

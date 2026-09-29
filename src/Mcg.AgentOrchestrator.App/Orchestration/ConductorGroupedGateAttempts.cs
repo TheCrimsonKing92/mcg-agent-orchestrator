@@ -65,6 +65,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     private readonly Func<ConductorGroupedGateAttempt, bool> _stop;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Action<string>? _event;
+    private readonly DotnetBuildStorageRoot _buildStorageRoot;
 
     internal int GenerationId { get; }
 
@@ -75,7 +76,8 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         Func<int, bool>? isProcessAlive = null,
         Func<ConductorGroupedGateAttempt, bool>? stop = null,
         Func<DateTimeOffset>? utcNow = null,
-        Action<string>? eventSink = null)
+        Action<string>? eventSink = null,
+        DotnetBuildStorageRoot? buildStorageRoot = null)
     {
         _root = root;
         GenerationId = generationId ?? Environment.ProcessId;
@@ -84,6 +86,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         _stop = stop ?? StopIdentityRevalidated;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _event = eventSink;
+        _buildStorageRoot = buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
     }
 
     internal IEnumerable<ConductorGroupedGateAttempt> ReadAll() =>
@@ -315,23 +318,9 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         return WorkerProcessJobs.TryKillOrFallback(attempt.OwnerProcessId);
     }
 
-    private static ConductorGroupedGateLaunchResult LaunchOwnedProcess(ConductorGroupedGateAttempt attempt)
+    private ConductorGroupedGateLaunchResult LaunchOwnedProcess(ConductorGroupedGateAttempt attempt)
     {
-        var executable = Environment.ProcessPath ?? "dotnet";
-        var startInfo = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = attempt.ExecutionDirectory,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-            startInfo.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
-        startInfo.ArgumentList.Add(OwnedProcessSubcommandName);
-        startInfo.ArgumentList.Add(attempt.MetadataPath);
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, attempt.ExecutionDirectory);
+        var startInfo = BuildOwnedProcessStartInfo(attempt, _buildStorageRoot);
         var process = ProcessTreeGuiSuppression.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start grouped acceptance gate child.");
         var processId = process.Id;
@@ -371,6 +360,34 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         }
         catch (InvalidOperationException) { }
         return result;
+    }
+
+    internal static ProcessStartInfo BuildOwnedProcessStartInfo(
+        ConductorGroupedGateAttempt attempt,
+        DotnetBuildStorageRoot buildStorageRoot,
+        string? executable = null,
+        IReadOnlyList<string>? commandLineArgs = null)
+    {
+        executable ??= Environment.ProcessPath ?? "dotnet";
+        commandLineArgs ??= Environment.GetCommandLineArgs();
+        var startInfo = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = attempt.ExecutionDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+            commandLineArgs.Count > 0)
+            startInfo.ArgumentList.Add(commandLineArgs[0]);
+        startInfo.ArgumentList.Add(OwnedProcessSubcommandName);
+        startInfo.ArgumentList.Add(attempt.MetadataPath);
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, attempt.ExecutionDirectory);
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            buildStorageRoot.RootPath;
+        return startInfo;
     }
 
     private static void Append(string path, string? line)

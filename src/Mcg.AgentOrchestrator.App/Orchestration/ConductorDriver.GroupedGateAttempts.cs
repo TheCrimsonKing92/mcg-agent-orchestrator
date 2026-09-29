@@ -16,7 +16,8 @@ internal sealed partial class ConductorDriver
         _groupedGateAttempts = coordinator ?? new ConductorGroupedGateAttemptCoordinator(
             Path.Combine(_cohortWorkspace.OrchestratorDirectory, "grouped-gate-attempts"),
             eventSink: line => new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath)
-                .Append("acceptance-cohort", null, line));
+                .Append("acceptance-cohort", null, line),
+            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
     }
 
     // The durable record is inspected before a caller reads a receipt. A child may write the primary
@@ -59,7 +60,10 @@ internal sealed partial class ConductorDriver
                 }
             }
 
-            if (difference is not null && coordinator.ShouldAdopt(attempt))
+            // This generation checked the identity at adoption. Keep its live gate fenced
+            // until the child publishes a result, even if the selection later moves.
+            if (attempt.AdoptedByGenerationId != coordinator.GenerationId &&
+                difference is not null && coordinator.ShouldAdopt(attempt))
             {
                 if (coordinator.Refuse(attempt, difference))
                 {
@@ -68,7 +72,8 @@ internal sealed partial class ConductorDriver
                 }
                 // Inspection failure is not permission to run a second gate beside a live owner.
             }
-            else if (difference is null && coordinator.ShouldAdopt(attempt))
+            else if (attempt.AdoptedByGenerationId != coordinator.GenerationId &&
+                difference is null && coordinator.ShouldAdopt(attempt))
             {
                 attempt = coordinator.Adopt(attempt);
             }
@@ -154,7 +159,8 @@ internal sealed partial class ConductorDriver
                     !coordinator.IsAlive(attempt.OwnerProcessId))
                     continue;
                 var current = attempt;
-                if (coordinator.ShouldAdopt(current))
+                if (current.AdoptedByGenerationId != coordinator.GenerationId &&
+                    coordinator.ShouldAdopt(current))
                 {
                     var identity = InspectRestoredGroupedGateIdentity(current);
                     if (identity.Known && identity.Difference is { } difference)
