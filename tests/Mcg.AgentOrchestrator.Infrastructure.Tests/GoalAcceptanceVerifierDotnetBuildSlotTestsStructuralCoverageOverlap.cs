@@ -6,18 +6,19 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverageOverlap : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Fact]
-    public async Task TrustedPreparationCompletesWhileBothLanesAreHeld()
+    public async Task TrustedPreparationCompletesForEveryProjectWhileAllLanesAreHeld()
     {
-        var (root, mainRoot) = CreateWorkspace();
+        var (root, mainRoot) = CreateWorkspace(includeCore: true);
         var goalId = GoalId.New();
         var releaseLanes = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var bothLanesStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var baselineDiscovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allLanesStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var baselinesDiscovered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var preparationFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var events = new ConcurrentQueue<string>();
         var progress = new ConcurrentQueue<AcceptanceGateProgress>();
         var laneStarts = 0;
         var laneFinishes = 0;
+        var baselineDiscoveryCount = 0;
         TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
         TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
@@ -37,7 +38,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
                 if (arguments.Length > 1 && arguments[0] == "dotnet" && arguments[1] == "build")
                 {
                     if (worktree == mainRoot)
-                        events.Enqueue("main-build");
+                        events.Enqueue($"main-build:{CoverageProjectName(arguments)}");
                     else
                         WriteCandidateBuildArtifacts(arguments);
                     return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
@@ -46,20 +47,30 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
                 if (arguments.Contains("--list-tests", StringComparer.OrdinalIgnoreCase))
                 {
                     if (worktree == root)
-                        await bothLanesStarted.Task.WaitAsync(token);
+                        await allLanesStarted.Task.WaitAsync(token);
                     Assert.Equal(0, Volatile.Read(ref laneFinishes));
-                    events.Enqueue(worktree == mainRoot ? "main-discovery" : "candidate-discovery");
-                    if (worktree == mainRoot)
-                        baselineDiscovered.TrySetResult();
+                    var project = CoverageProjectName(arguments);
+                    events.Enqueue($"{(worktree == mainRoot ? "main" : "candidate")}-discovery:{project}");
+                    if (worktree == mainRoot && Interlocked.Increment(ref baselineDiscoveryCount) == 2)
+                        baselinesDiscovered.TrySetResult();
                     return new GoalAcceptanceVerifier.CommandResult(0,
-                        "DISCOVERED_TEST:AlphaShardTests.Passes\nDISCOVERED_TEST:BetaShardTests.Passes");
+                        project == "Core"
+                            ? "DISCOVERED_TEST:CoreShardTests.Passes"
+                            : "DISCOVERED_TEST:AlphaShardTests.Passes\nDISCOVERED_TEST:BetaShardTests.Passes");
+                }
+
+                if (IsMtpExecutableCall(arguments, "Mcg.AgentOrchestrator.Core.Tests"))
+                {
+                    WriteMtpTrx(arguments, 1, ["CoreShardTests.Passes"]);
+                    events.Enqueue("core-check-complete");
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
                 }
 
                 if (IsMtpExecutableCall(arguments, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
                     var number = Interlocked.Increment(ref laneStarts);
                     if (number == 2)
-                        bothLanesStarted.TrySetResult();
+                        allLanesStarted.TrySetResult();
                     events.Enqueue($"lane-start-{number}");
                     await releaseLanes.Task.WaitAsync(token);
                     var alpha = arguments.Any(argument => argument.Contains("AlphaShardTests", StringComparison.Ordinal));
@@ -78,14 +89,26 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
             var run = verifier.RunOwnedAsync(root, goalId, changedFiles: ["src/Sample.cs"],
                 stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath), stableSlotLease: lease,
                 CancellationToken.None, new AcceptanceRunExecutionOptions(ProgressSink: progress.Enqueue));
-            await Task.WhenAll(bothLanesStarted.Task, baselineDiscovered.Task, preparationFinished.Task)
+            await Task.WhenAll(allLanesStarted.Task, baselinesDiscovered.Task, preparationFinished.Task)
                 .WaitAsync(TimeSpan.FromSeconds(15));
             Assert.Equal(0, Volatile.Read(ref laneFinishes));
             var beforeRelease = events.ToArray();
-            Assert.Contains("candidate-discovery", beforeRelease);
-            Assert.Contains("main-build-hook", beforeRelease);
-            Assert.Contains("main-build", beforeRelease);
-            Assert.Contains("main-discovery", beforeRelease);
+            Assert.Contains("core-check-complete", beforeRelease);
+            foreach (var project in new[] { "Core", "Infrastructure" })
+            {
+                Assert.Contains($"candidate-discovery:{project}", beforeRelease);
+                Assert.Contains($"main-build:{project}", beforeRelease);
+                Assert.Contains($"main-discovery:{project}", beforeRelease);
+            }
+            Assert.Equal(2, beforeRelease.Count(item => item == "main-build-hook"));
+            var preparationEvents = beforeRelease.Where(item =>
+                item.StartsWith("candidate-discovery:", StringComparison.Ordinal) ||
+                item.StartsWith("main-build:", StringComparison.Ordinal) ||
+                item.StartsWith("main-discovery:", StringComparison.Ordinal)).ToArray();
+            Assert.Equal([
+                "candidate-discovery:Core", "main-build:Core", "main-discovery:Core",
+                "candidate-discovery:Infrastructure", "main-build:Infrastructure", "main-discovery:Infrastructure"
+            ], preparationEvents);
             Assert.DoesNotContain("coverage-phase", beforeRelease);
             releaseLanes.TrySetResult();
             var result = await run.WaitAsync(TimeSpan.FromSeconds(15));
@@ -145,11 +168,30 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
             Assert.Equal(expected.FailureClassification, actual.FailureClassification);
             Assert.Equal(expected.MissingTests, actual.MissingTests);
             Assert.Equal(expected.EmptyPartitions, actual.EmptyPartitions);
-            Assert.Equal(scenario == "passing", actual.Passed);
-            if (scenario == "missing")
-                Assert.Contains("Sample.Tests.Missing", actual.MissingTests);
-            if (scenario == "empty")
-                Assert.Contains("partition", actual.EmptyPartitions);
+            // These literals pin the pre-split coverage result, independently of EvaluateAsync.
+            var (passed, summary, classification, missing, empty) = scenario switch
+            {
+                "passing" => (true,
+                    "structural coverage complete: discovered=1, executed=1, recorded=1, partitions=1",
+                    (string?)null, Array.Empty<string>(), Array.Empty<string>()),
+                "missing" => (false,
+                    "structural coverage failed: discovered=2, executed=1, recorded=1, missing=1, emptyPartitions=0",
+                    AcceptanceFailureClassifications.StructuralCoverageFailed,
+                    new[] { "Sample.Tests.Missing" }, Array.Empty<string>()),
+                "empty" => (false,
+                    "structural coverage failed: discovered=1, executed=0, recorded=0, missing=1, emptyPartitions=1",
+                    AcceptanceFailureClassifications.StructuralCoverageFailed,
+                    new[] { "Sample.Tests.Passes" }, new[] { "partition" }),
+                _ => throw new ArgumentOutOfRangeException(nameof(scenario))
+            };
+            foreach (var coverage in new[] { expected, actual })
+            {
+                Assert.Equal(passed, coverage.Passed);
+                Assert.Equal(summary, coverage.Summary);
+                Assert.Equal(classification, coverage.FailureClassification);
+                Assert.Equal(missing, coverage.MissingTests);
+                Assert.Equal(empty, coverage.EmptyPartitions);
+            }
         }
         finally
         {
@@ -242,9 +284,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
         }
     }
 
-    private static (string CandidateRoot, string MainRoot) CreateWorkspace()
+    private static (string CandidateRoot, string MainRoot) CreateWorkspace(bool includeCore = false)
     {
-        var candidateRoot = CreateManifestWorkspace("""
+        var coreInvocation = includeCore ? """
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": ["{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}"]
+                  },
+            """ : string.Empty;
+        var coreCheck = includeCore
+            ? """{ "name": "core tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj" },"""
+            : string.Empty;
+        var candidateRoot = CreateManifestWorkspace($$"""
             {
               "version": 1,
               "engine": {
@@ -255,6 +308,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
                   { "name": "Beta", "filter": "FullyQualifiedName~BetaShardTests" }
                 ],
                 "mtpInvocations": [
+                  {{coreInvocation}}
                   {
                     "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                     "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
@@ -264,6 +318,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
                 ]
               },
               "checks": [
+                {{coreCheck}}
                 { "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj" }
               ],
               "forbiddenChangedPathGlobs": []
@@ -272,21 +327,37 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
         var mainRoot = Path.Combine(Path.GetTempPath(), "mcg-acceptance-main", Guid.NewGuid().ToString("N"));
         foreach (var root in new[] { candidateRoot, mainRoot })
         {
-            var project = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests",
-                "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
-            Directory.CreateDirectory(Path.GetDirectoryName(project)!);
-            File.WriteAllText(project, "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+            var projectNames = includeCore
+                ? new[] { "Mcg.AgentOrchestrator.Core.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests" }
+                : ["Mcg.AgentOrchestrator.Infrastructure.Tests"];
+            foreach (var projectName in projectNames)
+            {
+                var project = Path.Combine(root, "tests", projectName, projectName + ".csproj");
+                Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+                File.WriteAllText(project, "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+            }
         }
         return (candidateRoot, mainRoot);
     }
 
     private static void WriteCandidateBuildArtifacts(string[] arguments)
     {
-        var projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
-        var outputDirectory = Path.Combine(GetArtifactsPath(arguments), "bin", projectName, "debug");
-        Directory.CreateDirectory(outputDirectory);
-        File.WriteAllText(Path.Combine(outputDirectory,
-            projectName + (OperatingSystem.IsWindows() ? ".exe" : string.Empty)), "fixture");
-        File.WriteAllText(Path.Combine(outputDirectory, projectName + ".dll"), "fixture");
+        foreach (var projectName in new[] { "Mcg.AgentOrchestrator.Core.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests" })
+        {
+            var outputDirectory = Path.Combine(GetArtifactsPath(arguments), "bin", projectName, "debug");
+            Directory.CreateDirectory(outputDirectory);
+            File.WriteAllText(Path.Combine(outputDirectory,
+                projectName + (OperatingSystem.IsWindows() ? ".exe" : string.Empty)), "fixture");
+            File.WriteAllText(Path.Combine(outputDirectory, projectName + ".dll"), "fixture");
+        }
+    }
+
+    private static string CoverageProjectName(string[] arguments)
+    {
+        if (arguments.Any(argument => argument.Contains("Mcg.AgentOrchestrator.Core.Tests", StringComparison.OrdinalIgnoreCase)))
+            return "Core";
+        if (arguments.Any(argument => argument.Contains("Mcg.AgentOrchestrator.Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)))
+            return "Infrastructure";
+        throw new InvalidOperationException("Coverage command did not identify a trusted test project.");
     }
 }
