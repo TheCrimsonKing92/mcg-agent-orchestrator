@@ -11,10 +11,11 @@ internal sealed class SystemOrphanFixtureReaperSources(
         .Select(path => Path.GetDirectoryName(path)!)
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     private readonly IReadOnlyList<string> _testRoots = TempRootJanitor.GetStandardSharedRoots();
+    private const string SupervisorDirectory = "continuity";
 
     public IReadOnlyList<string> SharedTestRoots => _testRoots;
     public IReadOnlyList<string> EvidenceRoots =>
-        [.. _testRoots, Path.Combine(Path.GetTempPath(), "mcg-run", "tmp")];
+        [.. _testRoots, OrchestratorTempRoot.GetParent()];
 
     public string? ReadPolicyJson()
     {
@@ -49,11 +50,11 @@ internal sealed class SystemOrphanFixtureReaperSources(
             catch (FileNotFoundException) { continue; }
             using (stream)
             {
-            using var reader = new StreamReader(stream);
-            if (!int.TryParse(reader.ReadLine(), NumberStyles.None, CultureInfo.InvariantCulture,
-                    out var pid) || pid <= 0)
-                throw new InvalidDataException($"Invalid conductor lock: {path}");
-            pids.Add(pid);
+                using var reader = new StreamReader(stream);
+                if (!int.TryParse(reader.ReadLine(), NumberStyles.None, CultureInfo.InvariantCulture,
+                        out var pid) || pid <= 0)
+                    throw new InvalidDataException($"Invalid conductor lock: {path}");
+                pids.Add(pid);
             }
         }
         return pids;
@@ -64,7 +65,7 @@ internal sealed class SystemOrphanFixtureReaperSources(
         var pids = new HashSet<int>();
         foreach (var directory in _storeDirectories)
         {
-            var path = Path.Combine(directory, "conduct-supervisor.lock");
+            var path = Path.Combine(directory, SupervisorDirectory, "conduct-supervisor.lock");
             string json;
             try { json = File.ReadAllText(path); }
             catch (FileNotFoundException) { continue; }

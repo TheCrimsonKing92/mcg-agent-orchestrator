@@ -123,6 +123,47 @@ public sealed class OrphanFixtureReaperTests
         Assert.Equal([51], fake.Stopped);
     }
 
+    [Xunit.Fact]
+    public void Commented_policy_without_setting_enables_reaper()
+    {
+        var fake = Fixture();
+        var process = Process(52, 999, Now.AddMinutes(-20));
+        fake.Add(process);
+        fake.Roots.Add(Root(process));
+        fake.PolicyJson = "{ // policy comment\n \"acceptanceWidth\": 2 }";
+
+        Assert.Contains(Run(fake), line => line.StartsWith(
+            "SWEEP_ORPHAN_FIXTURE_REAPED pid=52", StringComparison.Ordinal));
+        Assert.Equal([52], fake.Stopped);
+    }
+
+    [Xunit.Fact]
+    public void System_sources_read_supervisor_lease_from_continuity_directory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "orphan-reaper-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(directory, "continuity"));
+            File.WriteAllText(Path.Combine(directory, "continuity", "conduct-supervisor.lock"),
+                "{\"Process\":{\"ProcessId\":4242}}");
+            var sources = new SystemOrphanFixtureReaperSources(directory,
+                [Path.Combine(directory, "state.db")]);
+
+            Assert.Contains(4242, sources.ReadSupervisorPids());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Store_discovery_failure_is_reported_without_escaping_sweep_step()
+    {
+        Assert.Contains(TerminalGoalSweep.ReapOrphanFixtures("\0"), line =>
+            line.StartsWith("SWEEP_ORPHAN_FIXTURE_SKIPPED reason=protection-source-unavailable source=shared-store-discovery", StringComparison.Ordinal));
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("conductor-lock")]
     [Xunit.InlineData("supervisor-lease")]

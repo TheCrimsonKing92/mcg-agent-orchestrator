@@ -2,9 +2,18 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class TerminalGoalSweep
 {
-    private static IReadOnlyList<string> ReapOrphanFixtures(string stateDbPath)
+    internal static IReadOnlyList<string> ReapOrphanFixtures(string stateDbPath)
     {
-        var sharedStores = GetSharedGoalStorePaths(stateDbPath, out var failure);
+        IReadOnlyList<string>? sharedStores;
+        string? failure;
+        try
+        {
+            sharedStores = GetSharedGoalStorePaths(stateDbPath, out failure);
+        }
+        catch (Exception ex)
+        {
+            return [$"SWEEP_ORPHAN_FIXTURE_SKIPPED reason=protection-source-unavailable source=shared-store-discovery error={ex.GetType().Name}"];
+        }
         if (sharedStores is null)
             return failure is null ? [] :
                 ["SWEEP_ORPHAN_FIXTURE_SKIPPED reason=protection-source-unavailable source=shared-store-discovery"];

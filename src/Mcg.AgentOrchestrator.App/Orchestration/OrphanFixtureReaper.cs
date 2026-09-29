@@ -115,7 +115,8 @@ internal sealed class OrphanFixtureReaper(IOrphanFixtureReaperSources sources, T
     private static bool? ParseEnabled(string? json)
     {
         if (json is null) return true;
-        using var document = JsonDocument.Parse(json);
+        using var document = JsonDocument.Parse(json,
+            new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
         if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
         if (!document.RootElement.TryGetProperty("orphanFixtureReaperEnabled", out var value)) return true;
         return value.ValueKind switch
