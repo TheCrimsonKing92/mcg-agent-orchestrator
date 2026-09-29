@@ -2115,17 +2115,8 @@ public sealed class AcceptanceGateEngineSettingsTests
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var attemptPrefix = Path.Combine(root, ".orchestrator", "heartbeat-rerun-attempt");
         var invocation = 0;
-        var sleeperStartInfo = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "powershell",
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        sleeperStartInfo.ArgumentList.Add("-NoProfile");
-        sleeperStartInfo.ArgumentList.Add("-Command");
-        sleeperStartInfo.ArgumentList.Add("Start-Sleep -Seconds 30");
-        using var sleeper = System.Diagnostics.Process.Start(sleeperStartInfo)
-            ?? throw new InvalidOperationException("Failed to start heartbeat child process.");
+        var child = new GoalAcceptanceVerifierTestsGateChildReap.FakeGateChildReapSeam();
+        TestOverrides.GateChildReapSeamForTests = child;
         TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-heartbeat-rerun";
         TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-heartbeat-rerun";
         TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-heartbeat-rerun";
@@ -2156,8 +2147,8 @@ public sealed class AcceptanceGateEngineSettingsTests
                             "verification-check",
                             checkName,
                             null,
-                            sleeper.Id,
-                            sleeper.Id,
+                            child.ProcessId,
+                            child.ProcessId,
                             "completed",
                             DateTimeOffset.UtcNow,
                             DateTimeOffset.UtcNow,
@@ -2170,7 +2161,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 else
                 {
                     Xunit.Assert.True(
-                        sleeper.HasExited,
+                        child.Waited && child.ExitConfirmed,
                         "Previous invocation heartbeat child remained alive before the later same-named check ran.");
                 }
 
@@ -2198,11 +2189,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
         finally
         {
-            if (!sleeper.HasExited)
-            {
-                sleeper.Kill(entireProcessTree: true);
-                sleeper.WaitForExit();
-            }
+            TestOverrides.GateChildReapSeamForTests = null;
             Environment.SetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
                 previousPrefix);

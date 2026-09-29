@@ -31,6 +31,8 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
     internal DotnetBuildStorageRoot? BuildStorageRootForTests { get; set; }
     internal IWorkerIntegrityLabeler? BaselineIntegrityLabelerForTests { get; set; }
+    internal TimeSpan? GateChildExitConfirmationBudget { get; set; }
+    internal IGateChildReapSeam? GateChildReapSeamForTests { get; set; }
 
     internal GoalAcceptanceVerifierTestOverrides Snapshot() => new()
     {
@@ -62,6 +64,8 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         PartitionVerdictWithinAttemptRerunEnabled = PartitionVerdictWithinAttemptRerunEnabled,
         BaseBuildCacheForTests = BaseBuildCacheForTests,
         BuildStorageRootForTests = BuildStorageRootForTests,
-        BaselineIntegrityLabelerForTests = BaselineIntegrityLabelerForTests
+        BaselineIntegrityLabelerForTests = BaselineIntegrityLabelerForTests,
+        GateChildExitConfirmationBudget = GateChildExitConfirmationBudget,
+        GateChildReapSeamForTests = GateChildReapSeamForTests
     };
 }

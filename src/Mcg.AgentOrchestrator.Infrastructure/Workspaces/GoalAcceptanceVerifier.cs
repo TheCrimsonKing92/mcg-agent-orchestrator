@@ -2348,7 +2348,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 CompletionDecision = rerunDecision,
                 FailureClassification = rerun.Result.FailureClassification ?? rerunDecision.FailedPredicate
             };
-            fresh = (cacheContext.SelectPartitionVerdict(check, original, rerunResult), true);
+            fresh = (DecorateVerdictWithGateChildReap(
+                cacheContext.SelectPartitionVerdict(check, original, rerunResult), rerunResult), true);
         }
 
         cacheContext?.RecordExecution(check, fresh.Result);
@@ -4284,7 +4285,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }, buildRun.Run.Retried || testRun.Retried);
     }
 
-    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedMtpExecutableCheckAsync(
+    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedMtpExecutableCheckCoreAsync(
         AcceptanceManifestCheck check,
         string worktreePath,
         GoalId? goalId,
@@ -4691,7 +4692,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(environment, ct, _timeProvider, _leaseSleep,
             _executionContext?.ArtifactCustody);
 
-    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetCheckAsync(
+    private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetCheckCoreAsync(
         AcceptanceManifestCheck check,
         string[] arguments,
         string worktreePath,
@@ -5529,105 +5530,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             (string.IsNullOrWhiteSpace(holder.ProcessName) ||
                 holder.ProcessName.Equals("unknown", StringComparison.OrdinalIgnoreCase) ||
                 holder.ProcessName.Equals("unknown-probe-timeout", StringComparison.OrdinalIgnoreCase)));
-
-    private void ReapRecordedGateChildBeforeManagedDotnetCommand(
-        AcceptanceManifestCheck check,
-        DotnetBuildEnvironment environment,
-        GoalId? goalId,
-        int? stableSlotIndex)
-    {
-        foreach (var heartbeatPath in ResolveGateHeartbeatPathsForReap(check, environment, stableSlotIndex))
-        {
-            if (TryReapRecordedGateChild(heartbeatPath, environment, goalId, stableSlotIndex))
-            {
-                return;
-            }
-        }
-    }
-
-    private IEnumerable<string> ResolveGateHeartbeatPathsForReap(
-        AcceptanceManifestCheck check,
-        DotnetBuildEnvironment environment,
-        int? stableSlotIndex)
-    {
-        yield return ResolveGateHeartbeatPath(check, environment, stableSlotIndex, worktreePath: null);
-
-        if (string.IsNullOrWhiteSpace(AcceptanceAttemptResultsPrefix) ||
-            _invocationContext is not { Ordinal: > 0 } invocation)
-        {
-            yield break;
-        }
-
-        for (var ordinal = invocation.Ordinal - 1; ordinal >= 0; ordinal--)
-        {
-            yield return ResolveGateHeartbeatPath(
-                check,
-                environment,
-                stableSlotIndex,
-                worktreePath: null,
-                invocationOrdinal: ordinal);
-        }
-    }
-
-    private static bool TryReapRecordedGateChild(
-        string heartbeatPath,
-        DotnetBuildEnvironment environment,
-        GoalId? goalId,
-        int? stableSlotIndex)
-    {
-        if (!File.Exists(heartbeatPath))
-        {
-            return false;
-        }
-
-        GateHeartbeatSnapshot? snapshot;
-        try
-        {
-            snapshot = JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
-                File.ReadAllText(heartbeatPath),
-                new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (snapshot?.ChildPid is not { } childPid)
-        {
-            return false;
-        }
-
-        if (stableSlotIndex.HasValue && snapshot.SlotIndex != stableSlotIndex)
-        {
-            return false;
-        }
-
-        if (goalId is not null &&
-            !string.IsNullOrWhiteSpace(snapshot.GoalId) &&
-            !snapshot.GoalId.Equals(goalId.Value, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (!snapshot.State.Equals("running", StringComparison.OrdinalIgnoreCase) &&
-            DateTimeOffset.UtcNow - snapshot.LastObservedAt > TimeSpan.FromMinutes(5))
-        {
-            return false;
-        }
-
-        if (snapshot.CommandLine is not null &&
-            !snapshot.CommandLine.Contains(environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (!IsProcessRunning(childPid))
-        {
-            return false;
-        }
-
-        return WorkerProcessJobs.TryKillRecordedOwnedChildAndWait(childPid, TimeSpan.FromSeconds(5));
-    }
 
     private static bool IsProcessRunning(int processId)
     {
