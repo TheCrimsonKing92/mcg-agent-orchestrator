@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal interface IGateChildReapSeam
 {
-    IRecordedGateChild? TryOpen(int processId, DateTimeOffset recordedStartedAt);
+    IRecordedGateChild? TryOpen(int processId, DateTimeOffset recordedStartedAt, DateTimeOffset recordedLastObservedAt);
 }
 
 internal interface IRecordedGateChild : IDisposable
@@ -18,13 +18,14 @@ internal sealed class DefaultGateChildReapSeam : IGateChildReapSeam
 {
     internal static readonly DefaultGateChildReapSeam Instance = new();
 
-    public IRecordedGateChild? TryOpen(int processId, DateTimeOffset recordedStartedAt)
+    public IRecordedGateChild? TryOpen(int processId, DateTimeOffset recordedStartedAt, DateTimeOffset recordedLastObservedAt)
     {
         Process? process = null;
         try
         {
             process = Process.GetProcessById(processId);
-            if (process.HasExited || !IsRecordedChild(process.StartTime.ToUniversalTime(), recordedStartedAt))
+            if (process.HasExited || !IsRecordedChild(
+                    process.StartTime.ToUniversalTime(), recordedStartedAt, recordedLastObservedAt))
             {
                 process.Dispose();
                 return null;
@@ -39,8 +40,10 @@ internal sealed class DefaultGateChildReapSeam : IGateChildReapSeam
         }
     }
 
-    internal static bool IsRecordedChild(DateTime processStartUtc, DateTimeOffset recordedStartedAt) =>
-        recordedStartedAt != default && processStartUtc <= recordedStartedAt.UtcDateTime;
+    internal static bool IsRecordedChild(
+        DateTime processStartUtc, DateTimeOffset recordedStartedAt, DateTimeOffset recordedLastObservedAt) =>
+        recordedStartedAt != default && recordedLastObservedAt >= recordedStartedAt &&
+        processStartUtc <= recordedLastObservedAt.UtcDateTime;
 
     private sealed class RecordedGateChild(Process process) : IRecordedGateChild
     {

@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
-    private const string CheckName = "core tests";
+    private const string CheckName = "infrastructure tests: Remainder";
     private static readonly GoalId Goal = new("c0dec0dec0dec0dec0dec0dec0dec0de");
 
     internal sealed class FakeGateChildReapSeam : IGateChildReapSeam, IRecordedGateChild
@@ -17,11 +17,12 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
         internal TimeSpan? WaitBudget { get; private set; }
         internal List<string> Events { get; } = [];
 
-        public IRecordedGateChild? TryOpen(int processId, DateTimeOffset recordedStartedAt)
+        public IRecordedGateChild? TryOpen(int processId, DateTimeOffset recordedStartedAt, DateTimeOffset recordedLastObservedAt)
         {
             Events.Add("open");
             Assert.Equal(ProcessId, processId);
             Assert.NotEqual(default, recordedStartedAt);
+            Assert.True(recordedLastObservedAt >= recordedStartedAt);
             return Available ? this : null;
         }
 
@@ -53,7 +54,7 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
         Assert.Equal(2, invocations);
         Assert.Equal(["open", "kill", "wait", "invocation-1"], fake.Events);
         Assert.Equal(TimeSpan.FromSeconds(30), fake.WaitBudget);
-        Assert.Single(output.Split('\n'), line => line.Contains("GATE_CHILD_REAP check=\"core tests\" pid=424242 outcome=reaped reason=exit-confirmed", StringComparison.Ordinal));
+        Assert.Single(output.Split('\n'), line => line.Contains("GATE_CHILD_REAP check=\"infrastructure tests: Remainder\" pid=424242 outcome=reaped reason=exit-confirmed", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
@@ -110,8 +111,12 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
     public void RecordedStartTimeRejectsReusedPid()
     {
         var heartbeatStart = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        Assert.False(DefaultGateChildReapSeam.IsRecordedChild(heartbeatStart.UtcDateTime.AddSeconds(1), heartbeatStart));
-        Assert.True(DefaultGateChildReapSeam.IsRecordedChild(heartbeatStart.UtcDateTime.AddSeconds(-1), heartbeatStart));
+        var lastObserved = heartbeatStart.AddSeconds(2);
+        Assert.False(DefaultGateChildReapSeam.IsRecordedChild(heartbeatStart.UtcDateTime.AddSeconds(1), heartbeatStart, heartbeatStart));
+        Assert.True(DefaultGateChildReapSeam.IsRecordedChild(heartbeatStart.UtcDateTime.AddSeconds(-1), heartbeatStart, heartbeatStart));
+        Assert.True(DefaultGateChildReapSeam.IsRecordedChild(heartbeatStart.UtcDateTime.AddSeconds(1), heartbeatStart, lastObserved));
+        Assert.False(DefaultGateChildReapSeam.IsRecordedChild(heartbeatStart.UtcDateTime.AddSeconds(3), heartbeatStart, lastObserved));
+        Assert.False(DefaultGateChildReapSeam.IsRecordedChild(heartbeatStart.UtcDateTime, heartbeatStart, heartbeatStart.AddSeconds(-1)));
     }
 
     private (AcceptanceVerificationResult Result, string Output, int Invocations) RunScenario(
@@ -122,9 +127,9 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
               "version": 1,
               "engine": { "maxConcurrentShards": 1, "partitionVerdictFullRerunEveryN": 1 },
               "checks": [
-                { "name": "core tests", "type": "dotnet-test", "runner": "vstest",
-                  "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
-                  "arguments": ["--filter", "FullyQualifiedName~SampleTests"] }
+                { "name": "infrastructure tests: Remainder", "type": "dotnet-test", "runner": "vstest",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--filter", "FullyQualifiedName~RemainderTests"] }
               ],
               "forbiddenChangedPathGlobs": []
             }
@@ -175,11 +180,7 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
 
                 if (arguments[1].Equals("build", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!rerun)
-                        WriteHeartbeat(reason);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
-                }
 
                 if (!arguments[1].Equals("test", StringComparison.OrdinalIgnoreCase))
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
@@ -190,7 +191,7 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
                 if (current > 0)
                     fake.Events.Add($"invocation-{current}");
                 if (!rerun || current > 0)
-                    GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery.WriteVstestTrx(arguments, "SampleTests.Passes");
+                    GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery.WriteVstestTrx(arguments, "RemainderTests.Passes");
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     rerun && current == 0 ? 1 : 0,
                     rerun && current == 0 ? "Test runner exited before producing TRX." : "Passed: 1"));
@@ -198,6 +199,8 @@ public sealed class GoalAcceptanceVerifierTestsGateChildReap : GoalAcceptanceVer
 
             AcceptanceVerificationResult? result = null;
             Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, prefix);
+            if (!rerun)
+                WriteHeartbeat(reason);
             var output = AsyncLocalConsoleRouter.Capture(() =>
                 result = verifier.RunAsync(root, Goal, stableSlotIndex: reason == "slot-mismatch" ? 0 : null)
                     .GetAwaiter().GetResult());

@@ -99,7 +99,7 @@ public sealed partial class GoalAcceptanceVerifier
             !snapshot.CommandLine.Contains(environment.ArtifactsPath, StringComparison.OrdinalIgnoreCase))
             return Skip("artifacts-path-mismatch", childPid);
 
-        using var child = seam.TryOpen(childPid, snapshot.StartedAt);
+        using var child = seam.TryOpen(childPid, snapshot.StartedAt, snapshot.LastObservedAt);
         if (child is null)
             return Skip("not-running", childPid);
 
