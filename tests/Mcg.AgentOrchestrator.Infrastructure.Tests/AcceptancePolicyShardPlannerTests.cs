@@ -9,24 +9,26 @@ public sealed class AcceptancePolicyShardPlannerTests
     [Fact]
     public void BuildPolicyShardPlan_PreservesFullShardReasonsAndPrecedence()
     {
-        var previousFullShards = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
-        var previousChangeScoped = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
+        var previousFullShards = variables.GetValueOrDefault("MCG_ACCEPTANCE_FULL_SHARDS");
+        var previousChangeScoped = variables.GetValueOrDefault("MCG_ACCEPTANCE_CHANGE_SCOPED");
         try
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", "1");
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = "1";
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "0";
             Assert.Equal(
                 $"MCG_ACCEPTANCE_FULL_SHARDS=1; {AppEvidence}",
                 AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                     ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.cs"]).Evidence);
 
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", null);
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = null;
             Assert.Equal(
                 $"MCG_ACCEPTANCE_CHANGE_SCOPED disabled; {AppEvidence}",
                 AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                     ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.cs"]).Evidence);
 
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
             Assert.Equal(
                 "build-system file changed: src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj; " +
                 "changed projects: Core; dependency closure: App, Core, Core.Tests, Dashboard.Tests, " +
@@ -45,20 +47,22 @@ public sealed class AcceptancePolicyShardPlannerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previousFullShards);
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previousChangeScoped);
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = previousFullShards;
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = previousChangeScoped;
         }
     }
 
     [Fact]
     public void BuildPolicyShardPlan_PreservesEvidenceAndClosureOrdering()
     {
-        var previousFullShards = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
-        var previousChangeScoped = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
+        var previousFullShards = variables.GetValueOrDefault("MCG_ACCEPTANCE_FULL_SHARDS");
+        var previousChangeScoped = variables.GetValueOrDefault("MCG_ACCEPTANCE_CHANGE_SCOPED");
         try
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", null);
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = null;
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
 
             var plan = AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                 ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.cs"]);
@@ -72,8 +76,8 @@ public sealed class AcceptancePolicyShardPlannerTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previousFullShards);
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previousChangeScoped);
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = previousFullShards;
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = previousChangeScoped;
         }
     }
 
@@ -163,41 +167,43 @@ public sealed class AcceptancePolicyShardPlannerTests
     [Fact]
     public void EnvironmentFlags_PreserveTruthTables()
     {
-        var previousFullShards = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS");
-        var previousChangeScoped = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        var variables = new Dictionary<string, string?>();
+        using var policyScope = AcceptanceShardPolicySwitches.Use(new(ReadVariable: variables.GetValueOrDefault));
+        var previousFullShards = variables.GetValueOrDefault("MCG_ACCEPTANCE_FULL_SHARDS");
+        var previousChangeScoped = variables.GetValueOrDefault("MCG_ACCEPTANCE_CHANGE_SCOPED");
         try
         {
             foreach (var enabled in new string?[] { null, "", " ", "1", "true", "yes", "on" })
             {
-                Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", enabled);
+                variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = enabled;
                 Assert.True(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
             }
 
             foreach (var disabled in new[] { "0", "false", "no", "off" })
             {
-                Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", disabled);
+                variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = disabled;
                 Assert.False(AcceptancePolicyShardPlanner.ChangeScopedAcceptanceEnabled());
             }
 
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
             foreach (var enabled in new[] { "1", "true", "yes", "on" })
             {
-                Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", enabled);
+                variables["MCG_ACCEPTANCE_FULL_SHARDS"] = enabled;
                 Assert.True(AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                     ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.cs"]).ForceFull);
             }
 
             foreach (var disabled in new string?[] { null, "", " ", "0", "false", "no", "off" })
             {
-                Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", disabled);
+                variables["MCG_ACCEPTANCE_FULL_SHARDS"] = disabled;
                 Assert.False(AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                     ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.cs"]).ForceFull);
             }
         }
         finally
         {
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_FULL_SHARDS", previousFullShards);
-            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previousChangeScoped);
+            variables["MCG_ACCEPTANCE_FULL_SHARDS"] = previousFullShards;
+            variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = previousChangeScoped;
         }
     }
 }
