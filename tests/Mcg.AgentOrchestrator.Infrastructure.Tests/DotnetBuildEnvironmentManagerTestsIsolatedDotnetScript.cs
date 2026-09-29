@@ -89,14 +89,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             startInfo.EnvironmentVariables[WorkerSandboxOptions.AccountVariable] = "sandbox-user";
             startInfo.EnvironmentVariables[WorkerSandboxOptions.CredentialTargetVariable] = "sandbox-target";
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start PowerShell.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            var result = TestChildProcessCapture.Run(startInfo);
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
             Assert.True(
-                process.ExitCode == 0,
-                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+                result.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
 
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
@@ -198,13 +196,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
                 Path.Combine(root, "isolated-dotnet");
             startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start PowerShell.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            var result = TestChildProcessCapture.Run(startInfo);
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
 
-            Assert.NotEqual(0, process.ExitCode);
+            Assert.NotEqual(0, result.ExitCode);
             Assert.Contains(expectedError, stderr, StringComparison.OrdinalIgnoreCase);
             Assert.False(File.Exists(logPath), "The dotnet shim must not run before request validation.");
             Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
@@ -418,14 +414,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
             startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start PowerShell.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            var result = TestChildProcessCapture.Run(startInfo);
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
             Assert.True(
-                process.ExitCode == 0,
-                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+                result.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
 
             var markerPath = Path.Combine(
                 workDirectory,
@@ -539,14 +533,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
             startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start PowerShell.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            var result = TestChildProcessCapture.Run(startInfo);
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
             Assert.True(
-                process.ExitCode == 0,
-                $"Invoke-IsolatedDotnet.ps1 exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+                result.ExitCode == 0,
+                $"Invoke-IsolatedDotnet.ps1 exited {result.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
 
             Assert.Equal("stale-test-head", File.ReadAllText(markerPath).Trim());
             Assert.Equal(appDllLastWriteTime, File.GetLastWriteTimeUtc(appDllPath));
@@ -617,13 +609,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsIsolatedDotnetScript
             startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
 
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start PowerShell.");
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(10000), "Invoke-IsolatedDotnet.ps1 did not exit within 10 seconds.");
+            var result = TestChildProcessCapture.Run(startInfo);
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
 
-            Assert.NotEqual(0, process.ExitCode);
+            Assert.NotEqual(0, result.ExitCode);
             Assert.True(!File.Exists(logPath), "dotnet shim should not be invoked for worker-side self-verification.");
             Assert.True(stderr.Contains("Worker-side .NET self-verification is disabled", StringComparison.Ordinal), stderr);
             Assert.True(string.IsNullOrWhiteSpace(stdout), stdout);
