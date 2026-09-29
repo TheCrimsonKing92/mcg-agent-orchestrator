@@ -3726,10 +3726,8 @@ internal sealed partial class ConductorDriver
             partitionManifest = verifier.ComputeEffectivePlanIdentity(
                 partition.Path,
                 member.LandingPaths);
-            var result = AcceptanceExecutionRunner.RunAttempt(
-                verifier, partition.Path, member.GoalId, member.LandingPaths,
-                stableSlotIndex: null, stableSlotLease: null, cancellationToken,
-                CreateCohortAttributionExecutionOptions(gateProgressEventWriter, identity, member));
+            var result = RunCohortPartitionAttempt(
+                verifier, partition.Path, member, identity, gateProgressEventWriter, cancellationToken);
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             failingTestIdentities = CohortFailingTestIdentities(result);
             partition.AssertGoalBranchesUnchanged();

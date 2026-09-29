@@ -8028,6 +8028,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment["GIT_AUTHOR_EMAIL"] = HermeticGitIdentityEmail;
         environment["GIT_COMMITTER_NAME"] = HermeticGitIdentityName;
         environment["GIT_COMMITTER_EMAIL"] = HermeticGitIdentityEmail;
+        ConfigureHermeticGitConfiguration(environment, profileRoot);
         // A relocated DOTNET_CLI_HOME reads as a first use, and the SDK responds by PERSISTING
         // "$DOTNET_CLI_HOME\.dotnet\tools" into the operator's HKCU\Environment\Path. That is ambient
         // state written by a function whose entire purpose is to write none, so it must be suppressed
@@ -8138,6 +8139,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals("GIT_AUTHOR_EMAIL", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("GIT_COMMITTER_NAME", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("GIT_COMMITTER_EMAIL", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("GIT_CONFIG_NOSYSTEM", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("GIT_CONFIG_GLOBAL", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("GIT_TERMINAL_PROMPT", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("GCM_INTERACTIVE", StringComparison.OrdinalIgnoreCase) ||
         name.Equals(AcceptanceAttemptTrxPrefixVariable, StringComparison.OrdinalIgnoreCase) || name.Equals(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.ReceiptPathVariable, StringComparison.OrdinalIgnoreCase) ||
@@ -8699,13 +8704,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private void EmitGateProgress(AcceptanceGateProgress progress)
+    private void EmitGateProgress(AcceptanceGateProgress progress) => EmitGateProgress(progress, null);
+
+    private void EmitGateProgress(AcceptanceGateProgress progress, string? trailingTokens)
     {
         var line =
             $"PHASE_PROGRESS goal={FormatNullableToken(progress.GoalId, 8)} phase={progress.Phase} elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} " +
             $"target={QuoteProgressToken(progress.CurrentTarget)} child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
             $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)} {GateLoadContextProbe.FormatProgressTokens(progress.LoadContext)}";
-        Console.WriteLine($"{line} ts={progress.LastObservedAt:O}");
+        Console.WriteLine($"{line}{(trailingTokens is null ? "" : " " + trailingTokens)} ts={progress.LastObservedAt:O}");
         Console.Out.Flush();
         _executionContext?.ReportProgress(progress);
     }

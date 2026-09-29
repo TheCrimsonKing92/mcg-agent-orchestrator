@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -22,7 +21,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             try
             {
                 holderAcquired.Set();
-                Assert.True(holderRelease.Wait(TimeSpan.FromSeconds(10)));
+                Assert.True(holderRelease.Wait(TestHangGuard.Bound), "Writer-lease holder release was not signaled.");
             }
             finally
             {
@@ -33,17 +32,22 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         string? receipt = null;
         try
         {
-            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
-            var started = Stopwatch.StartNew();
+            Assert.True(holderAcquired.Wait(TestHangGuard.Bound), "Writer lease was not acquired by the holder.");
+            var requests = new List<(string Directory, TimeSpan Wait)>();
             var exception = Assert.Throws<TimeoutException>(() =>
                 StorageRetentionMaintenance.AcquireAttemptWriterLease(
                     root,
                     TimeSpan.FromMilliseconds(50),
-                    value => receipt = value));
+                    value => receipt = value,
+                    (directory, wait) =>
+                    {
+                        requests.Add((directory, wait));
+                        return StorageRetentionMaintenance.TryAcquireAttemptWriterLease(directory, wait);
+                    }));
 
             Assert.Contains("ACCEPTANCE_ARTIFACT_LEASE_TIMEOUT", exception.Message, StringComparison.Ordinal);
             Assert.Contains("timeout_ms=50", receipt, StringComparison.Ordinal);
-            Assert.True(started.Elapsed < TimeSpan.FromSeconds(2));
+            Assert.Equal((root, TimeSpan.FromMilliseconds(50)), Assert.Single(requests));
         }
         finally
         {
@@ -88,7 +92,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 {
                     using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
                     holderAcquired.Set();
-                    if (!holderRelease.Wait(TimeSpan.FromSeconds(10)))
+                    if (!holderRelease.Wait(TestHangGuard.Bound))
                     {
                         throw new TimeoutException("Writer-lease holder release signal was not observed.");
                     }
@@ -100,15 +104,21 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             });
             holder.IsBackground = true;
             holder.Start();
-            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(holderAcquired.Wait(TestHangGuard.Bound), "Writer lease was not acquired by the holder.");
 
             var leaseBoundaryEntered = false;
+            var liveRequests = new List<(string Directory, TimeSpan Wait)>();
             var observer = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 isProcessAlive: processId => processId == 7115,
                 launchOwnedProcess: _ => throw new InvalidOperationException("live observation must not launch"),
                 acquireStableSlotLease: (_, _) => null,
-                attemptWriterLeaseAcquiringForTests: () => leaseBoundaryEntered = true);
+                attemptWriterLeaseAcquiringForTests: () => leaseBoundaryEntered = true,
+                tryAcquireAttemptWriterLease: (directory, wait) =>
+                {
+                    liveRequests.Add((directory, wait));
+                    return StorageRetentionMaintenance.TryAcquireAttemptWriterLease(directory, wait);
+                });
             ConductorParallelAcceptanceAttemptDecision? observed = null;
             observationThread = new Thread(() =>
             {
@@ -129,21 +139,28 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             observationThread.Start();
 
             Assert.True(
-                observationThread.Join(TimeSpan.FromSeconds(5)),
-                "Live observation blocked at the writer-lease boundary.");
+                observationThread.Join(TestHangGuard.Bound),
+                "Live observation did not return while the writer lease was held.");
             Assert.Null(observationException);
             Assert.NotNull(observed);
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, observed.Kind);
             Assert.False(leaseBoundaryEntered);
+            Assert.Empty(liveRequests);
 
             var falseNegativeLeaseBoundaryEntered = false;
+            var busyRequests = new List<(string Directory, TimeSpan Wait, bool Acquired)>();
             var falseNegativeObserver = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
                 acquireStableSlotLease: (_, _) => null,
-                attemptWriterLeaseAcquiringForTests: () => falseNegativeLeaseBoundaryEntered = true);
-            var falseNegativeElapsed = Stopwatch.StartNew();
+                attemptWriterLeaseAcquiringForTests: () => falseNegativeLeaseBoundaryEntered = true,
+                tryAcquireAttemptWriterLease: (directory, wait) =>
+                {
+                    var lease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(directory, wait);
+                    busyRequests.Add((directory, wait, lease is not null));
+                    return lease;
+                });
 
             var leaseBusy = Assert.Throws<AcceptanceArtifactWriterLeaseBusyException>(() =>
                 falseNegativeObserver.EvaluateFocusedEvidence(
@@ -154,18 +171,18 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
 
             Assert.Equal(started.Attempt.AttemptId, leaseBusy.ObservedAttemptId);
             Assert.True(falseNegativeLeaseBoundaryEntered);
-            Assert.True(falseNegativeElapsed.Elapsed < TimeSpan.FromSeconds(2));
+            Assert.Equal((goalDirectory, TimeSpan.Zero, false), Assert.Single(busyRequests));
         }
         finally
         {
             holderRelease.Set();
             if (holder is not null)
             {
-                holder.Join(TimeSpan.FromSeconds(10));
+                Assert.True(holder.Join(TestHangGuard.Bound), "Writer-lease holder did not return after release.");
             }
             if (observationThread is not null && observationThread.IsAlive)
             {
-                observationThread.Join(TimeSpan.FromSeconds(10));
+                Assert.True(observationThread.Join(TestHangGuard.Bound), "Live observation thread did not return.");
             }
             Directory.Delete(root, recursive: true);
         }
@@ -194,7 +211,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 {
                     using var lease = StorageRetentionMaintenance.AcquireAttemptWriterLease(goalDirectory);
                     holderAcquired.Set();
-                    if (!holderRelease.Wait(TimeSpan.FromSeconds(10)))
+                    if (!holderRelease.Wait(TestHangGuard.Bound))
                     {
                         throw new TimeoutException("Writer-lease holder release signal was not observed.");
                     }
@@ -206,14 +223,20 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             });
             holder.IsBackground = true;
             holder.Start();
-            Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(holderAcquired.Wait(TestHangGuard.Bound), "Writer lease was not acquired by the holder.");
 
+            var busyRequests = new List<(string Directory, TimeSpan Wait, bool Acquired)>();
             var observer = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
-                acquireStableSlotLease: (_, _) => null);
-            var elapsed = Stopwatch.StartNew();
+                acquireStableSlotLease: (_, _) => null,
+                tryAcquireAttemptWriterLease: (directory, wait) =>
+                {
+                    var lease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(directory, wait);
+                    busyRequests.Add((directory, wait, lease is not null));
+                    return lease;
+                });
 
             var leaseBusy = Assert.Throws<AcceptanceArtifactWriterLeaseBusyException>(() =>
                 observer.EvaluateFocusedEvidence(
@@ -224,12 +247,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
 
             Assert.Null(leaseBusy.ObservedAttemptId);
             Assert.Equal(Path.GetFullPath(goalDirectory), Path.GetFullPath(leaseBusy.GoalDirectory));
-            Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(2));
+            Assert.Equal((goalDirectory, TimeSpan.Zero, false), Assert.Single(busyRequests));
         }
         finally
         {
             holderRelease.Set();
-            holder?.Join(TimeSpan.FromSeconds(10));
+            if (holder is not null)
+                Assert.True(holder.Join(TestHangGuard.Bound), "Writer-lease holder did not return after release.");
             Directory.Delete(root, recursive: true);
         }
 

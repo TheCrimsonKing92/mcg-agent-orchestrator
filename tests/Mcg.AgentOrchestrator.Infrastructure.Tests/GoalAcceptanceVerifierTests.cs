@@ -1273,7 +1273,9 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         // The identity must be DETERMINISTIC, not borrowed from the operator. Pointing GIT_CONFIG_GLOBAL at
         // the real ~/.gitconfig would also restore identity, but it would drag in every other global git
         // setting - the ambient-input class this whole function exists to forbid.
-        Assert.DoesNotContain("GIT_CONFIG_GLOBAL", environment.Keys);
+        var gateGitConfig = Assert.Contains("GIT_CONFIG_GLOBAL", environment);
+        Assert.StartsWith(profileRoot + Path.DirectorySeparatorChar, gateGitConfig!, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gitconfig"), gateGitConfig);
     }
 
     [Xunit.Fact(DisplayName = "Hermetic_per_user_folders_prefer_the_inherited_variables_over_the_known_folder")]

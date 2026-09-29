@@ -369,6 +369,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly DotnetBuildStorageRoot? _buildStorageRoot;
     private readonly int _conductorGenerationId;
+    private readonly Func<string, TimeSpan, IDisposable?> _tryAcquireAttemptWriterLease;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -394,7 +395,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         DotnetBuildStorageRoot? buildStorageRoot = null,
         // Each conductor renewal is a fresh child process, so the loop pid is a sound generation
         // identity and the driver needs no threading change to supply one.
-        int? conductorGenerationId = null)
+        int? conductorGenerationId = null,
+        Func<string, TimeSpan, IDisposable?>? tryAcquireAttemptWriterLease = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -427,6 +429,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
         _buildPermitSleep = buildPermitSleep;
         _conductorGenerationId = conductorGenerationId ?? Environment.ProcessId;
+        _tryAcquireAttemptWriterLease = tryAcquireAttemptWriterLease ??
+            ((directory, wait) => StorageRetentionMaintenance.TryAcquireAttemptWriterLease(directory, wait));
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -588,7 +592,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         _attemptWriterLeaseAcquiringForTests?.Invoke();
         var goalDirectory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
-        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        using var artifactLease = _tryAcquireAttemptWriterLease(goalDirectory, TimeSpan.Zero);
         if (artifactLease is null)
         {
             current = TryReadLatest(candidate.Goal.Id.Value);
@@ -1002,7 +1006,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     internal IReadOnlyList<string> TakePendingLeaseReceipts(ConductorParallelAcceptanceAttempt attempt)
     {
         var goalDirectory = Path.GetDirectoryName(attempt.MetadataPath) ?? _rootDirectory;
-        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        using var artifactLease = _tryAcquireAttemptWriterLease(goalDirectory, TimeSpan.Zero);
         if (artifactLease is null)
         {
             // Retention may be selecting terminal metadata for deletion. Leave the replay count
@@ -2409,7 +2413,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return null;
         }
 
-        using var artifactLease = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(goalDirectory);
+        using var artifactLease = _tryAcquireAttemptWriterLease(goalDirectory, TimeSpan.Zero);
         if (artifactLease is null)
         {
             return null;

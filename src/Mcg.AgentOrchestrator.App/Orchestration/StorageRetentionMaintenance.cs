@@ -301,10 +301,12 @@ internal static partial class StorageRetentionMaintenance
     internal static IDisposable AcquireAttemptWriterLease(
         string goalDirectory,
         TimeSpan? timeout = null,
-        Action<string>? receipt = null)
+        Action<string>? receipt = null,
+        Func<string, TimeSpan, IDisposable?>? acquirer = null)
     {
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(30);
-        var lease = TryAcquireAttemptWriterLease(goalDirectory, effectiveTimeout);
+        var lease = (acquirer ?? ((directory, wait) => TryAcquireAttemptWriterLease(directory, wait)))(
+            goalDirectory, effectiveTimeout);
         if (lease is not null)
         {
             return lease;
