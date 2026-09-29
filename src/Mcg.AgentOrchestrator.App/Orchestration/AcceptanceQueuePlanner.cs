@@ -87,7 +87,7 @@ public static class AcceptanceQueuePlanner
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var hasBranch = gitFacts.HasGoalBranch(branchName);
         var diff = BranchHasDiff(executionDirectory, branchName, gitRunner);
-        var status = worktreePath is null ? null : TryIsDirty(worktreePath, gitRunner);
+        ProbeResult? status = worktreePath is null ? null : TryIsDirty(worktreePath, gitRunner);
         var hasDiff = diff.Value;
         bool? dirty = status?.Value;
         var acceptanceAllowed = policy.Allows(AutonomyAction.Acceptance);
