@@ -2283,6 +2283,30 @@ function Stop-MtpOwnedProcessTree {
     }
 }
 
+function Get-MtpTimeoutPolicy {
+    param([ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds)
+
+    $gracefulExitSeconds = $script:MtpGracefulExitSeconds
+    $graceOverride = [System.Environment]::GetEnvironmentVariable('MCG_MTP_TEST_GRACEFUL_EXIT_SECONDS')
+    $parsedGrace = 0
+    if (-not [string]::IsNullOrWhiteSpace($graceOverride) -and
+        [int]::TryParse($graceOverride.Trim(), [System.Globalization.NumberStyles]::Integer,
+            [System.Globalization.CultureInfo]::InvariantCulture, [ref]$parsedGrace) -and
+        $parsedGrace -ge 0 -and $parsedGrace -le 15) {
+        $gracefulExitSeconds = $parsedGrace
+    }
+
+    $signalPath = [System.Environment]::GetEnvironmentVariable('MCG_MTP_TEST_TIMEOUT_SIGNAL_PATH')
+    if ([string]::IsNullOrWhiteSpace($signalPath)) {
+        $signalPath = $null
+    }
+    return [pscustomobject]@{
+        TimeoutMilliseconds = $TestHostTimeoutSeconds * 1000
+        GracefulExitSeconds = $gracefulExitSeconds
+        SignalPath = $signalPath
+    }
+}
+
 function Invoke-MtpAppHost {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
@@ -2290,7 +2314,8 @@ function Invoke-MtpAppHost {
         [Parameter(Mandatory = $true)][string]$OutputLog,
         [string]$StartupHookPath,
         [switch]$AllowBreakaway,
-        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
+        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
+        [pscustomobject]$TimeoutPolicy
     )
 
     $process = $null
@@ -2329,10 +2354,39 @@ function Invoke-MtpAppHost {
         $process.BeginOutputReadLine()
         $process.BeginErrorReadLine()
 
-        if (-not $process.WaitForExit($TestHostTimeoutSeconds * 1000)) {
+        if ($null -eq $TimeoutPolicy) {
+            $TimeoutPolicy = Get-MtpTimeoutPolicy -TestHostTimeoutSeconds $TestHostTimeoutSeconds
+        }
+        $signaled = $false
+        if ($null -eq $TimeoutPolicy.SignalPath) {
+            $hostExited = $process.WaitForExit($TimeoutPolicy.TimeoutMilliseconds)
+        }
+        else {
+            $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+            $hostExited = $false
+            while (-not $process.HasExited -and $deadline.ElapsedMilliseconds -lt $TimeoutPolicy.TimeoutMilliseconds) {
+                if (Test-Path -LiteralPath $TimeoutPolicy.SignalPath -PathType Leaf) {
+                    $signaled = $true
+                    break
+                }
+                $remaining = $TimeoutPolicy.TimeoutMilliseconds - $deadline.ElapsedMilliseconds
+                [void]$process.WaitForExit([int][Math]::Min(250, $remaining))
+            }
+            $hostExited = $process.HasExited
+            if (-not $hostExited -and -not $signaled -and
+                (Test-Path -LiteralPath $TimeoutPolicy.SignalPath -PathType Leaf)) {
+                $signaled = $true
+            }
+        }
+        if (-not $hostExited) {
             $timedOut = $true
-            Write-Host "TEST HOST TIMEOUT - owned PID $processId exceeded ${TestHostTimeoutSeconds}s; allowing ${script:MtpGracefulExitSeconds}s for MTP cancellation."
-            [void]$process.WaitForExit($script:MtpGracefulExitSeconds * 1000)
+            if ($signaled) {
+                Write-Host "TEST HOST TIMEOUT - owned PID $processId timeout signaled by test seam; allowing $($TimeoutPolicy.GracefulExitSeconds)s for MTP cancellation."
+            }
+            else {
+                Write-Host "TEST HOST TIMEOUT - owned PID $processId exceeded ${TestHostTimeoutSeconds}s; allowing $($TimeoutPolicy.GracefulExitSeconds)s for MTP cancellation."
+            }
+            [void]$process.WaitForExit($TimeoutPolicy.GracefulExitSeconds * 1000)
         }
     }
     catch {
@@ -2625,6 +2679,7 @@ function Invoke-MtpTestRun {
     $lastRunnerExitCode = $null
     $allExitsConfirmed = $true
     $environmentSnapshot = Get-MtpEnvironmentSnapshot
+    $timeoutPolicy = Get-MtpTimeoutPolicy -TestHostTimeoutSeconds $TestHostTimeoutSeconds
     # Captured before Set-MtpHermeticEnvironment strips it, so retained evidence written after the
     # strip still lands in the attributed retention lane instead of the 48h unattributed bound.
     $acceptanceAttemptId = [System.Environment]::GetEnvironmentVariable('MCG_ACCEPTANCE_GATE_ATTEMPT_ID')
@@ -2727,7 +2782,7 @@ function Invoke-MtpTestRun {
                 if ($usesManagedAssembly) {
                     $arguments = @($executable) + @($arguments)
                 }
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
                 $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed
@@ -2825,6 +2880,7 @@ function Invoke-MtpTestRun {
 }
 
 Export-ModuleMember -Function @(
+    'Get-MtpTimeoutPolicy',
     'Get-MtpTestExitCodes',
     'Read-MtpTestManifest',
     'Get-MtpLocalPartitions',
