@@ -30,7 +30,7 @@ public sealed class DirectGitLaunchSourceGuardTests
         var quote = "\"";
         var lines = new[]
         {
-            "new ProcessStartInfo(" + quote + "git" + quote + ")",
+            "new Process" + "StartInfo(" + quote + "git" + quote + ")",
             "FileName = " + quote + "git.exe" + quote + ",",
             "Process.Start(" + quote + "git" + quote + ")",
             "RunCommand(" + quote + "git" + quote + ")",
