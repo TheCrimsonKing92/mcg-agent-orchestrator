@@ -39,7 +39,20 @@ public static class AcceptanceQueuePlanner
     public static AcceptanceQueuePlan Build(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
-        AutonomyPolicy policy)
+        AutonomyPolicy policy) => BuildCore(kernel, executionDirectory, policy, null);
+
+    internal static AcceptanceQueuePlan Build(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        AutonomyPolicy policy,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner) =>
+        BuildCore(kernel, executionDirectory, policy, gitRunner);
+
+    private static AcceptanceQueuePlan BuildCore(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        AutonomyPolicy policy,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner)
     {
         var goals = kernel.Goals.ToArray();
         if (goals.Length == 0)
@@ -47,14 +60,16 @@ public static class AcceptanceQueuePlanner
             return new AcceptanceQueuePlan(policy, []);
         }
 
-        var gitFacts = GoalGitFactIndex.Build(executionDirectory);
+        var gitFacts = GoalGitFactIndex.Build(executionDirectory, gitRunner);
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> probeRunner =
+            gitRunner ?? ((directory, args) => GitCli.Run(directory, args.ToArray()));
         var items = goals
             .Where(goal => goal.Status is GoalStatus.Verified or GoalStatus.Completed ||
                 GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null ||
                 gitFacts.HasGoalBranch(GoalWorktrees.BranchName(goal.Id)))
             .OrderBy(goal => FirstTimelineAt(goal) ?? DateTimeOffset.MaxValue)
             .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
-            .Select(goal => BuildItem(goal, executionDirectory, policy, gitFacts))
+            .Select(goal => BuildItem(goal, executionDirectory, policy, gitFacts, probeRunner))
             .ToArray();
 
         return new AcceptanceQueuePlan(policy, items);
@@ -64,14 +79,17 @@ public static class AcceptanceQueuePlanner
         Goal goal,
         string executionDirectory,
         AutonomyPolicy policy,
-        GoalGitFactIndex gitFacts)
+        GoalGitFactIndex gitFacts,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
         var goalPrefix = goal.Id.Value[..8];
         var branchName = GoalWorktrees.BranchName(goal.Id);
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var hasBranch = gitFacts.HasGoalBranch(branchName);
-        var hasDiff = BranchHasDiff(executionDirectory, branchName);
-        bool? dirty = worktreePath is null ? null : TryIsDirty(worktreePath);
+        var diff = BranchHasDiff(executionDirectory, branchName, gitRunner);
+        var status = worktreePath is null ? null : TryIsDirty(worktreePath, gitRunner);
+        var hasDiff = diff.Value;
+        bool? dirty = status?.Value;
         var acceptanceAllowed = policy.Allows(AutonomyAction.Acceptance);
         var cleanupAllowed = policy.Allows(AutonomyAction.WorkspaceCleanup);
 
@@ -99,12 +117,22 @@ public static class AcceptanceQueuePlanner
                 $"goal-recovery {goalPrefix}");
         }
 
+        if (status?.FailureReason is { } statusFailure)
+        {
+            return Item(AcceptanceQueueDisposition.Blocked, statusFailure, $"goal-recovery {goalPrefix}");
+        }
+
         if (dirty == true)
         {
             return Item(
                 AcceptanceQueueDisposition.Blocked,
                 "worktree has uncommitted changes",
                 $"goal-recovery {goalPrefix}");
+        }
+
+        if (diff.FailureReason is { } diffFailure)
+        {
+            return Item(AcceptanceQueueDisposition.Blocked, diffFailure, $"goal-recovery {goalPrefix}");
         }
 
         if (!hasDiff)
@@ -115,7 +143,13 @@ public static class AcceptanceQueuePlanner
                 $"goal-recovery {goalPrefix}");
         }
 
-        if (!IsFastForwardable(executionDirectory, branchName))
+        var fastForward = IsFastForwardable(executionDirectory, branchName, gitRunner);
+        if (fastForward.FailureReason is { } fastForwardFailure)
+        {
+            return Item(AcceptanceQueueDisposition.Blocked, fastForwardFailure, $"goal-recovery {goalPrefix}");
+        }
+
+        if (!fastForward.Value)
         {
             return Item(
                 AcceptanceQueueDisposition.Held,
@@ -163,16 +197,50 @@ public static class AcceptanceQueuePlanner
         return goal.Timeline.Count == 0 ? null : goal.Timeline.Min(evt => evt.OccurredAt);
     }
 
-    private static bool TryIsDirty(string worktreePath) => GitCli.IsWorktreeDirty(worktreePath);
+    private readonly record struct ProbeResult(bool Value, string? FailureReason = null);
 
-    private static bool IsFastForwardable(string executionDirectory, string branchName)
+    private static ProbeResult TryIsDirty(
+        string worktreePath,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
-        return GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "HEAD", branchName).ExitCode == 0;
+        string[] args = ["status", "--porcelain=v1", "--untracked-files=all"];
+        var result = gitRunner(worktreePath, args);
+        return ProbeFailed(result)
+            ? new ProbeResult(true, Failure(args, result))
+            : new ProbeResult(GitCli.ParseCommitWorthyStatusPaths(result.Output).Length > 0);
     }
 
-    private static bool BranchHasDiff(string executionDirectory, string branchName)
+    private static ProbeResult IsFastForwardable(
+        string executionDirectory,
+        string branchName,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
-        var result = GitCli.Run(executionDirectory, "diff", "--name-only", "HEAD..." + branchName);
-        return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output);
+        string[] args = ["merge-base", "--is-ancestor", "HEAD", branchName];
+        var result = gitRunner(executionDirectory, args);
+        return result.ExitCode is not (0 or 1) || !result.ProcessStarted || result.DrainTimedOut
+            ? new ProbeResult(false, Failure(args, result))
+            : new ProbeResult(result.ExitCode == 0);
+    }
+
+    private static ProbeResult BranchHasDiff(
+        string executionDirectory,
+        string branchName,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
+    {
+        string[] args = ["diff", "--name-only", "HEAD..." + branchName];
+        var result = gitRunner(executionDirectory, args);
+        return ProbeFailed(result)
+            ? new ProbeResult(false, Failure(args, result))
+            : new ProbeResult(!string.IsNullOrWhiteSpace(result.Output));
+    }
+
+    private static bool ProbeFailed(GitCli.GitResult result) =>
+        result.ExitCode != 0 || !result.ProcessStarted || result.DrainTimedOut;
+
+    private static string Failure(IReadOnlyList<string> args, GitCli.GitResult result)
+    {
+        var firstError = result.Error.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? "(no stderr)";
+        return $"git probe failed: git {string.Join(' ', args)} exited {result.ExitCode}: {firstError}";
     }
 }

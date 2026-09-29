@@ -1148,9 +1148,9 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var context = CreateAcceptanceContext(kernel, repo, goal);
             var output = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance-queue"], context));
 
-            Assert.True(output.Contains("ready=0, held=1, blocked=0", StringComparison.Ordinal));
-            Assert.True(output.Contains("cannot fast-forward", StringComparison.Ordinal));
-            Assert.True(output.Contains($"command: workspace rebase {goal.Id.Value[..8]}", StringComparison.Ordinal));
+            Assert.Contains("ready=0, held=1, blocked=0", output);
+            Assert.Contains("cannot fast-forward", output);
+            Assert.Contains($"command: workspace rebase {goal.Id.Value[..8]}", output);
             Assert.False(File.Exists(Path.Combine(repo, "stale.txt")));
             Assert.True(GoalWorktrees.TryResolve(repo, goal.Id) is not null);
         }
