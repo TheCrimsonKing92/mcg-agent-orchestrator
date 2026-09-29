@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -166,6 +165,8 @@ public sealed class ConductorDriverTestsDeveloperCompletionStructuralPreflight
     {
         var executionDirectory = ConductorDriverTests.CreateTempDirectory();
         using var release = new ManualResetEventSlim();
+        using var entered = new ManualResetEventSlim();
+        var returned = 0;
         try
         {
             var (kernel, goal) = SoftwareGoal("Bounded Developer completion structural preflight");
@@ -196,16 +197,23 @@ public sealed class ConductorDriverTestsDeveloperCompletionStructuralPreflight
             driver.OverrideDeveloperCompletionStructuralPreflightForTests(
                 _ =>
                 {
+                    entered.Set();
                     release.Wait();
+                    Volatile.Write(ref returned, 1);
                     return new DeveloperCompletionStructuralFindings(false, "released");
                 },
                 TimeSpan.FromMilliseconds(100));
 
-            var stopwatch = Stopwatch.StartNew();
-            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
-            stopwatch.Stop();
+            var tick = Task.Factory.StartNew(
+                () => driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+                TaskScheduler.Default);
 
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Tick took {stopwatch.Elapsed}.");
+            Assert.True(tick.Wait(TestHangGuard.Bound), "AdvanceOnce did not return while the pre-check stayed blocked.");
+            Assert.True(entered.Wait(TestHangGuard.Bound), "Developer completion pre-check was not entered.");
+            Assert.Equal(0, Volatile.Read(ref returned));
+            Assert.False(release.IsSet);
             Assert.Equal(0, retries);
             Assert.Equal([AgentRole.Tester], dispatchedRoles);
             var note = Assert.Single(notes);

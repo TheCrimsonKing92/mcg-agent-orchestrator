@@ -168,24 +168,48 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         _ = new SqliteOrchestratorStateRepository(db);
         using var holder = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite);
         ExecuteSql(holder, "BEGIN IMMEDIATE");
+        long clock = 0;
+        var observeWrite = false;
+        var busyTimeouts = new List<(int TimeoutMilliseconds, long ClockMilliseconds)>();
+        var retryDelays = new List<TimeSpan>();
         var repository = new SqliteOrchestratorStateRepository(
             db,
-            statementObserver: null,
+            statementObserver: statement =>
+            {
+                if (!observeWrite || !statement.StartsWith("PRAGMA busy_timeout=", StringComparison.Ordinal))
+                    return;
+                var timeout = int.Parse(statement["PRAGMA busy_timeout=".Length..], System.Globalization.CultureInfo.InvariantCulture);
+                busyTimeouts.Add((timeout, clock));
+                clock += 100;
+            },
             new SqliteWriteTelemetryOptions
             {
                 BusyTimeoutMilliseconds = 200,
                 BusyRetryBudget = TimeSpan.FromMilliseconds(250),
                 MaxBusyRetries = int.MaxValue,
-                MirrorToConductEventStream = false
+                MirrorToConductEventStream = false,
+                MonotonicMilliseconds = () => clock,
+                RetryDelay = (_, delay, _) =>
+                {
+                    retryDelays.Add(delay);
+                    clock += (long)delay.TotalMilliseconds;
+                    return Task.CompletedTask;
+                }
             });
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        await Assert.ThrowsAsync<SqliteException>(() =>
+        observeWrite = true;
+        var exception = await Assert.ThrowsAsync<SqliteException>(() =>
             repository.SaveAsync(new AgentOrchestratorKernel()));
-        stopwatch.Stop();
         ExecuteSql(holder, "ROLLBACK");
 
-        Assert.InRange(stopwatch.Elapsed, TimeSpan.FromMilliseconds(150), TimeSpan.FromSeconds(2));
+        Assert.Equal(2, busyTimeouts.Count);
+        Assert.All(busyTimeouts, observation =>
+            Assert.Equal(250 - observation.ClockMilliseconds, observation.TimeoutMilliseconds));
+        Assert.Equal([(250, 0L), (100, 150L)], busyTimeouts);
+        Assert.Equal([TimeSpan.FromMilliseconds(50)], retryDelays);
+        Assert.Equal(250, clock);
+        Assert.Equal(2, exception.Data["Mcg.AttemptCount"]);
+        Assert.Equal(250d, exception.Data["Mcg.ElapsedMilliseconds"]);
     }
 
     [Xunit.Fact]
