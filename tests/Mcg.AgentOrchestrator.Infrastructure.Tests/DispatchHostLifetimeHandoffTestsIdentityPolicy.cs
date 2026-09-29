@@ -150,7 +150,7 @@ public sealed class DispatchHostLifetimeHandoffTestsIdentityPolicy
 
     private static IEnumerable<string> ForbiddenTokens(string body)
     {
-        string[] tokens = ["AppCaller", "Process.Start", "ProcessStartInfo", "UnrelatedSleeper",
+        string[] tokens = ["AppCaller.Start", "AppCaller", "Process.Start", "ProcessStartInfo", "UnrelatedSleeper",
             "Thread.Sleep", "Task.Delay", "SpinWait", "Stopwatch", "WaitFor", "WaitUntil", "WaitAsync"];
         return tokens.Where(token => body.Contains(token, StringComparison.Ordinal));
     }
