@@ -614,7 +614,7 @@ internal static partial class ConductorLoopHandoff
             terminalReason);
     }
 
-    private static bool HasSuccessorReadySignal(
+    internal static bool HasSuccessorReadySignal(
         ConductLoopLaunchResult result,
         ConductLoopLaunchRequest request)
     {
