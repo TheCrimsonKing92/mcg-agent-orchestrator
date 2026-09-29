@@ -100,6 +100,9 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
     private readonly string _wakeDirectory;
     private readonly bool _readOnly;
 
+    internal Action<string> RemoveWakeFile { get; init; } = File.Delete;
+    internal Action<string> EmitDiagnostic { get; init; } = Console.Error.WriteLine;
+
     public SqliteOperatorIntentStore(string dbPath, string wakeDirectory, bool readOnly = false)
     {
         _dbPath = Path.GetFullPath(dbPath);
@@ -366,7 +369,14 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         var wakePath = GetWakePath(intentId);
         if (File.Exists(wakePath))
         {
-            File.Delete(wakePath);
+            try
+            {
+                RemoveWakeFile(wakePath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                EmitDiagnostic($"OPERATOR_INTENT_WAKE_ACK_DEFERRED id={intentId} reason={exception.GetType().Name}");
+            }
         }
     }
 
