@@ -47,6 +47,7 @@ internal static class CSharpSourceLaunchPatternScanner
                     if (current == '/' && i + 1 < line.Length && line[i + 1] == '*')
                     {
                         frames.Push(new Frame(Kind.BlockComment));
+                        i += 2;
                         continue;
                     }
                     if (current == '\'')
@@ -141,6 +142,9 @@ internal static class CSharpSourceLaunchPatternScanner
             if (frames.Peek().Kind == Kind.LineComment) frames.Pop();
             if (frames.Peek().Kind is Kind.Regular or Kind.Character) frames.Pop();
         }
+
+        if (frames.Count != 1)
+            throw new InvalidOperationException("C# source ended inside a comment, string, or interpolation.");
 
         return masks;
     }

@@ -13,7 +13,8 @@ public sealed class ProcessStartInfoSourceGuardLexicalTests
             new[] { "var sample = \"\"\"", "new ProcessStartInfo; UseShellExecute = false", "\"\"\";" },
             new[] { "var sample = $$\"\"\"", "new ProcessStartInfo; UseShellExecute = false", "\"\"\";" },
             new[] { "// new ProcessStartInfo; UseShellExecute = false" },
-            new[] { "/* new ProcessStartInfo;", "UseShellExecute = false */" }
+            new[] { "/* new ProcessStartInfo;", "UseShellExecute = false */" },
+            new[] { "/*/ new ProcessStartInfo */" }
         };
 
         foreach (var lines in samples)
@@ -54,20 +55,28 @@ public sealed class ProcessStartInfoSourceGuardLexicalTests
     [Fact]
     public void QuotesAndRawStringCloseDoNotHideFollowingCode()
     {
-        Assert.Equal(new[] { "sample.cs:2" }, Offenders(
-            "var quote = '\"';",
-            "var psi = new ProcessStartInfo(\"tool.exe\");"));
+        Assert.Equal(new[] { "sample.cs:1" }, Offenders(
+            "var quote = '\"'; var psi = new ProcessStartInfo(\"tool.exe\");"));
         Assert.Equal(new[] { "sample.cs:2" }, Offenders(
             "var sample = \"escaped \\\" quote, new ProcessStartInfo\";",
             "var psi = new ProcessStartInfo(\"tool.exe\");"));
-        Assert.Equal(new[] { "sample.cs:2" }, Offenders(
-            "var sample = @\"doubled \"\" quote, new ProcessStartInfo\";",
+        Assert.Equal(new[] { "sample.cs:3" }, Offenders(
+            "var sample = @\"doubled \"\"",
+            "new ProcessStartInfo\";",
             "var psi = new ProcessStartInfo(\"tool.exe\");"));
         Assert.Equal(new[] { "sample.cs:4" }, Offenders(
             "var sample = \"\"\"",
             "new ProcessStartInfo",
             "\"\"\";",
             "var psi = new ProcessStartInfo(\"tool.exe\");"));
+    }
+
+    [Fact]
+    public void UnterminatedMultilineConstructsFailLoudly()
+    {
+        Assert.Throws<InvalidOperationException>(() => Offenders("/* unclosed comment"));
+        Assert.Throws<InvalidOperationException>(() => Offenders("var sample = @\"unclosed verbatim"));
+        Assert.Throws<InvalidOperationException>(() => Offenders("var sample = \"\"\"", "unclosed raw"));
     }
 
     [Fact]
