@@ -13,9 +13,9 @@ public sealed class RuntimeMaintenanceOwnershipTestsVerifiedRoot
             File.WriteAllText(Path.Combine(copy, ".git"), "gitdir: elsewhere");
             File.WriteAllText(Path.Combine(copy, "Mcg.AgentOrchestrator.sln"), "");
 
-            Xunit.Assert.Equal(copy, VerifiedRepositoryRoot.Resolve(
+            Xunit.Assert.Equal(copy, CliVerifiedRepositoryRoot.Resolve(
                 staleSource,
-                name => name == VerifiedRepositoryRoot.VariableName ? copy : null));
+                name => name == CliVerifiedRepositoryRoot.VariableName ? copy : null));
         }
         finally
         {

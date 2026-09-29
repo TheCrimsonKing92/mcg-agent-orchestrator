@@ -133,7 +133,7 @@ public sealed class RuntimeMaintenanceOwnershipTests
     }
 
     private static string FindRepositoryRoot([CallerFilePath] string sourcePath = "") =>
-        VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+        CliVerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
             ? verifiedRoot
             : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourcePath)!, "..", "..", ".."));
 

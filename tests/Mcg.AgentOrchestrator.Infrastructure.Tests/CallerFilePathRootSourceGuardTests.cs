@@ -19,7 +19,7 @@ public sealed class CallerFilePathRootSourceGuardTests
     [
         "tests/Mcg.AgentOrchestrator.Core.Tests/VerifiedRepositoryRoot.cs",
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/VerifiedRepositoryRoot.cs",
-        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/VerifiedRepositoryRoot.cs"
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliVerifiedRepositoryRoot.cs"
     ];
 
     [Xunit.Fact]
@@ -82,9 +82,11 @@ public sealed class CallerFilePathRootSourceGuardTests
         foreach (var path in new[]
                  {
                      Path.Combine(repositoryRoot, "tests", "Mcg.AgentOrchestrator.Core.Tests", "VerifiedRepositoryRoot.cs"),
-                     Path.Combine(repositoryRoot, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Cli", "VerifiedRepositoryRoot.cs")
+                     Path.Combine(repositoryRoot, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Cli", "CliVerifiedRepositoryRoot.cs")
                  })
-            Assert.Equal(expected, File.ReadAllText(path).Replace("\r\n", "\n", StringComparison.Ordinal));
+            Assert.Equal(expected, File.ReadAllText(path)
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace("CliVerifiedRepositoryRoot", "VerifiedRepositoryRoot", StringComparison.Ordinal));
     }
 
     private static IReadOnlyList<MethodDeclarationSyntax> CallerPathMethods(string source) =>

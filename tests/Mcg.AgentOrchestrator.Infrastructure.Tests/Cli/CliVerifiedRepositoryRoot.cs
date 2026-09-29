@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
 
-internal static class VerifiedRepositoryRoot
+internal static class CliVerifiedRepositoryRoot
 {
     internal const string VariableName = "MCG_ORCHESTRATOR_REPOSITORY_ROOT";
 
