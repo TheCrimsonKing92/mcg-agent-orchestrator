@@ -264,12 +264,19 @@ internal sealed partial class OperatorIntentCoordinator
             while (completions.Count > 0)
             {
                 var completion = completions[0];
-                _store.CompleteAsync(
-                    completion.IntentId,
-                    ClaimOwner,
-                    OperatorIntentStatus.Applied,
-                    completion.Outcome,
-                    _utcNow()).GetAwaiter().GetResult();
+                try
+                {
+                    _store.CompleteAsync(
+                        completion.IntentId,
+                        ClaimOwner,
+                        OperatorIntentStatus.Applied,
+                        completion.Outcome,
+                        _utcNow()).GetAwaiter().GetResult();
+                }
+                catch when (IsTerminalForClaimOwner(completion.IntentId))
+                {
+                    // A completion already made this claimed row terminal; its effect must not be applied again.
+                }
                 completions.RemoveAt(0);
             }
 
@@ -277,6 +284,21 @@ internal sealed partial class OperatorIntentCoordinator
             {
                 _pendingCompletions.Remove(goalId.Value);
             }
+        }
+    }
+
+    private bool IsTerminalForClaimOwner(string intentId)
+    {
+        try
+        {
+            var stored = _store.GetAsync(intentId).GetAwaiter().GetResult();
+            return stored is not null &&
+                stored.ClaimOwner == ClaimOwner &&
+                stored.Status is OperatorIntentStatus.Applied or OperatorIntentStatus.Rejected;
+        }
+        catch
+        {
+            return false;
         }
     }
 
