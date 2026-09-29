@@ -19,19 +19,23 @@ public sealed class MergeTrainIdentityMaterializationTests : AcceptanceCohortWor
             };
             string firstIdentity;
             string firstTree;
-            using (var workspace = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings))
+            string firstCommit;
+            var firstDate = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            using (var workspace = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings, committerDate: firstDate))
             {
                 firstTree = workspace.TreeRevision;
+                firstCommit = workspace.CommitRevision;
                 firstIdentity = MergeTrainIdentity.Create(workspace.Members, main, firstTree, "manifest-v1").Value;
             }
 
-            var initialSecond = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            Assert.True(SpinWait.SpinUntil(() => DateTimeOffset.UtcNow.ToUnixTimeSeconds() > initialSecond,
-                TimeSpan.FromSeconds(3)), "The UTC second did not advance before rematerialization.");
-            using var again = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings);
+            using var again = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings,
+                committerDate: firstDate.AddSeconds(10));
+            Assert.NotEqual(firstCommit, again.CommitRevision);
             Assert.Equal(firstTree, again.TreeRevision);
             Assert.Equal(firstIdentity,
                 MergeTrainIdentity.Create(again.Members, main, again.TreeRevision, "manifest-v1").Value);
+            using var defaultWorkspace = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings);
+            Assert.Equal(firstTree, defaultWorkspace.TreeRevision);
         }
         finally
         {

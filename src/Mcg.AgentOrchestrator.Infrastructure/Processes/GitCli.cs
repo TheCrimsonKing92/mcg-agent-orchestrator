@@ -55,6 +55,12 @@ internal static class GitCli
     public static GitResult Run(string workingDirectory, int timeoutMilliseconds, params string[] args)
         => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
 
+    internal static GitResult RunWithEnvironment(
+        string workingDirectory,
+        IReadOnlyDictionary<string, string> environment,
+        params string[] args) =>
+        RunExecutableCore("git", workingDirectory, DefaultTimeoutMilliseconds, null, args, environment);
+
     public static GitResult RunWithStandardInput(
         string workingDirectory, int timeoutMilliseconds, string standardInput, params string[] args) =>
         RunExecutableCore("git", workingDirectory, timeoutMilliseconds, standardInput, args);
@@ -71,7 +77,8 @@ internal static class GitCli
         string workingDirectory,
         int timeoutMilliseconds,
         string? standardInput,
-        params string[] args)
+        string[] args,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var processStarted = false;
         try
@@ -90,6 +97,12 @@ internal static class GitCli
                 startInfo.ArgumentList.Add(config);
             foreach (var arg in args)
                 startInfo.ArgumentList.Add(arg);
+
+            if (environment is not null)
+            {
+                foreach (var (key, value) in environment)
+                    startInfo.Environment[key] = value;
+            }
 
             // Read-only commands (status/diff/log) skip the index.lock, so recovery inspection can
             // never take or block on it; write commands take their required locks regardless.

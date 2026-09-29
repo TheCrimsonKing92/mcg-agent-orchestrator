@@ -600,7 +600,8 @@ public static partial class WorkerProcessJobs
         ProcessStartInfo startInfo,
         string? ownerId = null,
         Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null,
-        bool containDescendants = false)
+        bool containDescendants = false,
+        Action<int>? resumeObserver = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         var lifecycleAuthority = new object();
@@ -628,7 +629,8 @@ public static partial class WorkerProcessJobs
             startInfo,
             lifecycleAuthority,
             registrationIdentityReader,
-            ownerId);
+            ownerId,
+            resumeObserver);
     }
 
     internal static RegisteredOwnedProcess StartRegisteredOwnedRedirectedOrThrow(
@@ -766,7 +768,8 @@ public static partial class WorkerProcessJobs
         ProcessStartInfo startInfo,
         object lifecycleAuthority,
         Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader,
-        string? ownerId)
+        string? ownerId,
+        Action<int>? resumeObserver = null)
     {
         OwnedProcessGroup.SuspendedProcessStart launch;
         try
@@ -792,7 +795,11 @@ public static partial class WorkerProcessJobs
                     ownerIdentityReader,
                     out var registrationFailure,
                     launch.Group,
-                    launch.Resume,
+                    resumeObserver is null ? launch.Resume : () =>
+                    {
+                        resumeObserver(launch.Process.Id);
+                        launch.Resume();
+                    },
                     lifecycleAuthority: lifecycleAuthority))
             {
                 throw new InvalidOperationException(registrationFailure);

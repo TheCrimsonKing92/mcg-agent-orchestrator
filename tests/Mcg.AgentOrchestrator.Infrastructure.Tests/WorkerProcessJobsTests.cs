@@ -1859,26 +1859,38 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 Assert.False(string.IsNullOrWhiteSpace(nativeIdentity.ExecutablePath));
                 Assert.False(File.Exists(readyPath));
                 negativeControl.Group.Kill();
-                Assert.True(negativeControl.WaitForOwnedExit(TimeSpan.FromSeconds(5)));
+                Assert.True(negativeControl.WaitForOwnedExit(TestHangGuard.Bound),
+                    "Suspended negative-control child did not exit after kill.");
             }
             var closedHandleIdentity = negativeControl.ReadLifecycleIdentity(negativeControlProcessId);
             Assert.Equal(ProcessInspectionStatus.NativeFailure, closedHandleIdentity.Status);
             Assert.Equal("process-handle-validation", closedHandleIdentity.Operation);
 
-            var registrationStarted = Stopwatch.GetTimestamp();
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var watcher = new FileSystemWatcher(root, Path.GetFileName(readyPath));
+            watcher.Created += (_, _) => ready.TrySetResult();
+            watcher.Renamed += (_, _) => ready.TrySetResult();
+            watcher.Error += (_, _) => { if (File.Exists(readyPath)) ready.TrySetResult(); };
+            watcher.EnableRaisingEvents = true;
+            var observedRegistry = false;
+            var observedNoReadiness = false;
             child = WorkerProcessJobs.StartRegisteredOwnedOrThrow(
                 CreateIsolatedDotnetProbeStartInfo(readyPath),
-                "suspended-native-identity");
-            var registrationElapsed = Stopwatch.GetElapsedTime(registrationStarted);
+                "suspended-native-identity",
+                resumeObserver: processId =>
+                {
+                    observedRegistry = WorkerProcessJobs.ListActiveRegistryEntriesForTests()
+                        .Any(candidate => candidate.ProcessId == processId);
+                    observedNoReadiness = !File.Exists(readyPath);
+                });
+            Assert.True(observedRegistry, "Durable registry must list the suspended child before resume.");
+            Assert.True(observedNoReadiness, "Readiness sentinel must be absent before resume.");
             var entry = Assert.Single(
                 WorkerProcessJobs.ListActiveRegistryEntriesForTests(),
                 candidate => candidate.ProcessId == child.Id);
 
-            var readyDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
-            while (!File.Exists(readyPath) && DateTimeOffset.UtcNow < readyDeadline)
-            {
-                await Task.Delay(10, TestContext.Current.CancellationToken);
-            }
+            if (File.Exists(readyPath)) ready.TrySetResult();
+            await TestHangGuard.WaitAsync(ready.Task, "suspended child readiness sentinel");
 
             Assert.True(File.Exists(readyPath), "Suspended child did not publish its readiness sentinel after resume.");
             var identity = Assert.IsType<SpawnProcessIdentity>(child.Identity);
@@ -1890,13 +1902,9 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 SpawnTrackedProcessStatus.LiveMatch,
                 SpawnProcessIdentityReader.EvaluateTrackedProcess(entry, out var observedProcess, out _));
             Assert.IsType<Process>(observedProcess).Dispose();
-            Assert.True(
-                entry.RegisteredAt <= File.GetLastWriteTimeUtc(readyPath),
-                $"Registration {entry.RegisteredAt:O} must precede readiness {File.GetLastWriteTimeUtc(readyPath):O}.");
             Console.WriteLine(
                 $"suspended-registration-receipt pid={child.Id} identity_attempts={child.IdentityReadAttempts} " +
-                $"elapsed_ms={registrationElapsed.TotalMilliseconds:F3} registered_at={entry.RegisteredAt:O} " +
-                $"ready_at={File.GetLastWriteTimeUtc(readyPath):O} image={Path.GetFileName(entry.ImagePath)}");
+                $"registered_at={entry.RegisteredAt:O} image={Path.GetFileName(entry.ImagePath)}");
         }
         finally
         {
@@ -1905,12 +1913,14 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 try { child.Kill(entireProcessTree: true); } catch { }
                 try
                 {
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    await child.WaitForExitAsync(timeout.Token);
+                    await TestHangGuard.WaitAsync(child.WaitForExitAsync(CancellationToken.None),
+                        "suspended child cleanup exit");
                 }
-                catch { }
-                try { _ = child.Release(out _); } catch { }
-                child.Dispose();
+                finally
+                {
+                    try { _ = child.Release(out _); } catch { }
+                    child.Dispose();
+                }
             }
 
             WorkerProcessJobs.ClearRegistryForTests();
