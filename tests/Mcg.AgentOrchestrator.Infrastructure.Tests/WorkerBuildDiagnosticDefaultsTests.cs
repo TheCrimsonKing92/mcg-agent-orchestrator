@@ -39,11 +39,10 @@ public sealed class WorkerBuildDiagnosticDefaultsTests
         startInfo.ArgumentList.Add(inspect);
         startInfo.Environment["MCG_DIAGNOSTIC_SCRIPT"] = script;
 
-        using var process = Process.Start(startInfo)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        Assert.True(process.ExitCode == 0, stdout + stderr);
+        var capture = TestChildProcessCapture.Run(startInfo);
+        var stdout = capture.Stdout;
+        var stderr = capture.Stderr;
+        Assert.True(capture.ExitCode == 0, stdout + stderr);
         Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
         using var parsed = JsonDocument.Parse(stdout);
         var result = parsed.RootElement;

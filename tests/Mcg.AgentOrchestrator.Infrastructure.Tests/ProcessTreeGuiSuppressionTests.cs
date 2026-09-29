@@ -166,12 +166,10 @@ public sealed class ProcessTreeGuiSuppressionTests
             startInfo.Environment["MCG_PROBE_SCRIPT"] = childScript;
             startInfo.Environment["MCG_PROBE_OUTPUT"] = probePath;
 
-            using var process = ProcessTreeGuiSuppression.Start(startInfo);
-            Assert.True(process.WaitForExit(15_000), "Timed out waiting for GUI suppression probe.");
-
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
-            Assert.Equal(0, process.ExitCode);
+            var result = TestChildProcessCapture.Run(startInfo, start: ProcessTreeGuiSuppression.Start);
+            var stdout = result.Stdout;
+            var stderr = result.Stderr;
+            Assert.Equal(0, result.ExitCode);
             Assert.True(File.Exists(probePath), $"Probe did not write output. stdout={stdout} stderr={stderr}");
             Assert.Equal(originalErrorMode, WindowsProbe.GetErrorMode());
 

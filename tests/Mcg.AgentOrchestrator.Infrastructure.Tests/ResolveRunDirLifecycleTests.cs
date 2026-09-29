@@ -237,8 +237,7 @@ public sealed class ResolveRunDirLifecycleTests
 
     private static (int ExitCode, string Stdout, string Stderr) Resolve(string root, string appDll)
     {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo("powershell.exe")
+        var startInfo = new ProcessStartInfo("powershell.exe")
         {
             WorkingDirectory = RepositoryRoot(),
             UseShellExecute = false,
@@ -246,19 +245,16 @@ public sealed class ResolveRunDirLifecycleTests
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        process.StartInfo.Environment["TEMP"] = root;
-        process.StartInfo.Environment["TMP"] = root;
-        process.StartInfo.ArgumentList.Add("-NoProfile");
-        process.StartInfo.ArgumentList.Add("-ExecutionPolicy");
-        process.StartInfo.ArgumentList.Add("Bypass");
-        process.StartInfo.ArgumentList.Add("-File");
-        process.StartInfo.ArgumentList.Add(Path.Combine(RepositoryRoot(), "scripts", "resolve-run-dir.ps1"));
-        process.StartInfo.ArgumentList.Add(appDll);
-        process.Start();
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30000), "resolver did not exit within 30 seconds");
-        return (process.ExitCode, stdout, stderr);
+        startInfo.Environment["TEMP"] = root;
+        startInfo.Environment["TMP"] = root;
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-ExecutionPolicy");
+        startInfo.ArgumentList.Add("Bypass");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(RepositoryRoot(), "scripts", "resolve-run-dir.ps1"));
+        startInfo.ArgumentList.Add(appDll);
+        var result = TestChildProcessCapture.Run(startInfo);
+        return (result.ExitCode, result.Stdout, result.Stderr);
     }
 
     private static string RepositoryRoot([CallerFilePath] string sourceFile = "")
