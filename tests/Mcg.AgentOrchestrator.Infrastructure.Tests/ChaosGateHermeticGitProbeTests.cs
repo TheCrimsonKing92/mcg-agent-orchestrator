@@ -53,8 +53,23 @@ public sealed class ChaosGateHermeticGitProbeTests : ChaosGateTestBase
         }
         finally
         {
-            if (intended is not null && Directory.Exists(intended)) Directory.Delete(intended, recursive: true);
-            if (Directory.Exists(other)) Directory.Delete(other, recursive: true);
+            DeleteGitFixture(intended);
+            DeleteGitFixture(other);
         }
+    }
+
+    private static void DeleteGitFixture(string? path)
+    {
+        if (path is null || !Directory.Exists(path)) return;
+
+        // Git stores objects as read-only files on Windows, which blocks recursive deletion.
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+        {
+            var attributes = File.GetAttributes(file);
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(file, attributes & ~FileAttributes.ReadOnly);
+        }
+
+        Directory.Delete(path, recursive: true);
     }
 }
