@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -6,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed class ConductorWatchProgressReporter
+internal sealed partial class ConductorWatchProgressReporter
 {
     public const int DefaultThrottleSeconds = 30;
     public const int DefaultStallWarningMinutes = 10;
@@ -410,23 +409,6 @@ internal sealed class ConductorWatchProgressReporter
         }
 
         return $"{Math.Max(0, (int)duration.TotalSeconds)}s";
-    }
-
-    private static bool IsProcessAlive(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
     }
 
     private sealed record ConductorWatchProgressSnapshot(

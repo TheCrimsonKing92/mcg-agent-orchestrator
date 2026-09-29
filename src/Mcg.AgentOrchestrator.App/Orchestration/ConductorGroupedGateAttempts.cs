@@ -287,8 +287,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     private static bool IsProcessAlive(int pid)
     {
         try { using var process = Process.GetProcessById(pid); return !process.HasExited; }
-        catch (ArgumentException) { return false; }
-        catch (InvalidOperationException) { return false; }
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception)) { return false; }
     }
 
     private static bool StopIdentityRevalidated(ConductorGroupedGateAttempt attempt)

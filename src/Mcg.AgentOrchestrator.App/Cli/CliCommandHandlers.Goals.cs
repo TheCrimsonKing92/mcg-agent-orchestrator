@@ -1807,6 +1807,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var delegateSelfRelaunchToSupervisor = supervisedChild &&
                     !string.Equals(supervisorRestageSetting, "false", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(supervisorRestageSetting, "0", StringComparison.OrdinalIgnoreCase);
+                var conductorOutputLogPath = Environment.GetEnvironmentVariable(
+                    ConductorContinuitySupervisor.StdoutLogPathEnvironmentVariable);
+                var conductorDiagnosticPath = string.IsNullOrWhiteSpace(conductorOutputLogPath)
+                    ? Path.Combine(context.Workspace.LogDirectory,
+                        $"conduct-loop-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Environment.ProcessId}.crash.log")
+                    : Path.Combine(Path.GetDirectoryName(conductorOutputLogPath)!,
+                        Path.GetFileName(conductorOutputLogPath).EndsWith(".out.log", StringComparison.OrdinalIgnoreCase)
+                            ? Path.GetFileName(conductorOutputLogPath)[..^8] + ".crash.log"
+                            : Path.GetFileName(conductorOutputLogPath) + ".crash.log");
                 var loopSummary = new ConductorBatchLoop(
                     measuredSweepWithCheckpointHolds: reconcileSweep,
                     reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
@@ -1838,6 +1847,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
                     blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
                     workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
+                    .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                     .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace)).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
