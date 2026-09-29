@@ -58,12 +58,25 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
                         DateTimeOffset.UnixEpoch, "C:\\dotnet.exe");
                 }, pid => pid == FirstChild));
 
+            IReadOnlyList<GateReadyCandidateProjection> expectedMembers;
+            string expectedTreeRevision;
+            string expectedManifestIdentity;
+            string expectedIdentityValue;
             if (train)
             {
                 var selection = ProjectTrainSelection(driver, goals);
                 var result = driver.RunMergeTrain(selection, goals,
                     ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
                 Assert.Contains("outcome=inflight", result.Detail, StringComparison.Ordinal);
+                expectedMembers = selection.Members;
+                using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo,
+                    expectedMembers[0].MainRevision, selection.BindMembers(), cleanup.Hooks);
+                expectedTreeRevision = integration.TreeRevision;
+                expectedManifestIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                    integration.Path, integration.Members.SelectMany(member => member.LandingPaths)
+                        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+                expectedIdentityValue = MergeTrainIdentity.Create(integration.Members,
+                    expectedMembers[0].MainRevision, expectedTreeRevision, expectedManifestIdentity).Value;
             }
             else
             {
@@ -71,17 +84,29 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
                 var result = driver.RunAcceptanceCohort(selection, goals,
                     ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
                 Assert.Contains("outcome=inflight", result.Detail, StringComparison.Ordinal);
+                expectedMembers = selection.Members;
+                var bindings = selection.BindMembers();
+                using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo,
+                    expectedMembers[0].MainRevision, bindings, cleanup.Hooks);
+                expectedTreeRevision = integration.TreeRevision;
+                expectedManifestIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                    integration.Path, bindings.SelectMany(member => member.LandingPaths)
+                        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+                expectedIdentityValue = AcceptanceCohortIdentity.Create(bindings,
+                    expectedMembers[0].MainRevision, expectedTreeRevision, expectedManifestIdentity).Value;
             }
 
             var launched = Assert.Single(launches);
             var record = ConductorGroupedGateAttemptCoordinator.Read(launched.MetadataPath);
             Assert.Equal(train ? "train" : "cohort", record.Kind);
-            Assert.Equal(goals.Select(goal => goal.Id.Value), record.Members.Select(member => member.GoalId));
-            Assert.All(record.Members, member => Assert.Equal(40, member.CandidateRevision.Length));
-            Assert.Equal(40, record.MainRevision.Length);
-            Assert.Equal(40, record.CombinedTreeRevision.Length);
-            Assert.False(string.IsNullOrWhiteSpace(record.ManifestIdentity));
-            Assert.False(string.IsNullOrWhiteSpace(record.IdentityValue));
+            Assert.Equal(expectedMembers.Select(member => member.GoalId.Value),
+                record.Members.Select(member => member.GoalId));
+            Assert.Equal(expectedMembers.Select(member => member.CandidateRevision),
+                record.Members.Select(member => member.CandidateRevision));
+            Assert.Equal(expectedMembers[0].MainRevision, record.MainRevision);
+            Assert.Equal(expectedTreeRevision, record.CombinedTreeRevision);
+            Assert.Equal(expectedManifestIdentity, record.ManifestIdentity);
+            Assert.Equal(expectedIdentityValue, record.IdentityValue);
             Assert.Equal(FirstChild, record.OwnerProcessId);
             Assert.Equal(FirstGeneration, record.LaunchingGenerationId);
             Assert.Equal(0, background.StartCount);
