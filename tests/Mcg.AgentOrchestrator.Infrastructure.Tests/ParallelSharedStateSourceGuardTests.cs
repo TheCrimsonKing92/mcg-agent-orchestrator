@@ -28,6 +28,11 @@ public sealed class ParallelSharedStateSourceGuardTests
             .Select(path => (Path: Path.GetRelativePath(testsRoot, path), Text: File.ReadAllText(path)))
             .ToArray();
 
+        Assert.Contains(sources, source => source.Path.Replace('\\', '/').EndsWith(
+            "/AcceptancePolicyShardPlannerTests.cs", StringComparison.Ordinal));
+        Assert.Contains(sources, source => source.Path.Replace('\\', '/').EndsWith(
+            "/PlannerSamplingDispatchTests.cs", StringComparison.Ordinal));
+
         var offenders = FindOffenders(sources);
         Assert.True(offenders.Count == 0,
             "Parallel test source mutates shared state: " + string.Join(", ", offenders));
@@ -105,20 +110,16 @@ public sealed class ParallelSharedStateSourceGuardTests
 
     private static string FindTestsRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
-        var sourceDirectory = Path.GetDirectoryName(sourceFilePath);
-        if (Directory.Exists(sourceDirectory) &&
-            Path.GetFileName(sourceDirectory).Equals("Mcg.AgentOrchestrator.Infrastructure.Tests", StringComparison.Ordinal))
-            return Directory.GetParent(sourceDirectory)!.FullName;
-
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
         while (directory is not null)
         {
-            var candidate = Path.Combine(directory.FullName, "tests");
-            if (Directory.Exists(candidate))
-                return candidate;
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
+                return Path.Combine(directory.FullName, "tests");
             directory = directory.Parent;
         }
 
-        throw new InvalidOperationException("Could not locate the checked-out tests directory.");
+        throw new DirectoryNotFoundException(
+            $"Could not locate checked-out tests directory from source file path '{sourceFilePath}'.");
     }
 }
