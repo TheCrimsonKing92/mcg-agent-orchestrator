@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class GateShardPermitPool
+internal sealed partial class GateShardPermitPool
 {
     internal const int DefaultBudget = 4;
     internal const string GateShardBudgetVariable = "MCG_GATE_SHARD_BUDGET";
