@@ -16,6 +16,11 @@ if (args.Length >= 2 && args[0] == ConductorParallelAcceptanceAttemptCoordinator
     return ConductorParallelAcceptanceAttemptCoordinator.RunOwnedProcess(args[1]);
 }
 
+if (args.Length >= 2 && args[0] == ConductorGroupedGateAttemptCoordinator.OwnedProcessSubcommandName)
+{
+    return ConductorGroupedGateAttemptHost.Run(args[1]);
+}
+
 if (args.Length >= 1 && args[0] == ConductorSuccessorSelfCheck.SubcommandName)
 {
     return ConductorSuccessorSelfCheck.Run(args);

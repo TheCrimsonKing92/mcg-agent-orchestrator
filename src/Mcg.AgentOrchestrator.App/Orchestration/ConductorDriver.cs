@@ -57,7 +57,8 @@ internal sealed partial class ConductorDriver
         DateTimeOffset StartedAt,
         IReadOnlySet<string> MemberGoalIds,
         string PairFingerprint,
-        TaskCompletionSource Completion);
+        TaskCompletionSource Completion,
+        string? AttemptMetadataPath = null);
 
     private sealed class TransferableCohortWorkspace(AcceptanceCohortWorkspace workspace) : IDisposable
     {
@@ -3219,7 +3220,8 @@ internal sealed partial class ConductorDriver
         var memberGoalIds = selection.Members
             .Select(member => member.GoalId.Value)
             .ToHashSet(StringComparer.Ordinal);
-        if (TryGetActiveCohortGateRun(memberGoalIds, out var currentRun))
+        if (_groupedGateAttempts is null &&
+            TryGetActiveCohortGateRun(memberGoalIds, out var currentRun))
         {
             return CohortInFlight(
                 selection,
@@ -3291,6 +3293,21 @@ internal sealed partial class ConductorDriver
             integration.TreeRevision,
             manifestIdentity);
         var receipt = _cohortAcceptanceStore.TryReadReceipt(identity.Value);
+        if (runGateInBackground && _groupedGateAttempts is not null)
+        {
+            var recovered = RecoverGroupedGateAttempt("cohort", selection.Members,
+                selection.Members[0].MainRevision, integration.TreeRevision,
+                memberPairKey, receipt is not null);
+            if (recovered.Running is not null)
+                return CohortInFlight(selection, orderedGoals, policy, recovered.Running);
+            if (recovered.DeadWithoutReceipt)
+                receipt = _cohortAcceptanceStore.SaveGateReceipt(new AcceptanceCohortReceipt(
+                    $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                    identity, AcceptanceCohortGateOutcome.InfrastructureFailure, _utcNow(), 0,
+                    ["infrastructure:grouped-gate-owner-dead"], null, [],
+                    InfrastructureReasonCode: AcceptanceCohortInfrastructureReasonCodes.ExitCodeMissing,
+                    InfrastructureDetail: "Grouped gate child exited without a receipt."));
+        }
         if (receipt?.Invalidation is not null ||
             receipt?.Outcome == AcceptanceCohortGateOutcome.Invalidated)
         {
@@ -3332,6 +3349,14 @@ internal sealed partial class ConductorDriver
         {
             if (runGateInBackground)
             {
+                if (_groupedGateAttempts is not null)
+                {
+                    var ownedRun = StartGroupedGateAttempt("cohort", selection.Members,
+                        selection.Members[0].MainRevision, integration.TreeRevision,
+                        manifestIdentity, identity.Value, memberPairKey, policy);
+                    onGateAdmitted?.Invoke();
+                    return CohortInFlight(selection, orderedGoals, policy, ownedRun);
+                }
                 var run = new CohortGateRun(
                     _utcNow(),
                     memberGoalIds,

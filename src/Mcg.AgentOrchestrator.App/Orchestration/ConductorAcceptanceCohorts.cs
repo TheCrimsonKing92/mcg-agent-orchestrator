@@ -813,6 +813,7 @@ internal sealed partial class ConductorDriver
 
     private void SweepCompletedCohortGateRuns()
     {
+        ObserveOwnedGroupedGateAttempts();
         foreach (var pair in _cohortGateRuns)
         {
             if (!pair.Value.Completion.Task.IsCompleted ||
@@ -823,6 +824,7 @@ internal sealed partial class ConductorDriver
 
             ObserveCohortGateCompletion(pair.Key, completed);
         }
+        RestoreRunningGroupedGateAttempts();
     }
 
     private bool TryGetActiveCohortGateRun(
