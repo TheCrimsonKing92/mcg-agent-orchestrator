@@ -158,6 +158,7 @@ internal sealed class SupervisorHandoffFixture
         internal bool InheritedChildWaitForCancellation { get; set; }
         internal int InheritedChildObservations { get; private set; }
         internal List<ConductLoopLaunchRequest> Launches { get; } = [];
+        internal List<ConductorSupervisorProcessIdentity> Stopped { get; } = [];
         internal ConductorSupervisorProcessIdentity? Owner { get; private set; }
         public string? IncomingRecordPath { get; set; }
         public ConductorSupervisorProcessIdentity Self { get; } =
@@ -207,7 +208,8 @@ internal sealed class SupervisorHandoffFixture
         {
             Launches.Add(request);
             if (ThrowOnLaunch) throw new InvalidOperationException("launch failed");
-            return new ConductLoopLaunchResult(Successor.ProcessId, request.StdoutPath, request.StderrPath);
+            return new ConductLoopLaunchResult(Successor.ProcessId, request.StdoutPath, request.StderrPath,
+                StartedAt: Successor.StartedAt);
         }
         public bool IsAlive(ConductorSupervisorProcessIdentity process) =>
             !(InheritedChildMissingBeforeAttach && process.ProcessId == 901);
@@ -232,7 +234,7 @@ internal sealed class SupervisorHandoffFixture
             return InheritedChildResult ??
                 throw new NotSupportedException("No active child in this fixture.");
         }
-        public void StopPending(int processId) { }
+        public void StopPending(ConductorSupervisorProcessIdentity identity) => Stopped.Add(identity);
     }
 
     internal sealed class RecordingEvents : IRunEventStore

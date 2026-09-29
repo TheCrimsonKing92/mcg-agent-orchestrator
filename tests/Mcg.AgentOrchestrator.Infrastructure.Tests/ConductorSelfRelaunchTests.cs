@@ -10,9 +10,8 @@ public sealed class ConductorSelfRelaunchTests
     {
         using var fixture = RealRelaunchFixture.Create();
 
-        var result = ConductorSelfRelaunch.Create(fixture.Options)(
+        var result = ConductorSelfRelaunch.Create(fixture.OptionsWithCapturedSuccessorIdentity)(
             new ConductorSelfRelaunchRequest("goal-real-success", 7));
-        fixture.SuccessorProcessId = result.Handoff?.ProcessId;
 
         Assert.True(result.HandedOff, result.Reason);
         Assert.NotNull(result.Successor);
@@ -49,9 +48,8 @@ public sealed class ConductorSelfRelaunchTests
             loopArgs: ["conduct", "--loop", "--daemon", "--watch", "1", "--max-duration", "30"],
             usePrebuiltPayload: true);
 
-        var result = ConductorSelfRelaunch.Create(fixture.Options)(
+        var result = ConductorSelfRelaunch.Create(fixture.OptionsWithCapturedSuccessorIdentity)(
             new ConductorSelfRelaunchRequest("goal-real-handoff-failure", 8));
-        fixture.SuccessorProcessId = result.Handoff?.ProcessId;
 
         Assert.False(result.HandedOff);
         Assert.Equal("handoff", result.FailedPhase);
@@ -399,7 +397,18 @@ public sealed class ConductorSelfRelaunchTests
         public string Root { get; }
         public ConductorLoopLeaseController Lease { get; }
         public ConductorSelfRelaunchOptions Options { get; }
-        public int? SuccessorProcessId { get; set; }
+        public ConductorSupervisorProcessIdentity? SuccessorIdentity { get; set; }
+        public ConductorSelfRelaunchOptions OptionsWithCapturedSuccessorIdentity => Options with
+        {
+            HandoffOptions = Options.HandoffOptions with
+            {
+                SuccessorReadyProbe = (launched, request) =>
+                {
+                    SuccessorIdentity = launched.SuccessorIdentity;
+                    return ConductorLoopHandoff.HasSuccessorReadySignal(launched, request);
+                }
+            }
+        };
 
         public static RealRelaunchFixture Create(
             Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
@@ -483,16 +492,7 @@ public sealed class ConductorSelfRelaunchTests
 
         public void Dispose()
         {
-            if (SuccessorProcessId is { } processId)
-            {
-                try
-                {
-                    ConductorLoopHandoff.StopFailedSuccessor(processId);
-                }
-                catch
-                {
-                }
-            }
+            TestOwnedProcessStop.StopTreeIfSame(SuccessorIdentity);
 
             Lease.Dispose();
             TryDeleteDirectory(Root);
