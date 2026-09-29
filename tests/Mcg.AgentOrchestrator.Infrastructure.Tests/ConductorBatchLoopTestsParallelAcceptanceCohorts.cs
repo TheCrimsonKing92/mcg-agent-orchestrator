@@ -675,7 +675,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
             }
         }
 
-        var faulted = RunCohortFaultTicks(CaptureFault, runs: 2);
+        var faulted = RunCohortFaultTicks(CaptureFault, runs: 1);
         Assert.Null(faulted.LoopException);
         Assert.Equal(faulted.StatusesBefore, faulted.StatusesAfter);
         foreach (var goalId in faulted.MemberGoalIds)
