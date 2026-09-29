@@ -33,11 +33,12 @@ Tests and source helpers must not discover the repository from `Environment.Curr
 Ambient discovery breaks isolated gate execution and can make acceptance inspect the checkout running the
 process instead of the goal worktree being verified.
 
-Thread the repository or worktree root as an explicit argument. A repository-layout test may derive its root
-hermetically from `[CallerFilePath]` when its source location is the authority. The compiler supplies the
-source path even when the test binary runs under an isolated `mcg-dotnet-isolated` artifacts root with no
-repository above it. Walk upward from that source path and recognize `.git` as either a directory or a file,
-as shown in `tests/Mcg.AgentOrchestrator.Core.Tests/AgentHarnessDocsDriftTests.cs`.
+Thread the repository or worktree root as an explicit argument. Tests that derive a root from `[CallerFilePath]`
+must first use `VerifiedRepositoryRoot`. The helper accepts `MCG_ORCHESTRATOR_REPOSITORY_ROOT` when it names
+a repository with a `.git` file or directory, `Mcg.AgentOrchestrator.sln`, and `tests`; otherwise each caller
+keeps its source-path fallback. The variable names the worktree under verification. Base-build cache hits can
+restore test assemblies compiled in another worktree, so a compile-time path alone can point at the wrong
+checkout or one that has been removed.
 
 The repository layout convention guard mechanically rejects test-source patterns that combine
 `Environment.CurrentDirectory` or `AppContext.BaseDirectory` with repository-root discovery. It deliberately

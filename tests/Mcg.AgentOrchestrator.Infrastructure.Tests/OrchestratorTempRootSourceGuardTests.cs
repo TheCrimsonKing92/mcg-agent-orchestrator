@@ -64,6 +64,9 @@ public sealed class OrchestratorTempRootSourceGuardTests
 
     private static string FindRepositoryRoot([CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return verifiedRoot;
+
         for (var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
              directory is not null;
              directory = directory.Parent)

@@ -3108,7 +3108,9 @@ public sealed class WorkerProcessJobsTests : IDisposable
     private static void AssertProductionCallersObserveRegistrationFailure(
         [CallerFilePath] string sourceFilePath = "")
     {
-        var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
+        var repoRoot = VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? verifiedRoot
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
         var checkedCallers = new Dictionary<string, string>
         {
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "BackgroundDispatchRunner.cs")] =
@@ -3168,7 +3170,9 @@ public sealed class WorkerProcessJobsTests : IDisposable
     private static void AssertOwnedGroupCloseRoutesThroughAccountingHelper(
         [CallerFilePath] string sourceFilePath = "")
     {
-        var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
+        var repoRoot = VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? verifiedRoot
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
         var productionRoot = Path.Combine(repoRoot, "src", "Mcg.AgentOrchestrator.Infrastructure");
         var offenders = Directory.EnumerateFiles(productionRoot, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))

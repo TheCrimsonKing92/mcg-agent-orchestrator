@@ -83,6 +83,9 @@ public sealed class HeadlessRuntimeDependencyGraphTests
 
     private static string FindRepositoryRoot([CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return verifiedRoot;
+
         var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
         while (directory is not null)
         {

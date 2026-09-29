@@ -119,6 +119,9 @@ public sealed class PostLandingCanaryBuildLifecycleTests
 
     private static string RepositoryRoot([CallerFilePath] string sourceFile = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return verifiedRoot;
+
         for (var path = Path.GetDirectoryName(sourceFile); path is not null; path = Path.GetDirectoryName(path))
         {
             if (Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git")))

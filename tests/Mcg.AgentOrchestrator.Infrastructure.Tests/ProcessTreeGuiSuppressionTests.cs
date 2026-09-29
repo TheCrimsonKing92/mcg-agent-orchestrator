@@ -519,6 +519,9 @@ public sealed class ProcessTreeGuiSuppressionTests
 
     private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return verifiedRoot;
+
         var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath) ?? AppContext.BaseDirectory);
         while (directory is not null)
         {

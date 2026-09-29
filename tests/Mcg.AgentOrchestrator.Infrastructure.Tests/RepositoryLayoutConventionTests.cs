@@ -205,7 +205,9 @@ public sealed class RepositoryLayoutConventionTests
     }
 
     private static string RepositoryRoot([CallerFilePath] string sourcePath = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourcePath)!, "..", ".."));
+        VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? verifiedRoot
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourcePath)!, "..", ".."));
 
     private sealed class RepositoryFixture : IDisposable
     {

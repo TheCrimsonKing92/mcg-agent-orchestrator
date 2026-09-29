@@ -133,7 +133,9 @@ public sealed class RuntimeMaintenanceOwnershipTests
     }
 
     private static string FindRepositoryRoot([CallerFilePath] string sourcePath = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourcePath)!, "..", "..", ".."));
+        VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? verifiedRoot
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourcePath)!, "..", "..", ".."));
 
     private static int CountOccurrences(string source, string value) =>
         source.Split(value, StringSplitOptions.None).Length - 1;

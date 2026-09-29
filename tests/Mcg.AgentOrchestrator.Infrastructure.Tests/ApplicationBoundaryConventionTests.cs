@@ -196,6 +196,9 @@ public sealed class ApplicationBoundaryConventionTests
     // guard inspects the worktree it was compiled from even under an isolated artifacts root.
     private static string FindRepositoryRoot([CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return verifiedRoot;
+
         var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
         while (directory is not null)
         {

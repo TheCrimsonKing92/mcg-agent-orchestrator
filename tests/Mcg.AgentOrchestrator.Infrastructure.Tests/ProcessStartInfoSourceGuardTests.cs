@@ -69,6 +69,9 @@ public sealed class ProcessStartInfoSourceGuardTests
 
     private static string FindTestRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return Path.Combine(verifiedRoot, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+
         var sourceDirectory = Path.GetDirectoryName(sourceFilePath);
         if (Directory.Exists(sourceDirectory) &&
             Path.GetFileName(sourceDirectory).Equals("Mcg.AgentOrchestrator.Infrastructure.Tests", StringComparison.Ordinal))

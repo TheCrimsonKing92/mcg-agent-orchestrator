@@ -110,6 +110,9 @@ public sealed class ParallelSharedStateSourceGuardTests
 
     private static string FindTestsRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+            return Path.Combine(verifiedRoot, "tests");
+
         var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);
         while (directory is not null)
         {
