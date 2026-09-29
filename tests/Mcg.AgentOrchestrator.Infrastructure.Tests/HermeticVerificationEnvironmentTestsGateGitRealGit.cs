@@ -60,6 +60,7 @@ public sealed class HermeticVerificationEnvironmentTestsGateGitRealGit : GoalAcc
         {
             WorkingDirectory = directory,
             UseShellExecute = false,
+            CreateNoWindow = true,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true

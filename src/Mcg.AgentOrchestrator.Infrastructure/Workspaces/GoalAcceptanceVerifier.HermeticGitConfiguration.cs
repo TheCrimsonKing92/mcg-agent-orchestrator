@@ -23,11 +23,14 @@ public sealed partial class GoalAcceptanceVerifier
         var directory = Path.Combine(profileRoot, "git");
         var destination = Path.Combine(directory, "gate-gitconfig");
         var expected = new UTF8Encoding(false).GetBytes(HermeticGateGitConfig);
-        var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(destination))));
+        var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(destination).ToUpperInvariant())));
         using var mutex = new Mutex(false, "mcg-gate-gitconfig-" + identity);
         try
         {
-            mutex.WaitOne();
+            if (!mutex.WaitOne(TimeSpan.FromSeconds(30)))
+            {
+                throw new IOException($"Timed out waiting to write the hermetic git config at '{destination}'.");
+            }
         }
         catch (AbandonedMutexException)
         {
@@ -47,12 +50,23 @@ public sealed partial class GoalAcceptanceVerifier
             try
             {
                 File.WriteAllBytes(temporary, expected);
-                if (File.Exists(destination))
+                try
                 {
-                    File.SetAttributes(destination, File.GetAttributes(destination) & ~FileAttributes.ReadOnly);
-                }
+                    if (File.Exists(destination))
+                    {
+                        File.SetAttributes(destination, File.GetAttributes(destination) & ~FileAttributes.ReadOnly);
+                    }
 
-                File.Move(temporary, destination, overwrite: true);
+                    File.Move(temporary, destination, overwrite: true);
+                }
+                catch (IOException) when (File.Exists(destination) && File.ReadAllBytes(destination).AsSpan().SequenceEqual(expected))
+                {
+                    // A concurrent writer may have installed the same content first.
+                }
+                catch (UnauthorizedAccessException) when (File.Exists(destination) && File.ReadAllBytes(destination).AsSpan().SequenceEqual(expected))
+                {
+                    // A concurrent writer may have installed the same read-only content first.
+                }
                 File.SetAttributes(destination, File.GetAttributes(destination) | FileAttributes.ReadOnly);
             }
             finally
