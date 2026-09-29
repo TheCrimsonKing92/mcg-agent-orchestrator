@@ -69,6 +69,8 @@ internal sealed class SystemOrphanFixtureReaperSources(
             string json;
             try { json = File.ReadAllText(path); }
             catch (FileNotFoundException) { continue; }
+            catch (DirectoryNotFoundException) { continue; }
+            if (string.IsNullOrWhiteSpace(json)) continue;
             using var document = JsonDocument.Parse(json);
             if (!document.RootElement.TryGetProperty("Process", out var process) ||
                 !process.TryGetProperty("ProcessId", out var processId) ||

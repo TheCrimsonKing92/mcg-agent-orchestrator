@@ -158,6 +158,37 @@ public sealed class OrphanFixtureReaperTests
     }
 
     [Xunit.Fact]
+    public void System_sources_allow_missing_continuity_directory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "orphan-reaper-test-" + Guid.NewGuid().ToString("N"));
+        var sources = new SystemOrphanFixtureReaperSources(directory,
+            [Path.Combine(directory, "state.db")]);
+
+        Assert.Empty(sources.ReadSupervisorPids());
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("  \r\n  ")]
+    public void System_sources_allow_empty_supervisor_lease(string contents)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "orphan-reaper-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(directory, "continuity"));
+            File.WriteAllText(Path.Combine(directory, "continuity", "conduct-supervisor.lock"), contents);
+            var sources = new SystemOrphanFixtureReaperSources(directory,
+                [Path.Combine(directory, "state.db")]);
+
+            Assert.Empty(sources.ReadSupervisorPids());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void Store_discovery_failure_is_reported_without_escaping_sweep_step()
     {
         Assert.Contains(TerminalGoalSweep.ReapOrphanFixtures("\0"), line =>
