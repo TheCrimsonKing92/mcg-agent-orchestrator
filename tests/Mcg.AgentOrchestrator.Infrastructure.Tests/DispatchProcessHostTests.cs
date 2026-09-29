@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("ProcessSpawning")]
@@ -2024,6 +2025,7 @@ public sealed class DispatchProcessHostTests
         Process? wrapper = null;
         OwnedProcessGroup? group = null;
         int? childPid = null;
+        ConductorSupervisorProcessIdentity? childIdentity = null;
         try
         {
             var startInfo = BuildGrandchildReapWrapperStartInfo(
@@ -2047,6 +2049,7 @@ public sealed class DispatchProcessHostTests
                 waitFailurePath,
                 wrapper,
                 fixtureTimeout);
+            childIdentity = TestOwnedProcessStop.TryIdentify(childPid.Value);
             Assert.NotEqual(wrapper.Id, childPid.Value);
 
             using var child = Process.GetProcessById(childPid.Value);
@@ -2089,7 +2092,7 @@ public sealed class DispatchProcessHostTests
         }
         finally
         {
-            CleanupGrandchildReapFixture(dir, childPid, group, wrapper, fixtureTimeout);
+            CleanupGrandchildReapFixture(dir, childIdentity, group, wrapper, fixtureTimeout);
         }
     }
 
@@ -2867,15 +2870,12 @@ public sealed class DispatchProcessHostTests
 
     private static void CleanupGrandchildReapFixture(
         string fixtureRoot,
-        int? childPid,
+        ConductorSupervisorProcessIdentity? childIdentity,
         OwnedProcessGroup? group,
         Process? wrapper,
         TimeSpan timeout)
     {
-        if (childPid is { } pid)
-        {
-            TryKillProcess(pid);
-        }
+        TestOwnedProcessStop.StopTreeIfSame(childIdentity);
 
         try { group?.Kill(); } catch { }
         try { wrapper?.Kill(entireProcessTree: true); } catch { }
@@ -2884,20 +2884,20 @@ public sealed class DispatchProcessHostTests
         var fixtureProcessIds = FindFixturePwshProcessIds(fixtureRoot);
         foreach (var fixtureProcessId in fixtureProcessIds)
         {
-            TryKillProcess(fixtureProcessId);
+            TestOwnedProcessStop.StopTreeIfSame(fixtureProcessId);
         }
 
         var reaped = WaitUntil(
-            () => fixtureProcessIds.All(processId => !IsProcessAlive(processId)),
+            () => fixtureProcessIds.All(identity => TestOwnedProcessStop.TryIdentify(identity.ProcessId) != identity),
             timeout);
         var lateFixtureProcessIds = FindFixturePwshProcessIds(fixtureRoot);
         foreach (var fixtureProcessId in lateFixtureProcessIds)
         {
-            TryKillProcess(fixtureProcessId);
+            TestOwnedProcessStop.StopTreeIfSame(fixtureProcessId);
         }
 
         var lateReaped = WaitUntil(
-            () => lateFixtureProcessIds.All(processId => !IsProcessAlive(processId)),
+            () => lateFixtureProcessIds.All(identity => TestOwnedProcessStop.TryIdentify(identity.ProcessId) != identity),
             timeout);
         var survivingFixtureProcessIds = FindFixturePwshProcessIds(fixtureRoot);
         try { Directory.Delete(fixtureRoot, recursive: true); } catch { }
@@ -2906,24 +2906,26 @@ public sealed class DispatchProcessHostTests
             $"Grandchild fixture teardown timed out after {timeout.TotalSeconds:0} seconds; pwsh processes still reference fixture root '{fixtureRoot}': [{string.Join(",", survivingFixtureProcessIds)}]");
     }
 
-    private static IReadOnlyList<int> FindFixturePwshProcessIds(string fixtureRoot)
+    private static IReadOnlyList<ConductorSupervisorProcessIdentity> FindFixturePwshProcessIds(string fixtureRoot)
     {
         var processName = Path.GetFileNameWithoutExtension(WorkerShell.Executable);
         var processes = Process.GetProcessesByName(processName);
 
         try
         {
-            var processIds = processes.Select(process => process.Id).ToArray();
+            var identities = processes.Select(TestOwnedProcessStop.Identify)
+                .OfType<ConductorSupervisorProcessIdentity>().ToArray();
+            var processIds = identities.Select(identity => identity.ProcessId).ToArray();
             if (processIds.Length == 0)
             {
                 return [];
             }
 
             var commandLines = ProcessCommandLines.Read(processIds);
-            return commandLines
+            var matchedIds = commandLines
                 .Where(pair => pair.Value.Contains(fixtureRoot, StringComparison.OrdinalIgnoreCase))
-                .Select(pair => pair.Key)
-                .ToArray();
+                .Select(pair => pair.Key).ToHashSet();
+            return identities.Where(identity => matchedIds.Contains(identity.ProcessId)).ToArray();
         }
         finally
         {
@@ -2944,22 +2946,6 @@ public sealed class DispatchProcessHostTests
         catch
         {
             return false;
-        }
-    }
-
-    private static void TryKillProcess(int processId)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // The process may have exited between the scoped command-line snapshot and the kill.
         }
     }
 

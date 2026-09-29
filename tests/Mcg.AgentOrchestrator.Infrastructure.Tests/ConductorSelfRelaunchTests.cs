@@ -12,7 +12,8 @@ public sealed class ConductorSelfRelaunchTests
 
         var result = ConductorSelfRelaunch.Create(fixture.Options)(
             new ConductorSelfRelaunchRequest("goal-real-success", 7));
-        fixture.SuccessorProcessId = result.Handoff?.ProcessId;
+        fixture.SuccessorIdentity = result.Handoff?.ProcessId is int successorPid
+            ? TestOwnedProcessStop.TryIdentify(successorPid) : null;
 
         Assert.True(result.HandedOff, result.Reason);
         Assert.NotNull(result.Successor);
@@ -51,7 +52,8 @@ public sealed class ConductorSelfRelaunchTests
 
         var result = ConductorSelfRelaunch.Create(fixture.Options)(
             new ConductorSelfRelaunchRequest("goal-real-handoff-failure", 8));
-        fixture.SuccessorProcessId = result.Handoff?.ProcessId;
+        fixture.SuccessorIdentity = result.Handoff?.ProcessId is int successorPid
+            ? TestOwnedProcessStop.TryIdentify(successorPid) : null;
 
         Assert.False(result.HandedOff);
         Assert.Equal("handoff", result.FailedPhase);
@@ -399,7 +401,7 @@ public sealed class ConductorSelfRelaunchTests
         public string Root { get; }
         public ConductorLoopLeaseController Lease { get; }
         public ConductorSelfRelaunchOptions Options { get; }
-        public int? SuccessorProcessId { get; set; }
+        public ConductorSupervisorProcessIdentity? SuccessorIdentity { get; set; }
 
         public static RealRelaunchFixture Create(
             Func<ConductLoopHandoffOptions, long, bool>? loopStartProbe = null,
@@ -483,16 +485,7 @@ public sealed class ConductorSelfRelaunchTests
 
         public void Dispose()
         {
-            if (SuccessorProcessId is { } processId)
-            {
-                try
-                {
-                    ConductorLoopHandoff.StopFailedSuccessor(processId);
-                }
-                catch
-                {
-                }
-            }
+            TestOwnedProcessStop.StopTreeIfSame(SuccessorIdentity);
 
             Lease.Dispose();
             TryDeleteDirectory(Root);

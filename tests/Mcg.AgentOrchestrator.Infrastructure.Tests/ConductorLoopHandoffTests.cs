@@ -113,6 +113,7 @@ public sealed class ConductorLoopHandoffTests
     {
         var root = CreateTempDirectory("mcg-conduct-loop-handoff-dead");
         Process? successor = null;
+        DateTimeOffset? successorStartedAt = null;
         try
         {
             var stopwatch = Stopwatch.StartNew();
@@ -126,7 +127,7 @@ public sealed class ConductorLoopHandoffTests
                     stopFailedSuccessor: pid =>
                     {
                         transitions.Add("stop-failed-successor");
-                        ConductorLoopHandoff.StopFailedSuccessor(pid);
+                        ConductorLoopHandoff.StopFailedSuccessor(new(pid, successorStartedAt!.Value));
                     }),
                 new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                 request =>
@@ -142,11 +143,13 @@ public sealed class ConductorLoopHandoffTests
                             "exit 19"
                         }
                     })!;
+                    try { successorStartedAt = new DateTimeOffset(successor.StartTime.ToUniversalTime(), TimeSpan.Zero); }
+                    catch (InvalidOperationException) { successorStartedAt = DateTimeOffset.MinValue; }
                     successor.WaitForExit(5000);
                     return new ConductLoopLaunchResult(
                         successor.Id,
                         request.StdoutPath,
-                        request.StderrPath);
+                        request.StderrPath, StartedAt: successorStartedAt);
                 });
 
             Assert.False(result.Started);
@@ -211,6 +214,7 @@ public sealed class ConductorLoopHandoffTests
     {
         var root = CreateTempDirectory("mcg-conduct-loop-handoff-verify-throws");
         Process? successor = null;
+        DateTimeOffset? successorStartedAt = null;
         var transitions = new List<string>();
         try
         {
@@ -223,7 +227,7 @@ public sealed class ConductorLoopHandoffTests
                     {
                         Assert.Equal(successor!.Id, pid);
                         transitions.Add("stop");
-                        ConductorLoopHandoff.StopFailedSuccessor(pid);
+                        ConductorLoopHandoff.StopFailedSuccessor(new(pid, successorStartedAt!.Value));
                     }),
                 new ConductorLoopHandoffRequest(12, TimeSpan.FromHours(4), 0),
                 request =>
@@ -234,10 +238,11 @@ public sealed class ConductorLoopHandoffTests
                         CreateNoWindow = true,
                         ArgumentList = { "-NoProfile", "-Command", "Start-Sleep -Seconds 30" }
                     })!;
+                    successorStartedAt = new DateTimeOffset(successor.StartTime.ToUniversalTime(), TimeSpan.Zero);
                     return new ConductLoopLaunchResult(
                         successor.Id,
                         request.StdoutPath,
-                        request.StderrPath);
+                        request.StderrPath, StartedAt: successorStartedAt);
                 },
                 (_, _) => throw new InvalidOperationException("verification exploded"));
 
@@ -310,7 +315,7 @@ public sealed class ConductorLoopHandoffTests
             LoopStartProbe: loopStartProbe,
             SuccessorReadyProbe: useProtocolReady ? null : (_, _) => true,
             ReacquireCurrentLease: reacquireCurrentLease,
-            StopFailedSuccessor: stopFailedSuccessor);
+            StopFailedSuccessor: stopFailedSuccessor is null ? null : identity => stopFailedSuccessor(identity.ProcessId));
 
     private static IReadOnlyList<RunEventRecord> ReadHandoffRecords(string root) =>
         new SqliteRunEventStore(Path.Combine(root, ".orchestrator", "run-events.db"))
