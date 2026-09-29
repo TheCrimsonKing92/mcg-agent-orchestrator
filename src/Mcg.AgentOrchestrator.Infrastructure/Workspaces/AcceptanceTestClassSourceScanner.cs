@@ -36,9 +36,10 @@ internal static class AcceptanceTestClassSourceScanner
                 Variable = variable
             }))
             .Where(item => item.Variable.Initializer?.Value is LiteralExpressionSyntax)
-            .ToDictionary(item => $"{item.Owner}.{item.Variable.Identifier.ValueText}",
-                item => ((LiteralExpressionSyntax)item.Variable.Initializer!.Value).Token.ValueText,
-                StringComparer.Ordinal);
+            .GroupBy(item => $"{item.Owner}.{item.Variable.Identifier.ValueText}", StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.Select(item => ((LiteralExpressionSyntax)item.Variable.Initializer!.Value).Token.ValueText)
+                    .Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
 
         var classes = roots.SelectMany(root => root.DescendantNodes().OfType<ClassDeclarationSyntax>())
             .Select(node => new SourceClass(
@@ -81,7 +82,7 @@ internal static class AcceptanceTestClassSourceScanner
                 attribute.Name.ToString().Split('.').Last() is "Fact" or "FactAttribute" or
                     "Theory" or "TheoryAttribute"));
 
-    private static string? CollectionOf(ClassDeclarationSyntax node, IReadOnlyDictionary<string, string> constants)
+    private static string? CollectionOf(ClassDeclarationSyntax node, IReadOnlyDictionary<string, string[]> constants)
     {
         var attribute = node.AttributeLists.SelectMany(list => list.Attributes)
             .FirstOrDefault(item => item.Name.ToString().Split('.').Last() is "Collection" or "CollectionAttribute");
@@ -95,17 +96,28 @@ internal static class AcceptanceTestClassSourceScanner
             LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression) => literal.Token.ValueText,
             InvocationExpressionSyntax invocation when invocation.Expression.ToString() == "nameof" =>
                 invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString().Split('.').Last(),
-            MemberAccessExpressionSyntax member when constants.TryGetValue(member.ToString(), out var resolved) => resolved,
+            MemberAccessExpressionSyntax member when constants.TryGetValue(member.ToString(), out var resolved) &&
+                                                     resolved.Length == 1 => resolved[0],
             IdentifierNameSyntax identifier => ResolveUnqualifiedConstant(identifier.Identifier.ValueText, constants),
             _ => null
         };
+        if (value is null && expression switch
+            {
+                MemberAccessExpressionSyntax member => constants.TryGetValue(member.ToString(), out var values) &&
+                                                       values.Length > 1,
+                IdentifierNameSyntax identifier => constants.Any(item =>
+                    item.Key.EndsWith($".{identifier.Identifier.ValueText}", StringComparison.Ordinal) &&
+                    item.Value.Length > 1),
+                _ => false
+            }) return null;
         return value ?? throw new InvalidDataException($"Cannot resolve test collection on '{NameOf(node)}'.");
     }
 
-    private static string? ResolveUnqualifiedConstant(string name, IReadOnlyDictionary<string, string> constants)
+    private static string? ResolveUnqualifiedConstant(string name, IReadOnlyDictionary<string, string[]> constants)
     {
-        var values = constants.Where(item => item.Key.EndsWith($".{name}", StringComparison.Ordinal))
-            .Select(item => item.Value).Distinct(StringComparer.Ordinal).ToArray();
+        var matches = constants.Where(item => item.Key.EndsWith($".{name}", StringComparison.Ordinal)).ToArray();
+        if (matches.Any(item => item.Value.Length != 1)) return null;
+        var values = matches.Select(item => item.Value[0]).Distinct(StringComparer.Ordinal).ToArray();
         return values.Length == 1 ? values[0] : null;
     }
 
