@@ -4,7 +4,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>
 /// grok-cli --output-format plain concatenates the last thinking sentence onto the first ATX heading.
-/// Heading contracts require start-of-line match. Insert a newline before mid-line ## headings.
+/// Heading contracts require start-of-line match. Insert a newline before mid-line headings with two to six hashes.
+/// Single hashes within text such as C# and issue# 12 remain inline.
 /// The lookbehind excludes # so a start-of-line ## is not treated as inline and demoted to #.
 /// </summary>
 internal static partial class MarkdownHeadingNormalizer
@@ -20,6 +21,6 @@ internal static partial class MarkdownHeadingNormalizer
         return InlineAtxHeading().Replace(normalized, "\n$1");
     }
 
-    [GeneratedRegex(@"(?m)(?<=[^\s#])(#{1,6}[ \t]+\S)")]
+    [GeneratedRegex(@"(?m)(?<=[^\s#])(#{2,6}[ \t]+\S)")]
     private static partial Regex InlineAtxHeading();
 }
