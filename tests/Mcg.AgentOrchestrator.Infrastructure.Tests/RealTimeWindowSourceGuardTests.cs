@@ -43,7 +43,7 @@ public sealed class RealTimeWindowSourceGuardTests
         Xunit.Assert.Empty(ForbiddenCalls("WaitAsync(TimeSpan.FromSeconds(30))"));
     }
 
-    private static string MethodBody(string source, string method)
+    internal static string MethodBody(string source, string method)
     {
         var declaration = Regex.Match(source,
             @"\b(?:public|private|internal)\s+(?:async\s+)?(?:void|Task(?:<[^>]+>)?)\s+" +
@@ -60,7 +60,7 @@ public sealed class RealTimeWindowSourceGuardTests
         return string.Empty;
     }
 
-    private static IReadOnlyList<string> ForbiddenCalls(string body)
+    internal static IReadOnlyList<string> ForbiddenCalls(string body)
     {
         var calls = new List<string>();
         foreach (Match match in Regex.Matches(body, @"\b(?:Thread\.Sleep|SpinWait\b|Stopwatch\b)\s*(?:\.|\()"))

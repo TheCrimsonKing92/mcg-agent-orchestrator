@@ -24,6 +24,7 @@ internal sealed class PostLandingCanaryCoordinator
     private readonly ICollaborationItemStore? _operatorItems;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+    private readonly Func<TimeSpan, CancellationToken, Task>? _leaseRetryWait;
     private readonly Action<string> _progress;
 
     internal PostLandingCanaryCoordinator(
@@ -34,7 +35,8 @@ internal sealed class PostLandingCanaryCoordinator
         ICollaborationItemStore? operatorItems = null,
         Func<DateTimeOffset>? utcNow = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
-        Action<string>? progress = null)
+        Action<string>? progress = null,
+        Func<TimeSpan, CancellationToken, Task>? leaseRetryWait = null)
     {
         _configuration = configuration;
         _runner = runner;
@@ -43,6 +45,7 @@ internal sealed class PostLandingCanaryCoordinator
         CircuitBreaker = circuitBreaker;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _delay = delay ?? Task.Delay;
+        _leaseRetryWait = leaseRetryWait;
         _progress = progress ?? Console.WriteLine;
     }
 
@@ -173,7 +176,7 @@ internal sealed class PostLandingCanaryCoordinator
         {
             TimeSpan? retryDelay = null;
             using (await PostLandingCanarySerializationLease
-                       .AcquireAsync(_events.Identity, cancellationToken)
+                       .AcquireAsync(_events.Identity, cancellationToken, _leaseRetryWait)
                        .ConfigureAwait(false))
             {
                 if (await _events.FindTerminalAsync(request.LandingSha, cancellationToken)
@@ -929,6 +932,7 @@ internal static class PostLandingCanaryFactory
 
 internal sealed class PostLandingCanarySerializationLease : IDisposable
 {
+    internal static readonly TimeSpan RetryInterval = TimeSpan.FromMilliseconds(100);
     private readonly FileStream _lockStream;
     private bool _disposed;
 
@@ -939,7 +943,8 @@ internal sealed class PostLandingCanarySerializationLease : IDisposable
 
     internal static async Task<PostLandingCanarySerializationLease> AcquireAsync(
         string identity,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<TimeSpan, CancellationToken, Task>? retryWait = null)
     {
         var lockPath = Path.GetFullPath(identity) + ".post-landing-canary.lock";
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
@@ -959,7 +964,7 @@ internal sealed class PostLandingCanarySerializationLease : IDisposable
             }
             catch (IOException)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+                await (retryWait ?? Task.Delay)(RetryInterval, cancellationToken).ConfigureAwait(false);
             }
         }
     }

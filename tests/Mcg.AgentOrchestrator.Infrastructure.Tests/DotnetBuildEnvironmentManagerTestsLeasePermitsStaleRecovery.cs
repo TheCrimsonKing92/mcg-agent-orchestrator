@@ -59,12 +59,32 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
             var first = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "developer");
             var second = RootedDotnetBuildEnvironmentManager.CreateAttempt(StorageRoot, goalId, "tester");
             using var firstLock = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(first);
-            var secondLockTask = Task.Run(() => DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(second));
-            var earlyWinner = await Task.WhenAny(secondLockTask, Task.Delay(200));
-            Xunit.Assert.NotEqual(secondLockTask, earlyWinner);
-
-            firstLock.Dispose();
-            using var secondLock = await secondLockTask.WaitAsync(TimeSpan.FromSeconds(5));
+            var contended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var resume = new ManualResetEventSlim();
+            var secondLockTask = Task.Run(() => DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                second,
+                sleep: interval =>
+                {
+                    contended.TrySetResult();
+                    Assert.True(resume.Wait(TestHangGuard.Bound),
+                        "The test never resumed the contended second acquisition.");
+                    DotnetBuildEnvironmentManager.DefaultLeaseSleepForTests(interval);
+                }));
+            try
+            {
+                await TestHangGuard.WaitAsync(contended.Task,
+                    "the second lease execution acquisition reporting the lock held");
+                Assert.False(secondLockTask.IsCompleted);
+                firstLock.Dispose();
+                resume.Set();
+                using var secondLock = await TestHangGuard.WaitAsync(secondLockTask,
+                    "the second lease execution acquisition after the first lock was released");
+            }
+            finally
+            {
+                firstLock.Dispose();
+                resume.Set();
+            }
             Assert.Equal(first.ExecutionLockPath, second.ExecutionLockPath);
         }
         finally
