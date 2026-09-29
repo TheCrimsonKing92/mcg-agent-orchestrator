@@ -36,7 +36,13 @@ public sealed class DashboardTestGitIsolationEnvMutationTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            {
+                var attributes = File.GetAttributes(file);
+                if ((attributes & FileAttributes.ReadOnly) != 0)
+                    File.SetAttributes(file, attributes & ~FileAttributes.ReadOnly);
+            }
+            SharedTestSupport.RemoveTempDirectory(root);
         }
     }
 
