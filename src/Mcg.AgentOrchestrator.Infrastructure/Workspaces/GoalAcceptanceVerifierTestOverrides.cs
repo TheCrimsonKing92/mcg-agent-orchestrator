@@ -23,6 +23,8 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal Action<string>? OnShardPermitReleasedForTests { get; set; }
     internal Action<string>? OnInfrastructureShardResourcesAcquiredForTests { get; set; }
     internal Action? OnStructuralCoverageStartedForTests { get; set; }
+    internal Action<string>? OnTrustedMainBaselineBuildStartingForTests { get; set; }
+    internal Action? OnStructuralCoveragePreparationFinishedForTests { get; set; }
     internal TimeSpan? StructuralCoveragePermitWaitBound { get; set; }
     internal TimeSpan? StructuralCoveragePermitWaitHeartbeatInterval { get; set; }
     internal Action<AcceptanceGateProgress>? OnStructuralCoveragePermitWaitForTests { get; set; }
@@ -57,6 +59,8 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         OnShardPermitReleasedForTests = OnShardPermitReleasedForTests,
         OnInfrastructureShardResourcesAcquiredForTests = OnInfrastructureShardResourcesAcquiredForTests,
         OnStructuralCoverageStartedForTests = OnStructuralCoverageStartedForTests,
+        OnTrustedMainBaselineBuildStartingForTests = OnTrustedMainBaselineBuildStartingForTests,
+        OnStructuralCoveragePreparationFinishedForTests = OnStructuralCoveragePreparationFinishedForTests,
         StructuralCoveragePermitWaitBound = StructuralCoveragePermitWaitBound,
         StructuralCoveragePermitWaitHeartbeatInterval = StructuralCoveragePermitWaitHeartbeatInterval,
         OnStructuralCoveragePermitWaitForTests = OnStructuralCoveragePermitWaitForTests,

@@ -103,7 +103,9 @@ public sealed record AcceptanceGatePhaseBreakdown(
     TimeSpan? LongestLaneDuration = null,
     TimeSpan? SlotWaitDuration = null,
     int? ShardPermitBudget = null,
-    TimeSpan? ShardPermitWaitDuration = null);
+    TimeSpan? ShardPermitWaitDuration = null,
+    TimeSpan? StructuralCoveragePreparationDuration = null,
+    TimeSpan? StructuralCoveragePreparationWaitDuration = null);
 
 internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 {
@@ -128,6 +130,8 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private TimeSpan? _slotWaitDuration;
     private int _shardPermitBudget;
     private long _shardPermitWaitTicks;
+    private TimeSpan? _structuralCoveragePreparationDuration;
+    private TimeSpan? _structuralCoveragePreparationWaitDuration;
     private string _outcome = "faulted";
     private bool _disposed;
 
@@ -272,6 +276,13 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
         _slotWaitDuration = duration;
     }
 
+    internal void RecordStructuralCoveragePreparation(TimeSpan duration, TimeSpan wait)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _structuralCoveragePreparationDuration = duration;
+        _structuralCoveragePreparationWaitDuration = wait;
+    }
+
     internal void MarkCompleted(bool passed) => _outcome = passed ? "completed" : "failed";
 
     public void Dispose()
@@ -365,7 +376,9 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             _longestLaneTicks > 0 ? TimeSpan.FromTicks(_longestLaneTicks) : null,
             _slotWaitDuration,
             _shardPermitBudget > 0 ? _shardPermitBudget : null,
-            _shardPermitBudget > 0 ? TimeSpan.FromTicks(Interlocked.Read(ref _shardPermitWaitTicks)) : null);
+            _shardPermitBudget > 0 ? TimeSpan.FromTicks(Interlocked.Read(ref _shardPermitWaitTicks)) : null,
+            _structuralCoveragePreparationDuration,
+            _structuralCoveragePreparationWaitDuration);
     }
 
     private static string FormatCompact(AcceptanceGatePhaseBreakdown breakdown)
@@ -388,6 +401,11 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             $"attributed_ms={Milliseconds(breakdown.AttributedPhaseDuration)}",
             $"unattributed_ms={Milliseconds(breakdown.UnattributedDuration)}"
         };
+        if (breakdown.StructuralCoveragePreparationDuration is { } preparation)
+        {
+            fields.Add($"structural_coverage_preparation_ms={Milliseconds(preparation)}");
+            fields.Add($"structural_coverage_preparation_wait_ms={Milliseconds(breakdown.StructuralCoveragePreparationWaitDuration ?? TimeSpan.Zero)}");
+        }
         fields.AddRange(breakdown.Phases.Select(
             phase => $"{phase.Name}_ms={Milliseconds(phase.Duration)}"));
         return string.Join(';', fields);

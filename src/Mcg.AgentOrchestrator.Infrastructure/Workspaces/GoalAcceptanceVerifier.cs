@@ -790,6 +790,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
         var sanctionedRemovedTests = LoadSanctionedTestRemovals(worktreePath);
+        if (structuralCoverageApplies)
+        {
+            _coverageHasIndependentChecks = effectiveChecks.Any(check =>
+                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase));
+            _coveragePreparationFactory = token => PrepareStructuralCoverageCheckAsync(
+                effectiveChecks, infrastructureTestLanes, worktreePath, goalId, stableSlotIndex,
+                stableSlotLease, partitionVerdictCache?.AttemptId, sanctionedRemovedTests, token);
+        }
 
         var checks = new List<AcceptanceCheckResult>();
         checks.AddRange(effectivePlan.SemanticDeduplications.Select(receipt =>
@@ -941,20 +949,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         _testOverrides.OnStructuralCoverageStartedForTests?.Invoke();
         if (checks.All(check => check.Passed) && structuralCoverageApplies)
         {
-            var structuralCoverage = await RunStructuralCoverageCheckAsync(
-                effectiveChecks,
-                infrastructureTestLanes,
-                checks,
-                worktreePath,
-                changedFiles,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                partitionVerdictCache?.AttemptId,
-                sanctionedRemovedTests,
-                cancellationToken).ConfigureAwait(false);
+            var (prepared, preparationDuration, preparationWait) =
+                await AwaitStructuralCoveragePreparationAsync(cancellationToken).ConfigureAwait(false);
+            phaseAccountant.RecordStructuralCoveragePreparation(preparationDuration, preparationWait);
+            var structuralCoverage = await EvaluateStructuralCoverageCheckAsync(
+                prepared, checks, cancellationToken).ConfigureAwait(false);
             checks.Add(structuralCoverage);
             retried |= structuralCoverage.LockRemediationApplied;
+        }
+        else if (structuralCoverageApplies)
+        {
+            var preparationDuration = await DiscardStructuralCoveragePreparationAsync().ConfigureAwait(false);
+            phaseAccountant.RecordStructuralCoveragePreparation(preparationDuration, TimeSpan.Zero);
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.AdvisoryAndTamper);
@@ -1051,6 +1057,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch (Exception exception) when (ShouldCaptureGateEngineFault(exception))
         {
             throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
+        }
+        finally
+        {
+            await DiscardStructuralCoveragePreparationAsync().ConfigureAwait(false);
+            _coveragePreparationCancellation?.Dispose();
         }
     }
 
@@ -1928,14 +1939,23 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (independentChecks.Length > 0 && laneChecks.Length > 0)
         {
             var overlapped = await AcceptanceOverlappedCheckRunner.RunAsync(
-                () => RunCheckBatchAsync(independentChecks, cacheContext, worktreePath, goalId, stableSlotIndex,
-                    stableSlotLease, dotnetTestBuildPhase, 1, cancellationToken, continueAfterFailure, executionOwner),
+                async () =>
+                {
+                    var independent = await RunCheckBatchAsync(independentChecks, cacheContext, worktreePath,
+                        goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, 1,
+                        cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false);
+                    if (independent.Results.All(result => result.Passed))
+                        SignalStructuralCoveragePrechecksPassed();
+                    return independent;
+                },
                 () => RunCheckBatchAsync(laneChecks, cacheContext, worktreePath, goalId, stableSlotIndex,
                     stableSlotLease, dotnetTestBuildPhase, maxConcurrentShards, cancellationToken, continueAfterFailure, executionOwner),
                 executionOwner).ConfigureAwait(false);
             return new CheckBatchResult([.. overlapped.Independent.Results, .. overlapped.Lanes.Results],
                 overlapped.Independent.Retried || overlapped.Lanes.Retried);
         }
+        if (!_coverageHasIndependentChecks && independentChecks.Length == 0 && laneChecks.Length > 0)
+            SignalStructuralCoveragePrechecksPassed();
         var results = new List<AcceptanceCheckResult>(batchChecks.Count);
         var retried = false;
         for (var index = 0; index < batchChecks.Count;)
@@ -2027,6 +2047,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 VerifyPrebuiltMtpArtifacts(shardChecks, primaryBuildPhase);
                 primaryLease.ReleaseExecutionLock();
+                SignalStructuralCoverageCandidateBuildComplete();
             }
         }
 
@@ -5683,269 +5704,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return forbidden.Length == 0
             ? new AcceptanceCheckResult("forbidden changed paths", true, 0, null)
             : new AcceptanceCheckResult("forbidden changed paths", false, 1, string.Join(Environment.NewLine, forbidden));
-    }
-
-    private async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
-        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
-        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes,
-        IReadOnlyList<AcceptanceCheckResult> completedChecks,
-        string worktreePath,
-        IReadOnlyList<string>? changedFiles,
-        GoalId? goalId,
-        int? stableSlotIndex,
-        DotnetBuildEnvironmentLease? stableSlotLease,
-        string? currentAttemptId,
-        IReadOnlyList<string> sanctionedRemovedTests,
-        CancellationToken cancellationToken)
-    {
-        var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
-        if (string.IsNullOrWhiteSpace(mainWorktreePath))
-        {
-            throw new AcceptanceInfrastructureDeferredException(
-                "trusted-main-worktree-unavailable",
-                exitCode: null,
-                outputTail: "Trusted main worktree could not be resolved for cross-generation discovery.");
-        }
-
-        var broadChecks = DiscoverTrustedStructuralCoverageProjects(worktreePath, mainWorktreePath)
-            .Select(project => BuildTrustedStructuralCoverageCheck(worktreePath, project, effectiveChecks))
-            .ToArray();
-        if (broadChecks.Length == 0)
-        {
-            return new AcceptanceCheckResult(
-                "structural test coverage",
-                false,
-                1,
-                "Structural coverage is enabled but trusted discovery found no test projects.",
-                ResultSummary: "no trusted test project");
-        }
-
-        var environment = ResolveExecutionEnvironment(
-            goalId,
-            "acceptance-coverage-discovery",
-            stableSlotIndex,
-            stableSlotLease);
-        var allSummaries = new List<string>();
-        var baselineLockRemediationApplied = false;
-        foreach (var broadCheck in broadChecks)
-        {
-            var deletedTestFiles = ResolveDeletedTestFiles(worktreePath, broadCheck.Project!);
-            var candidateDiscoveryArguments = BuildUnattendedDiscoveryArguments(
-                broadCheck,
-                EngineSettings,
-                environment);
-            IReadOnlyList<TestPartitionCoverage> ResolvePartitions()
-            {
-                IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
-                    ? AcceptanceStructuralCoveragePartitionPlan.Resolve(
-                        broadCheck,
-                        effectiveChecks,
-                        infrastructureTestLanes)
-                    : effectiveChecks.Where(check =>
-                        check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(NormalizePath(check.Project), NormalizePath(broadCheck.Project), StringComparison.OrdinalIgnoreCase));
-                if (!partitionChecks.Any())
-                    partitionChecks = [broadCheck];
-                return partitionChecks
-                    .Select(shard =>
-                    {
-                        var result = completedChecks.LastOrDefault(candidate =>
-                            candidate.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
-                        return new TestPartitionCoverage(
-                            shard.Name,
-                            result?.Passed == true,
-                            result?.TestResultPaths ?? [],
-                            result?.LockRemediationApplied == true,
-                            result?.TestResultAttemptId,
-                            result?.TestResultRunOrdinal ?? 0,
-                            result?.TestResultIsExplicitCrossAttemptReuse == true);
-                    })
-                    .ToArray();
-            }
-
-            async Task<AcceptanceStructuralCoverageBaseline?> PrepareBaselineAsync(
-                string baselineWorktreePath,
-                string artifactsDirectoryName,
-                string operationName,
-                CancellationToken baselineCancellationToken)
-            {
-                var baselineProjectPath = Path.Combine(
-                    baselineWorktreePath,
-                    broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(baselineProjectPath))
-                {
-                    return null;
-                }
-
-                var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, artifactsDirectoryName);
-                var mainEnvironment = environment.DeriveArtifactsPath(mainArtifactsPath);
-                var mainBuildArguments = new[]
-                {
-                    "dotnet",
-                    "build",
-                    broadCheck.Project,
-                    "--verbosity",
-                    "minimal"
-                };
-                AcceptanceCheckResult mainBuild;
-                var lockRemediationApplied = false;
-                try
-                {
-                    var managedBuild = await RunManagedDotnetCheckAsync(
-                        broadCheck,
-                        mainBuildArguments,
-                        baselineWorktreePath,
-                        goalId,
-                        stableSlotIndex,
-                        stableSlotLease,
-                        operationName,
-                        baselineCancellationToken,
-                        executionEnvironment: mainEnvironment,
-                        waitForPermit: true)
-                        .ConfigureAwait(false);
-                    mainBuild = managedBuild.Result;
-                    lockRemediationApplied = managedBuild.Retried;
-                }
-                catch (BuildLockBlockedException ex)
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        "trusted-main-build-lock",
-                        exitCode: null,
-                        outputTail: null,
-                        buildLockAttribution: ex.Attribution);
-                }
-                catch (Exception ex) when (
-                    IsBuildArtifactIoException(ex) &&
-                    ex is not DotnetBuildSlotsBusyException)
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        "trusted-main-build-io",
-                        exitCode: null,
-                        outputTail: ex.Message);
-                }
-
-                if (!mainBuild.Passed)
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        mainBuild.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true
-                            ? "trusted-main-build-timeout"
-                            : "trusted-main-build-failed",
-                        mainBuild.ExitCode,
-                        mainBuild.OutputTail);
-                }
-
-                var mainDiscoveryArguments = BuildUnattendedDiscoveryArguments(
-                    broadCheck,
-                    EngineSettings,
-                    mainEnvironment);
-                return new AcceptanceStructuralCoverageBaseline(
-                    mainDiscoveryArguments,
-                    baselineWorktreePath,
-                    baselineWorktreePath,
-                    UsesMicrosoftTestingPlatform(broadCheck),
-                    lockRemediationApplied);
-            }
-
-            Task<AcceptanceContainedGenerationBaseline> PrepareContainedBaselineAsync(
-                CancellationToken baselineCancellationToken) =>
-                AcceptanceContainedGenerationBaseline.PrepareAsync(
-                    worktreePath,
-                    goalId?.Value ?? "operator",
-                    (path, sha, token) => PrepareBaselineAsync(
-                        path,
-                        $"contained-coverage-baseline-{sha[..Math.Min(8, sha.Length)]}",
-                        "acceptance-contained-coverage-baseline",
-                        token),
-                    AcceptanceGitTextResolver.Resolve,
-                    static (directory, arguments) => GitCli.Run(directory, arguments),
-                    baselineCancellationToken);
-
-            var evaluation = await _structuralCoverageEvaluator.EvaluateAsync(
-                new AcceptanceStructuralCoverageRequest(
-                    candidateDiscoveryArguments,
-                    worktreePath,
-                    EngineSettings.ResolveDiscoveryTimeout(),
-                    UsesMicrosoftTestingPlatform(broadCheck),
-                    ResolvePartitions,
-                    () => DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
-                    currentAttemptId,
-                    sanctionedRemovedTests,
-                    cancellationToken => PrepareBaselineAsync(
-                        mainWorktreePath,
-                        "main-coverage-baseline",
-                        "acceptance-main-coverage-baseline",
-                        cancellationToken),
-                    PrepareContainedBaselineAsync),
-                cancellationToken).ConfigureAwait(false);
-
-            var candidateDiscovery = evaluation.CandidateDiscovery;
-            if (candidateDiscovery.ExitCode != 0)
-            {
-                return new AcceptanceCheckResult(
-                    $"structural test coverage: {broadCheck.Name}",
-                    false,
-                    candidateDiscovery.ExitCode,
-                    TailOutput(candidateDiscovery.Output),
-                    ResultSummary: "candidate trusted discovery failed");
-            }
-
-            if (evaluation.BaselineDiscoveryIoException is { } baselineDiscoveryException)
-            {
-                throw new AcceptanceInfrastructureDeferredException(
-                    "trusted-main-discovery-io",
-                    exitCode: null,
-                    outputTail: baselineDiscoveryException.Message);
-            }
-
-            if (evaluation.BaselineDiscovery is { } mainDiscovery &&
-                (mainDiscovery.TimedOut || mainDiscovery.ExitCode != 0))
-            {
-                throw new AcceptanceInfrastructureDeferredException(
-                    mainDiscovery.TimedOut
-                        ? "trusted-main-discovery-timeout"
-                        : "trusted-main-discovery-failed",
-                    mainDiscovery.ExitCode,
-                    TailOutput(mainDiscovery.Output));
-            }
-
-            baselineLockRemediationApplied |= evaluation.BaselineLockRemediationApplied;
-            var coverage = evaluation.Coverage
-                ?? throw new InvalidOperationException("Structural coverage evaluation produced no verdict.");
-            if (!coverage.Passed)
-            {
-                var details = new List<string>
-                {
-                    $"classification: {coverage.FailureClassification}",
-                    coverage.Summary
-                };
-                details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
-                var identityMismatches = coverage.IdentityMismatches ?? [];
-                details.AddRange(identityMismatches.Take(10).Select(mismatch =>
-                    $"missing test: discovered={JsonSerializer.Serialize(mismatch.Discovered)}; executed={JsonSerializer.Serialize(mismatch.Executed)}"));
-                details.AddRange(coverage.MissingTests
-                    .Except(identityMismatches.Select(mismatch => mismatch.Discovered), StringComparer.OrdinalIgnoreCase)
-                    .Take(10)
-                    .Select(name => $"missing test: {name}"));
-                return new AcceptanceCheckResult(
-                    $"structural test coverage: {broadCheck.Name}",
-                    false,
-                    1,
-                    string.Join(Environment.NewLine, details),
-                    LockRemediationApplied: baselineLockRemediationApplied,
-                    ResultSummary: coverage.Summary,
-                    FailureClassification: coverage.FailureClassification);
-            }
-
-            allSummaries.Add(coverage.Summary);
-        }
-
-        return new AcceptanceCheckResult(
-            "structural test coverage",
-            true,
-            0,
-            null,
-            LockRemediationApplied: baselineLockRemediationApplied,
-            ResultSummary: string.Join("; ", allSummaries));
     }
 
     internal static IReadOnlyList<string> DiscoverTrustedTestProjects(string worktreePath)

@@ -84,7 +84,7 @@ public sealed class StructuralCoverageVerifierPermitWaitTests : GoalAcceptanceVe
         TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
         TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
         TestOverrides.StructuralCoveragePermitWaitBound = TimeSpan.FromSeconds(1);
-        TestOverrides.OnStructuralCoverageStartedForTests = () =>
+        TestOverrides.OnTrustedMainBaselineBuildStartingForTests = _ =>
             holder = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
                 observedEnvironment = DotnetBuildEnvironmentManager.ResolveGoalEnvironment(goalId, storage));
         TestOverrides.OnStructuralCoveragePermitWaitForTests = progress =>
