@@ -27,10 +27,9 @@ public sealed class HermeticVerificationEnvironmentTestsGateGitRealGit : GoalAcc
             Assert.Equal(0, branch.ExitCode);
             Assert.Equal("refs/heads/master", branch.Stdout.Trim());
 
-            var autocrlf = await RunGitAsync(root, environment, "config", "--show-origin", "--get", "core.autocrlf");
+            var autocrlf = await RunGitAsync(root, environment, "config", "--null", "--show-origin", "--get", "core.autocrlf");
             Assert.Equal(0, autocrlf.ExitCode);
-            Assert.Contains(environment["GIT_CONFIG_GLOBAL"]!.Replace('\\', '/'), autocrlf.Stdout.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
-            Assert.EndsWith("\ttrue", autocrlf.Stdout.Trim(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal($"file:{environment["GIT_CONFIG_GLOBAL"]}\0true\0", autocrlf.Stdout);
 
             var helper = await RunGitAsync(root, environment, "config", "--get-all", "credential.helper");
             Assert.Equal(1, helper.ExitCode);
