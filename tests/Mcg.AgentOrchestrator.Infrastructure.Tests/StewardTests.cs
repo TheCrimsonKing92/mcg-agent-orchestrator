@@ -36,13 +36,25 @@ public sealed class StewardTests
     {
         var store = new InMemoryStewardTriageReceiptStore();
         var transport = new RecordingControlPlaneMessageTransport();
+        var time = new ManualStewardTimeProvider();
+        var engine = new NeverCompletingEngine();
+        var timeout = TimeSpan.FromMilliseconds(10);
         var dispatcher = new StewardDispatcher(
-            new DelayingEngine(TimeSpan.FromSeconds(30)),
+            engine,
             store,
             transport,
-            new StewardDispatchOptions(TimeSpan.FromMinutes(2), TimeSpan.FromMilliseconds(10)));
+            new StewardDispatchOptions(TimeSpan.FromMinutes(2), timeout),
+            timeProvider: time);
 
-        var result = await dispatcher.DispatchAsync(Bundle(), DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        var dispatch = dispatcher.DispatchAsync(Bundle(), DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        await TestHangGuard.WaitAsync(engine.TriageEntered.Task, "Steward triage entry");
+        await TestHangGuard.WaitAsync(time.TimerCreated.Task, "Steward fail-open timer creation");
+        time.Advance(timeout - TimeSpan.FromTicks(1));
+        Assert.False(dispatch.IsCompleted);
+        Assert.Empty(transport.Sent);
+        Assert.Empty(store.Receipts);
+        time.Advance(TimeSpan.FromTicks(1));
+        var result = await TestHangGuard.WaitAsync(dispatch, "Steward fail-open dispatch");
 
         Assert.True(result.FailedOpen);
         Assert.Single(transport.Sent);
@@ -51,6 +63,7 @@ public sealed class StewardTests
         Assert.Equal(StewardOutputKind.FailOpenRawEscalation, receipt.OutputKind);
         Assert.NotEmpty(receipt.InputsHash);
         Assert.Equal(StewardDispositionKind.RaisedRaw, Assert.Single(receipt.Dispositions).Kind);
+        Assert.True(await TestHangGuard.WaitAsync(engine.CancellationObserved.Task, "Steward triage cancellation"));
     }
 
     [Xunit.Fact(DisplayName = "StewardDispatcher_timeout_cancels_timed_out_triage_work")]
@@ -58,15 +71,27 @@ public sealed class StewardTests
     {
         var store = new InMemoryStewardTriageReceiptStore();
         var transport = new RecordingControlPlaneMessageTransport();
-        var engine = new CancellationRecordingEngine();
+        var time = new ManualStewardTimeProvider();
+        var engine = new NeverCompletingEngine();
+        var timeout = TimeSpan.FromMilliseconds(10);
         var dispatcher = new StewardDispatcher(
             engine,
             store,
             transport,
-            new StewardDispatchOptions(TimeSpan.FromMinutes(2), TimeSpan.FromMilliseconds(10)));
+            new StewardDispatchOptions(TimeSpan.FromMinutes(2), timeout),
+            timeProvider: time);
 
-        var result = await dispatcher.DispatchAsync(Bundle(), DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
-        var cancellationObserved = await engine.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var dispatch = dispatcher.DispatchAsync(Bundle(), DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        await TestHangGuard.WaitAsync(engine.TriageEntered.Task, "Steward triage entry");
+        await TestHangGuard.WaitAsync(time.TimerCreated.Task, "Steward fail-open timer creation");
+        time.Advance(timeout - TimeSpan.FromTicks(1));
+        Assert.False(dispatch.IsCompleted);
+        Assert.Empty(transport.Sent);
+        Assert.Empty(store.Receipts);
+        time.Advance(TimeSpan.FromTicks(1));
+        var result = await TestHangGuard.WaitAsync(dispatch, "Steward fail-open dispatch");
+        var cancellationObserved = await TestHangGuard.WaitAsync(
+            engine.CancellationObserved.Task, "Steward triage cancellation");
 
         Assert.True(result.FailedOpen);
         Assert.True(cancellationObserved);
@@ -358,25 +383,6 @@ public sealed class StewardTests
             dispositions ?? [StewardInboxDisposition.CardCreated("inbox-1", "card-1")],
             "summary");
 
-    private sealed class DelayingEngine : IStewardTriageEngine
-    {
-        private readonly TimeSpan _delay;
-
-        public DelayingEngine(TimeSpan delay)
-        {
-            _delay = delay;
-        }
-
-        public async Task<StewardTriageBatch> TriageAsync(
-            StewardBriefingBundle bundle,
-            DateTimeOffset now,
-            CancellationToken cancellationToken = default)
-        {
-            await Task.Delay(_delay, cancellationToken);
-            return new StewardTriageBatch([], []);
-        }
-    }
-
     private sealed class ThrowingEngine : IStewardTriageEngine
     {
         public Task<StewardTriageBatch> TriageAsync(
@@ -395,8 +401,10 @@ public sealed class StewardTests
             throw new TaskCanceledException("internal steward timeout");
     }
 
-    private sealed class CancellationRecordingEngine : IStewardTriageEngine
+    private sealed class NeverCompletingEngine : IStewardTriageEngine
     {
+        public TaskCompletionSource TriageEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> CancellationObserved { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -405,9 +413,10 @@ public sealed class StewardTests
             DateTimeOffset now,
             CancellationToken cancellationToken = default)
         {
+            TriageEntered.TrySetResult();
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             }
             catch (OperationCanceledException)
             {
