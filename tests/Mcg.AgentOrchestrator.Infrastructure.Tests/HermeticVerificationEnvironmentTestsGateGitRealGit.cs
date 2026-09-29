@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -58,38 +57,15 @@ public sealed class HermeticVerificationEnvironmentTestsGateGitRealGit : GoalAcc
         }
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitAsync(
+    private static Task<(int ExitCode, string Stdout, string Stderr)> RunGitAsync(
         string directory,
         IDictionary<string, string?> environment,
         params string[] arguments)
     {
-        var start = new ProcessStartInfo("git")
-        {
-            WorkingDirectory = directory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        foreach (var argument in arguments)
-        {
-            start.ArgumentList.Add(argument);
-        }
-        start.Environment.Clear();
-        foreach (var pair in environment)
-        {
-            if (pair.Value is not null)
-            {
-                start.Environment[pair.Key] = pair.Value;
-            }
-        }
-
-        using var process = Process.Start(start)!;
-        process.StandardInput.Close();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        return (process.ExitCode, await stdout, await stderr);
+        var probe = InfrastructureTestSupport.RunGitProbe(
+            directory,
+            arguments,
+            verificationEnvironment: environment.ToDictionary(pair => pair.Key, pair => pair.Value));
+        return Task.FromResult((probe.ExitCode ?? -1, probe.StandardOutput, probe.StandardError));
     }
 }
