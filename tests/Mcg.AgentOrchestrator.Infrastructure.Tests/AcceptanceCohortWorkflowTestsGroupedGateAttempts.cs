@@ -129,6 +129,8 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
             Assert.Equal(goals.Length, second.GetActiveCohortGateMemberGoalIds().Count);
             Assert.Equal(1, second.GetActiveAcceptanceCohortCapacity().ActiveRootCount);
 
+            var landings = new List<ConductorLandingReceipt>();
+            second.SuccessfulLandingSink = landings.Add;
             PublishPassingReceipt(record, workspace, repo);
             File.WriteAllText(record.ResultPath, "passed");
             File.WriteAllText(record.ExitCodePath, "0");
@@ -136,6 +138,22 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
             _ = second.GetActiveCohortGateMemberGoalIds();
             var completed = Run(second, goals, cohort, mergeTrain);
             Assert.Equal(goals.Length, completed);
+            Assert.Equal(goals.Select(goal => goal.Id.Value).Order(StringComparer.Ordinal),
+                landings.Select(landing => landing.GoalId).Order(StringComparer.Ordinal));
+            if (!train)
+            {
+                // The direct cohort call lands both members. The conduct loop then records and
+                // completes them in its two ordinary post-landing lifecycle steps.
+                foreach (var goal in goals)
+                {
+                    var recorded = Assert.IsType<ConductorAdvanceOutcome.Executed>(
+                        second.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
+                    Assert.Equal(GoalLifecycleState.Merged, recorded.FromState);
+                    var finished = Assert.IsType<ConductorAdvanceOutcome.Executed>(
+                        second.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
+                    Assert.Equal(GoalLifecycleState.Recorded, finished.FromState);
+                }
+            }
             Assert.All(goals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
             Assert.Equal(0, launches);
         }
@@ -208,11 +226,15 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
                 _ => false));
             var selection = ProjectSelection(second, goals[0], goals[1]);
             Run(second, goals, selection, null);
-            Run(second, goals, selection, null);
             var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory,
                 "cohort-acceptance.db"));
-            Assert.Equal(AcceptanceCohortGateOutcome.Invalidated,
-                store.TryReadReceipt(record.IdentityValue)?.Outcome);
+            var firstReceipt = Assert.IsType<AcceptanceCohortReceipt>(store.TryReadReceipt(record.IdentityValue));
+            Run(second, goals, selection, null);
+            var receipt = Assert.IsType<AcceptanceCohortReceipt>(store.TryReadReceipt(record.IdentityValue));
+            Assert.Equal(firstReceipt.ReceiptId, receipt.ReceiptId);
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, receipt.Outcome);
+            Assert.Equal(AcceptanceCohortInvalidationReason.InfrastructureRetryExhausted,
+                receipt.Invalidation?.Reason);
             Assert.Equal(0, launches);
         }
         finally { DeleteDirectory(repo); }
