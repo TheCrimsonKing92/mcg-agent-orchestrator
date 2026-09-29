@@ -14,6 +14,10 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        if (RouteRecordedCohortAttributionFailure(goal, goalPrefix, policy) is { } attributedFailure)
+        {
+            return attributedFailure;
+        }
         if (HasActiveApparatusHold(goal, out _))
         {
             var failure = goal.LatestAcceptanceFailure!;

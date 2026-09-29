@@ -274,8 +274,8 @@ public sealed partial class CohortAcceptanceStore
             insert.CommandText = """
                 INSERT INTO cohort_partition_receipts(
                     cohort_id, member_ordinal, receipt_id, goal_id, candidate_revision,
-                    main_revision, tree_revision, manifest_identity, outcome, elapsed_ms, test_result_paths_json)
-                VALUES ($cohort, $ordinal, $receipt, $goal, $candidate, $main, $tree, $manifest, $outcome, $elapsed, $paths)
+                    main_revision, tree_revision, manifest_identity, outcome, elapsed_ms, test_result_paths_json, failed_checks_json, failing_test_identities_json)
+                VALUES ($cohort, $ordinal, $receipt, $goal, $candidate, $main, $tree, $manifest, $outcome, $elapsed, $paths, $checks, $tests)
                 ON CONFLICT(cohort_id, member_ordinal) DO NOTHING;
                 """;
             insert.Parameters.AddWithValue("$cohort", cohortId);
@@ -289,6 +289,8 @@ public sealed partial class CohortAcceptanceStore
             insert.Parameters.AddWithValue("$outcome", partition.Outcome.ToString());
             insert.Parameters.AddWithValue("$elapsed", partition.ElapsedMilliseconds);
             insert.Parameters.AddWithValue("$paths", JsonSerializer.Serialize(partition.TestResultPaths));
+            insert.Parameters.AddWithValue("$checks", JsonSerializer.Serialize(partition.FailedChecks));
+            insert.Parameters.AddWithValue("$tests", JsonSerializer.Serialize(partition.FailingTestIdentities));
             insert.ExecuteNonQuery();
         }
         using (var update = connection.CreateCommand())
@@ -1036,6 +1038,8 @@ public sealed partial class CohortAcceptanceStore
         EnsureColumn(connection, "cohort_receipts", "unrelated_failures_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_landing_intents", "prior_integration_revision", "TEXT NULL");
         EnsureReusablePartitionReceiptSchema(connection);
+        EnsureColumn(connection, "cohort_partition_receipts", "failed_checks_json", "TEXT NULL");
+        EnsureColumn(connection, "cohort_partition_receipts", "failing_test_identities_json", "TEXT NULL");
         using var invalidateLegacy = connection.CreateCommand();
         invalidateLegacy.CommandText = """
             UPDATE cohort_landing_intents

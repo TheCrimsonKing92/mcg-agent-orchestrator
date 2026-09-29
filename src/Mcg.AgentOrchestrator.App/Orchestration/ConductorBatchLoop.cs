@@ -229,7 +229,6 @@ internal sealed partial class ConductorBatchLoop
             EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
                          (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
         }
-
         void CompleteActivationTick(int tick) => EmitActivationTickEnd(emitActivationHeartbeat, tick);
 
         driver.DispatchRecordWriteSucceededSink = goalId =>
@@ -1975,7 +1974,7 @@ internal sealed partial class ConductorBatchLoop
     }
 
     // Emit a compact progress line to stdout with immediate flush; optionally accumulate in a list.
-    private static void EmitProgress(string line, List<string>? accumulator = null)
+    internal static void EmitProgress(string line, List<string>? accumulator = null)
     {
         var stampedLine = $"{line} ts={DateTimeOffset.UtcNow:O}";
         Console.WriteLine(stampedLine);
@@ -2064,6 +2063,7 @@ internal sealed partial class ConductorBatchLoop
             "ACCEPTANCE_COHORT_INFLIGHT" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_FAIRNESS" => "acceptance-cohort",
             "ACCEPTANCE_COHORT_FAIRNESS_TRANSITION" => "acceptance-cohort",
+            "ACCEPTANCE_COHORT_ATTRIBUTION_VERDICT" => "acceptance-cohort",
             "SWEEP_BLOCKER" => "sweep-blocker", "SWEEP_OWNED_ROOT_DEFERRED" => "sweep-owned-root-deferred",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
@@ -2911,12 +2911,12 @@ internal sealed partial class ConductorBatchLoop
         {
             return new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         }
-
         var results = new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         var deferredByAdmission = 0;
         var orderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
             .Where(goal =>
                 IsParallelAcceptanceLifecycleEligible(goal, driver) &&
+                !driver.HasRoutableRecordedCohortAttributionFailure(goal) &&
                 goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
                 AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) &&
                 !ConductorDriver.HasPendingDeferredNoChangeEvidence(goal) &&
@@ -3277,7 +3277,7 @@ internal sealed partial class ConductorBatchLoop
                 }
                 foreach (var pair in cohortRun.MemberResults)
                 {
-                    results[pair.Key] = new ParallelLandingOutcome(pair.Value, SlotIndex: 0);
+                    results[pair.Key] = TrackCohortAttributionFailure(cohortRun, pair, kernel, changedGoalIds);
                 }
                 if (cohortRun.Detail.Contains("outcome=inflight", StringComparison.Ordinal))
                 {

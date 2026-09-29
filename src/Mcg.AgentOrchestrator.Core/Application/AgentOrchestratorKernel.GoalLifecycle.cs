@@ -775,6 +775,18 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
+    public bool RouteRecordedAcceptanceFailure(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status != GoalStatus.Verified || goal.LatestAcceptanceFailure is null)
+        {
+            return false;
+        }
+        goal.SetStatus(GoalStatus.AcceptanceFailed);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
+        return true;
+    }
+
     public TaskSpec RequeueInterruptedDispatch(
         GoalId goalId,
         TaskId taskId,
