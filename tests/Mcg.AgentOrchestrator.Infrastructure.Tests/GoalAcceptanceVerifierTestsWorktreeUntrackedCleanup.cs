@@ -26,6 +26,7 @@ public sealed class GoalAcceptanceVerifierTestsWorktreeUntrackedCleanup : GoalAc
             Git(root, "add", ".gitignore", "tracked.txt", "config/acceptance-manifest.json");
             Git(root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture");
             File.WriteAllText(Path.Combine(root, "pre-existing.txt"), "keep");
+            Directory.CreateDirectory(Path.Combine(root, "pre-existing-empty"));
 
             var emitted = new List<string>();
             TestOverrides.OnGateWorktreeCleanupLineForTests = emitted.Add;
@@ -38,6 +39,9 @@ public sealed class GoalAcceptanceVerifierTestsWorktreeUntrackedCleanup : GoalAc
                     var cache = Path.Combine(root, "%SystemDrive%", "ProgramData");
                     Directory.CreateDirectory(cache);
                     File.WriteAllText(Path.Combine(cache, "x.db"), "remove");
+                    var existingParent = Path.Combine(root, "pre-existing-empty", "new-child");
+                    Directory.CreateDirectory(existingParent);
+                    File.WriteAllText(Path.Combine(existingParent, "new.db"), "remove");
                     File.WriteAllText(Path.Combine(root, "during.ignored"), "keep");
                     File.WriteAllText(Path.Combine(root, "tracked.txt"), "after");
                 }
@@ -52,10 +56,16 @@ public sealed class GoalAcceptanceVerifierTestsWorktreeUntrackedCleanup : GoalAc
             Assert.True(File.Exists(Path.Combine(root, "during.ignored")));
             Assert.Equal("after", File.ReadAllText(Path.Combine(root, "tracked.txt")));
             Assert.False(Directory.Exists(Path.Combine(root, "%SystemDrive%")));
-            var line = Assert.Single(emitted);
-            Assert.StartsWith("GATE_WORKTREE_UNTRACKED_REMOVED ", line, StringComparison.Ordinal);
-            Assert.Contains("path=%SystemDrive%/ProgramData/x.db", line, StringComparison.Ordinal);
-            Assert.Contains("check=\"worktree cleanup probe\"", line, StringComparison.Ordinal);
+            Assert.True(Directory.Exists(Path.Combine(root, "pre-existing-empty")));
+            Assert.False(File.Exists(Path.Combine(root, "pre-existing-empty", "new-child", "new.db")));
+            Assert.Equal(2, emitted.Count);
+            Assert.All(emitted, line =>
+            {
+                Assert.StartsWith("GATE_WORKTREE_UNTRACKED_REMOVED ", line, StringComparison.Ordinal);
+                Assert.Contains("check=\"worktree cleanup probe\"", line, StringComparison.Ordinal);
+            });
+            Assert.Contains(emitted, line => line.Contains("path=%SystemDrive%/ProgramData/x.db", StringComparison.Ordinal));
+            Assert.Contains(emitted, line => line.Contains("path=pre-existing-empty/new-child/new.db", StringComparison.Ordinal));
         }
         finally
         {

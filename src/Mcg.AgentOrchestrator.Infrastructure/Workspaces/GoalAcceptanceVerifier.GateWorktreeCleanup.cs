@@ -4,30 +4,50 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
-    private sealed record GateUntrackedSnapshot(string Root, HashSet<string> Paths);
+    private sealed record GateUntrackedSnapshot(
+        string Root,
+        HashSet<string> Paths,
+        HashSet<string> IgnoredDirectories,
+        HashSet<string> ExistingRootDirectories);
 
-    private static GateUntrackedSnapshot? CaptureGateWorktreeUntrackedSnapshot(string worktreePath)
+    private GateUntrackedSnapshot? CaptureGateWorktreeUntrackedSnapshot(string worktreePath, GoalId? goalId)
     {
+        string? root = null;
         try
         {
-            var root = Path.GetFullPath(worktreePath).TrimEnd(Path.DirectorySeparatorChar);
+            root = Path.GetFullPath(worktreePath).TrimEnd(Path.DirectorySeparatorChar);
             var gitRoot = GitCli.Run(root, "rev-parse", "--show-toplevel");
-            if (!gitRoot.Succeeded || !SameGatePath(root, gitRoot.Output.Trim()))
+            if (!GitGateInspectionSucceeded(gitRoot))
+            {
+                EmitGateWorktreeSkippedIfTopLevel(root, goalId, gitRoot.Error);
+                return null;
+            }
+            if (!SameGatePath(root, gitRoot.Output.Trim()))
                 return null;
 
             var paths = ReadGateUntrackedPaths(root);
             var tracked = GitCli.Run(root, "ls-files", "-z", "--cached");
-            var ignored = GitCli.Run(root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard");
-            if (paths is null || !tracked.Succeeded || !ignored.Succeeded)
+            var ignored = GitCli.Run(root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory");
+            if (paths is null || !GitGateInspectionSucceeded(tracked) || !GitGateInspectionSucceeded(ignored))
+            {
+                EmitGateWorktreeCleanupLine($"GATE_WORKTREE_UNTRACKED_SKIPPED goal={goalId?.Value ?? "unknown"} reason=baseline-inspection-failed");
                 return null;
+            }
 
             paths.UnionWith(tracked.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries));
-            paths.UnionWith(ignored.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries));
-            return new GateUntrackedSnapshot(root, paths);
+            var ignoredPaths = ignored.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+            paths.UnionWith(ignoredPaths);
+            return new GateUntrackedSnapshot(
+                root,
+                paths,
+                new HashSet<string>(ignoredPaths.Where(path => path.EndsWith("/", StringComparison.Ordinal)), GatePathComparer),
+                new HashSet<string>(Directory.EnumerateDirectories(root).Select(path => Path.GetFileName(path)), GatePathComparer));
         }
-        catch
+        catch (Exception exception)
         {
             // An incomplete baseline cannot authorize any deletion.
+            if (root is not null)
+                EmitGateWorktreeSkippedIfTopLevel(root, goalId, exception.Message);
             return null;
         }
     }
@@ -35,7 +55,7 @@ public sealed partial class GoalAcceptanceVerifier
     private static HashSet<string>? ReadGateUntrackedPaths(string root)
     {
         var status = GitCli.Run(root, "status", "--porcelain=v1", "-z", "--untracked-files=all");
-        if (!status.Succeeded)
+        if (!GitGateInspectionSucceeded(status))
             return null;
 
         var paths = new HashSet<string>(GatePathComparer);
@@ -67,9 +87,14 @@ public sealed partial class GoalAcceptanceVerifier
         {
             var current = ReadGateUntrackedPaths(snapshot.Root);
             if (current is null)
+            {
+                EmitGateWorktreeCleanupLine($"GATE_WORKTREE_UNTRACKED_SKIPPED goal={goalId?.Value ?? "unknown"} reason=recheck-inspection-failed");
                 return;
+            }
 
-            foreach (var path in current.Except(snapshot.Paths, GatePathComparer))
+            foreach (var path in current.Except(snapshot.Paths, GatePathComparer)
+                         .Where(path => !snapshot.IgnoredDirectories.Any(directory =>
+                             path.StartsWith(directory, GatePathComparison))))
             {
                 try
                 {
@@ -84,13 +109,17 @@ public sealed partial class GoalAcceptanceVerifier
                     if (Directory.Exists(fullPath))
                         throw new IOException("directory-entry");
 
+                    if (!File.Exists(fullPath))
+                        throw new IOException("missing-at-removal");
                     File.Delete(fullPath);
+                    if (File.Exists(fullPath))
+                        throw new IOException("file-still-present");
                     EmitGateWorktreeCleanupLine(
                         $"GATE_WORKTREE_UNTRACKED_REMOVED goal={goalId?.Value ?? "unknown"} " +
                         $"path={QuoteProgressToken(path)} check={QuoteProgressToken(lastCheck ?? "unknown")}");
                     try
                     {
-                        PruneGateEmptyParents(snapshot.Root, Path.GetDirectoryName(fullPath)!);
+                        PruneGateEmptyParents(snapshot.Root, Path.GetDirectoryName(fullPath)!, snapshot.ExistingRootDirectories);
                     }
                     catch
                     {
@@ -105,11 +134,28 @@ public sealed partial class GoalAcceptanceVerifier
                 }
             }
         }
-        catch
+        catch (Exception exception)
         {
             // Gate cleanup is diagnostic and cannot change the verdict or mask a gate exception.
+            EmitGateWorktreeCleanupLine($"GATE_WORKTREE_UNTRACKED_SKIPPED goal={goalId?.Value ?? "unknown"} reason={QuoteProgressToken(exception.Message)}");
         }
     }
+
+    private void EmitGateWorktreeSkippedIfTopLevel(string root, GoalId? goalId, string reason)
+    {
+        try
+        {
+            if (File.Exists(Path.Combine(root, ".git")) || Directory.Exists(Path.Combine(root, ".git")))
+                EmitGateWorktreeCleanupLine($"GATE_WORKTREE_UNTRACKED_SKIPPED goal={goalId?.Value ?? "unknown"} reason={QuoteProgressToken(reason)}");
+        }
+        catch
+        {
+            // Diagnostic output must not change the gate verdict.
+        }
+    }
+
+    private static bool GitGateInspectionSucceeded(GitCli.GitResult result) =>
+        result.Succeeded && !result.DrainTimedOut;
 
     private void EmitGateWorktreeCleanupLine(string line)
     {
@@ -136,9 +182,10 @@ public sealed partial class GoalAcceptanceVerifier
         }
     }
 
-    private static void PruneGateEmptyParents(string root, string parent)
+    private static void PruneGateEmptyParents(string root, string parent, HashSet<string> existingRootDirectories)
     {
         while (!SameGatePath(parent, root) &&
+               !existingRootDirectories.Contains(Path.GetRelativePath(root, parent).Split(Path.DirectorySeparatorChar)[0]) &&
                !File.GetAttributes(parent).HasFlag(FileAttributes.ReparsePoint) &&
                !Directory.EnumerateFileSystemEntries(parent).Any())
         {
