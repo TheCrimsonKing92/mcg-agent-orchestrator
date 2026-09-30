@@ -7,15 +7,25 @@ public sealed class CliChildProcessRunnerTests
     public async Task HangingChildIsTreeKilledAndNamedWhenInjectedGuardExpires()
     {
         Assert.True(CliChildProcessRunner.DefaultHangGuard >= TimeSpan.FromSeconds(120));
-        // Block in the child itself so a descendant cannot retain a redirected pipe after the kill.
-        var start = ShellStart(OperatingSystem.IsWindows()
-            ? "echo started& for /L %i in (1,0,2) do @set x=1"
-            : "echo started; exec sleep 3600");
+        var marker = Path.Combine(Path.GetTempPath(), $"mcg-cli-child-{Guid.NewGuid():N}.pid");
+        var temporaryMarker = marker + ".tmp";
+        var markerWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(Path.GetDirectoryName(marker)!, Path.GetFileName(marker));
+        watcher.Created += (_, _) => markerWritten.TrySetResult();
+        watcher.Renamed += (_, _) => markerWritten.TrySetResult();
+        watcher.EnableRaisingEvents = true;
+
+        var start = TreeStart(marker, temporaryMarker);
         Process? child = null;
+        Process? descendant = null;
         try
         {
-            var run = CliChildProcessRunner.RunAsync(start, TimeSpan.FromSeconds(2),
+            var run = CliChildProcessRunner.RunAsync(start, TimeSpan.FromSeconds(10),
                 process => child = Process.GetProcessById(process.Id));
+            await markerWritten.Task.WaitAsync(TestHangGuard.Bound);
+            descendant = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker)));
+            Assert.False(descendant.HasExited);
+
             var error = await Assert.ThrowsAsync<TimeoutException>(async () =>
                 await run.WaitAsync(TestHangGuard.Bound));
             Assert.Contains(start.FileName, error.Message, StringComparison.Ordinal);
@@ -24,9 +34,20 @@ public sealed class CliChildProcessRunnerTests
             Assert.Contains("stderr=", error.Message, StringComparison.Ordinal);
             Assert.NotNull(child);
             Assert.True(child.HasExited);
+            await descendant.WaitForExitAsync().WaitAsync(TestHangGuard.Bound);
+            Assert.True(descendant.HasExited);
         }
         finally
         {
+            if (descendant is not null)
+            {
+                if (!descendant.HasExited)
+                {
+                    descendant.Kill(entireProcessTree: true);
+                    await descendant.WaitForExitAsync();
+                }
+                descendant.Dispose();
+            }
             if (child is not null)
             {
                 if (!child.HasExited)
@@ -36,7 +57,36 @@ public sealed class CliChildProcessRunnerTests
                 }
                 child.Dispose();
             }
+            File.Delete(marker);
+            File.Delete(temporaryMarker);
         }
+    }
+
+    private static ProcessStartInfo TreeStart(string marker, string temporaryMarker)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var start = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            start.ArgumentList.Add("-NoProfile");
+            start.ArgumentList.Add("-NonInteractive");
+            start.ArgumentList.Add("-Command");
+            start.ArgumentList.Add("$p = Start-Process ping.exe -ArgumentList '-t 127.0.0.1' -PassThru -WindowStyle Hidden; " +
+                $"Set-Content -LiteralPath '{temporaryMarker.Replace("'", "''")}' -Value $p.Id; " +
+                $"Move-Item -LiteralPath '{temporaryMarker.Replace("'", "''")}' -Destination '{marker.Replace("'", "''")}' ; " +
+                "Write-Output started; Wait-Process -Id $p.Id");
+            return start;
+        }
+
+        var shellMarker = marker.Replace("'", "'\"'\"'");
+        var shellTemporaryMarker = temporaryMarker.Replace("'", "'\"'\"'");
+        return ShellStart($"sleep 3600 & child=$!; printf '%s' \"$child\" > '{shellTemporaryMarker}'; mv '{shellTemporaryMarker}' '{shellMarker}'; echo started; wait \"$child\"");
     }
 
     [Fact]
