@@ -111,7 +111,7 @@ public static class AgentDefinitionFactory
     {
         if (!AgentExecutionPolicies.AllowsSubscription(executionPolicy)) return null;
         if (providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)) return AgentCatalog.OpenAiSubscriptionModelAlias;
-        if (providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase)) return "grok-4.6";
+        if (providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase)) return AgentCatalog.XaiSubscriptionModelAlias;
         return providerName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase)
             ? LlamaCppDefaults.DefaultModelAlias
             : null;
@@ -140,7 +140,7 @@ public static class AgentDefinitionFactory
             return new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
                 SubscriptionMode.ApiKey, AgentCatalog.ComplexReasoningEffort, AgentCatalog.ComplexApiMaxOutputTokens);
         if (providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
-            return new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
+            return new ModelProfile("Anthropic", AgentCatalog.AnthropicComplexModelName, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
                 SubscriptionMode.ApiKey, null, AgentCatalog.ComplexApiMaxOutputTokens);
         return null;
     }

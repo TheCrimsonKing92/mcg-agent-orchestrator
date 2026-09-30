@@ -1375,7 +1375,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, anthropic.Model.MaxOutputTokens);
     Assert.Equal(SubscriptionMode.ApiKey, anthropic.Model.SubscriptionMode);
     Assert.Equal("Anthropic", anthropic.ComplexModel!.ProviderName);
-    Assert.Equal("claude-sonnet-4-6", anthropic.ComplexModel.ModelName);
+    Assert.Equal("claude-sonnet-5-5", anthropic.ComplexModel.ModelName);
     Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, anthropic.ComplexModel.MaxOutputTokens);
 
     Assert.Equal(AgentExecutionPolicy.ApiOnly, ollama.ExecutionPolicy);

@@ -4745,6 +4745,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
     [Xunit.Theory(DisplayName = "UsesTypedContextPackage_pins_supported_models_provider_and_roles")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]
     [Xunit.InlineData(AgentCatalog.OpenAiSolSubscriptionModelAlias, "OpenAI", AgentRole.Developer, true)]

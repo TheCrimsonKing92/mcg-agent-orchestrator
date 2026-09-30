@@ -9,6 +9,7 @@ internal static class WorkerContextHelpers
         AgentCatalog.OpenAiSolSubscriptionModelAlias,
         AgentCatalog.OpenAiTerraSubscriptionModelAlias,
         AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias,
+        AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias,
         AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias,
         AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias
     };

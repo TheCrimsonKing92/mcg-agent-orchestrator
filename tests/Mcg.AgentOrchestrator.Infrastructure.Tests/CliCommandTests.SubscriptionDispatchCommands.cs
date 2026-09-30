@@ -2966,7 +2966,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Equal("Anthropic", agent.Model.ProviderName);
         Xunit.Assert.Equal("claude-haiku-4-5", agent.Model.ModelName);
         Xunit.Assert.Equal("Anthropic", agent.ComplexModel!.ProviderName);
-        Xunit.Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
+        Xunit.Assert.Equal("claude-sonnet-5-5", agent.ComplexModel.ModelName);
     }
 
 

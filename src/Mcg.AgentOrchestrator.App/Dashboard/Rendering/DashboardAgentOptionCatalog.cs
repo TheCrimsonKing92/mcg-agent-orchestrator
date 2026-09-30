@@ -48,7 +48,11 @@ internal static class DashboardAgentOptionCatalog
                     new("gpt-5.4-nano", "GPT-5.4 nano"),
                     new("gpt-5-mini", "GPT-5 mini"),
                     new("gpt-5-nano", "GPT-5 nano"),
-                    new("gpt-5.2", "GPT-5.2 (previous)")
+                    new("gpt-5.2", "GPT-5.2 (previous)"),
+                    new(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "GPT-6.1 Sol"),
+                    new(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "GPT-6 Sol"),
+                    new(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "GPT-6 Luna"),
+                    new(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "GPT-6 Astra")
                 ],
                 ApiReasoning:
                 [
@@ -68,6 +72,7 @@ internal static class DashboardAgentOptionCatalog
                     new(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "GPT-6 Sol"),
                     new(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "GPT-6 Luna"),
                     new(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "GPT-6 Astra"),
+                    new(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "GPT-6.1 Sol"),
                     UseApiModel
                 ],
                 SubscriptionReasoning: OpenAiSubscriptionReasoning,
@@ -77,6 +82,7 @@ internal static class DashboardAgentOptionCatalog
                     [AgentCatalog.OpenAiTerraSubscriptionModelAlias] = OpenAiSubscriptionReasoning,
                     [AgentCatalog.OpenAiLunaSubscriptionModelAlias] = OpenAiLunaSubscriptionReasoning,
                     [AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias] = OpenAiSubscriptionReasoning,
+                    [AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias] = OpenAiSubscriptionReasoning,
                     [AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias] = OpenAiLunaSubscriptionReasoning,
                     [AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias] = OpenAiSubscriptionReasoning
                 },
@@ -87,6 +93,7 @@ internal static class DashboardAgentOptionCatalog
                     [AgentCatalog.OpenAiTerraSubscriptionModelAlias] = "medium",
                     [AgentCatalog.OpenAiLunaSubscriptionModelAlias] = "medium",
                     [AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias] = "medium",
+                    [AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias] = "medium",
                     [AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias] = "medium",
                     [AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias] = "medium"
                 },
@@ -98,7 +105,11 @@ internal static class DashboardAgentOptionCatalog
                     new("claude-sonnet-4-6", "Claude Sonnet 4.6"),
                     new("claude-haiku-4-5", "Claude Haiku 4.5"),
                     new("claude-opus-4-8", "Claude Opus 4.8"),
-                    new("claude-opus-5", "Claude Opus 5")
+                    new("claude-opus-5", "Claude Opus 5"),
+                    new("claude-opus-5-5", "Claude Opus 5.5"),
+                    new(AgentCatalog.AnthropicComplexModelName, "Claude Sonnet 5.5"),
+                    new("claude-sonnet-5", "Claude Sonnet 5"),
+                    new("claude-fable-5-1", "Claude Fable 5.1")
                 ],
                 ApiReasoning: [Default],
                 SubscriptionModels:
@@ -126,7 +137,28 @@ internal static class DashboardAgentOptionCatalog
                 SubscriptionReasoningByModel: new Dictionary<string, IReadOnlyList<DashboardAgentOption>>(StringComparer.OrdinalIgnoreCase),
                 DefaultSubscriptionReasoningByModel: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 DefaultSubscriptionModel: string.Empty,
-                PreferredProfile: string.Empty)
+                PreferredProfile: string.Empty),
+            ["xAI"] = new(
+                ApiModels:
+                [
+                    new(AgentCatalog.XaiSubscriptionModelAlias, AgentCatalog.XaiSubscriptionModelAlias),
+                    new("grok-4.7-build-fast", "grok-4.7-build-fast"),
+                    new("grok-4.6", "grok-4.6"),
+                    new("grok-4.5", "grok-4.5")
+                ],
+                ApiReasoning: [Default],
+                SubscriptionModels:
+                [
+                    new(AgentCatalog.XaiSubscriptionModelAlias, AgentCatalog.XaiSubscriptionModelAlias),
+                    new("grok-4.7-build-fast", "grok-4.7-build-fast"),
+                    new("grok-4.6", "grok-4.6"),
+                    new("grok-4.5", "grok-4.5")
+                ],
+                SubscriptionReasoning: [Default],
+                SubscriptionReasoningByModel: new Dictionary<string, IReadOnlyList<DashboardAgentOption>>(StringComparer.OrdinalIgnoreCase),
+                DefaultSubscriptionReasoningByModel: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                DefaultSubscriptionModel: AgentCatalog.XaiSubscriptionModelAlias,
+                PreferredProfile: WorkerProfileDispatcher.XaiSubscriptionProfileName)
         };
 
     public static DashboardAgentProviderOptions ForProvider(string provider)

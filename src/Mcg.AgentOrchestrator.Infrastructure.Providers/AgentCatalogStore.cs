@@ -11,8 +11,11 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
     public const string OpenAiTerraSubscriptionModelAlias = "gpt-5.6-terra";
     public const string OpenAiLunaSubscriptionModelAlias = "gpt-5.6-luna";
     public const string OpenAiGpt6SolSubscriptionModelAlias = "gpt-6-sol";
+    public const string OpenAiGpt61SolSubscriptionModelAlias = "gpt-6.1-sol";
     public const string OpenAiGpt6LunaSubscriptionModelAlias = "gpt-6-luna";
     public const string OpenAiGpt6AstraSubscriptionModelAlias = "gpt-6-astra";
+    public const string AnthropicComplexModelName = "claude-sonnet-5-5";
+    public const string XaiSubscriptionModelAlias = "grok-4.7";
     public const string StaleOpenAiCodexSubscriptionModelAlias = "gpt-5.3-codex";
     public const int RoutineApiMaxOutputTokens = OutputTokenPolicy.RoutinePaidMaxOutputTokens;
     public const int ComplexApiMaxOutputTokens = OutputTokenPolicy.ComplexPaidMaxOutputTokens;
@@ -31,6 +34,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
             (modelAlias.Equals(OpenAiTerraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiLunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiGpt6SolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
+             modelAlias.Equals(OpenAiGpt61SolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiGpt6LunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase) ||
              modelAlias.Equals(OpenAiGpt6AstraSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
             ? "medium"
@@ -104,7 +108,7 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
             new("Anthropic", "claude-haiku-4-5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, null, RoutineApiMaxOutputTokens);
 
         static ModelProfile Sonnet() =>
-            new("Anthropic", "claude-sonnet-4-6", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, null, ComplexApiMaxOutputTokens);
+            new("Anthropic", AnthropicComplexModelName, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, null, ComplexApiMaxOutputTokens);
 
         static SubscriptionLaunchProfile ClaudeCli() =>
             new("claude-cli");
@@ -321,7 +325,7 @@ public static class AgentCatalogStore
         if (IsOpenAiCodexSubscription(agent, subscription) &&
             string.Equals(subscription.ModelAlias, AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
         {
-            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiTerraSubscriptionModelAlias };
+            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias };
         }
 
         return string.IsNullOrWhiteSpace(subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)
