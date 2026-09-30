@@ -1058,7 +1058,7 @@ public sealed class RepositoryChangeClassifierTests
         Assert.False(docsPolicy.RequiresHumanReview);
         Assert.True(riskyDashboardPolicy.RequiresTests);
         Assert.True(riskyDashboardPolicy.RequiresHumanReview);
-        Assert.True(riskyDashboardPolicy.Checks.Any(check => check.Kind == "browser-smoke"));
+        Assert.DoesNotContain(riskyDashboardPolicy.Checks, check => check.Kind == "browser-smoke");
         Assert.True(riskyDashboardPolicy.Checks.Any(check => check.Kind == "manual-risk-review"));
     }
 }

@@ -658,6 +658,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings).Checks;
     }
 
+    internal static IReadOnlyList<AcceptanceManifestCheck> MapRequiredPolicyChecksForTests(
+        string worktreePath,
+        VerificationPolicy policy) => MapRequiredPolicyChecks(worktreePath, policy);
+
     internal async Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
@@ -3458,16 +3462,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             taskDescription: string.Empty,
             verificationPlan: null,
             changedFiles, RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath));
-        return policy.Checks
-            .Where(c =>
-                c.Required &&
-                (c.Kind.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
-                    c.Kind.Equals("browser-smoke", StringComparison.OrdinalIgnoreCase)))
+        return MapRequiredPolicyChecks(worktreePath, policy);
+    }
+
+    private static IReadOnlyList<AcceptanceManifestCheck> MapRequiredPolicyChecks(
+        string worktreePath,
+        VerificationPolicy policy) =>
+        policy.Checks
+            .Where(c => c.Required)
             .Select(check => PolicyCheckToManifestCheck(worktreePath, check))
             .Where(c => c is not null)
             .Select(c => c!)
             .ToArray();
-    }
 
     internal static string ProjectLabel(string project) =>
         AcceptancePolicyShardPlanner.ProjectLabel(project);
@@ -3580,22 +3586,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             return DotnetCommandToManifestCheck(worktreePath, check.Name, parts);
-        }
-
-        if (check.Kind.Equals("browser-smoke", StringComparison.OrdinalIgnoreCase))
-        {
-            var parts = SplitCommandLine(check.CommandLine);
-            var script = parts.Length == 0 ? @".\scripts\Run-DashboardBrowserScript.ps1" : parts[0];
-            string[] scriptArguments = parts.Length > 1
-                ? parts[1..]
-                : [@".\scripts\dashboard-smoke.js"];
-            return new AcceptanceManifestCheck
-            {
-                Name = check.Name,
-                Type = "browser-smoke",
-                Command = "powershell",
-                Arguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, .. scriptArguments]
-            };
         }
 
         return null;
