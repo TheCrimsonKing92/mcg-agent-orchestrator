@@ -60,8 +60,7 @@ internal static class HarnessHookRootContract
         string[] requiredPaths =
         [
             Path.Combine(claudeDirectory, "settings.json"),
-            Path.Combine(claudeDirectory, "hooks", "Emit-Timestamp.ps1"),
-            Path.Combine(claudeDirectory, "hooks", "Block-CompoundShell.ps1")
+            Path.Combine(claudeDirectory, "hooks", "Emit-Timestamp.ps1")
         ];
         var missingPath = requiredPaths.FirstOrDefault(path => !File.Exists(path));
         return missingPath is null

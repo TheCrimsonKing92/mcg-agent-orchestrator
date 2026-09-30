@@ -5,14 +5,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class HarnessHookRootContractTests
 {
-    // Failsafe, not an assertion: every fact here launches at least one cold pwsh hook process and no
-    // fact asserts on elapsed time. The former 20-second bound cancelled
-    // RenderedCompoundHook_RejectsCompoundShellPayload (two launches under one bound) during a saturated
-    // acceptance gate, reporting a TaskCanceledException that reads as a hook defect.
+    // Failsafe for facts that launch a cold pwsh hook process, not an elapsed-time assertion.
+    // The former 20-second bound could cancel a cold hook process
+    // during a saturated acceptance gate, reporting a TaskCanceledException that reads as a hook defect.
     private static readonly TimeSpan HookProcessFailsafe = TimeSpan.FromMinutes(5);
 
     private const string LegacyBlockCommand =
-        "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/Block-CompoundShell.ps1\"";
+        "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/Emit-Timestamp.ps1\"";
 
     [Xunit.Fact]
     public async Task LegacyCommand_WithoutRoot_ResolvesSlashPathAndFails()
@@ -28,7 +27,7 @@ public sealed class HarnessHookRootContractTests
             timeout.Token);
 
         Assert.NotEqual(0, result.ExitCode);
-        Assert.Contains("/.claude/hooks/Block-CompoundShell.ps1", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("/.claude/hooks/Emit-Timestamp.ps1", result.StandardError, StringComparison.Ordinal);
         Assert.Contains("not recognized as the name of a script file", result.StandardError, StringComparison.Ordinal);
     }
 
@@ -62,49 +61,6 @@ public sealed class HarnessHookRootContractTests
             timeout.Token);
 
         Assert.NotEqual(0, result.ExitCode);
-        Assert.Contains(
-            "Repository hook root is unavailable: set CLAUDE_PROJECT_DIR to the worktree root",
-            result.StandardError,
-            StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact]
-    public async Task RenderedCompoundHook_RejectsCompoundShellPayload()
-    {
-        using var fixture = HookWorkspace.Create();
-        var command = WithoutOptionalEnvironment(ReadHookCommand(fixture.Root, "PreToolUse"));
-        var benignPayload = JsonSerializer.Serialize(new { tool_input = new { command = "Get-ChildItem" } });
-        var compoundPayload = JsonSerializer.Serialize(new { tool_input = new { command = "Get-ChildItem && Get-Date" } });
-        using var timeout = new CancellationTokenSource(HookProcessFailsafe);
-
-        var benign = await WorkerProcessRunner.RunBufferedAsync(
-            new WorkerProcessRunRequest(command, fixture.Root, StandardInput: benignPayload),
-            timeout.Token);
-        var blocked = await WorkerProcessRunner.RunBufferedAsync(
-            new WorkerProcessRunRequest(command, fixture.Root, StandardInput: compoundPayload),
-            timeout.Token);
-
-        Assert.Equal(0, benign.ExitCode);
-        Assert.Empty(benign.StandardError);
-        Assert.Equal(2, blocked.ExitCode);
-        Assert.Contains("BLOCKED compound shell command", blocked.StandardError, StringComparison.Ordinal);
-        Assert.Contains("chaining &&", blocked.StandardError, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact]
-    public async Task RenderedCompoundHook_WithoutRoot_BlocksWithActionableDiagnostic()
-    {
-        using var fixture = HookWorkspace.Create();
-        var command =
-            "$env:CLAUDE_PROJECT_DIR = $null; " +
-            ReadHookCommand(fixture.Root, "PreToolUse");
-        using var timeout = new CancellationTokenSource(HookProcessFailsafe);
-
-        var result = await WorkerProcessRunner.RunBufferedAsync(
-            new WorkerProcessRunRequest(command, fixture.Root),
-            timeout.Token);
-
-        Assert.Equal(2, result.ExitCode);
         Assert.Contains(
             "Repository hook root is unavailable: set CLAUDE_PROJECT_DIR to the worktree root",
             result.StandardError,
@@ -146,7 +102,7 @@ public sealed class HarnessHookRootContractTests
     public void ProviderSeed_UnsupportedHookRoot_WritesActionableDiagnostic()
     {
         using var fixture = HookWorkspace.Create();
-        var missingHook = Path.Combine(fixture.Root, ".claude", "hooks", "Block-CompoundShell.ps1");
+        var missingHook = Path.Combine(fixture.Root, ".claude", "hooks", "Emit-Timestamp.ps1");
         File.Delete(missingHook);
         var stderrPath = Path.Combine(fixture.Root, "dispatch.err.log");
         var startInfo = new ProcessStartInfo
@@ -167,6 +123,23 @@ public sealed class HarnessHookRootContractTests
         Assert.Contains(HarnessHookRootContract.EnvironmentVariableName, diagnostic, StringComparison.Ordinal);
         Assert.Contains(missingHook, diagnostic, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Launch the harness from a worktree", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void DescribeUnsupported_RequiresOnlySettingsAndTimestampHook()
+    {
+        using var fixture = HookWorkspace.Create();
+        var timestampHook = Path.Combine(fixture.Root, ".claude", "hooks", "Emit-Timestamp.ps1");
+
+        Assert.Null(HarnessHookRootContract.DescribeUnsupported(fixture.Root));
+
+        File.Delete(timestampHook);
+        var diagnostic = HarnessHookRootContract.DescribeUnsupported(fixture.Root);
+        Assert.NotNull(diagnostic);
+        Assert.Contains(timestampHook, diagnostic, StringComparison.OrdinalIgnoreCase);
+
+        Directory.Delete(Path.Combine(fixture.Root, ".claude"), recursive: true);
+        Assert.Null(HarnessHookRootContract.DescribeUnsupported(fixture.Root));
     }
 
     private static string ReadHookCommand(string root, string eventName)
@@ -227,9 +200,6 @@ public sealed class HarnessHookRootContractTests
             File.Copy(
                 Path.Combine(sourceRoot, ".claude", "hooks", "Emit-Timestamp.ps1"),
                 Path.Combine(hooks, "Emit-Timestamp.ps1"));
-            File.Copy(
-                Path.Combine(sourceRoot, ".claude", "hooks", "Block-CompoundShell.ps1"),
-                Path.Combine(hooks, "Block-CompoundShell.ps1"));
             return new HookWorkspace(root);
         }
 

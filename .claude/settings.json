@@ -10,18 +10,6 @@
           }
         ]
       }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "shell": "powershell",
-            "command": "pwsh -NoProfile -Command 'if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(\"CLAUDE_PROJECT_DIR\"))) { [Console]::Error.WriteLine(\"Repository hook root is unavailable: set CLAUDE_PROJECT_DIR to the worktree root before invoking this hook.\"); exit 3 }; & ([IO.Path]::Combine([Environment]::GetEnvironmentVariable(\"CLAUDE_PROJECT_DIR\"), \".claude\", \"hooks\", \"Block-CompoundShell.ps1\"))'; if (-not $?) { exit 2 }"
-          }
-        ]
-      }
     ]
   },
   "permissions": {
@@ -95,8 +83,6 @@
       "PowerShell(dotnet build-server shutdown)",
       "PowerShell(Wait-Process *)",
       "Bash(tasklist.exe *)",
-      "Bash(cd C:/Users/miles/vcs/mcg-agent-orchestrator*)",
-      "Bash(cd /c/Users/miles/vcs/mcg-agent-orchestrator*)",
       "Bash(cd .orchestrator-worktrees/*)",
       "Bash(./mcg-orchestrator.cmd *)",
       "Bash(MCG_WORKER_SANDBOX=1 ./mcg-orchestrator.cmd *)",
@@ -179,8 +165,6 @@
       "Bash(rm -f .conduct-stop)",
       "PowerShell(Remove-Item .conduct-stop *)",
       "PowerShell(Remove-Item .conduct-stop)",
-      "PowerShell(Remove-Item C:\\Users\\miles\\vcs\\mcg-agent-orchestrator\\.conduct-stop *)",
-      "PowerShell(Remove-Item C:\\Users\\miles\\vcs\\mcg-agent-orchestrator\\.conduct-stop)",
       "PowerShell(.\\scripts\\Find-OrchestratorLocks.ps1*)",
       "PowerShell(.\\scripts\\Find-HandleLock.ps1*)",
       "PowerShell(.\\scripts\\Test-WorkerSandbox.ps1*)",
