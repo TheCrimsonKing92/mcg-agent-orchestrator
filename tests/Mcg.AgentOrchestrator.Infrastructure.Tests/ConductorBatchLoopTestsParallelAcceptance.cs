@@ -3256,6 +3256,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Path.Combine(Path.GetTempPath(), $"mcg-owned-start-build-{Guid.NewGuid():N}"));
         var root = CreateSeededGitRepository();
         var attemptRoot = CreateTempDirectory("mcg-conductor-owned-start");
+        var markerPath = Path.Combine(attemptRoot, "background-owned-start.marker");
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update docs/OwnedStart.md");
         var externalProcesses = new ConcurrentBag<Process>();
@@ -3266,7 +3267,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             File.WriteAllText(
                 Path.Combine(root, "config", "acceptance-manifest.json"),
                 AcceptanceManifestTestDefaults.WithEngine(
-                    """
+                    $$"""
                     {
                       "version": 1,
                       "checks": [
@@ -3277,7 +3278,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                           "arguments": [
                             "-NoProfile",
                             "-Command",
-                            "Set-Content -LiteralPath 'background-owned-start.marker' -Value started"
+                            {{JsonSerializer.Serialize($"Set-Content -LiteralPath '{markerPath.Replace("'", "''", StringComparison.Ordinal)}' -Value started")}}
                           ],
                           "timeoutMinutes": 1
                         }
@@ -3339,7 +3340,6 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.True(
                 completedAttempt!.Outcome == expectedOutcome,
                 $"Expected {expectedOutcome}, actual {completedAttempt.Outcome}: {completedAttempt.Detail}");
-            var markerPath = Path.Combine(worktree, "background-owned-start.marker");
             if (useLegacyStartThenAttach)
             {
                 Assert.True(File.Exists(markerPath), "The legacy start-then-attach control waits for the unowned child to exit, so its first command must execute before attachment fails.");
