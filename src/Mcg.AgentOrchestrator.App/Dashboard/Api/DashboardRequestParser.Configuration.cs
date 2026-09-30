@@ -142,7 +142,7 @@ private static string? DefaultSubscriptionModelAlias(string providerName, AgentE
 
     if (providerName.Equals("xAI", StringComparison.OrdinalIgnoreCase))
     {
-        return "grok-4.6";
+        return AgentCatalog.XaiSubscriptionModelAlias;
     }
 
     if (providerName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase))
@@ -196,7 +196,7 @@ private static ModelProfile? DefaultComplexModel(string providerName)
     {
         return new ModelProfile(
             "Anthropic",
-            "claude-sonnet-4-6",
+            AgentCatalog.AnthropicComplexModelName,
             ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse,
             SubscriptionMode.ApiKey,
             null,

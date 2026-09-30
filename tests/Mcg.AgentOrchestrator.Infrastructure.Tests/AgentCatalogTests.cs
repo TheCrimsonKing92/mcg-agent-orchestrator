@@ -13,6 +13,7 @@ public sealed class AgentCatalogTests
     [Xunit.InlineData(AgentCatalog.OpenAiTerraSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiLunaSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, "medium")]
+    [Xunit.InlineData(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, "medium")]
     [Xunit.InlineData(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, "medium")]
     public void AgentCatalogSubscriptionReasoningDefaultsArePinnedByModel(string modelAlias, string expected)
@@ -168,7 +169,7 @@ public sealed class AgentCatalogTests
         Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
         Assert.Equal("claude-cli", agent.Subscription!.WorkerProfileName);
         Assert.Equal("Anthropic", agent.ComplexModel!.ProviderName);
-        Assert.Equal("claude-sonnet-4-6", agent.ComplexModel.ModelName);
+        Assert.Equal("claude-sonnet-5-5", agent.ComplexModel.ModelName);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
 }
@@ -435,7 +436,7 @@ public sealed class AgentCatalogTests
     var restored = AgentCatalogStore.Load(path);
 
     Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
-    Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
     Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, restored.GetRequired(AgentRole.Reviewer).Subscription!.ModelAlias);
 }
 
