@@ -224,6 +224,7 @@ internal static partial class LandingExecutor
             }
 
             if (!TryPrepareCandidateFromBoundMain(
+                    goal,
                     executionDirectory,
                     tempPath,
                     boundMainRevision,
@@ -855,6 +856,7 @@ internal static partial class LandingExecutor
     }
 
     private static bool TryPrepareCandidateFromBoundMain(
+        Goal goal,
         string executionDirectory,
         string tempPath,
         string boundMainRevision,
@@ -871,7 +873,14 @@ internal static partial class LandingExecutor
             return false;
         }
 
-        var merge = RunGit(tempPath, "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}");
+        var mergeArgs = new List<string> { "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}" };
+        var goalTitleBody = OrchestratorCommitMessage.GoalTitleBody(goal);
+        if (goalTitleBody is not null)
+        {
+            mergeArgs.AddRange(["-m", goalTitleBody]);
+        }
+
+        var merge = RunGit(tempPath, mergeArgs.ToArray());
         if (merge.ExitCode != 0)
         {
             failure = FormatGitFailure(merge);

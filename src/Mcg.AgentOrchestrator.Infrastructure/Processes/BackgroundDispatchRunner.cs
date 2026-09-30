@@ -1574,7 +1574,7 @@ public sealed partial class BackgroundDispatchRunner
             {
                 commitAttempt = _worktreeCommitter.TryCommitWorktreeEdits(
                     processRecord.WorkingDirectory,
-                    DispatchWorktreeCommitter.BuildOrchestratorCommitSubject(task, decisionStandardOutput, decisionStandardError),
+                    DispatchWorktreeCommitter.BuildOrchestratorCommitMessage(goal, task, BuildDispatchId(goalId, taskId, task.LastDispatch!), decisionStandardOutput, decisionStandardError, worktreeEvidence.DirtyPaths),
                     worktreeEvidence.DirtyPaths);
                 commitAttempted = true;
                 if (commitAttempt.Succeeded &&

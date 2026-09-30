@@ -230,7 +230,7 @@ public sealed class GoalWorktreeTestsCreationResolution : GoalWorktreeTestBase
             Assert.Equal(WorkTaskStatus.Completed, task.Status);
             Assert.Equal(0, task.LastVerification!.ExitCode);
             Assert.Equal(string.Empty, RunGitOutput(worktree, "status", "--short"));
-            Assert.Equal("Developer task.: Committed implementation.", RunGitOutput(worktree, "log", "-1", "--pretty=%s"));
+            Assert.Equal($"Developer({goal.Id.Value[..8]}): Commit residual dirty worktree", RunGitOutput(worktree, "log", "-1", "--pretty=%s"));
             Assert.Equal("seed.txt", RunGitOutput(worktree, "show", "--name-only", "--pretty=", "HEAD"));
         }
         finally

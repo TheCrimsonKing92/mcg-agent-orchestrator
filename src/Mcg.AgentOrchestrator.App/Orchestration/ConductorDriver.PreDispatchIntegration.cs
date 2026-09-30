@@ -74,13 +74,14 @@ internal sealed partial class ConductorDriver
                 mergeTree.ConflictPaths);
         }
 
-        var merge = GitCli.Run(
-            worktreePath,
-            "merge",
-            "--no-ff",
-            mainRevision,
-            "-m",
-            $"Integrate main into {branch} before {role} dispatch");
+        var mergeArgs = new List<string> { "merge", "--no-ff", mainRevision, "-m", $"Integrate main into {branch} before {role} dispatch" };
+        var goalTitleBody = OrchestratorCommitMessage.GoalTitleBody(goal);
+        if (goalTitleBody is not null)
+        {
+            mergeArgs.AddRange(["-m", goalTitleBody]);
+        }
+
+        var merge = GitCli.Run(worktreePath, mergeArgs.ToArray());
         if (merge.ExitCode != 0)
         {
             var conflictPaths = ReadUnmergedPaths(worktreePath);

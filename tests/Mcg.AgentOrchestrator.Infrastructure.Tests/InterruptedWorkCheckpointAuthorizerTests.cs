@@ -119,7 +119,7 @@ public sealed class InterruptedWorkCheckpointAuthorizerTests
         Xunit.Assert.Contains("Feature.cs", Git(fixture.Root, "status", "--short").Output, StringComparison.Ordinal);
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         private readonly InterruptedWorkCheckpointAuthorizer _authorizer;
         private readonly InterruptedWorkCheckpointRequest _request;
@@ -146,6 +146,7 @@ public sealed class InterruptedWorkCheckpointAuthorizerTests
         }
 
         internal string Root { get; }
+        internal GoalId GoalId => _request.GoalId;
         internal TaskSpec Task { get; }
         internal string BaseCommit { get; }
         internal DispatchWorktreeCommitter Committer { get; }

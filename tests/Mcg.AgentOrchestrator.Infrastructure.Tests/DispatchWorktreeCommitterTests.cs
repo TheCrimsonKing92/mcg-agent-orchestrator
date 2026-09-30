@@ -24,18 +24,22 @@ public sealed class DispatchWorktreeCommitterTests
             directoryExists: _ => throw new InvalidOperationException("commit must not inspect the filesystem"),
             fileExists: _ => throw new InvalidOperationException("commit must not inspect the filesystem"));
         var task = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
-        var subject = DispatchWorktreeCommitter.BuildOrchestratorCommitSubject(
+        var goal = new Goal(new GoalId("0a09cd85d2974c208a8117d15f3cb2f8"), "Readable commit subjects", [task]);
+        var message = DispatchWorktreeCommitter.BuildOrchestratorCommitMessage(
+            goal,
             task,
+            "dispatch-1",
             "Committed implementation.",
-            string.Empty);
+            string.Empty,
+            ["src/Feature.cs"]);
 
         var result = committer.TryCommitWorktreeEdits(
             "memory-worktree",
-            subject,
+            message,
             ["src/Feature.cs"]);
 
         Xunit.Assert.True(result.Succeeded, result.Diagnostic);
-        Xunit.Assert.Equal("Developer task.: Committed implementation.", subject);
+        Xunit.Assert.Equal("Developer(0a09cd85): Readable commit subjects", message.Subject);
         Xunit.Assert.Collection(
             calls,
             arguments => Xunit.Assert.Equal(new[] { "add", "-A", "--", "src/Feature.cs" }, arguments),
@@ -44,7 +48,7 @@ public sealed class DispatchWorktreeCommitterTests
                 new[] { "diff", "--cached", "--ignore-all-space", "--quiet", "--exit-code", "--" },
                 arguments),
             arguments => Xunit.Assert.Equal(
-                new[] { "commit", "-m", "Developer task.: Committed implementation." },
+                new[] { "commit", "-m", "Developer(0a09cd85): Readable commit subjects", "-m", message.Body },
                 arguments));
     }
 

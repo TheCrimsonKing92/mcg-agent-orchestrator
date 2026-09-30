@@ -34,6 +34,19 @@ internal sealed class DispatchWorktreeCommitter
     internal CommitWorktreeEditsResult TryCommitWorktreeEdits(
         string workingDirectory,
         string subject,
+        IReadOnlyList<string> dirtyPaths) =>
+        TryCommitWorktreeEdits(workingDirectory, subject, null, dirtyPaths);
+
+    internal CommitWorktreeEditsResult TryCommitWorktreeEdits(
+        string workingDirectory,
+        OrchestratorCommitMessage message,
+        IReadOnlyList<string> dirtyPaths) =>
+        TryCommitWorktreeEdits(workingDirectory, message.Subject, message.Body, dirtyPaths);
+
+    private CommitWorktreeEditsResult TryCommitWorktreeEdits(
+        string workingDirectory,
+        string subject,
+        string? body,
         IReadOnlyList<string> dirtyPaths)
     {
         try
@@ -77,7 +90,9 @@ internal sealed class DispatchWorktreeCommitter
                     substantive);
             }
 
-            var commitArgs = new[] { "commit", "-m", subject };
+            var commitArgs = string.IsNullOrWhiteSpace(body)
+                ? new[] { "commit", "-m", subject }
+                : new[] { "commit", "-m", subject, "-m", body };
             var commit = _runGit(workingDirectory, commitArgs);
             return commit.Succeeded
                 ? CommitWorktreeEditsResult.Success
@@ -96,15 +111,19 @@ internal sealed class DispatchWorktreeCommitter
         IReadOnlyList<string> dirtyPaths) =>
         TryCommitWorktreeEdits(workingDirectory, checkpoint.RenderCommitMessage(), dirtyPaths);
 
-    internal static string BuildOrchestratorCommitSubject(TaskSpec task, string standardOutput, string standardError)
-    {
-        var title = NormalizeCommitSubjectPart(task.Description);
-        var summary = ExtractWorkerSummary(standardOutput, standardError);
-        var subject = string.IsNullOrWhiteSpace(summary)
-            ? title
-            : $"{title}: {summary}";
-        return TruncateCommitSubject(subject);
-    }
+    internal static OrchestratorCommitMessage BuildOrchestratorCommitMessage(
+        Goal goal,
+        TaskSpec task,
+        string? dispatchId,
+        string standardOutput,
+        string standardError,
+        IReadOnlyList<string> committedPaths) =>
+        OrchestratorCommitMessage.ForWorker(
+            goal,
+            task,
+            dispatchId,
+            ExtractWorkerSummary(standardOutput, standardError),
+            committedPaths);
 
     private static string ExtractWorkerSummary(string standardOutput, string standardError)
     {
@@ -134,15 +153,6 @@ internal sealed class DispatchWorktreeCommitter
     private static string NormalizeCommitSubjectPart(string value)
     {
         return Regex.Replace(value.Trim(), @"\s+", " ");
-    }
-
-    private static string TruncateCommitSubject(string subject)
-    {
-        const int MaxSubjectLength = 72;
-        subject = NormalizeCommitSubjectPart(subject);
-        return subject.Length <= MaxSubjectLength
-            ? subject
-            : subject[..MaxSubjectLength].TrimEnd();
     }
 
     internal static string BuildCommitOnBehalfFailureDiagnostic(

@@ -3948,7 +3948,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    Assert.Equal("Developer task.: Committed implementation.", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
+    Assert.Equal($"Developer({goal.Id.Value[..8]}): Dispatch evidence goal", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
     Assert.Equal("2", ReadGit(worktree, ["rev-list", "--count", "HEAD~2..HEAD"]));
     Assert.Equal("seed.txt", ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]));
 }

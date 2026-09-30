@@ -961,7 +961,7 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     Assert.Contains("Orchestrator committed the worker's verified worktree edits", task.LastVerification.StandardError, StringComparison.Ordinal);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    Assert.Equal("Developer task.: Implemented feature.", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
+    Assert.Equal($"Developer({goal.Id.Value[..8]}): Dispatch evidence goal", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
     Assert.Equal("1", ReadGit(worktree, ["rev-list", "--count", "HEAD~1..HEAD"]));
     var head = ReadGit(worktree, ["rev-parse", "HEAD"]);
     Assert.Equal(head, task.LastDispatch?.ResultCommit);
