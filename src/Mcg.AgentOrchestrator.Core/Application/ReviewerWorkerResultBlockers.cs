@@ -1037,7 +1037,7 @@ public static class WorkerResultBlockers
 
     private static string NormalizeWorkerResultLine(string line)
     {
-        return line.Trim();
+        return WorkerResultLineUnwrap.Unwrap(line.Trim());
     }
 
     private static bool IsWorkerResultOpener(string line)

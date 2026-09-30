@@ -67,7 +67,7 @@ internal static class WorkerResultParser
 
         // If a block opener exists (even with markdown decoration), parse the block.
         // An opener implies intent: missing fields are reported as substance failures.
-        if (Array.Exists(lines, line => IsOpener(line.Trim())))
+        if (Array.Exists(lines, line => IsOpener(WorkerResultLineUnwrap.Unwrap(line.Trim()))))
         {
             return TryParseBlock(lines, out fields, out diagnostic) &&
                 ValidateEvidenceBoundOutcomeFields(fields, out diagnostic);
@@ -182,7 +182,7 @@ internal static class WorkerResultParser
 
         // The final block is authoritative because workers can emit a corrected
         // result after an earlier draft. Core outcome routing uses the same rule.
-        var start = Array.FindLastIndex(lines, line => IsOpener(line.Trim()));
+        var start = Array.FindLastIndex(lines, line => IsOpener(WorkerResultLineUnwrap.Unwrap(line.Trim())));
         if (start < 0)
         {
             diagnostic = "missing WORKER_RESULT block.";
@@ -190,7 +190,7 @@ internal static class WorkerResultParser
         }
 
         // Find end marker with the same leniency as the opener.
-        var end = Array.FindIndex(lines, start + 1, line => IsEndMarker(line.Trim()));
+        var end = Array.FindIndex(lines, start + 1, line => IsEndMarker(WorkerResultLineUnwrap.Unwrap(line.Trim())));
         if (end < 0)
         {
             // Tolerate missing END marker: blank line, markdown heading, or EOF terminates.
@@ -207,7 +207,7 @@ internal static class WorkerResultParser
 
         for (var i = start + 1; i < end; i++)
         {
-            var line = lines[i].Trim();
+            var line = WorkerResultLineUnwrap.Unwrap(lines[i].Trim());
             if (string.IsNullOrWhiteSpace(line))
             {
                 continue;
@@ -258,7 +258,7 @@ internal static class WorkerResultParser
 
         foreach (var line in lines)
         {
-            var trimmed = line.Trim();
+            var trimmed = WorkerResultLineUnwrap.Unwrap(line.Trim());
             if (string.IsNullOrWhiteSpace(trimmed))
             {
                 continue;
