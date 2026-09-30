@@ -48,6 +48,8 @@ public sealed record OrchestratorHealthReport(
 
 public static class OrchestratorHealthInspector
 {
+    private const string NotProbedMode = "NotProbed";
+
     public static OrchestratorHealthReport Inspect(
         IReadOnlyDictionary<string, string?> environment,
         AgentCatalog agents,
@@ -58,8 +60,10 @@ public static class OrchestratorHealthInspector
         {
             InspectProvider("OpenAI", "OPENAI_API_KEY", "codex", environment, commandExists),
             InspectProvider("Anthropic", "ANTHROPIC_API_KEY", "claude", environment, commandExists),
-            InspectLlamaCppProvider(environment),
-            InspectOllamaProvider(environment)
+            InspectLocalInferenceProvider("LlamaCpp", LlamaCppDefaults.ResolveBaseUrl(
+                environment.TryGetValue("LLAMA_CPP_BASE_URL", out var llamaUrl) ? llamaUrl : null)),
+            InspectLocalInferenceProvider("Ollama", OllamaDefaults.ResolveBaseUrl(
+                environment.TryGetValue("OLLAMA_BASE_URL", out var ollamaUrl) ? ollamaUrl : null))
         };
 
         var profiles = InspectWorkerProfiles(workerProfiles, commandExists);
@@ -117,52 +121,13 @@ public static class OrchestratorHealthInspector
         return new ProviderConfigurationStatus(providerName, false, "Offline", $"{apiKeyName} is not set and '{localBridgeExecutable}' was not found; offline scripted provider will be used.");
     }
 
-    private static ProviderConfigurationStatus InspectLlamaCppProvider(IReadOnlyDictionary<string, string?> environment)
+    private static ProviderConfigurationStatus InspectLocalInferenceProvider(string providerName, string baseUrl)
     {
-        var baseUrl = LlamaCppDefaults.ResolveBaseUrl(
-            environment.TryGetValue("LLAMA_CPP_BASE_URL", out var url) ? url : null);
-
-        try
-        {
-            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = probe.GetAsync(LlamaCppDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
-            if (response.IsSuccessStatusCode)
-            {
-                var model = environment.TryGetValue("LLAMA_CPP_MODEL", out var m) && !string.IsNullOrWhiteSpace(m)
-                    ? m
-                    : LlamaCppDefaults.DefaultModelAlias;
-                return new ProviderConfigurationStatus("LlamaCpp", true, "LocalBridge", $"OpenAI-compatible local inference server is running at {baseUrl}; default model is '{model}'.");
-            }
-        }
-        catch
-        {
-            // Local inference server is not reachable.
-        }
-
-        return new ProviderConfigurationStatus("LlamaCpp", false, "Offline", $"OpenAI-compatible local inference server is not reachable at {baseUrl}.");
-    }
-
-    private static ProviderConfigurationStatus InspectOllamaProvider(IReadOnlyDictionary<string, string?> environment)
-    {
-        var baseUrl = OllamaDefaults.ResolveBaseUrl(
-            environment.TryGetValue("OLLAMA_BASE_URL", out var url) ? url : null);
-
-        try
-        {
-            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = probe.GetAsync(OllamaDefaults.BuildOpenAiModelsUrl(baseUrl)).GetAwaiter().GetResult();
-            if (response.IsSuccessStatusCode)
-            {
-                var model = environment.TryGetValue("OLLAMA_MODEL", out var m) && !string.IsNullOrWhiteSpace(m) ? m : "qwen3:8b";
-                return new ProviderConfigurationStatus("Ollama", true, "LocalBridge", $"OpenAI-compatible local inference server is running at {baseUrl}; default model is '{model}'.");
-            }
-        }
-        catch
-        {
-            // Local inference server is not reachable.
-        }
-
-        return new ProviderConfigurationStatus("Ollama", false, "Offline", $"OpenAI-compatible local inference server is not reachable at {baseUrl}.");
+        return new ProviderConfigurationStatus(
+            providerName,
+            false,
+            NotProbedMode,
+            $"Local inference server at {baseUrl} is not health-checked; no network probe is made.");
     }
 
     private static IEnumerable<AgentConfigurationValidation> InspectAgents(
@@ -172,10 +137,6 @@ public static class OrchestratorHealthInspector
     {
         var providersByName = providers.ToDictionary(provider => provider.ProviderName, StringComparer.OrdinalIgnoreCase);
         var profilesByName = workerProfiles.ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
-        var localLlamaAvailable = providers.Any(provider =>
-            provider.ProviderName.Equals("LlamaCpp", StringComparison.OrdinalIgnoreCase) &&
-            provider.IsConfigured &&
-            provider.Mode.Equals("LocalBridge", StringComparison.OrdinalIgnoreCase));
         var roles = Enum.GetValues<AgentRole>();
 
         foreach (var role in roles)
@@ -236,7 +197,7 @@ public static class OrchestratorHealthInspector
                 subscriptionCapableAlternates.Count > 0,
                 BuildSubscriptionCapableAlternatesDetail(subscriptionCapableAlternates),
                 isValid,
-                BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName, localLlamaAvailable),
+                BuildAgentValidationDetail(agent, provider, profileKnown ? profile : null, apiAllowed, subscriptionAllowed, profileName),
                 agent.ComplexModel?.ProviderName,
                 agent.ComplexModel?.ModelName,
                 agent.ComplexModel?.MaxOutputTokens,
@@ -246,6 +207,11 @@ public static class OrchestratorHealthInspector
 
     private static bool IsApiRouteUsable(ProviderConfigurationStatus? provider)
     {
+        if (provider is not null && provider.Mode.Equals(NotProbedMode, StringComparison.OrdinalIgnoreCase))
+        {
+            return provider.ProviderName.Equals("Ollama", StringComparison.OrdinalIgnoreCase);
+        }
+
         if (provider is null || !provider.IsConfigured)
         {
             return false;
@@ -312,8 +278,7 @@ public static class OrchestratorHealthInspector
         WorkerProfileValidation? profile,
         bool apiAllowed,
         bool subscriptionAllowed,
-        string? profileName,
-        bool localLlamaAvailable)
+        string? profileName)
     {
         var api = apiAllowed
             ? BuildApiValidationDetail(agent, provider)
@@ -321,14 +286,7 @@ public static class OrchestratorHealthInspector
         var subscription = subscriptionAllowed
             ? BuildSubscriptionValidationDetail(agent, profile, profileName)
             : "subscription execution disabled";
-        return $"{api}; {subscription}{BuildLocalModelRecommendation(agent, localLlamaAvailable)}.";
-    }
-
-    private static string BuildLocalModelRecommendation(AgentDefinition agent, bool localLlamaAvailable)
-    {
-        return localLlamaAvailable && IsPotentiallyPaidProvider(agent.Model.ProviderName)
-            ? "; local LlamaCpp is available, consider switching this role to LlamaCpp before paid work"
-            : string.Empty;
+        return $"{api}; {subscription}.";
     }
 
     private static string BuildApiValidationDetail(AgentDefinition agent, ProviderConfigurationStatus? provider)
@@ -336,6 +294,13 @@ public static class OrchestratorHealthInspector
         if (provider is null)
         {
             return $"API provider '{agent.Model.ProviderName}' is not registered";
+        }
+
+        if (provider.Mode.Equals(NotProbedMode, StringComparison.OrdinalIgnoreCase))
+        {
+            return IsApiRouteUsable(provider)
+                ? $"API provider '{provider.ProviderName}' is not health-checked; local inference is assumed reachable"
+                : $"API provider '{provider.ProviderName}' is not health-checked and is not an API execution route";
         }
 
         if (IsApiRouteUsable(provider))
@@ -396,12 +361,6 @@ public static class OrchestratorHealthInspector
     {
         return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
-    }
-
-    private static bool IsPotentiallyPaidProvider(string providerName)
-    {
-        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
-            providerName.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ResolveSubscriptionProfileName(AgentDefinition agent)

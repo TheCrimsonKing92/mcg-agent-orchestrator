@@ -1,8 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 
 public sealed class HealthInspectorTests
 {
@@ -54,37 +52,6 @@ public sealed class HealthInspectorTests
     Assert.False(report.Providers.Single(provider => provider.ProviderName == "Anthropic").IsConfigured);
     Assert.Equal("ApiKey", report.Providers.Single(provider => provider.ProviderName == "OpenAI").Mode);
     Assert.Equal("Offline", report.Providers.Single(provider => provider.ProviderName == "Anthropic").Mode);
-}
-    [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_recommends_llamacpp_for_paid_agents_when_available")]
-public async Task OrchestratorHealthInspectorRecommendsLlamaCppForPaidAgentsWhenAvailable()
-{
-    using var listener = new TcpListener(IPAddress.Loopback, 0);
-    listener.Start();
-    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-    var server = Task.Run(async () =>
-    {
-        using var client = await listener.AcceptTcpClientAsync();
-        await using var stream = client.GetStream();
-        var buffer = new byte[1024];
-        await stream.ReadAtLeastAsync(buffer, 1);
-        var bytes = System.Text.Encoding.UTF8.GetBytes("{\"version\":\"test\"}");
-        var header = System.Text.Encoding.ASCII.GetBytes(
-            $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n");
-        await stream.WriteAsync(header);
-        await stream.WriteAsync(bytes);
-    });
-    var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["OPENAI_API_KEY"] = "set",
-        ["LLAMA_CPP_BASE_URL"] = $"http://127.0.0.1:{port}"
-    };
-
-    var report = OrchestratorHealthInspector.Inspect(environment, AgentCatalog.Default(), WorkerProfileCatalog.Default(), _ => false);
-
-    var developer = report.Agents.Single(agent => agent.Role == AgentRole.Developer);
-    Assert.Contains("local LlamaCpp is available", developer.Detail, StringComparison.Ordinal);
-    Assert.Contains("switching this role to LlamaCpp before paid work", developer.Detail, StringComparison.Ordinal);
-    await server.WaitAsync(TimeSpan.FromSeconds(5));
 }
     [Xunit.Fact(DisplayName = "OrchestratorHealthInspector_validates_subscription_only_agents_by_worker_profile")]
     public void OrchestratorHealthInspectorValidatesSubscriptionOnlyAgentsByWorkerProfile()
