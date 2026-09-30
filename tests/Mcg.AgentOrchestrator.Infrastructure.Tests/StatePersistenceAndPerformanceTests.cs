@@ -3,7 +3,9 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Prototype;
 using Mcg.AgentOrchestrator.Infrastructure;
-using System.Diagnostics;
+using Microsoft.Data.Sqlite;
+using SQLitePCL;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 
@@ -466,35 +468,235 @@ public sealed class StatePersistenceAndPerformanceTests
     [Xunit.Fact(DisplayName = "Dashboard_and_state_persistence_have_reasonable_smoke_performance")]
     public async Task DashboardAndStatePersistenceHaveReasonableSmokePerformance()
     {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, ".orchestrator", "state.db");
+        var tenTasks = await MeasureSaveLoadStatementsAsync(10);
+        var hundredTasks = await MeasureSaveLoadStatementsAsync(100);
+        var html = DashboardRenderer.Render(hundredTasks.Restored, new DashboardRenderOptions(
+            AutoRefreshSeconds: 5,
+            WorkerProfiles: WorkerProfileCatalog.Default()));
+
+        Assert.True(hundredTasks.Restored.Goals.Single().Tasks.Count >= 100);
+        Assert.True(html.Contains("Synthetic performance task 99", StringComparison.Ordinal));
+        AssertGoalReadAndWriteWereTraced(tenTasks.Statements);
+        AssertGoalReadAndWriteWereTraced(hundredTasks.Statements);
+        Assert.True(IsBoundedStatementGrowth(tenTasks.Count, hundredTasks.Count),
+            $"SaveAsync+LoadAsync statement count grew with task count: 10 tasks={tenTasks.Count}, 100 tasks={hundredTasks.Count}, allowed growth=9.");
+    }
+
+    [Xunit.Fact]
+    public void StatementCountComparisonRejectsPerTaskStatementPattern()
+    {
+        foreach (var reusePreparedCommand in new[] { true, false })
+        {
+            var tenStatements = CountSimulatedTaskStatements(10, reusePreparedCommand);
+            var hundredStatements = CountSimulatedTaskStatements(100, reusePreparedCommand);
+            Assert.True(hundredStatements - tenStatements >= 90,
+                $"Prepared={reusePreparedCommand}: 10 tasks={tenStatements}, 100 tasks={hundredStatements}.");
+            Assert.False(IsBoundedStatementGrowth(tenStatements, hundredStatements));
+        }
+    }
+
+    [Xunit.Fact]
+    public void StatementCounterIgnoresForeignPathsAndStopsAfterWindow()
+    {
+        var ownPath = Path.Combine(CreateTempDirectory(), ".orchestrator", "state.db");
+        var foreignPath = Path.Combine(CreateTempDirectory(), ".orchestrator", "state.db");
+        _ = OpenMigratedStateRepository(ownPath);
+        _ = OpenMigratedStateRepository(foreignPath);
+        var counter = new SaveLoadStatementCounter(ownPath);
+        SqliteConnection? ownConnection = null;
+        try
+        {
+            counter.Start();
+            using (var foreignConnection = StateDbConnectionFactory.Open(foreignPath, StateDbConnectionProfile.ReadWrite))
+                ExecuteScalarStatement(foreignConnection);
+            Assert.Equal(0, counter.Count);
+
+            ownConnection = StateDbConnectionFactory.Open(ownPath, StateDbConnectionProfile.ReadWrite);
+            ExecuteScalarStatement(ownConnection);
+            Assert.Equal(1, counter.Count);
+            counter.Stop();
+            ExecuteScalarStatement(ownConnection);
+            Assert.Equal(1, counter.Count);
+        }
+        finally
+        {
+            counter.Dispose();
+            ownConnection?.Dispose();
+        }
+
+        using (var laterConnection = StateDbConnectionFactory.Open(ownPath, StateDbConnectionProfile.ReadWrite))
+            ExecuteScalarStatement(laterConnection);
+        Assert.Equal(1, counter.Count);
+    }
+
+    [Xunit.Fact]
+    public void SmokePerformanceTestHasNoWallClockAssertions()
+    {
+        var path = Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(),
+            "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "StatePersistenceAndPerformanceTests.cs");
+        var source = File.ReadAllText(path);
+        var signature = "Task DashboardAndStatePersistenceHaveReasonableSmokePerformance(";
+        var start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var end = source.IndexOf("\n    }", start, StringComparison.Ordinal);
+        Assert.True(end > start);
+        var body = source[start..end];
+        Assert.Empty(FindWallClockTokens(body));
+
+        var oldBody = "var elapsed = Stopwatch.StartNew(); Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5));";
+        var rejected = FindWallClockTokens(oldBody);
+        Assert.Contains("Stopwatch", rejected);
+        Assert.Contains("Elapsed", rejected);
+        Assert.Contains("TimeSpan", rejected);
+    }
+
+    private static async Task<(int Count, string[] Statements, AgentOrchestratorKernel Restored)> MeasureSaveLoadStatementsAsync(int taskCount)
+    {
+        var path = Path.Combine(CreateTempDirectory(), ".orchestrator", "state.db");
         var repository = OpenMigratedStateRepository(path);
         var agents = AgentCatalog.Default().Agents;
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Render a large local dashboard smoke scenario");
         kernel.ActivateGoal(goal.Id, agents);
-
-        for (var index = 0; index < 100; index++)
+        for (var index = 0; index < taskCount; index++)
         {
-            kernel.AddTask(
-                goal.Id,
+            kernel.AddTask(goal.Id,
                 index % 2 == 0 ? AgentRole.Developer : AgentRole.Tester,
-                $"Synthetic performance task {index}",
-                agents,
-                "Record smoke evidence.");
+                $"Synthetic performance task {index}", agents, "Record smoke evidence.");
         }
 
-        var elapsed = Stopwatch.StartNew();
-        await repository.SaveAsync(kernel);
-        var restored = await repository.LoadAsync();
-        var html = DashboardRenderer.Render(restored, new DashboardRenderOptions(
-            AutoRefreshSeconds: 5,
-            WorkerProfiles: WorkerProfileCatalog.Default()));
-        elapsed.Stop();
+        var counter = new SaveLoadStatementCounter(path);
+        try
+        {
+            counter.Start();
+            await repository.SaveAsync(kernel);
+            var restored = await repository.LoadAsync();
+            counter.Stop();
+            return (counter.Count, counter.Statements, restored);
+        }
+        finally
+        {
+            counter.Dispose();
+        }
+    }
 
-        Assert.True(restored.Goals.Single().Tasks.Count >= 100);
-        Assert.True(html.Contains("Synthetic performance task 99", StringComparison.Ordinal));
-        Xunit.Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), $"Persistence/render smoke took {elapsed.Elapsed}.");
+    private static int CountSimulatedTaskStatements(int taskCount, bool reusePreparedCommand)
+    {
+        var path = Path.Combine(CreateTempDirectory(), ".orchestrator", "state.db");
+        _ = OpenMigratedStateRepository(path);
+        var counter = new SaveLoadStatementCounter(path);
+        try
+        {
+            counter.Start();
+            using var connection = StateDbConnectionFactory.Open(path, StateDbConnectionProfile.ReadWrite);
+            using (var create = connection.CreateCommand())
+            {
+                create.CommandText = "CREATE TABLE statement_count_probe (task_index INTEGER)";
+                create.ExecuteNonQuery();
+            }
+
+            if (reusePreparedCommand)
+            {
+                using var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO statement_count_probe (task_index) VALUES ($index)";
+                var parameter = insert.Parameters.Add("$index", SqliteType.Integer);
+                insert.Prepare();
+                for (var index = 0; index < taskCount; index++)
+                {
+                    parameter.Value = index;
+                    insert.ExecuteNonQuery();
+                }
+            }
+            else
+            {
+                for (var index = 0; index < taskCount; index++)
+                {
+                    using var insert = connection.CreateCommand();
+                    insert.CommandText = "INSERT INTO statement_count_probe (task_index) VALUES ($index)";
+                    insert.Parameters.AddWithValue("$index", index);
+                    insert.ExecuteNonQuery();
+                }
+            }
+
+            counter.Stop();
+            return counter.Count;
+        }
+        finally
+        {
+            counter.Dispose();
+        }
+    }
+
+    private static void ExecuteScalarStatement(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1";
+        _ = command.ExecuteScalar();
+    }
+
+    private static bool IsBoundedStatementGrowth(int tenTasks, int hundredTasks)
+        => hundredTasks - tenTasks <= 9;
+
+    private static void AssertGoalReadAndWriteWereTraced(string[] statements)
+    {
+        Assert.Contains(statements, statement => statement.TrimStart().StartsWith("INSERT INTO goals", StringComparison.Ordinal));
+        Assert.Contains(statements, statement => statement.TrimStart().StartsWith("SELECT", StringComparison.Ordinal)
+            && statement.Contains(" FROM goals", StringComparison.Ordinal));
+    }
+
+    private static string[] FindWallClockTokens(string body)
+        => new[] { "Stopwatch", "Elapsed", "TimeSpan", "DateTime", "Environment.TickCount", "Task.Delay" }
+            .Where(token => body.Contains(token, StringComparison.Ordinal))
+            .ToArray();
+
+    private sealed class SaveLoadStatementCounter : IDisposable
+    {
+        private readonly string _databasePath;
+        private readonly ConcurrentQueue<string> _statements = new();
+        private readonly HashSet<sqlite3> _attachedHandles = [];
+        private readonly delegate_trace _traceCallback;
+        private int _measuring;
+        private int _count;
+
+        public SaveLoadStatementCounter(string databasePath)
+        {
+            _databasePath = Path.GetFullPath(databasePath);
+            _traceCallback = TraceStatement;
+            StateDbConnectionFactory.ConnectionOpenedForDiagnostics += ObserveConnection;
+        }
+
+        public int Count => Volatile.Read(ref _count);
+        public string[] Statements => _statements.ToArray();
+        public void Start() => Volatile.Write(ref _measuring, 1);
+        public void Stop() => Volatile.Write(ref _measuring, 0);
+
+        public void Dispose()
+        {
+            Stop();
+            StateDbConnectionFactory.ConnectionOpenedForDiagnostics -= ObserveConnection;
+        }
+
+        private void ObserveConnection(SqliteConnection connection, string path)
+        {
+            if (!Path.GetFullPath(path).Equals(_databasePath, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            lock (_attachedHandles)
+            {
+                if (_attachedHandles.Add(connection.Handle))
+                    raw.sqlite3_trace(connection.Handle, _traceCallback, null);
+            }
+        }
+
+        private void TraceStatement(object userData, utf8z statement)
+        {
+            if (Volatile.Read(ref _measuring) == 0)
+                return;
+
+            var sql = statement.utf8_to_string();
+            _statements.Enqueue(sql[..Math.Min(sql.Length, 256)]);
+            Interlocked.Increment(ref _count);
+        }
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_bounds_verification_output_when_path_set_and_text_is_large")]
