@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Xunit;
 
 public sealed class CliChildProcessRunnerTests
@@ -18,17 +19,21 @@ public sealed class CliChildProcessRunnerTests
         var start = TreeStart(marker, temporaryMarker);
         Process? child = null;
         Process? descendant = null;
+        ConductorSupervisorProcessIdentity? childIdentity = null;
+        ConductorSupervisorProcessIdentity? descendantIdentity = null;
         try
         {
             var run = CliChildProcessRunner.RunAsync(start, TimeSpan.FromSeconds(10),
                 process =>
                 {
+                    childIdentity = TestOwnedProcessStop.Identify(process);
                     child = Process.GetProcessById(process.Id);
                     TestHangGuard.WaitAsync(markerWritten.Task, "descendant PID marker")
                         .GetAwaiter().GetResult();
                 });
             await markerWritten.Task.WaitAsync(TestHangGuard.Bound);
             descendant = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker)));
+            descendantIdentity = TestOwnedProcessStop.Identify(descendant);
             Assert.False(descendant.HasExited);
 
             var error = await Assert.ThrowsAsync<TimeoutException>(async () =>
@@ -46,18 +51,16 @@ public sealed class CliChildProcessRunnerTests
         {
             if (descendant is not null)
             {
-                if (!descendant.HasExited)
+                if (!descendant.HasExited && TestOwnedProcessStop.StopTreeIfSame(descendantIdentity))
                 {
-                    descendant.Kill(entireProcessTree: true);
                     await descendant.WaitForExitAsync();
                 }
                 descendant.Dispose();
             }
             if (child is not null)
             {
-                if (!child.HasExited)
+                if (!child.HasExited && TestOwnedProcessStop.StopTreeIfSame(childIdentity))
                 {
-                    child.Kill(entireProcessTree: true);
                     await child.WaitForExitAsync();
                 }
                 child.Dispose();
