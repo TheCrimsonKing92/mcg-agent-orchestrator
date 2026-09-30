@@ -31,16 +31,11 @@ public sealed class GoalRefinementStartupValidationTests
             startInfo.Environment[Mcg.AgentOrchestrator.Infrastructure.DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
                 Path.Combine(root, ".orchestrator", "test-dotnet");
 
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start refinement child.");
-            process.StandardInput.Close();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var standardOutputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var standardErrorTask = process.StandardError.ReadToEndAsync(timeout.Token);
-            await process.WaitForExitAsync(timeout.Token);
-            var standardOutput = await standardOutputTask;
-            var standardError = await standardErrorTask;
+            var result = await CliChildProcessRunner.RunAsync(startInfo);
+            var standardOutput = result.StandardOutput;
+            var standardError = result.StandardError;
 
-            Assert.NotEqual(0, process.ExitCode);
+            Assert.NotEqual(0, result.ExitCode);
             Assert.Empty(standardOutput);
             Assert.Contains("Usage: goal-refinement-run", standardError, StringComparison.Ordinal);
             Assert.Contains($"<goal-id> argument '{invalidGoalId}' contains whitespace", standardError, StringComparison.Ordinal);
