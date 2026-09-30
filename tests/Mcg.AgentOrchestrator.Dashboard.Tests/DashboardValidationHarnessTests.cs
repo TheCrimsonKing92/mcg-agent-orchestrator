@@ -10,7 +10,7 @@ public sealed class DashboardValidationHarnessTests
     var api = File.ReadAllText(Path.Combine(root, "scripts", "Invoke-DashboardApi.ps1"));
     var buildTestCycle = File.ReadAllText(Path.Combine(root, "scripts", "Invoke-DashboardBuildTestCycle.ps1"));
     var dogfoodAction = File.ReadAllText(Path.Combine(root, "scripts", "Invoke-DashboardDogfoodAction.ps1"));
-    var readme = File.ReadAllText(Path.Combine(root, "README.md"));
+    var readme = File.ReadAllText(Path.Combine(root, "docs", "cli-reference.md"));
     var agents = File.ReadAllText(Path.Combine(root, "AGENTS.md"));
 
     Assert.Contains("ScriptPath must be under", runner, StringComparison.Ordinal);
