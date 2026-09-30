@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed partial class GateShardPermitPool
 {
-    internal const int DefaultBudget = 4;
+    internal const int DefaultBudget = 5;
     internal const string GateShardBudgetVariable = "MCG_GATE_SHARD_BUDGET";
     private readonly string _directory;
 
