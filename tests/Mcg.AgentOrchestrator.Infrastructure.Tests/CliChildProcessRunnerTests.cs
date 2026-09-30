@@ -7,9 +7,10 @@ public sealed class CliChildProcessRunnerTests
     public async Task HangingChildIsTreeKilledAndNamedWhenInjectedGuardExpires()
     {
         Assert.True(CliChildProcessRunner.DefaultHangGuard >= TimeSpan.FromSeconds(120));
+        // Block in the child itself so a descendant cannot retain a redirected pipe after the kill.
         var start = ShellStart(OperatingSystem.IsWindows()
-            ? "echo started& ping -n 3600 127.0.0.1 >nul"
-            : "echo started; sleep 3600");
+            ? "echo started& for /L %i in (1,0,2) do @set x=1"
+            : "echo started; exec sleep 3600");
         Process? child = null;
         try
         {
