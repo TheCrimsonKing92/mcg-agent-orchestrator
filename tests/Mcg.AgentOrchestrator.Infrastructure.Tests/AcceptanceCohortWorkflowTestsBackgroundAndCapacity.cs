@@ -9,6 +9,24 @@ using Microsoft.Data.Sqlite;
 
 public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : AcceptanceCohortWorkflowTests
 {
+    internal readonly record struct DrainedTeardown(bool Drained, string Condition)
+    {
+        public void AssertDrained() =>
+            Assert.True(Drained, $"Background cohort gate did not drain: {Condition}.");
+    }
+
+    internal static DrainedTeardown RemoveAfterObservedDrain(
+        Func<bool> drainCondition, string conditionName, TimeSpan bound, params Action[] removals)
+    {
+        var drained = SpinWait.SpinUntil(drainCondition, bound);
+        if (drained)
+        {
+            foreach (var removal in removals)
+                removal();
+        }
+        return new DrainedTeardown(drained, conditionName);
+    }
+
 
     [Fact]
     public void ConductLog_FairnessYield_PersistsTypedDecision()
@@ -145,6 +163,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
         using var gateStarted = new ManualResetEventSlim();
         using var gateRelease = new ManualResetEventSlim();
         var cleanupContext = CreateIsolatedCleanupContext(repo);
+        DrainedTeardown teardown;
         try
         {
             AddAcceptanceManifest(repo);
@@ -220,15 +239,17 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
         finally
         {
             gateRelease.Set();
-            _ = SpinWait.SpinUntil(
+            teardown = RemoveAfterObservedDrain(
                 () => !Directory.Exists(repo) ||
                       !Directory.EnumerateDirectories(
                           Path.Combine(repo, GoalWorktrees.DirectoryName),
                           "c-*").Any(),
-                TimeSpan.FromSeconds(10));
-            if (File.Exists(trx)) File.Delete(trx);
-            DeleteDirectory(repo);
+                "no c-* cohort worktree remains under repo",
+                TimeSpan.FromSeconds(10),
+                () => { if (File.Exists(trx)) File.Delete(trx); },
+                () => DeleteDirectory(repo));
         }
+        teardown.AssertDrained();
     }
 
     [Fact]
@@ -241,6 +262,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
         var cleanupContext = CreateIsolatedCleanupContext(repo);
         ConductorDriver? driver = null;
         TaskCompletionSource? registrationProbe = null;
+        DrainedTeardown teardown;
         try
         {
             AddAcceptanceManifest(repo);
@@ -310,15 +332,14 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
         {
             registrationProbe?.TrySetResult();
             gateRelease.Set();
-            if (driver is not null)
-            {
-                _ = SpinWait.SpinUntil(
-                    () => driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
-                    TimeSpan.FromSeconds(10));
-            }
-            if (File.Exists(trx)) File.Delete(trx);
-            DeleteDirectory(repo);
+            teardown = RemoveAfterObservedDrain(
+                () => driver is null || driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
+                "ActiveRootCount == 0",
+                TimeSpan.FromSeconds(10),
+                () => { if (File.Exists(trx)) File.Delete(trx); },
+                () => DeleteDirectory(repo));
         }
+        teardown.AssertDrained();
     }
 
     [Theory]
@@ -751,6 +772,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
         using var gateRelease = new ManualResetEventSlim();
         var cleanupContext = CreateIsolatedCleanupContext(repo);
         ConductorDriver? driver = null;
+        DrainedTeardown teardown;
         try
         {
             AddAcceptanceManifest(repo);
@@ -825,15 +847,14 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
         finally
         {
             gateRelease.Set();
-            if (driver is not null)
-            {
-                _ = SpinWait.SpinUntil(
-                    () => driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
-                    TimeSpan.FromSeconds(10));
-            }
-            if (File.Exists(trx)) File.Delete(trx);
-            DeleteDirectory(repo);
+            teardown = RemoveAfterObservedDrain(
+                () => driver is null || driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount == 0,
+                "ActiveRootCount == 0",
+                TimeSpan.FromSeconds(10),
+                () => { if (File.Exists(trx)) File.Delete(trx); },
+                () => DeleteDirectory(repo));
         }
+        teardown.AssertDrained();
     }
 
     [Fact]

@@ -48,13 +48,15 @@ public sealed class ProviderProbeTests
     [Xunit.Fact(DisplayName = "Provider_registry_falls_back_when_models_probe_connection_is_refused")]
     public void ProviderRegistryFallsBackWhenModelsProbeConnectionIsRefused()
     {
-        var baseUrl = $"http://127.0.0.1:{GetAvailablePort()}";
+        using var endpoint = ReserveRefusingLoopbackEndpoint();
+        var baseUrl = endpoint.BaseUrl;
 
         using var _ = new EnvironmentVariableScope(("OLLAMA_BASE_URL", baseUrl), ("OLLAMA_MODEL", "llama-server-model"));
 
         var provider = ProviderRegistryFactory.CreateDefaultProviders().GetRequired("Ollama");
 
         Assert.IsType<ScriptedModelProvider>(provider);
+        Assert.True(endpoint.IsHeld, "Refused endpoint port was released before the probe completed.");
     }
 
     [Xunit.Fact(DisplayName = "Provider_smoke_runner_accepts_openai_compatible_models_probe")]
