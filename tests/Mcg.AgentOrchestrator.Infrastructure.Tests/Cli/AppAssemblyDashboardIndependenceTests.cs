@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Cli;
+using Xunit;
 
 // Parallel-safe: assembly reflection and read-only project inspection.
 public sealed class AppAssemblyDashboardIndependenceTests

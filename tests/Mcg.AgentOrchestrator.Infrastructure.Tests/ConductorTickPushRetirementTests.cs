@@ -48,7 +48,7 @@ public sealed class ConductorTickPushRetirementTests
 
     private static string FindRepositoryRoot([CallerFilePath] string sourceFilePath = "")
     {
-        if (CliVerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
+        if (VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot))
             return verifiedRoot;
 
         var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFilePath)!);

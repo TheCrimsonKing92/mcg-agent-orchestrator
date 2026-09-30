@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Xunit;
 
 // Parallel-safe: each fixture uses its own in-memory kernel and starts no processes.
 public sealed class NextActionControlsTests
