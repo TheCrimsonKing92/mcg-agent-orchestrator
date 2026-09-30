@@ -17,7 +17,7 @@ public sealed class CliChildProcessRunnerTests
             var run = CliChildProcessRunner.RunAsync(start, TimeSpan.FromSeconds(2),
                 process => child = Process.GetProcessById(process.Id));
             var error = await Assert.ThrowsAsync<TimeoutException>(async () =>
-                await TestHangGuard.WaitAsync(run, "CLI child tree termination"));
+                await run.WaitAsync(TestHangGuard.Bound));
             Assert.Contains(start.FileName, error.Message, StringComparison.Ordinal);
             Assert.Contains("did not exit", error.Message, StringComparison.Ordinal);
             Assert.Contains("stdout=started", error.Message, StringComparison.Ordinal);
