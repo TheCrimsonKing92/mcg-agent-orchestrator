@@ -1,3 +1,4 @@
+using NextActionControls = Mcg.AgentOrchestrator.App.Cli.NextActionControls;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -2264,8 +2265,8 @@ public sealed class DashboardRenderingTests
     Assert.False(html.Contains("No operator action is required.", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "DashboardNextActionControls_builds_direct_controls_for_safe_actions")]
-    public void DashboardNextActionControlsBuildsDirectControlsForSafeActions()
+    [Xunit.Fact(DisplayName = "NextActionControls_builds_direct_controls_for_safe_actions")]
+    public void NextActionControlsBuildsDirectControlsForSafeActions()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Map direct next actions");
@@ -2339,7 +2340,7 @@ public sealed class DashboardRenderingTests
         "GET",
         $"/api/monitor?goal={goalPrefix}");
 
-    Assert.Equal(null, DashboardNextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify"), WorkerProfileCatalog.Default()));
+    Assert.Equal(null, NextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify"), WorkerProfileCatalog.Default()));
 }
 
     [Xunit.Fact(DisplayName = "Dashboard_action_recommendations_aggregate_next_triage_recovery_capacity_and_policy")]
@@ -2418,8 +2419,8 @@ public sealed class DashboardRenderingTests
         Xunit.Assert.Contains("Latest verification failed", triage.Reason, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "DashboardNextActionControls_surface_prior_subscription_model_fit_before_handoff")]
-    public void DashboardNextActionControlsSurfacePriorSubscriptionModelFitBeforeHandoff()
+    [Xunit.Fact(DisplayName = "NextActionControls_surface_prior_subscription_model_fit_before_handoff")]
+    public void NextActionControlsSurfacePriorSubscriptionModelFitBeforeHandoff()
 {
     var kernel = new AgentOrchestratorKernel();
     var priorTask = new TaskSpec(TaskId.New(), "Update the old label.", AgentRole.Developer);
@@ -2443,7 +2444,7 @@ public sealed class DashboardRenderingTests
         DateTimeOffset.UtcNow));
     var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
-    var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default(), agentDefinitions: [agent]);
+    var control = NextActionControls.Build(goal, action, WorkerProfileCatalog.Default(), agentDefinitions: [agent]);
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default(), [agent]).Items.Single();
 
     Assert.Equal(NextActionKind.RunAssignedTask, action.Kind);
@@ -2454,8 +2455,8 @@ public sealed class DashboardRenderingTests
     Assert.True(nextDto.Control.CostRecommendation?.Contains("try local Ollama/qwen3:8b", StringComparison.Ordinal) == true);
 }
 
-    [Xunit.Fact(DisplayName = "DashboardNextActionControls_confirm_large_paid_prepared_dispatch")]
-    public void DashboardNextActionControlsConfirmLargePaidPreparedDispatch()
+    [Xunit.Fact(DisplayName = "NextActionControls_confirm_large_paid_prepared_dispatch")]
+    public void NextActionControlsConfirmLargePaidPreparedDispatch()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -2477,7 +2478,7 @@ public sealed class DashboardRenderingTests
     var action = kernel.BuildNextActions(goal.Id).Items.Single();
     var goalPrefix = goal.Id.Value[..8];
 
-    var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
+    var control = NextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default()).Items.Single();
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
         kernel,
@@ -2664,8 +2665,8 @@ public sealed class DashboardRenderingTests
     Assert.Equal(string.Empty, RunGit(worktree, "status", "--porcelain"));
 }
 
-    [Xunit.Fact(DisplayName = "DashboardNextActionControls_allow_complex_paid_prepared_dispatch_under_size_threshold")]
-    public void DashboardNextActionControlsAllowComplexPaidPreparedDispatchUnderSizeThreshold()
+    [Xunit.Fact(DisplayName = "NextActionControls_allow_complex_paid_prepared_dispatch_under_size_threshold")]
+    public void NextActionControlsAllowComplexPaidPreparedDispatchUnderSizeThreshold()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal(
@@ -2687,7 +2688,7 @@ public sealed class DashboardRenderingTests
     var action = kernel.BuildNextActions(goal.Id).Items.Single();
     var goalPrefix = goal.Id.Value[..8];
 
-    var control = DashboardNextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
+    var control = NextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
     var nextDto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default()).Items.Single();
     var workSummary = DashboardResponseMapper.ToGoalWorkSummaryDto(
         kernel,
@@ -3541,7 +3542,7 @@ static void AssertControl(
     IReadOnlyList<AgentConfigurationValidation>? agents = null,
     string? costRisk = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item, WorkerProfileCatalog.Default(), agents);
+    var control = NextActionControls.Build(goal, item, WorkerProfileCatalog.Default(), agents);
 
     Assert.True(control is not null);
     Assert.Equal(label, control!.Label);
