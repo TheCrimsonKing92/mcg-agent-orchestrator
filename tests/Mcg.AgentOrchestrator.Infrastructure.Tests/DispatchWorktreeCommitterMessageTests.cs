@@ -21,6 +21,7 @@ public sealed class DispatchWorktreeCommitterMessageTests
         var message = Build(goal, task, "Completed work.");
         var full = $"Developer(0a09cd85): {GoalCommitTitle.Resolve(goal.Objective, task.Description)}";
 
+        Xunit.Assert.Equal("Developer(0a09cd85): A long title with several words and another", message.Subject);
         Xunit.Assert.True(message.Subject.Length <= 72);
         Xunit.Assert.StartsWith(message.Subject, full, StringComparison.Ordinal);
         Xunit.Assert.Equal(' ', full[message.Subject.Length]);
