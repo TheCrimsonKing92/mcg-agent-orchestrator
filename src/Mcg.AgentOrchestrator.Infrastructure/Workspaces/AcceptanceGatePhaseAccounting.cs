@@ -121,6 +121,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private readonly Dictionary<string, TimeSpan> _phaseDurations = new(StringComparer.Ordinal);
     private string? _currentPhase;
     private readonly AsyncLocal<string?> _currentTarget = new();
+    private string? _lastStartedTarget;
     private long _currentPhaseStartedTimestamp;
     private TimeSpan _recordedLaneDuration;
     private bool _hasRecordedLaneDuration;
@@ -193,6 +194,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
         CurrentAccountant.Value?.BeginTarget(target) ?? NoopDisposable.Instance;
 
     internal AcceptanceGateDiagnosticSnapshot Snapshot => new(_currentPhase, _currentTarget.Value);
+    internal string? LastStartedTarget => Volatile.Read(ref _lastStartedTarget);
 
     internal void SetTarget(string? target)
     {
@@ -204,6 +206,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     {
         var previous = _currentTarget.Value;
         SetTarget(target);
+        Volatile.Write(ref _lastStartedTarget, _currentTarget.Value);
         return new RestoreTargetScope(this, previous);
     }
 

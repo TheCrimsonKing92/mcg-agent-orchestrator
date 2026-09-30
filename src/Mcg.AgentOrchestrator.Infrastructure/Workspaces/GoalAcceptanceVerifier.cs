@@ -709,6 +709,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var phaseAccountant = AcceptanceGatePhaseAccountant.Start(
             _timeProvider, goalId?.Value, EmitGateProgress, cancellationToken);
         AcceptanceGatePhaseAccountant.RecordCurrentSlotWait(stableSlotLease?.SlotWaitDuration);
+        var untrackedSnapshot = CaptureGateWorktreeUntrackedSnapshot(worktreePath);
         try
         {
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.GatePlan);
@@ -1060,8 +1061,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         finally
         {
-            await DiscardStructuralCoveragePreparationAsync().ConfigureAwait(false);
-            _coveragePreparationCancellation?.Dispose();
+            try
+            {
+                await DiscardStructuralCoveragePreparationAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                RemoveGateCreatedUntrackedPaths(untrackedSnapshot, goalId, phaseAccountant.LastStartedTarget);
+                _coveragePreparationCancellation?.Dispose();
+            }
         }
     }
 
@@ -7906,6 +7914,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
+        IsHermeticSystemLocationVariable(name) ||
         name.Equals("PATH", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("PATHEXT", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("SystemRoot", StringComparison.OrdinalIgnoreCase) ||
