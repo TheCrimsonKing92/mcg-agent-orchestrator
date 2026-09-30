@@ -21,7 +21,12 @@ public sealed class CliChildProcessRunnerTests
         try
         {
             var run = CliChildProcessRunner.RunAsync(start, TimeSpan.FromSeconds(10),
-                process => child = Process.GetProcessById(process.Id));
+                process =>
+                {
+                    child = Process.GetProcessById(process.Id);
+                    TestHangGuard.WaitAsync(markerWritten.Task, "descendant PID marker")
+                        .GetAwaiter().GetResult();
+                });
             await markerWritten.Task.WaitAsync(TestHangGuard.Bound);
             descendant = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker)));
             Assert.False(descendant.HasExited);
@@ -77,16 +82,16 @@ public sealed class CliChildProcessRunnerTests
             start.ArgumentList.Add("-NoProfile");
             start.ArgumentList.Add("-NonInteractive");
             start.ArgumentList.Add("-Command");
-            start.ArgumentList.Add("$p = Start-Process ping.exe -ArgumentList '-t 127.0.0.1' -PassThru -WindowStyle Hidden; " +
+            start.ArgumentList.Add("Write-Output started; $p = Start-Process ping.exe -ArgumentList '-t 127.0.0.1' -PassThru -WindowStyle Hidden; " +
                 $"Set-Content -LiteralPath '{temporaryMarker.Replace("'", "''")}' -Value $p.Id; " +
                 $"Move-Item -LiteralPath '{temporaryMarker.Replace("'", "''")}' -Destination '{marker.Replace("'", "''")}' ; " +
-                "Write-Output started; Wait-Process -Id $p.Id");
+                "Wait-Process -Id $p.Id");
             return start;
         }
 
         var shellMarker = marker.Replace("'", "'\"'\"'");
         var shellTemporaryMarker = temporaryMarker.Replace("'", "'\"'\"'");
-        return ShellStart($"sleep 3600 & child=$!; printf '%s' \"$child\" > '{shellTemporaryMarker}'; mv '{shellTemporaryMarker}' '{shellMarker}'; echo started; wait \"$child\"");
+        return ShellStart($"echo started; sleep 3600 & child=$!; printf '%s' \"$child\" > '{shellTemporaryMarker}'; mv '{shellTemporaryMarker}' '{shellMarker}'; wait \"$child\"");
     }
 
     [Fact]
