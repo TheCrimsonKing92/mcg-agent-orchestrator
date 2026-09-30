@@ -18,6 +18,9 @@ public sealed class ProcessSpawningCollectionSplitTests
         typeof(ExcessWorkerRoundAnalysisScriptTests),
         typeof(GitCliTests),
         typeof(LaneTimingMeasurementScriptTests),
+        typeof(MtpManagedFilterDiscoveryTests),
+        typeof(MtpNoBuildReceiptIdentityTests),
+        typeof(OrchestratorSnapshotStatusTimeoutTests),
         typeof(SemanticAcceptanceTests),
         typeof(WorkerContextArtifactsCharacterizationTests),
         typeof(WorkerDispatchTestsModelSelection)
@@ -38,6 +41,55 @@ public sealed class ProcessSpawningCollectionSplitTests
         typeof(ConsoleIoPreservationTests),
         typeof(RunGoalServiceProcessContractTests)
     ];
+
+    [Xunit.Fact]
+    public void MovedFactsHaveOnlyTheParallelLaneAndNewDeclaringClasses()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot())
+            .InfrastructureTestLanes;
+        var descriptors = typeof(ProcessSpawningCollectionSplitTests).Assembly.GetTypes()
+            .Where(type => type is { IsClass: true, IsAbstract: false } &&
+                type.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .Any(method => method.GetCustomAttributes(inherit: true)
+                        .Any(attribute => attribute is Xunit.FactAttribute)))
+            .Select(type => new AcceptanceTestClassDescriptor(type.FullName ?? type.Name,
+                type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name))
+            .ToArray();
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
+        foreach (var type in new[]
+                 {
+                     typeof(OrchestratorSnapshotStatusTimeoutTests),
+                     typeof(MtpManagedFilterDiscoveryTests),
+                     typeof(MtpNoBuildReceiptIdentityTests)
+                 })
+        {
+            Xunit.Assert.Equal(ParallelCollection,
+                type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name);
+            var selected = AcceptanceLaneMembership.LanesIncluding(resolved, type.FullName!);
+            Xunit.Assert.Equal("Process spawning parallel", Xunit.Assert.Single(selected).Name);
+            Xunit.Assert.DoesNotContain(selected, lane => lane.Name is "Process spawning" or "Remainder");
+        }
+
+        foreach (var (oldType, newType, methodName) in new[]
+                 {
+                     (typeof(LauncherScriptTests), typeof(OrchestratorSnapshotStatusTimeoutTests),
+                         "GetOrchestratorSnapshotStatusTimeoutKillsOwnedStatusProcessAndReportsPartialData"),
+                     (typeof(MtpTestRunnerScriptTests), typeof(MtpManagedFilterDiscoveryTests),
+                         "ManifestFilters_TranslateAndKeepExclusionSemantics"),
+                     (typeof(MtpTestRunnerScriptTests), typeof(MtpManagedFilterDiscoveryTests),
+                         "BooleanFilters_SelectExactManagedTestSets")
+                 })
+        {
+            Xunit.Assert.Null(oldType.GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
+            Xunit.Assert.NotNull(newType.GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly));
+        }
+
+        var snapshotFact = typeof(OrchestratorSnapshotStatusTimeoutTests)
+            .GetMethod("GetOrchestratorSnapshotStatusTimeoutKillsOwnedStatusProcessAndReportsPartialData")!
+            .GetCustomAttribute<Xunit.FactAttribute>();
+        Xunit.Assert.Equal("GetOrchestratorSnapshot_status_timeout_kills_owned_status_process_and_reports_partial_data",
+            snapshotFact?.DisplayName);
+    }
 
     [Xunit.Fact(DisplayName = "ProcessSpawning_collection_split_preserves_serial_hazards_and_removes_exclusive_overlap")]
     public void ProcessSpawningCollectionSplitPreservesSerialHazardsAndRemovesExclusiveOverlap()

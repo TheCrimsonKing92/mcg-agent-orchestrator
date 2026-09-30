@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class MtpNoBuildReceiptIdentityTests
 {
     [Xunit.Fact(DisplayName = "MTP_no_build_rejects_receipt_for_a_different_configuration_before_launch")]
