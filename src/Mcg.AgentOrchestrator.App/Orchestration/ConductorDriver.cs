@@ -6331,8 +6331,8 @@ internal sealed partial class ConductorDriver
         return diagnostic.Length <= 1000 ? diagnostic : $"{diagnostic[..997]}...";
     }
 
-    private static IEnumerable<string> SplitEvidenceLines(string text) =>
-        text
+    private static IEnumerable<string> SplitEvidenceLines(string? text) =>
+        (text ?? string.Empty)
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.TrimEnd())
             .Where(line => !string.IsNullOrWhiteSpace(line));
