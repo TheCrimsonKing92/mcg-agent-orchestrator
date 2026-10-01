@@ -78,7 +78,10 @@ public sealed class CandidateTreeAbsenceSkipTests
             new(FullShards: false, ChangeScoped: true), CandidateTreeProbe.AssumeAllPresent);
 
         Assert.Empty(plan.DependencyClosure);
-        Assert.StartsWith("changed files did not map to a known project; changed projects: (none)", plan.Evidence);
+        Assert.True(plan.Applies);
+        Assert.False(plan.ForceFull);
+        Assert.False(plan.IncludesProject(AcceptancePolicyShardPlanner.DashboardTestsProject));
+        Assert.Equal("changed projects: (none); dependency closure: (none)", plan.Evidence);
     }
 
     [Xunit.Theory(DisplayName = "Effective acceptance plans never schedule an absent manifest project")]
