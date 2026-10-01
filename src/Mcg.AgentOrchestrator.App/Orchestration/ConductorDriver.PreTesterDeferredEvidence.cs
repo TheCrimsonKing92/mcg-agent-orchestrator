@@ -158,7 +158,21 @@ internal sealed partial class ConductorDriver
                     selected.AddRange(normalized.Selections);
             }
         }
+        foreach (var selection in PreTesterAlwaysRunGuardTestClasses.Select(worktreePath))
+        {
+            if (TryNormalizeFindingEvidenceRequest(
+                    new FindingEvidenceRequest([selection]), settings,
+                    (_, _) => [],
+                    out var normalized, out _, out _, out _))
+                selected.AddRange(normalized.Selections);
+        }
         var distinct = selected.DistinctBy(FormatFindingEvidenceSelection).ToArray();
+        // Pre-change attempts keep their original request identity and per-class TRX obligation.
+        if (prior?.Outcome == "started")
+            distinct = distinct.Where(selection =>
+                !PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) ||
+                prior.Selections.Contains(FormatFindingEvidenceSelection(selection), StringComparer.OrdinalIgnoreCase))
+                .ToArray();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
         var selectionNames = distinct.Select(FormatFindingEvidenceSelection).ToArray();
         if (prior?.Outcome == "started" &&
@@ -207,9 +221,11 @@ internal sealed partial class ConductorDriver
                            candidate is { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red };
         var attributionBatch = new FindingEvidenceBatch(
             identity, request, new FindingEvidenceRequest(distinct), [], []);
+        var unlistedFailures = failingTests.Where(test => !PreTesterAlwaysRunGuardTestClasses.IsListed(test)).ToArray();
         var actionableRed = candidateRed && failingTests.Count > 0 &&
                             (baseline is null
-                                ? EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, failingTests)
+                                ? unlistedFailures.Length == 0 ||
+                                  EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, unlistedFailures)
                                 : baseline.Disposition == FindingEvidenceArmDisposition.Green);
         var green = completed && evidence.IsValidEvidence &&
                     candidate is { Accepted: true, Passed: true, Disposition: FindingEvidenceArmDisposition.Green,
