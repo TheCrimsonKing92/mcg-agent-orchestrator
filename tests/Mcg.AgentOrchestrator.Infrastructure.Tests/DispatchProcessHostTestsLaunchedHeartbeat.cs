@@ -40,7 +40,7 @@ public sealed class DispatchProcessHostTestsLaunchedHeartbeat
         try
         {
             runTask = StartHost(parameters, new DispatchProcessHost.HeartbeatTestHooks());
-            var heartbeat = await WaitForLaunchedHeartbeatAsync(parameters.HeartbeatPath!);
+            var heartbeat = await WaitForLaunchedHeartbeatAsync(parameters.HeartbeatPath!, runTask);
             Assert.Equal("launched", heartbeat.GetProperty("state").GetString());
             var childPid = heartbeat.GetProperty("childPid").GetInt32();
             var identity = Assert.Single(heartbeat.GetProperty("ownedProcessIdentities").EnumerateArray(),
@@ -50,7 +50,7 @@ public sealed class DispatchProcessHostTestsLaunchedHeartbeat
             Assert.Equal(worker.StartTime.ToUniversalTime(), identity.GetProperty("startedAt").GetDateTimeOffset().UtcDateTime);
 
             File.WriteAllText(releasePath, "release");
-            Assert.Equal(0, await WaitForHostExitAsync(runTask));
+            Assert.Equal(0, await WaitForHostExitAsync(runTask, directory));
             using var terminal = ReadHeartbeat(parameters.HeartbeatPath!);
             Assert.Equal("exited", terminal.RootElement.GetProperty("state").GetString());
         }
@@ -98,11 +98,12 @@ public sealed class DispatchProcessHostTestsLaunchedHeartbeat
             }
             catch (TimeoutException failure)
             {
-                throw new InvalidOperationException("The launched heartbeat write failure was not recorded.", failure);
+                throw new InvalidOperationException(DescribeHostState(
+                    "The launched heartbeat write failure was not recorded.", directory, runTask), failure);
             }
 
             File.WriteAllText(releasePath, "release");
-            Assert.Equal(0, await WaitForHostExitAsync(runTask));
+            Assert.Equal(0, await WaitForHostExitAsync(runTask, directory));
             Assert.True(DispatchExitArtifacts.TryRead(parameters.ExitCodePath, out var exitArtifact));
             Assert.Equal(0, exitArtifact.ExitCode);
             Assert.Equal(DispatchExitArtifactOrigin.Native, exitArtifact.Origin);
@@ -143,7 +144,7 @@ public sealed class DispatchProcessHostTestsLaunchedHeartbeat
         return completion.Task;
     }
 
-    private static async Task<JsonElement> WaitForLaunchedHeartbeatAsync(string heartbeatPath)
+    private static async Task<JsonElement> WaitForLaunchedHeartbeatAsync(string heartbeatPath, Task<int> runTask)
     {
         var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         void TryRead()
@@ -177,7 +178,9 @@ public sealed class DispatchProcessHostTestsLaunchedHeartbeat
         {
             TryRead();
             if (completion.Task.IsCompletedSuccessfully) return completion.Task.Result;
-            throw new InvalidOperationException("The launched heartbeat was not published while the worker was held.", failure);
+            throw new InvalidOperationException(DescribeHostState(
+                "The launched heartbeat was not published while the worker was held.",
+                Path.GetDirectoryName(heartbeatPath)!, runTask), failure);
         }
     }
 
@@ -187,13 +190,64 @@ public sealed class DispatchProcessHostTestsLaunchedHeartbeat
         return JsonDocument.Parse(stream);
     }
 
-    private static async Task<int> WaitForHostExitAsync(Task<int> runTask)
+    private static async Task<int> WaitForHostExitAsync(Task<int> runTask, string directory)
     {
         try { return await runTask.WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken); }
         catch (TimeoutException failure)
         {
-            throw new InvalidOperationException("The dispatch host did not exit after the worker was released.", failure);
+            throw new InvalidOperationException(DescribeHostState(
+                "The dispatch host did not exit after the worker was released.", directory, runTask), failure);
         }
+    }
+
+    internal static string DescribeHostState(string failure, string directory, Task<int>? runTask)
+    {
+        string ReadArtifact(string name, bool tail = false)
+        {
+            try
+            {
+                using var stream = new FileStream(Path.Combine(directory, name), FileMode.Open,
+                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                string content;
+                if (tail)
+                {
+                    var lines = new Queue<string>();
+                    while (reader.ReadLine() is { } line)
+                    {
+                        lines.Enqueue(line);
+                        if (lines.Count > 40) lines.Dequeue();
+                    }
+                    content = string.Join(Environment.NewLine, lines);
+                }
+                else content = reader.ReadToEnd();
+                return content.Length == 0 ? "<empty>" : content;
+            }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return "absent";
+            }
+            catch (Exception error)
+            {
+                return $"unreadable: {error.GetType().FullName}: {error.Message}";
+            }
+        }
+
+        var status = runTask?.Status;
+        var exception = status == TaskStatus.Faulted ? runTask!.Exception!.GetBaseException() : null;
+        var state = status switch
+        {
+            null => "none",
+            TaskStatus.RanToCompletion => $"completed: {runTask!.Result}",
+            TaskStatus.Canceled => "canceled",
+            TaskStatus.Faulted => $"faulted: {exception!.GetType().FullName}: {exception.Message}",
+            _ => "not completed"
+        };
+        return string.Join(Environment.NewLine, failure,
+            $"heartbeat.json: {ReadArtifact("heartbeat.json")}",
+            $"host.err.log (last 40 lines): {ReadArtifact("host.err.log", tail: true)}",
+            $"exit.txt: {ReadArtifact("exit.txt")}",
+            $"run task: {state}");
     }
 
     private static string NewDirectory()
