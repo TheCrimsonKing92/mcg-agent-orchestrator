@@ -1071,6 +1071,9 @@ public static class DispatchProcessHost
     internal sealed class HeartbeatWriteGuard(
         string destinationPath, bool durable, Action<HeartbeatWriteFailure>? onFailure = null)
     {
+        private const int PublishAttempts = 5;
+        private const int PublishRetryDelayMilliseconds = 20;
+
         private readonly object _gate = new();
         private bool _terminalWritten;
         private HeartbeatWriteFailure? _lastFailure;
@@ -1105,19 +1108,37 @@ public static class DispatchProcessHost
                     File.WriteAllText(temporaryPath, payload);
                 }
 
-                BeforeMoveForTests?.Invoke(destinationPath, state);
-                lock (_gate)
+                for (var attempt = 1; ; attempt++)
                 {
-                    if (!terminal && _terminalWritten)
+                    if (!terminal && Volatile.Read(ref _terminalWritten))
                     {
                         return;
                     }
 
-                    File.Move(temporaryPath, destinationPath, overwrite: true);
-                    temporaryPath = null;
-                    if (terminal)
+                    try
                     {
-                        _terminalWritten = true;
+                        BeforeMoveForTests?.Invoke(destinationPath, state);
+                        lock (_gate)
+                        {
+                            if (!terminal && _terminalWritten)
+                            {
+                                return;
+                            }
+
+                            File.Move(temporaryPath, destinationPath, overwrite: true);
+                            temporaryPath = null;
+                            if (terminal)
+                            {
+                                _terminalWritten = true;
+                            }
+                        }
+                        return;
+                    }
+                    catch (Exception failure) when (
+                        attempt < PublishAttempts && IsTransientPublishDenial(failure))
+                    {
+                        // Release the publication gate so a terminal write can win during retries.
+                        Thread.Sleep(PublishRetryDelayMilliseconds);
                     }
                 }
             }
@@ -1136,6 +1157,11 @@ public static class DispatchProcessHost
                 }
             }
         }
+
+        private static bool IsTransientPublishDenial(Exception failure) =>
+            failure is UnauthorizedAccessException ||
+            (failure is IOException and not FileNotFoundException and not DirectoryNotFoundException &&
+                (failure.HResult & 0xFFFF) is 32 or 33);
     }
 
     private static IWorkerIntegrityLabeler ResolveIntegrityLabeler() =>
