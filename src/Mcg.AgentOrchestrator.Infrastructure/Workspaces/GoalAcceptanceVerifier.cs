@@ -801,7 +801,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase));
             _coveragePreparationFactory = token => PrepareStructuralCoverageCheckAsync(
                 effectiveChecks, infrastructureTestLanes, worktreePath, goalId, stableSlotIndex,
-                stableSlotLease, partitionVerdictCache?.AttemptId, sanctionedRemovedTests, token);
+                stableSlotLease, partitionVerdictCache?.AttemptId, sanctionedRemovedTests,
+                manifest.Checks, engineSettings, ownerProtectedDecision.OwnerApprovalSatisfied, token);
         }
 
         var checks = new List<AcceptanceCheckResult>();

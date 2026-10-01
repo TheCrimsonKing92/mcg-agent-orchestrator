@@ -141,6 +141,23 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             baseline?.LockRemediationApplied == true);
     }
 
+    internal async Task<(GoalAcceptanceVerifier.CommandResult? Discovery, Exception? IoException,
+        TestDiscoverySnapshot? Snapshot)> DiscoverBaselineAsync(
+        AcceptanceStructuralCoverageBaseline baseline, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var discovery = await _discoveryRunner(baseline.DiscoveryArguments, baseline.WorktreePath,
+                timeout, cancellationToken).ConfigureAwait(false);
+            return (discovery, null, discovery.TimedOut || discovery.ExitCode != 0 ? null :
+                TestCoverageInvariant.ParseDiscovery(discovery.Output, baseline.BareTestList, baseline.RepositoryRoot));
+        }
+        catch (Exception error) when (_isBaselineDiscoveryIoException(error))
+        {
+            return (null, error, null);
+        }
+    }
+
     internal async Task<AcceptanceStructuralCoverageEvaluation> CompareAsync(
         AcceptanceStructuralCoverageRequest request,
         AcceptanceStructuralCoveragePrepared prepared,
