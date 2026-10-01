@@ -1,5 +1,4 @@
 using Mcg.AgentOrchestrator.Core;
-using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -109,7 +108,7 @@ public static void PrintNextActions(
         }
 
         Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
-        var control = DashboardNextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
+        var control = NextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
         if (!string.IsNullOrWhiteSpace(control?.CostRisk))
         {
             var recommendation = string.IsNullOrWhiteSpace(control.CostRecommendation)

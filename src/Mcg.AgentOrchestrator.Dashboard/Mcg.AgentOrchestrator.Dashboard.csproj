@@ -13,7 +13,6 @@
     <Compile Include="..\Mcg.AgentOrchestrator.App\Dashboard\Api\**\*.cs"
              Link="Dashboard\Api\%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="..\Mcg.AgentOrchestrator.App\Dashboard\Rendering\**\*.cs"
-             Exclude="..\Mcg.AgentOrchestrator.App\Dashboard\Rendering\DashboardNextActionControls.cs"
              Link="Dashboard\Rendering\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>
