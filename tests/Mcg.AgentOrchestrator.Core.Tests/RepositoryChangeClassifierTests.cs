@@ -427,7 +427,6 @@ public sealed class RepositoryChangeClassifierTests
     [Xunit.Theory(DisplayName = "RepositoryChangeClassifier_does_not_infer_relaunch_from_similar_non_runtime_paths")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderRegistryFactoryTests.cs")]
-    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/BuildStatusRenderer.cs")]
     public void RepositoryChangeClassifierDoesNotInferRelaunchFromSimilarNonRuntimePaths(string path)
     {
         var summary = RepositoryChangeClassifier.Classify([path]);
@@ -440,7 +439,7 @@ public sealed class RepositoryChangeClassifierTests
     {
         var summary = RepositoryChangeClassifier.Classify([
             "docs/operator.md",
-            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.cs"
+            "src/Mcg.AgentOrchestrator.App/README.md"
         ]);
 
         Assert.False(summary.RequiresConductorRelaunch);
@@ -451,14 +450,12 @@ public sealed class RepositoryChangeClassifierTests
     {
         var guard = RepositoryOwnershipMap.GuardWriteSet([
             "src/Mcg.AgentOrchestrator.Core/Application/ParallelExecutionPlanner.cs",
-            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.cs",
             "tests/Mcg.AgentOrchestrator.Core.Tests/ParallelExecutionPlannerTests.cs",
             "docs/operator.md",
             "src/Mcg.AgentOrchestrator.App/bin/Debug/generated.dll"
         ]);
 
         Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.SharedInfrastructure && path.IsHighRisk);
-        Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.DashboardUi && path.RequiresSerialization);
         Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.Test);
         Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.Documentation);
         Assert.Contains(guard.Paths, path => path.Area == RepositoryOwnershipArea.GeneratedOrNoisy && path.IsGeneratedOrNoisy);
@@ -466,7 +463,6 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains(
             guard.RequiredResources,
             resource => resource == "ownership:shared-infrastructure:core/application");
-        Assert.Contains(guard.RequiredResources, resource => resource == "ownership:dashboard-ui");
         Assert.Contains(guard.Reasons, reason => reason.Contains("generated/noisy path", StringComparison.Ordinal));
     }
 

@@ -144,8 +144,8 @@ public sealed class ParallelExecutionPlannerTests
 {
     var plan = ParallelExecutionPlanner.Build(
     [
-        new ParallelExecutionIntent("dashboard-rendering", "goal-a", ["src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.cs"]),
-        new ParallelExecutionIntent("dashboard-assets", "goal-b", ["src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardAssets.cs"]),
+        new ParallelExecutionIntent("dashboard-rendering", "goal-a", ["tests/RenderingFixtureTests.cs"]),
+        new ParallelExecutionIntent("dashboard-assets", "goal-b", ["tests/AssetsFixtureTests.cs"]),
         new ParallelExecutionIntent("docs", "goal-c", ["docs/operator.md"])
     ]);
 

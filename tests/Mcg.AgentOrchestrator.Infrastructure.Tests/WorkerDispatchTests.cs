@@ -1564,7 +1564,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             File.ReadAllText(Path.Combine(contextDirectory, "research-notes.md")),
             StringComparison.Ordinal);
         Assert.Contains("selected-skills.md: read the selected planning skill", plannerDigest, StringComparison.Ordinal);
-        Assert.DoesNotContain("Prefer the dashboard source survey", plannerPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Prefer source-survey.md in the context directory", plannerPrompt, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(contextDirectory, "source-survey.md")));
         Assert.DoesNotContain(
             "source-survey",
@@ -1665,7 +1665,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var brief = kernel.BuildTaskBrief(goal.Id, planner.Id);
 
         Assert.DoesNotContain("Durable Research Notes supplied below", brief.Content, StringComparison.Ordinal);
-        Assert.Contains("dashboard source survey", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("source-survey.md in the context directory", brief.Content, StringComparison.Ordinal);
         Assert.Contains(
             "Inspect the supplied goal evidence and current repository context",
             brief.Content,

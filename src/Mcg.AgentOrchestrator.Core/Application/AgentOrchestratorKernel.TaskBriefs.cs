@@ -253,7 +253,7 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(renderedObjective, complexity)}",
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
-            "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach dashboard APIs or orchestrator state.",
+            "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach orchestrator state.",
             "A Planner must map evidence that was never recorded as disposition=undecidable, naming what would settle it, its required source, and why it is unavailable, while planning all remaining criteria in the same round. Escalate only when operator action is required; classified evidence escalations must state retrievable plus the inaccessible store, or never-recorded.",
             $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}",
             $"Task role: {task.RequiredRole}",
@@ -784,7 +784,7 @@ public sealed partial class AgentOrchestratorKernel
                 2,
                 role == AgentRole.Planner && hasDurableResearch
                     ? "Use the complete Durable Research Notes supplied in the context package; synthesize from them and do not run another broad repository source survey."
-                    : "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.");
+                    : "When surveying files, start with source-survey.md in the context directory when present, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.");
             simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
             simpleLines.Add(modelFitInstruction);
             return simpleLines;
@@ -809,7 +809,7 @@ public sealed partial class AgentOrchestratorKernel
                 :
                 [
                     "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
-                    "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads."
+                    "Prefer source-survey.md in the context directory as the starting repository map before broad recursive file reads."
                 ]);
         complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
         complexLines.Add(modelFitInstruction);

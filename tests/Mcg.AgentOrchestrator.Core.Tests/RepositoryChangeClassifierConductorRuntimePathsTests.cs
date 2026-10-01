@@ -38,8 +38,6 @@ public sealed class RepositoryChangeClassifierConductorRuntimePathsTests
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/README.md")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/notes.txt")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Core.Tests/RepositoryChangeClassifierTests.cs")]
-    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Dashboard/Program.cs")]
-    [Xunit.InlineData("src/Mcg.AgentOrchestrator.Dashboard/Mcg.AgentOrchestrator.Dashboard.csproj")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/bin/Debug/x.dll")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.Core/obj/Debug/x.cs")]
     [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/.scratch/x.cs")]
@@ -54,21 +52,6 @@ public sealed class RepositoryChangeClassifierConductorRuntimePathsTests
     {
         Assert.False(RepositoryChangeClassifier.Classify([path]).RequiresConductorRelaunch, path);
         Assert.False(RepositoryChangeClassifier.DecideConductorRelaunch([path]).Required, path);
-    }
-
-    [Xunit.Fact]
-    public void EveryNamedExclusionStaysOutsideTheRelaunchSet()
-    {
-        Assert.Equal(["src/Mcg.AgentOrchestrator.App/Dashboard/"],
-            RepositoryChangeClassifier.ConductorExcludedPathPrefixes);
-        foreach (var prefix in RepositoryChangeClassifier.ConductorExcludedPathPrefixes)
-        {
-            Assert.False(RepositoryChangeClassifier.Classify([prefix]).RequiresConductorRelaunch);
-            foreach (var suffix in new[] { "Api/X.cs", "Hosting/X.cs", "Rendering/X.cs" })
-            {
-                Assert.False(RepositoryChangeClassifier.Classify([prefix + suffix]).RequiresConductorRelaunch);
-            }
-        }
     }
 
     [Xunit.Fact]

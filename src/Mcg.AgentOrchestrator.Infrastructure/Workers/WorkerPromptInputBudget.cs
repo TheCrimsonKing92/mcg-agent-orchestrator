@@ -61,7 +61,7 @@ public static class WorkerPromptInputBudget
     private static readonly IReadOnlyList<ContextSectionRule> DropRules =
     [
         new("evidence", ["Prior Task Evidence", "Prior Task Handoff", "Last Verification", "Last Model Output", "Last Dispatch"]),
-        new("source survey", ["Source Survey", "Dashboard Source Survey"]),
+        new("source survey", ["Source Survey"]),
         new("digest", ["Worker Context Digest", "Context Digest"])
     ];
 

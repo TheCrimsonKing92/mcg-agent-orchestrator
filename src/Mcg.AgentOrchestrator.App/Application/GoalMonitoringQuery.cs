@@ -56,8 +56,7 @@ internal static class GoalMonitoringQuery
             Math.Max(0, sinceEventId),
             events.Count,
             snapshot,
-            events.Where(evt => evt.Id > sinceEventId).ToList(),
-            $"/api/goals/{goal.Id.Value}/events/stream");
+            events.Where(evt => evt.Id > sinceEventId).ToList());
     }
 
     private static QueryProcessSnapshot? ToProcessSnapshot(TaskProcessRecord? process)

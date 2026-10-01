@@ -128,8 +128,7 @@ internal static class AcceptanceMainAdvanceClassifier
     private static bool IsSafeForPathLevelCarry(RepositoryOwnershipArea area) =>
         area is RepositoryOwnershipArea.Source or
             RepositoryOwnershipArea.Test or
-            RepositoryOwnershipArea.Documentation or
-            RepositoryOwnershipArea.DashboardUi;
+            RepositoryOwnershipArea.Documentation;
 
     private static IReadOnlyList<string> Normalize(IEnumerable<string> paths) =>
         paths

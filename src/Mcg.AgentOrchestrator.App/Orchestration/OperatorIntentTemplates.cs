@@ -89,29 +89,6 @@ internal static class OperatorIntentTemplates
                 "acceptance evidence before merge."
             ]),
         new(
-            "dashboard",
-            "Change dashboard UX, API DTOs, or browser-facing operator workflows.",
-            [
-                "Keep dashboard changes dense, operational, and scan-friendly.",
-                "Expose the same state through API DTOs before relying on rendered HTML.",
-                "Avoid hidden workflow state that the CLI cannot inspect."
-            ],
-            [
-                "DTO shape or endpoint evidence.",
-                "Rendered HTML evidence for visible controls.",
-                "Operator safety or policy behavior for action buttons."
-            ],
-            [
-                "Run focused dashboard rendering/API tests.",
-                "Use browser validation only when interaction or layout risk warrants it.",
-                "Check text does not duplicate unavailable actions."
-            ],
-            [
-                "Invoke-DashboardBuildTestCycle.ps1 when a dashboard process may hold locks.",
-                "Run-DashboardBrowserScript.ps1 for manual browser checks.",
-                "monitor-goal for subscription event consumers."
-            ]),
-        new(
             "test-hardening",
             "Improve reliability, isolation, or coverage of tests.",
             [

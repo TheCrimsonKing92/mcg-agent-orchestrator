@@ -13,74 +13,43 @@ public sealed class NextActionControlsTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Map direct next actions");
         var task = goal.Tasks[2];
-        var goalPrefix = goal.Id.Value[..8];
 
         AssertControl(
             goal,
-            new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
-            "Run task",
-            "POST",
-            $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true");
+            new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"));
         AssertControl(
             goal,
             new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
-            "Prepare subscription handoff",
-            "POST",
-            $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true",
             [Validation(task.RequiredRole, AgentExecutionPolicy.PreferSubscription)],
             "paid subscription handoff");
         AssertControl(
             goal,
             new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
-            "Prepare subscription handoff",
-            "POST",
-            $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true",
             [Validation(task.RequiredRole, AgentExecutionPolicy.AnyAvailable)],
             "paid subscription handoff");
         AssertControl(
             goal,
             new NextActionItem(NextActionKind.RunAssignedTask, task.Id, null, "Run it"),
-            "Run paid API task",
-            "POST",
-            $"/api/goals/{goalPrefix}/tasks/3/run?confirmTaskRun=true&confirmPaidApiRun=true",
             [Validation(task.RequiredRole, AgentExecutionPolicy.ApiOnly)],
             "paid API");
         AssertControl(
             goal,
-            new NextActionItem(NextActionKind.RefreshRunningProcess, task.Id, null, "Refresh it"),
-            "Refresh process",
-            "POST",
-            $"/api/goals/{goalPrefix}/tasks/3/refresh");
+            new NextActionItem(NextActionKind.RefreshRunningProcess, task.Id, null, "Refresh it"));
         AssertControl(
             goal,
-            new NextActionItem(NextActionKind.ExecuteRecordedDispatch, task.Id, null, "Start it"),
-            "Start prepared work",
-            "POST",
-            $"/api/goals/{goalPrefix}/tasks/3/start?confirmDispatchStart=true");
+            new NextActionItem(NextActionKind.ExecuteRecordedDispatch, task.Id, null, "Start it"));
         AssertControl(
             goal,
-            new NextActionItem(NextActionKind.DelegatePendingTask, null, null, "Delegate"),
-            "Assign tasks",
-            "POST",
-            $"/api/goals/{goalPrefix}/delegate");
+            new NextActionItem(NextActionKind.DelegatePendingTask, null, null, "Delegate"));
         AssertControl(
             goal,
-            new NextActionItem(NextActionKind.InspectFailedTask, task.Id, null, "Inspect"),
-            "Inspect task",
-            "GET",
-            $"/api/task/3?goal={goalPrefix}");
+            new NextActionItem(NextActionKind.InspectFailedTask, task.Id, null, "Inspect"));
         AssertControl(
             goal,
-            new NextActionItem(NextActionKind.FixFailedVerification, task.Id, null, "Fix verification"),
-            "Verification records",
-            "GET",
-            $"/api/goals/{goalPrefix}/tasks/3/verifications");
+            new NextActionItem(NextActionKind.FixFailedVerification, task.Id, null, "Fix verification"));
         AssertControl(
             goal,
-            new NextActionItem(NextActionKind.MonitorGoal, null, null, "Monitor"),
-            "Monitor goal",
-            "GET",
-            $"/api/monitor?goal={goalPrefix}");
+            new NextActionItem(NextActionKind.MonitorGoal, null, null, "Monitor"));
 
         Assert.Equal(null, NextActionControls.Build(goal, new NextActionItem(NextActionKind.VerifyCompletedTask, task.Id, null, "Verify"), WorkerProfileCatalog.Default()));
     }
@@ -139,12 +108,11 @@ public sealed class NextActionControlsTests
             TaskComplexity.Complex,
             500));
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
-        var goalPrefix = goal.Id.Value[..8];
 
         var control = NextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
 
         Assert.Equal(NextActionKind.ExecuteRecordedDispatch, action.Kind);
-        Assert.Equal($"/api/goals/{goalPrefix}/tasks/1/start?confirmDispatchStart=true", control!.Url);
+        Assert.NotNull(control);
         Xunit.Assert.Null(control.CostRisk);
         Xunit.Assert.Null(control.CostRecommendation);
     }
@@ -165,8 +133,6 @@ public sealed class NextActionControlsTests
             WorkerProfileCatalog.Default(), [validation]);
 
         Assert.Equal(new NextActionControl(
-            "Prepare subscription handoff", "POST",
-            $"/api/goals/{goal.Id.Value[..8]}/tasks/3/run?confirmTaskRun=true",
             "paid subscription handoff",
             $"Review subscription-plan first; {CostRecommendationText.LocalModelSwitchAction} before paid subscription handoff when the task is routine."), control);
     }
@@ -191,8 +157,6 @@ public sealed class NextActionControlsTests
         var control = NextActionControls.Build(goal, action, WorkerProfileCatalog.Default());
 
         Assert.Equal(new NextActionControl(
-            "Start prepared work", "POST",
-            $"/api/goals/{goal.Id.Value[..8]}/tasks/1/start?confirmDispatchStart=true",
             "large paid subscription start",
             "Inspect the generated prompt before paid subscription start; it exceeds the paid prompt threshold."), control);
     }
@@ -207,25 +171,18 @@ public sealed class NextActionControlsTests
             new NextActionItem(NextActionKind.InspectFailedTask, goal.Tasks[2].Id, null, "Inspect"),
             WorkerProfileCatalog.Default());
 
-        Assert.Equal(new NextActionControl("Inspect task", "GET",
-            $"/api/task/3?goal={goal.Id.Value[..8]}", null, null), control);
+        Assert.Equal(new NextActionControl(null, null), control);
     }
 
     static void AssertControl(
         Goal goal,
         NextActionItem item,
-        string label,
-        string method,
-        string url,
         IReadOnlyList<AgentConfigurationValidation>? agents = null,
         string? costRisk = null)
     {
         var control = NextActionControls.Build(goal, item, WorkerProfileCatalog.Default(), agents);
 
         Assert.True(control is not null);
-        Assert.Equal(label, control!.Label);
-        Assert.Equal(method, control.Method);
-        Assert.Equal(url, control.Url);
         Assert.Equal(costRisk, control.CostRisk);
     }
 

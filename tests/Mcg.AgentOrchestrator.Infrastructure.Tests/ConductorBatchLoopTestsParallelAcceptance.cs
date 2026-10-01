@@ -605,8 +605,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs"],
             [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs"],
             [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs"],
-            [goals[3].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortFourth.razor"],
-            [goals[4].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortFifth.cs"]
+            [goals[3].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/CohortFourth.cs"],
+            [goals[4].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortFifth.cs"]
         };
         var projector = new GateReadyCandidateProjector(
             goalId => new GateReadyCandidateRevisionPair(
@@ -693,8 +693,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs"],
             [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs"],
             [goals[3].Id] = ["tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs"],
-            [goals[4].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortFourth.razor"],
-            [goals[5].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortFifth.cs"]
+            [goals[4].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/CohortFourth.cs"],
+            [goals[5].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortFifth.cs"]
         };
         const string failedCheck = "infrastructure tests: Remainder";
         kernel.RecordAcceptanceFailure(

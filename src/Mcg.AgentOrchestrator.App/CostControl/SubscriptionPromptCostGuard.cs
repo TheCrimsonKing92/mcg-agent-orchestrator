@@ -20,7 +20,6 @@ public sealed record PaidSubscriptionPromptRisk(
 
 public static class SubscriptionPromptCostGuard
 {
-    public const string DashboardConfirmationQueryName = "confirmLargePaidSubscriptionStart";
     public const string CliConfirmationFlag = "--confirm-large-paid-subscription-start";
 
     public static PaidSubscriptionPromptRisk? EvaluateReadySubscriptionStart(
@@ -142,7 +141,7 @@ public static class SubscriptionPromptCostGuard
     // Only a genuinely ANOMALOUS prompt (disproportionate to its task complexity, or an extreme
     // batch fan-in) requires explicit acknowledgement. A routine large paid start that the operator
     // already initiated and the autonomy policy already authorizes proceeds without the confirm
-    // flag; the non-anomalous risk is still surfaced (plan/dashboard) as an advisory, not a gate.
+    // flag; the non-anomalous risk is still surfaced in the plan as an advisory, not a gate.
     public static void ThrowIfConfirmationRequired(PaidSubscriptionPromptRisk? risk, bool confirmed)
     {
         if (risk is null || !risk.IsAnomalous || confirmed)
@@ -151,13 +150,6 @@ public static class SubscriptionPromptCostGuard
         }
 
         throw new InvalidOperationException(BuildCliMessage(risk));
-    }
-
-    public static string BuildDashboardMessage(PaidSubscriptionPromptRisk risk)
-    {
-        return BuildMessage(
-            risk,
-            $"add {DashboardConfirmationQueryName}=true after inspecting the subscription plan");
     }
 
     public static string BuildInlineLabel(PaidSubscriptionPromptRisk risk)

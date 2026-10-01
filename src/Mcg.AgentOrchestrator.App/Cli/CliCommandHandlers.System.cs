@@ -1653,7 +1653,6 @@ internal static partial class CliCommandHandlers
         return DistributedArchitectureReport.Create(
             context.Workspace,
             context.Agents,
-            context.WorkerProfiles,
-            operatorControlsEnabled: false);
+            context.WorkerProfiles);
     }
 }

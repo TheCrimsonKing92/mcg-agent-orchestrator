@@ -26,8 +26,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
             [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/BlockedMember.cs"],
-            [goals[1].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortMember.razor"],
-            [goals[2].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortMember.cs"]
+            [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/CohortMember.cs"],
+            [goals[2].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortMember.cs"]
         };
         kernel.RecordGoalRefinement(goals[0].Id, new RefinedSpec(
             goals[0].Objective,
@@ -315,8 +315,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [goals[0].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/HeartbeatFirst.razor"],
-            [goals[1].Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/HeartbeatSecond.cs"]
+            [goals[0].Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/HeartbeatFirst.cs"],
+            [goals[1].Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/HeartbeatSecond.cs"]
         };
         var projector = new GateReadyCandidateProjector(
             candidateGoalId => new GateReadyCandidateRevisionPair(
@@ -428,7 +428,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var statusesBefore = new[] { first.Status, second.Status };
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstAdvisory.razor"],
+            [first.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/FirstAdvisory.cs"],
             [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondAdvisoryTests.cs"]
         };
         var acceptanceCalls = new List<string>();
@@ -544,7 +544,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var statusesBefore = new[] { first.Status, second.Status };
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstInfrastructureFailure.razor"],
+            [first.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/FirstInfrastructureFailure.cs"],
             [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondInfrastructureFailureTests.cs"]
         };
         var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -909,7 +909,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohorts : Conductor
         var second = CreateVerifiedSimpleGoal(kernel, "Second gate fault member");
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstGateFault.razor"],
+            [first.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/FirstGateFault.cs"],
             [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondGateFaultTests.cs"]
         };
         var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

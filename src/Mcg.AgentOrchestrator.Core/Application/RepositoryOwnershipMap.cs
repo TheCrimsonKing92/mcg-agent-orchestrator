@@ -9,8 +9,6 @@ public enum RepositoryOwnershipArea
     BuildSystem,
     GeneratedOrNoisy,
     SharedInfrastructure,
-    DashboardApi,
-    DashboardUi,
     Script,
     Skill,
     Unknown
@@ -88,16 +86,6 @@ public static class RepositoryOwnershipMap
                 RepositoryOwnershipArea.SharedInfrastructure,
                 SharedInfrastructureReservationKeyFor(path),
                 highRisk: true);
-        }
-
-        if (path.StartsWith("src/Mcg.AgentOrchestrator.App/Dashboard/Api/", StringComparison.OrdinalIgnoreCase))
-        {
-            return Build(path, RepositoryOwnershipArea.DashboardApi, "dashboard-api", highRisk: true);
-        }
-
-        if (path.StartsWith("src/Mcg.AgentOrchestrator.App/Dashboard/", StringComparison.OrdinalIgnoreCase))
-        {
-            return Build(path, RepositoryOwnershipArea.DashboardUi, "dashboard-ui", highRisk: false);
         }
 
         if (IsBuildSystem(path, fileName, extension))

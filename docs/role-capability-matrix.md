@@ -33,8 +33,8 @@ The boundaries below come from these live controls:
   Reviewer findings, Reviewer criterion verdicts, and an explicit `tests` state that may be `deferred`
   (`src/Mcg.AgentOrchestrator.Core/AgentOutputDirectives.cs:12-42` and
   `src/Mcg.AgentOrchestrator.Core/AgentOutputDirectives.cs:56-89`).
-- Every task brief says its decision context is embedded and tells workers not to reach dashboard APIs
-  or orchestrator state (`src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.TaskBriefs.cs:253`).
+- Every task brief says its decision context is embedded and tells workers "do not attempt to reach
+  orchestrator state." (`src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.TaskBriefs.cs:256`).
   Packaged prior-task evidence is selected from earlier tasks in the same goal
   (`src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerArtifactWriter.cs:329-332`); it is not an
   authority to inspect `state.db`, `.orchestrator/goal-events`, or another goal. Cross-goal evidence reaches a

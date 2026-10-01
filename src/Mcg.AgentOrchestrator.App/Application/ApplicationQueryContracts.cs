@@ -39,22 +39,18 @@ internal sealed record DistributedArchitectureReport(
     string ExecutionDirectory,
     string Persistence,
     string SubscriptionWorkers,
-    IReadOnlyList<string> ApiSurfaces,
-    [property: JsonPropertyName("Dash" + "boardModes")] IReadOnlyList<string> HostModes,
     IReadOnlyList<string> StateStores,
     IReadOnlyList<string> DistributedBoundaries,
     IReadOnlyList<string> SafetyGates,
     int ProviderCount,
     int AgentCount,
     int WorkerProfileCount,
-    int UsableWorkerProfileCount,
-    bool OperatorControlsEnabled)
+    int UsableWorkerProfileCount)
 {
     public static DistributedArchitectureReport Create(
         OrchestratorWorkspace workspace,
         IReadOnlyList<AgentDefinition> agents,
-        WorkerProfileCatalog workerProfiles,
-        bool operatorControlsEnabled)
+        WorkerProfileCatalog workerProfiles)
     {
         var usableProfiles = workerProfiles.Profiles.Count(profile =>
             !string.IsNullOrWhiteSpace(profile.CommandTemplate) &&
@@ -77,20 +73,6 @@ internal sealed record DistributedArchitectureReport(
             "Kernel state is stored in SQLite state.db with WAL mode and transaction-scoped updates.",
             "Subscription dispatches use worker profiles with role-based sandbox/permission placeholders and persisted continuation watches.",
             [
-                "/api/system/architecture reports tenant, storage, provider, worker, and dashboard topology.",
-                "/api/system/dashboard-host reports bind URLs, restart command, tenant-scoped paths, and hosted source-survey links.",
-                "/api/source-survey?max=8 provides bounded repository discovery for distributed workers.",
-                "/api/goals/{goalId}/work-summary and /api/tasks/{taskId}/work-summary provide compact handoff context.",
-                "/api/goals/{goalId}/events/stream provides a browser-native monitoring subscription with resumable timeline events.",
-                "Operator POST endpoints remain disabled on simple-hosted-dashboard for read-only distributed access."
-            ],
-            [
-                "serve-dashboard: local operator mode with write controls.",
-                "hosted-dashboard: network operator mode with write controls.",
-                "simple-hosted-dashboard: network read-only mode for distributed inspection.",
-                "prototype-ui: isolated prototype workspace mode."
-            ],
-            [
                 $"Kernel state: {workspace.SqliteStatePath}",
                 $"Agent catalog: {workspace.AgentCatalogPath}",
                 $"Worker profiles: {workspace.WorkerProfilePath}",
@@ -102,21 +84,18 @@ internal sealed record DistributedArchitectureReport(
                 $"Tenant '{workspace.TenantName}' owns an isolated orchestrator directory at {workspace.OrchestratorDirectory}.",
                 $"File-touching goal work resolves through worktrees when present, otherwise {workspace.ExecutionDirectory}.",
                 "API-key model execution stays in-process through provider registry calls.",
-                "Subscription execution leaves process boundaries through worker profiles and persisted prompt/log paths.",
-                "Optional web hosts expose read/write capability by mode instead of by endpoint convention alone."
+                "Subscription execution leaves process boundaries through worker profiles and persisted prompt/log paths."
             ],
             [
                 "Tenant names are normalized and reject relative path segments.",
                 "State updates use SQLite transactions with WAL durability.",
                 "Subscription worker starts require explicit confirmation and paid-cost guard acknowledgements.",
-                "Role-based sandbox and permission placeholders keep non-implementation roles read-only.",
-                "Build/test cleanup exposes exact dashboard PIDs instead of broad process termination."
+                "Role-based sandbox and permission placeholders keep non-implementation roles read-only."
             ],
             providerCount,
             agents.Count,
             workerProfiles.Profiles.Count,
-            usableProfiles,
-            operatorControlsEnabled);
+            usableProfiles);
     }
 }
 
@@ -140,8 +119,7 @@ internal sealed record GoalMonitoringBatch(
     long SinceEventId,
     long LastEventId,
     GoalMonitoringSnapshot Snapshot,
-    IReadOnlyList<GoalMonitoringEvent> Events,
-    string StreamPath);
+    IReadOnlyList<GoalMonitoringEvent> Events);
 
 internal sealed record GoalMonitoringSnapshot(
     string GoalId,

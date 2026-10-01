@@ -45,7 +45,7 @@ public sealed class TaskBriefTests
     Assert.Equal(AgentRole.Developer, brief.Role);
     Assert.Contains("Build worker adapter", brief.Content, StringComparison.Ordinal);
     Assert.Contains($"Goal id: {goal.Id.Value}", brief.Content, StringComparison.Ordinal);
-    Assert.Contains("do not attempt to reach dashboard APIs or orchestrator state", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("do not attempt to reach orchestrator state", brief.Content, StringComparison.Ordinal);
     Assert.True(!brief.Content.Contains("Goal work summary:", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("/api/goals/", StringComparison.Ordinal));
     Assert.True(!brief.Content.Contains("/api/system/dashboard-host", StringComparison.Ordinal));
@@ -60,7 +60,7 @@ public sealed class TaskBriefTests
     Assert.Contains("Model fit: <provider>/<model or launcher> - adequate|overkill|underpowered - <task shape> - <short reason>", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/bin/**", brief.Content, StringComparison.Ordinal);
     Assert.Contains("**/obj/**", brief.Content, StringComparison.Ordinal);
-    Assert.Contains("/api/source-survey?max=8", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("source-survey.md in the context directory", brief.Content, StringComparison.Ordinal);
     Assert.Contains("## Verification Plan", brief.Content, StringComparison.Ordinal);
     Assert.Contains(task.VerificationPlan!, brief.Content, StringComparison.Ordinal);
     Assert.True(!brief.Content.Contains("Context files:", StringComparison.Ordinal));
@@ -100,7 +100,7 @@ public sealed class TaskBriefTests
 
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
-    Assert.Contains("/api/source-survey?max=8", brief, StringComparison.Ordinal);
+    Assert.Contains("source-survey.md in the context directory", brief, StringComparison.Ordinal);
     Assert.Contains("before broad recursive file reads", brief, StringComparison.Ordinal);
 }
 
@@ -285,7 +285,7 @@ public sealed class TaskBriefTests
     await runner.RunAsync(goal.Id, task.Id);
 
     Assert.True(provider.LastRequest is not null);
-    Assert.Contains("/api/source-survey?max=8", provider.LastRequest!.Messages.Single().Content, StringComparison.Ordinal);
+    Assert.Contains("source-survey.md in the context directory", provider.LastRequest!.Messages.Single().Content, StringComparison.Ordinal);
     Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", provider.LastRequest!.Messages.Single().Content, StringComparison.Ordinal); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_goal_and_task_primary_context")]
@@ -366,7 +366,7 @@ public sealed class TaskBriefTests
     var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
     Assert.Contains("Developer Requirements", brief, StringComparison.Ordinal);
-    Assert.Contains("dashboard or orchestrator blocks the ideal path", brief, StringComparison.Ordinal);
+    Assert.Contains("the orchestrator blocks the ideal path", brief, StringComparison.Ordinal);
     Assert.Contains("Complete this task as the assigned SDLC role", brief, StringComparison.Ordinal);
     Assert.Contains("Avoid generic status summaries", brief, StringComparison.Ordinal);
     Assert.Contains("Keep the response evidence-focused", brief, StringComparison.Ordinal);

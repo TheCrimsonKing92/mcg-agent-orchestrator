@@ -34,7 +34,7 @@ public sealed class DeveloperDeferredTestsExactFormPromptTests
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Report changed files and the behavior each change enables.",
                 "- Run focused verification when practical and include exact command names.",
-                "- Leave follow-up work explicit when the dashboard or orchestrator blocks the ideal path."
+                "- Leave follow-up work explicit when the orchestrator blocks the ideal path."
             };
         Assert.Contains("## Developer Requirements", instructions, StringComparison.Ordinal);
         foreach (var existing in existingRequirements)

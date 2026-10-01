@@ -5,9 +5,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 public sealed record NextActionControl(
-    string Label,
-    string Method,
-    string Url,
     string? CostRisk = null,
     string? CostRecommendation = null);
 
@@ -20,35 +17,28 @@ public static class NextActionControls
         IReadOnlyList<AgentConfigurationValidation>? agents = null,
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
-        var goalPrefix = goal.Id.Value[..8];
         int? taskNumber = item.TaskId is null ? null : GetTaskDisplayNumber(goal, item.TaskId);
 
         return item.Kind switch
         {
             NextActionKind.RunAssignedTask when taskNumber is not null =>
                 new NextActionControl(
-                    GetRunActionLabel(goal, item.TaskId, agents, agentDefinitions),
-                    "POST",
-                    BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions),
                     BuildRunAssignedCostRiskLabel(goal, item.TaskId!, workerProfiles, agents, agentDefinitions),
                     BuildRunAssignedCostRecommendation(goal, item.TaskId!, workerProfiles, agents, agentDefinitions)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
-                new NextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
+                new NextActionControl(),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
                 new NextActionControl(
-                    "Start prepared work",
-                    "POST",
-                    $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true",
                     BuildPreparedDispatchCostRiskLabel(goal, item.TaskId!),
                     BuildPreparedDispatchCostRecommendation(goal, item.TaskId!)),
             NextActionKind.DelegatePendingTask =>
-                new NextActionControl("Assign tasks", "POST", $"/api/goals/{goalPrefix}/delegate"),
+                new NextActionControl(),
             NextActionKind.InspectFailedTask when taskNumber is not null =>
-                new NextActionControl("Inspect task", "GET", $"/api/task/{taskNumber}?goal={goalPrefix}"),
+                new NextActionControl(),
             NextActionKind.FixFailedVerification when taskNumber is not null =>
-                new NextActionControl("Verification records", "GET", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/verifications"),
+                new NextActionControl(),
             NextActionKind.MonitorGoal =>
-                new NextActionControl("Monitor goal", "GET", $"/api/monitor?goal={goalPrefix}"),
+                new NextActionControl(),
             _ => null
         };
     }
@@ -56,34 +46,6 @@ public static class NextActionControls
     private static int GetTaskDisplayNumber(Goal goal, TaskId taskId)
     {
         return TaskDisplayNumber.Resolve(goal, taskId);
-    }
-
-    public static string GetRunActionLabel(
-        Goal goal,
-        TaskId? taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null,
-        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
-    {
-        var policy = ResolveTaskExecutionPolicy(goal, taskId, agents, agentDefinitions);
-        return policy switch
-        {
-            AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription => "Prepare subscription handoff",
-            AgentExecutionPolicy.AnyAvailable => "Prepare subscription handoff",
-            _ => RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
-                ? "Run paid API task"
-                : "Run task"
-        };
-    }
-
-    public static string GetExplicitApiRunActionLabel(
-        Goal goal,
-        TaskId taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null,
-        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
-    {
-        return RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
-            ? "Explicit paid API run"
-            : "Explicit API run";
     }
 
     public static bool CanRunApiExplicitly(
@@ -105,32 +67,6 @@ public static class NextActionControls
             task.LastExecution is null &&
             task.LastVerification is null &&
             task.SubscriptionRetryAfter is null;
-    }
-
-    public static string BuildTaskRunUrl(
-        Goal goal,
-        TaskId taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null,
-        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
-    {
-        var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        var url = $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/run?confirmTaskRun=true";
-        return RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: false, agents, agentDefinitions)
-            ? $"{url}&confirmPaidApiRun=true"
-            : url;
-    }
-
-    public static string BuildExplicitApiRunUrl(
-        Goal goal,
-        TaskId taskId,
-        IReadOnlyList<AgentConfigurationValidation>? agents = null,
-        IReadOnlyList<AgentDefinition>? agentDefinitions = null)
-    {
-        var taskNumber = GetTaskDisplayNumber(goal, taskId);
-        var url = $"/api/goals/{goal.Id.Value[..8]}/tasks/{taskNumber}/api-run?confirmTaskRun=true";
-        return RequiresPaidApiRunConfirmation(goal, taskId, explicitApiRun: true, agents, agentDefinitions)
-            ? $"{url}&confirmPaidApiRun=true"
-            : url;
     }
 
     private static AgentExecutionPolicy? ResolveTaskExecutionPolicy(

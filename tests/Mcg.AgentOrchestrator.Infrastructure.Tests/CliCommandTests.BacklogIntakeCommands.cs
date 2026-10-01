@@ -670,8 +670,8 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_intent_template_creates_simple_goal_from_dashboard_template")]
-    public void CliIntentTemplateCreatesSimpleGoalFromDashboardTemplate()
+    [Xunit.Fact(DisplayName = "Cli_intent_template_creates_simple_goal_from_test_hardening_template")]
+    public void CliIntentTemplateCreatesSimpleGoalFromTestHardeningTemplate()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -684,7 +684,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var output = CaptureConsole(() =>
         {
             changed = CliCommandDispatcher.ExecuteCommand(
-                ["intent-template", "dashboard", "Expose failure triage in the goal page", "--create-simple-goal"],
+                ["intent-template", "test-hardening", "Expose failure triage in the goal page", "--create-simple-goal"],
                 kernel,
                 workspace,
                 ref agents,
@@ -697,10 +697,10 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Single(kernel.Goals);
         Xunit.Assert.Single(currentGoal!.Tasks);
-        Xunit.Assert.Contains("Intent template: dashboard", currentGoal.Objective);
+        Xunit.Assert.Contains("Intent template: test-hardening", currentGoal.Objective);
         Xunit.Assert.Contains("Request: Expose failure triage in the goal page", currentGoal.Objective);
-        Xunit.Assert.Contains("Expose the same state through API DTOs before relying on rendered HTML.", currentGoal.Objective);
-        Xunit.Assert.Contains("Run focused dashboard rendering/API tests.", currentGoal.Objective);
+        Xunit.Assert.Contains("Prefer deterministic fixtures over sleeps or broad process cleanup.", currentGoal.Objective);
+        Xunit.Assert.Contains("Run the focused test repeatedly when fixing flake.", currentGoal.Objective);
         Xunit.Assert.Contains("Created simple goal from intent template.", output);
     }
 
