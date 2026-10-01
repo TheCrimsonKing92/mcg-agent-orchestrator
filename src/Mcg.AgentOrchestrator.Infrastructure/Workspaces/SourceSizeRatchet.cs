@@ -48,7 +48,9 @@ internal static class SourceSizeRatchet
             // Raised for goal 6f9ddf54: the verifier must carry the job-owned command-child identity rather
             // than the Windows shell wrapper identity into acceptance evidence used for root correlation.
             // Goal 3ca963ea extracted candidate rerun execution to the verifier's partial collaborator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 9640),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8935),
+            // Goal c60a7cb5 split focused-evidence request resolution into its own type.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 740),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
