@@ -1972,6 +1972,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         if (!_coverageHasIndependentChecks && independentChecks.Length == 0 && laneChecks.Length > 0)
             SignalStructuralCoveragePrechecksPassed();
+        if (CanOverlapNonPartitionDotnetTests(batchChecks, stableSlotIndex, stableSlotLease,
+                dotnetTestBuildPhase, maxConcurrentShards))
+            return await RunOverlappedDotnetTestBatchAsync(batchChecks, cacheContext, worktreePath,
+                goalId, stableSlotIndex!.Value, stableSlotLease!, dotnetTestBuildPhase!,
+                maxConcurrentShards, cancellationToken, continueAfterFailure).ConfigureAwait(false);
         var results = new List<AcceptanceCheckResult>(batchChecks.Count);
         var retried = false;
         for (var index = 0; index < batchChecks.Count;)
@@ -2045,7 +2050,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease primaryLease,
         DotnetTestBuildPhase? primaryBuildPhase,
         int maxConcurrentShards,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SemaphoreSlim? slotBudget = null,
+        CancellationToken stopToken = default)
     {
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.SharedPrebuild);
         var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
@@ -2083,9 +2090,23 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var activeShards = new List<(Task Task, IReadOnlyList<string> ResourceKeys)>();
         var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
-        using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
 
         async Task RunShardAsync(IndexedShard shard)
+        {
+            if (slotBudget is not null)
+                await slotBudget.WaitAsync(sharedApparatusCancellation.Token).ConfigureAwait(false);
+            try
+            {
+                await ExecuteShardAsync(shard).ConfigureAwait(false);
+            }
+            finally
+            {
+                slotBudget?.Release();
+            }
+        }
+
+        async Task ExecuteShardAsync(IndexedShard shard)
         {
             using var shardExecution = shardConcurrency.Enter();
             _testOverrides.OnInfrastructureShardResourcesAcquiredForTests?.Invoke(shard.Check.Name);
@@ -2123,7 +2144,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         while (pendingShards.Count > 0 || activeShards.Count > 0)
         {
+            if (stopToken.IsCancellationRequested)
+                pendingShards.Clear();
             while (!cancellationToken.IsCancellationRequested &&
+                   !stopToken.IsCancellationRequested &&
                    activeShards.Count < maxConcurrentExecutions)
             {
                 var runnableIndex = pendingShards.FindIndex(shard =>
@@ -2154,6 +2178,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (activeShards.Count == 0)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (stopToken.IsCancellationRequested)
+                    break;
                 throw new InvalidOperationException(
                     "Infrastructure shard scheduler has pending work but no runnable or active shard.");
             }
@@ -2170,7 +2196,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             catch (Exception exception)
             {
                 if (exception is not OperationCanceledException ||
-                    cacheContext?.SharedApparatusInvalidation is null)
+                    (cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested))
                 {
                     failures.Add(exception);
                 }
@@ -2205,7 +2231,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceGatePhaseAccountant.RecordCurrentLaneExecution(wallElapsed);
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.CheckExecution);
         if (outcomes.Any(outcome => outcome is null) &&
-            cacheContext?.SharedApparatusInvalidation is null)
+            cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested)
         {
             throw new InvalidOperationException(
                 "Concurrent infrastructure shard execution completed without a verdict for every shard.");
@@ -9104,7 +9130,18 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string[] BuildArguments { get; } = buildArguments;
         public DotnetBaseBuildCachePlan? CachePlan { get; } = cachePlan;
         public DotnetBuildEnvironment? BuildEnvironment { get; set; }
-        public (AcceptanceCheckResult Result, bool Retried)? Run { get; set; }
+        private (AcceptanceCheckResult Result, bool Retried)? _run;
+        public TaskCompletionSource BuildCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public (AcceptanceCheckResult Result, bool Retried)? Run
+        {
+            get => _run;
+            set
+            {
+                _run = value;
+                if (value is not null)
+                    BuildCompleted.TrySetResult();
+            }
+        }
     }
 
     private sealed record IndexedShard(int Index, AcceptanceManifestCheck Check);
