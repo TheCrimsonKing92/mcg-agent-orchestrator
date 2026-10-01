@@ -4080,6 +4080,7 @@ internal sealed partial class ConductorDriver
         return requiredUnmetCriteria.All(check =>
             check.FailureClassification is
                 AcceptanceFailureClassifications.GateEnvironmentInterference or
+                AcceptanceFailureClassifications.AssemblyCleanupFailure or
                 AcceptanceFailureClassifications.InheritedBaselineApparatus or AcceptanceFailureClassifications.SharedGateApparatusInvalidated ||
             acceptance.CheckAttributions is { Count: > 0 } attributions &&
             attributions.Any(attribution =>
@@ -6258,6 +6259,7 @@ internal sealed partial class ConductorDriver
                     evidence.Add($"{omittedFailures} more failures omitted — see {receipt.Path}.");
                 }
             }
+            AppendAssemblyCleanupStderrEvidence(evidence, criterion, testResultPaths);
         }
 
         return evidence;
@@ -6329,8 +6331,8 @@ internal sealed partial class ConductorDriver
         return diagnostic.Length <= 1000 ? diagnostic : $"{diagnostic[..997]}...";
     }
 
-    private static IEnumerable<string> SplitEvidenceLines(string text) =>
-        text
+    private static IEnumerable<string> SplitEvidenceLines(string? text) =>
+        (text ?? string.Empty)
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.TrimEnd())
             .Where(line => !string.IsNullOrWhiteSpace(line));
