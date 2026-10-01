@@ -7,6 +7,7 @@ using ArchUnitNET.Loader;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.RegularExpressions;
 using Architecture = ArchUnitNET.Domain.Architecture;
 using ReflectionAssembly = System.Reflection.Assembly;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
@@ -106,9 +107,9 @@ public sealed class RuntimeAssemblyArchitectureTests
     {
         var infrastructureFailures = Failures(RuntimeIsolationRule([InfrastructureAssembly]));
         AssertNames(infrastructureFailures, "Microsoft.Data.Sqlite.");
-        AssertNames(infrastructureFailures, "System.Diagnostics.Process");
-        AssertNames(infrastructureFailures, "System.Diagnostics.ProcessStartInfo");
-        AssertNames(Failures(RuntimeIsolationRule([ProvidersAssembly])), "System.Net.Http.HttpClient");
+        AssertNamesExactType(infrastructureFailures, "System.Diagnostics.Process");
+        AssertNamesExactType(infrastructureFailures, "System.Diagnostics.ProcessStartInfo");
+        AssertNamesExactType(Failures(RuntimeIsolationRule([ProvidersAssembly])), "System.Net.Http.HttpClient");
     }
 
     [Fact]
@@ -191,6 +192,11 @@ public sealed class RuntimeAssemblyArchitectureTests
     private static void AssertNames(EvaluationResult[] failures, string expected) =>
         Assert.True(failures.Any(result => result.Description.Contains(expected, StringComparison.Ordinal)),
             $"Expected a failed description naming {expected}. {failures.ToErrorMessage()}");
+
+    private static void AssertNamesExactType(EvaluationResult[] failures, string expected) =>
+        Assert.True(failures.Any(result => Regex.IsMatch(result.Description,
+                $@"(?<![\w.]){Regex.Escape(expected)}(?![\w.])", RegexOptions.CultureInvariant)),
+            $"Expected a failed description naming the exact type {expected}. {failures.ToErrorMessage()}");
 
     private static void AssertNamesSubject(EvaluationResult[] failures, ReflectionAssembly subject) =>
         Assert.True(failures.Any(result => result.EvaluatedObject is IType type
