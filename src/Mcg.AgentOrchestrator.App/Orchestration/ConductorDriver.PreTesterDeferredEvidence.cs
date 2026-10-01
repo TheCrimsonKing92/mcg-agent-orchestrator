@@ -134,7 +134,16 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        // Open requests remain part of the same candidate run, with Developer declarations first.
+        foreach (var selection in PreTesterNamedTestClasses.Select(goal, tester, worktreePath))
+        {
+            if (TryNormalizeFindingEvidenceRequest(
+                    new FindingEvidenceRequest([selection]), settings,
+                    (_, _) => [],
+                    out var normalized, out _, out _, out _))
+                selected.AddRange(normalized.Selections);
+        }
+
+        // Open requests follow Developer declarations, then brief- and Planner-named classes.
         foreach (var finding in goal.Tasks
                      .Where(task => task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer)
                      .SelectMany(task => task.LastVerification?.MergedReviewFindings ?? [])
