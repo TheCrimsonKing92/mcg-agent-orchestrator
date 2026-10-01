@@ -42,6 +42,17 @@ public sealed class MergeTrainAcceptanceStore
                 conflict_paths_json TEXT NOT NULL,
                 detail TEXT NOT NULL,
                 recorded_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS merge_train_implicated_candidates(
+                goal_id TEXT NOT NULL,
+                candidate_revision TEXT NOT NULL,
+                train_id TEXT NOT NULL,
+                observed_main_revision TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                PRIMARY KEY(goal_id, candidate_revision));
+            CREATE TABLE IF NOT EXISTS merge_train_pair_suppressions(
+                pair_fingerprint TEXT PRIMARY KEY,
+                train_id TEXT NOT NULL,
+                created_at TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
     }
@@ -107,6 +118,65 @@ public sealed class MergeTrainAcceptanceStore
             .OrderByDescending(receipt => receipt.CompletedAt)
             .ThenByDescending(receipt => receipt.ReceiptId, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    public void RecordTrainImplicatedCandidate(
+        GoalId goalId, string candidateRevision, string trainId, string observedMainRevision)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(candidateRevision);
+        ArgumentException.ThrowIfNullOrWhiteSpace(trainId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(observedMainRevision);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO merge_train_implicated_candidates
+                (goal_id, candidate_revision, train_id, observed_main_revision, recorded_at)
+            VALUES($goal, $candidate, $train, $main, $at);
+            """;
+        command.Parameters.AddWithValue("$goal", goalId.Value);
+        command.Parameters.AddWithValue("$candidate", candidateRevision);
+        command.Parameters.AddWithValue("$train", trainId);
+        command.Parameters.AddWithValue("$main", observedMainRevision);
+        command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlySet<string> ReadTrainImplicatedCandidateKeys()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT goal_id, candidate_revision FROM merge_train_implicated_candidates;";
+        using var reader = command.ExecuteReader();
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read()) keys.Add($"{reader.GetString(0)}:{reader.GetString(1)}");
+        return keys;
+    }
+
+    public void SuppressPair(string pairFingerprint, string trainId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pairFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(trainId);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO merge_train_pair_suppressions(pair_fingerprint, train_id, created_at)
+            VALUES($pair, $train, $at);
+            """;
+        command.Parameters.AddWithValue("$pair", pairFingerprint);
+        command.Parameters.AddWithValue("$train", trainId);
+        command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlySet<string> ReadSuppressedPairs()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT pair_fingerprint FROM merge_train_pair_suppressions;";
+        using var reader = command.ExecuteReader();
+        var pairs = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read()) pairs.Add(reader.GetString(0));
+        return pairs;
     }
 
     public void RecordEjections(string trainAttemptId, IReadOnlyList<MergeTrainEjection> ejections)

@@ -16,7 +16,8 @@ internal enum ConductorAcceptanceCohortPairExclusionReason
     LandingPathOverlap,
     SerializedResourceOverlap,
     SuppressedInteraction,
-    AttributedMember
+    AttributedMember,
+    TrainImplicatedMember
 }
 
 internal sealed record ConductorAcceptanceCohortPairExclusion(
@@ -128,7 +129,8 @@ internal static class ConductorAcceptanceCohortSelector
         GoalId? forcedCandidate = null,
         IReadOnlySet<string>? suppressedPairFingerprints = null,
         ConductorAcceptanceCohortFairnessContext? fairnessContext = null,
-        IReadOnlySet<string>? attributedMemberKeys = null)
+        IReadOnlySet<string>? attributedMemberKeys = null,
+        IReadOnlySet<string>? trainImplicatedMemberKeys = null)
     {
         ArgumentNullException.ThrowIfNull(orderedCandidates);
         var ready = new List<GateReadyCandidateProjection>(orderedCandidates.Count);
@@ -159,6 +161,15 @@ internal static class ConductorAcceptanceCohortSelector
                 exclusions.Add(new ConductorAcceptanceCohortPairExclusion(
                     candidate.GoalId, candidate.GoalId,
                     ConductorAcceptanceCohortPairExclusionReason.AttributedMember,
+                    $"candidate={projected.Projection.CandidateRevision}"));
+                continue;
+            }
+            if (trainImplicatedMemberKeys?.Contains(ConductorAcceptanceCohortAttributedMembers.Key(
+                    candidate.GoalId, projected.Projection.CandidateRevision)) == true)
+            {
+                exclusions.Add(new ConductorAcceptanceCohortPairExclusion(
+                    candidate.GoalId, candidate.GoalId,
+                    ConductorAcceptanceCohortPairExclusionReason.TrainImplicatedMember,
                     $"candidate={projected.Projection.CandidateRevision}"));
                 continue;
             }
@@ -533,9 +544,10 @@ internal sealed partial class ConductorBatchLoop
         var decision = ConductorAcceptanceCohortSelector.Select(
             candidates,
             fairnessPriority?.GoalId,
-            driver.ReadSuppressedCohortPairs(),
+            driver.ReadSuppressedGroupedPairs(),
             fairnessContext,
-            driver.ReadCohortAttributedMemberKeys());
+            driver.ReadCohortAttributedMemberKeys(),
+            driver.ReadTrainImplicatedMemberKeys());
         EmitAcceptanceCohortFairnessDecision(decision.FairnessDecision);
         return decision;
     }

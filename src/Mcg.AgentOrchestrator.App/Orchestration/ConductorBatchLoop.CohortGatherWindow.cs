@@ -61,12 +61,14 @@ internal sealed partial class ConductorBatchLoop
             return;
         }
 
-        var suppressedPairs = driver.ReadSuppressedCohortPairs();
+        var suppressedPairs = driver.ReadSuppressedGroupedPairs();
+        var trainImplicatedKeys = driver.ReadTrainImplicatedMemberKeys();
         var partners = inReview
             .Where(goal => ConductorAcceptanceCohortSelector.Select(
                 [readyCandidate, new ConductorSpeculativeAcceptanceCandidate(
                     goal.Id, driver.ProjectInReviewCohortPartner(goal, policy))],
-                suppressedPairFingerprints: suppressedPairs).Selection is not null)
+                suppressedPairFingerprints: suppressedPairs,
+                trainImplicatedMemberKeys: trainImplicatedKeys).Selection is not null)
             .Select(goal => goal.Id.Value)
             .Order(StringComparer.Ordinal)
             .ToArray();
