@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
-using Mcg.AgentOrchestrator.App.Prototype;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using SQLitePCL;
