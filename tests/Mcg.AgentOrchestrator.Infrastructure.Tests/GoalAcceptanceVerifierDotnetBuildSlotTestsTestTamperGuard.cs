@@ -63,7 +63,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard : 
         Assert.Equal("git", lastCall[0]);
         Assert.Equal("diff", lastCall[1]);
         Assert.True(lastCall.Any(a => a.Equals("main...HEAD", StringComparison.Ordinal)));
-        Assert.True(lastCall.Any(a => a.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs", StringComparison.Ordinal)));
+        Assert.Equal(["git", "diff", "--unified=0", "main...HEAD"], lastCall);
     }
 
     [Xunit.Fact]
