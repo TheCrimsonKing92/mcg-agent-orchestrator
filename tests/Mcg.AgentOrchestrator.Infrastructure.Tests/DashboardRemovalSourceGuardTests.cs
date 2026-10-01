@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -13,7 +12,7 @@ public sealed class DashboardRemovalSourceGuardTests
     [Fact]
     public void RemovedDashboardConstructsAreAbsent()
     {
-        var root = FindRepositoryRoot();
+        var root = VerifiedRepositoryRoot.Find();
         foreach (var folder in new[]
         {
             "src/Mcg.AgentOrchestrator.Dashboard", "src/Mcg.AgentOrchestrator.App/Dashboard",
@@ -144,10 +143,4 @@ public sealed class DashboardRemovalSourceGuardTests
             .Where(file => !Path.GetRelativePath(root, file).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                 .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype" or "TestResults" or "playwright-report"));
 
-    private static string FindRepositoryRoot([CallerFilePath] string sourceFile = "")
-    {
-        for (var directory = new DirectoryInfo(Path.GetDirectoryName(sourceFile)!); directory is not null; directory = directory.Parent)
-            if (File.Exists(Path.Combine(directory.FullName, "Mcg.AgentOrchestrator.sln"))) return directory.FullName;
-        throw new DirectoryNotFoundException("Could not locate repository root.");
-    }
 }
