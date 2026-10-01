@@ -3350,7 +3350,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var requiredPolicyChecks = policyRequiredChecks ?? BuildRequiredPolicyChecks(worktreePath, changedFiles);
         var plannedChecks = requiredPolicyChecks
-            .Where(check => !IsSkippedPolicyShardCheck(check, policyShardPlan))
+            .Where(check => !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || !policyShardPlan.IsAbsentProject(check.Project))
             .Where(check => !policyShardPlan.ForceFull ||
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
             .SelectMany(check => ExpandBroadInfrastructureCheck(check, infrastructureTestLanes))
