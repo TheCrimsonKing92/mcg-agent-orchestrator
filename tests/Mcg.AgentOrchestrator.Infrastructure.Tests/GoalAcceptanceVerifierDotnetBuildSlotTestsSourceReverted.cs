@@ -114,6 +114,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
         bool untracked = false)
     {
         using var fixture = FindingBaselineProbeFixture.Create();
+        // Match the repository ignore rule: conductor receipts are not candidate inputs.
+        File.AppendAllText(Path.Combine(fixture.Root, ".git", "info", "exclude"), "\n.orchestrator/\n");
         if (!noSourceChanges) PrepareSourceChanges(fixture.Root);
         var probe = new Probe
         {
