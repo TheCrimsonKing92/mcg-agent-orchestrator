@@ -438,7 +438,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly Encoding StrictUtf32LittleEndian = new UTF32Encoding(false, true, true);
     private static readonly Encoding StrictUtf32BigEndian = new UTF32Encoding(true, true, true);
 
-    private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
+    private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD"];
     private const int MaxFocusedEvidenceFilterLength = 1024;
     internal static string FocusedEvidenceSupportedProjectForms(
         AcceptanceGateEngineSettings? engineSettings) =>
@@ -999,7 +999,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (testFileChanges is { Length: > 0 })
         {
             checks.Add(await RunTestTamperCheckAsync(
-                testFileChanges,
                 worktreePath,
                 sanctionedRemovedTests,
                 cancellationToken).ConfigureAwait(false));
@@ -6078,14 +6077,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(
-        string[] testFiles,
         string worktreePath,
         IReadOnlyList<string> sanctionedRemovedTests,
         CancellationToken cancellationToken)
     {
         const string CheckName = "test tamper guard";
 
-        var diffArgs = DiffBaseArgs.Concat(testFiles).ToArray();
+        string[] diffArgs = [.. DiffBaseArgs];
 
         var result = await _runner(
             diffArgs,
@@ -6096,7 +6094,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (result.ExitCode != 0)
             return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "diff unavailable");
 
-        var signals = AnalyzeTestFileDiff(result.Output, sanctionedRemovedTests);
+        var signals = AnalyzeTestFileDiff(FilterTestFileDiffSections(result.Output), sanctionedRemovedTests);
 
         if (signals.Count == 0)
             return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "no test degradation detected");
@@ -8598,6 +8596,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             // cmd /c strips one surrounding quote pair, so wrap the whole command once.
             startInfo.Arguments = $"/c \"{command}\"";
+            ThrowIfCmdCommandLineTooLong(startInfo.Arguments, arguments);
         }
         else
         {
