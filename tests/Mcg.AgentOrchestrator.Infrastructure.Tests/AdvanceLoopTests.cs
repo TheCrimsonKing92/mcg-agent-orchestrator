@@ -48,10 +48,27 @@ public sealed class AdvanceLoopTests
         }
     }
 
-    private const string BlockingCodexProfileCommand =
-        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'";
-    private const string BlockingClaudeProfileCommand =
-        "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output '--permission-mode {permissionMode}'";
+    internal const string WorkerReleaseFileName = "advance-loop-worker.release";
+
+    internal static string WorkerReleasePath(string root) => Path.Combine(root, WorkerReleaseFileName);
+
+    internal static string BlockingWorkerCommand(string root, string output)
+    {
+        var releasePath = WorkerReleasePath(root).Replace("'", "''", StringComparison.Ordinal);
+        // The safety cap only handles a dead test host; normal teardown releases the worker.
+        return $"for ($poll = 0; $poll -lt 1500 -and -not (Test-Path -LiteralPath '{releasePath}'); $poll++) {{ Start-Sleep -Milliseconds 200 }}; " + output;
+    }
+
+    internal static void ReleaseBlockingWorkers(string root) => File.WriteAllText(WorkerReleasePath(root), "released");
+
+    internal static string BlockingCodexProfileCommand(string root) => BlockingWorkerCommand(root,
+        "Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'");
+
+    internal static string BlockingClaudeProfileCommand(string root) => BlockingWorkerCommand(root,
+        "Write-Output {subscriptionModelName}; Write-Output '--permission-mode {permissionMode}'");
+
+    internal static string BlockingXhighCodexProfileCommand(string root) => BlockingWorkerCommand(root,
+        "Write-Output {subscriptionModelName}; Write-Output model_reasoning_effort={subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'");
 
     [Xunit.Fact(DisplayName = "CreateActivateAndHandoffGoal_starts_first_subscription_dispatch")]
     public void CreateActivateAndHandoffGoalStartsFirstSubscriptionDispatch()
@@ -64,7 +81,7 @@ public sealed class AdvanceLoopTests
     var providers = new InMemoryModelProviderRegistry([]);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root)),
         new WorkerProfile("claude-cli", "Write-Output {subscriptionModelName}; Write-Output {promptPath}")
     ]);
 
@@ -116,9 +133,16 @@ public sealed class AdvanceLoopTests
     }
     finally
     {
-        if (goal is not null && researcher?.LastProcess is { IsRunning: true })
+        try
         {
-            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, researcher.Id);
+            if (goal is not null && researcher?.LastProcess is { IsRunning: true })
+            {
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, researcher.Id);
+            }
+        }
+        finally
+        {
+            ReleaseBlockingWorkers(root);
         }
     }
 }
@@ -606,10 +630,10 @@ public sealed class AdvanceLoopTests
     kernel.RecordTaskDispatch(
         goal.Id,
         prepared.Id,
-        new TaskDispatchRecord("manual", "Start-Sleep -Seconds 30; Write-Output manual", workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
+        new TaskDispatchRecord("manual", BlockingWorkerCommand(root, "Write-Output manual"), workspace.ExecutionDirectory, DateTimeOffset.UtcNow));
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", BlockingCodexProfileCommand)
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root))
     ]);
 
     try
@@ -632,9 +656,16 @@ public sealed class AdvanceLoopTests
     }
     finally
     {
-        if (subscription.LastProcess is { IsRunning: true })
+        try
         {
-            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, subscription.Id);
+            if (subscription.LastProcess is { IsRunning: true })
+            {
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, subscription.Id);
+            }
+        }
+        finally
+        {
+            ReleaseBlockingWorkers(root);
         }
     }
 }
@@ -677,7 +708,7 @@ public sealed class AdvanceLoopTests
     });
     goal = kernel.GetGoal(goal.Id);
     task = goal.Tasks.Single();
-    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root))]);
 
     var batch = new GoalDispatchOperations(isProcessRunning: _ => false).SubscriptionDispatchReadyBatch(
         kernel,
@@ -737,7 +768,7 @@ public sealed class AdvanceLoopTests
     });
     goal = kernel.GetGoal(goal.Id);
     task = goal.Tasks.Single();
-    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root))]);
 
     var batch = new GoalDispatchOperations(isProcessRunning: _ => false).SubscriptionDispatchReadyBatch(
         kernel,
@@ -787,7 +818,7 @@ public sealed class AdvanceLoopTests
     File.WriteAllText(
         BackgroundDispatchRunner.GetHeartbeatPath(processRecord),
         "{\"pid\":28516,\"childPid\":28517,\"ownedPids\":[28517],\"ownedProcessIdentities\":[{\"processId\":28517,\"startedAt\":\"2026-07-11T01:52:20Z\",\"imagePath\":\"C:\\\\workers\\\\child.exe\"}],\"state\":\"running\",\"lastObservedAt\":\"2026-07-11T01:52:19Z\",\"lastProgressAt\":\"2026-07-11T01:52:19Z\",\"stdoutBytes\":4,\"stderrBytes\":0,\"ownedCpuMs\":1}");
-    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root))]);
 
     var batch = new GoalDispatchOperations(
             isProcessRunning: pid => pid == 28517,
@@ -836,7 +867,7 @@ public sealed class AdvanceLoopTests
         goal.Id,
         task.Id,
         new TaskProcessRecord(28516, "old dispatch", root, stdout, stderr, exit, clock, null, null));
-    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root))]);
 
     var batch = new GoalDispatchOperations(isProcessRunning: _ => false).SubscriptionDispatchReadyBatch(
         kernel,
@@ -874,7 +905,7 @@ public sealed class AdvanceLoopTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", BlockingCodexProfileCommand)
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root))
     ]);
 
     try
@@ -904,9 +935,16 @@ public sealed class AdvanceLoopTests
     }
     finally
     {
-        if (first.LastProcess is { IsRunning: true })
+        try
         {
-            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, first.Id);
+            if (first.LastProcess is { IsRunning: true })
+            {
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, first.Id);
+            }
+        }
+        finally
+        {
+            ReleaseBlockingWorkers(root);
         }
     }
 }
@@ -937,8 +975,8 @@ public sealed class AdvanceLoopTests
     EnsureGoalWorktree(root, goal.Id);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
-        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand)
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root)),
+        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand(root))
     ]);
 
     try
@@ -1045,9 +1083,16 @@ public sealed class AdvanceLoopTests
     }
     finally
     {
-        foreach (var task in goal.Tasks.Where(task => task.LastProcess is { IsRunning: true }))
+        try
         {
-            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            foreach (var task in goal.Tasks.Where(task => task.LastProcess is { IsRunning: true }))
+            {
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            }
+        }
+        finally
+        {
+            ReleaseBlockingWorkers(root);
         }
     }
 }
@@ -1090,8 +1135,8 @@ public sealed class AdvanceLoopTests
     var loopReviewer = loopGoal.Tasks.Single(task => task.Id == reviewer.Id);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output model_reasoning_effort={subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'"),
-        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand)
+        new WorkerProfile("codex-cli", BlockingXhighCodexProfileCommand(root)),
+        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand(root))
     ]);
 
     try
@@ -1119,9 +1164,16 @@ public sealed class AdvanceLoopTests
     }
     finally
     {
-        if (loopReviewer.LastProcess is { IsRunning: true })
+        try
         {
-            new BackgroundDispatchRunner().CancelLatestProcess(loopKernel, goal.Id, reviewer.Id);
+            if (loopReviewer.LastProcess is { IsRunning: true })
+            {
+                new BackgroundDispatchRunner().CancelLatestProcess(loopKernel, goal.Id, reviewer.Id);
+            }
+        }
+        finally
+        {
+            ReleaseBlockingWorkers(root);
         }
     }
 }
@@ -1140,8 +1192,8 @@ public sealed class AdvanceLoopTests
     EnsureGoalWorktree(root, goal.Id);
     var profiles = new WorkerProfileCatalog(
     [
-        new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
-        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand)
+        new WorkerProfile("codex-cli", BlockingCodexProfileCommand(root)),
+        new WorkerProfile("claude-cli", BlockingClaudeProfileCommand(root))
     ]);
 
     try
@@ -1171,9 +1223,16 @@ public sealed class AdvanceLoopTests
     }
     finally
     {
-        if (task.LastProcess is { IsRunning: true })
+        try
         {
-            new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            if (task.LastProcess is { IsRunning: true })
+            {
+                new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            }
+        }
+        finally
+        {
+            ReleaseBlockingWorkers(root);
         }
     }
 }
