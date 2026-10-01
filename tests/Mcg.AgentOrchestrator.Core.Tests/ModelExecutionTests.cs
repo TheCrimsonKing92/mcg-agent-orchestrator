@@ -891,7 +891,7 @@ public sealed class ModelExecutionTests
     Assert.Equal("gpt-5.4-mini", goal.Tasks[0].LastExecution!.ModelName);
     Assert.Equal(TaskComplexity.Simple, goal.Tasks[0].LastExecution!.TaskComplexity);
     Assert.Contains("Call out blockers or follow-up work explicitly", simplePrompt, StringComparison.Ordinal);
-    Assert.True(!simplePrompt.Contains("dashboard or orchestrator blocks the ideal path", StringComparison.Ordinal));
+    Assert.True(!simplePrompt.Contains("the orchestrator blocks the ideal path", StringComparison.Ordinal));
 
     await runner.RunAsync(goal.Id, goal.Tasks[1].Id);
 
@@ -901,7 +901,7 @@ public sealed class ModelExecutionTests
     Assert.Equal(1200, provider.LastRequest.Options.MaxOutputTokens);
     Assert.Equal(OpenAiSubscriptionModelAlias, goal.Tasks[1].LastExecution!.ModelName);
     Assert.Equal(TaskComplexity.Complex, goal.Tasks[1].LastExecution!.TaskComplexity);
-    Assert.Contains("dashboard or orchestrator blocks the ideal path", complexPrompt, StringComparison.Ordinal);
+    Assert.Contains("the orchestrator blocks the ideal path", complexPrompt, StringComparison.Ordinal);
     Assert.True(!complexPrompt.Contains("No goal repeats/generic progress", StringComparison.Ordinal));
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_pauses_for_agent_requested_human_input")]

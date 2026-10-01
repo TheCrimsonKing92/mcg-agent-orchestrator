@@ -2701,9 +2701,7 @@ internal sealed partial class ConductorDriver
         RepositoryOwnershipMap.Classify(path).Area is
             RepositoryOwnershipArea.Source or
             RepositoryOwnershipArea.Test or
-            RepositoryOwnershipArea.SharedInfrastructure or
-            RepositoryOwnershipArea.DashboardApi or
-            RepositoryOwnershipArea.DashboardUi;
+            RepositoryOwnershipArea.SharedInfrastructure;
 
     private static bool IsTestIdentitySelectionMatch(string identity, string selection)
     {

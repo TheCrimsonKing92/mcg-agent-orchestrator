@@ -112,8 +112,8 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
         const string mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/CohortMember.razor"],
-            [second.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/CohortMember.cs"]
+            [first.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/CohortMember.cs"],
+            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CohortMember.cs"]
         };
         var projector = new GateReadyCandidateProjector(
             goalId => new GateReadyCandidateRevisionPair(goalId.Value.PadRight(40, 'b')[..40], mainRevision),

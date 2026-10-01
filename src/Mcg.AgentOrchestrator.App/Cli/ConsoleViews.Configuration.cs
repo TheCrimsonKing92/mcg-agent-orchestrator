@@ -122,12 +122,6 @@ internal static partial class ConsoleViews
             Console.WriteLine($"    - {store}");
         }
 
-        Console.WriteLine("  api surfaces:");
-        foreach (var surface in report.ApiSurfaces)
-        {
-            Console.WriteLine($"    - {surface}");
-        }
-
         Console.WriteLine("  safety gates:");
         foreach (var gate in report.SafetyGates)
         {

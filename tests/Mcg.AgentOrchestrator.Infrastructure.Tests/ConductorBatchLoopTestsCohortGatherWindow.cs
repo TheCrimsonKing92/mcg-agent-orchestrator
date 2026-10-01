@@ -134,8 +134,8 @@ public sealed class ConductorBatchLoopTestsCohortGatherWindow : ConductorBatchLo
             if (includeReviewingGoal)
             {
                 Reviewing = GoalLifecycleCommands.CreateAndActivateSimpleGoal(Kernel, DefaultAgents(),
-                    "Update src/Mcg.AgentOrchestrator.App/Dashboard/Api/GatherReviewing.cs");
-                Paths[Reviewing.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Api/GatherReviewing.cs"];
+                    "Update tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GatherReviewing.cs");
+                Paths[Reviewing.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GatherReviewing.cs"];
                 ReplaceReviewerStatus(WorkTaskStatus.Running);
             }
             if (includeExcludedReadyGoal)

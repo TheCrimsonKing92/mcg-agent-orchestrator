@@ -196,8 +196,7 @@ public static partial class RepositoryChangeClassifier
             path.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("src/Mcg.AgentOrchestrator.App/Dashboard/Api/", StringComparison.OrdinalIgnoreCase);
+            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/", StringComparison.OrdinalIgnoreCase);
 
         return new RepositoryChangedFile(
             path,

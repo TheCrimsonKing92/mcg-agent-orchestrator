@@ -60,7 +60,7 @@ internal static class SdlcRolePromptRequirements
                 "- Do NOT build the solution or run tests. A live conductor holds the built assemblies, so your build will fail on a file lock and consume your whole session on lock recovery. Inspect source, git history, and committed receipts instead. If a question can only be settled by executing tests, say so and name the exact test classes so the Tester or a Conductor-side evidence request can settle it.",
                 "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with concrete findings tied to repository-local files, APIs, tests, or primary external sources; include file paths, commands, URLs, or symbol names for each material claim.",
-                "- Prefer /api/source-survey?max=8 when available, or source reads that exclude generated artifacts such as **/bin/** and **/obj/**; inspect generated output only when it is the subject of the task.",
+                "- Prefer source-survey.md in the context directory when present, or source reads that exclude generated artifacts such as **/bin/** and **/obj/**; inspect generated output only when it is the subject of the task.",
                 "- Identify integration constraints, dependency risks, contradictory evidence, and unknowns that affect implementation.",
                 "- Separate confirmed facts from inferences; call out stale, missing, or low-confidence evidence and the consequence for implementation.",
                 "- Include the exact repository-local commands or file inspections used as research evidence when available.",
@@ -79,7 +79,7 @@ internal static class SdlcRolePromptRequirements
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Report changed files and the behavior each change enables.",
                 "- Run focused verification when practical and include exact command names.",
-                "- Leave follow-up work explicit when the dashboard or orchestrator blocks the ideal path."
+                "- Leave follow-up work explicit when the orchestrator blocks the ideal path."
             ],
             AgentRole.Tester =>
             [
@@ -229,7 +229,7 @@ internal static class SdlcRolePromptRequirements
                 "- Do NOT build the solution or run tests. A live conductor holds the built assemblies, so your build will fail on a file lock and consume your whole session on lock recovery. Inspect source, git history, and committed receipts instead. If a question can only be settled by executing tests, say so and name the exact test classes so the Tester or a Conductor-side evidence request can settle it.",
                 "- Produce the durable research artifact under the required Current source findings, Prior goal evidence, Upstream capabilities, and Likely seams and risks headings.",
                 "- Lead with repository evidence: file paths, symbols, APIs, tests, primary sources, and commands or file inspections.",
-                "- Prefer /api/source-survey?max=8 when available; otherwise exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
+                "- Prefer source-survey.md in the context directory when present; otherwise exclude generated output such as **/bin/** and **/obj/** unless the task targets it.",
                 "- Separate confirmed facts from inferences, risks, and unknowns.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before downstream implementation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."

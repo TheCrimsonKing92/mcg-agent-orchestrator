@@ -255,7 +255,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
                 return new LandingResult(candidate.Id.Value, candidate.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
             },
             getLandingFileScopes: _ =>
-                ["src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.cs"]);
+                ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RenderingChangeTests.cs"]);
 
         new ConductorBatchLoop(
             selfRelaunch: _ =>

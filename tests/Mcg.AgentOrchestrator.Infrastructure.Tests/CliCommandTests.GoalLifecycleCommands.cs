@@ -965,8 +965,6 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("Architecture:", output);
         Xunit.Assert.Contains("subscriptions: Subscription dispatches use worker profiles with role-based sandbox/permission placeholders", output);
         Xunit.Assert.Contains("state stores:", output);
-        Xunit.Assert.Contains("api surfaces:", output);
-        Xunit.Assert.Contains("/api/system/architecture", output);
         Xunit.Assert.Contains("safety gates:", output);
         Xunit.Assert.Contains("Tenant names are normalized", output);
     }

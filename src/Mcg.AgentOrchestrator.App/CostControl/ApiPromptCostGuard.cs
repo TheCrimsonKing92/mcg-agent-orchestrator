@@ -18,7 +18,6 @@ public sealed record PaidApiPromptRisk(
 
 public static class ApiPromptCostGuard
 {
-    public const string DashboardConfirmationQueryName = "confirmLargePaidApiPrompt";
     public const string CliConfirmationFlag = "--confirm-large-paid-api-prompt";
     private const int SimplePaidApiPrompt = 4000;
     private const int ComplexPaidApiPrompt = 6000;
@@ -66,13 +65,6 @@ public static class ApiPromptCostGuard
         }
 
         throw new InvalidOperationException(BuildCliMessage(risk));
-    }
-
-    public static string BuildDashboardMessage(PaidApiPromptRisk risk)
-    {
-        return BuildMessage(
-            risk,
-            $"add {DashboardConfirmationQueryName}=true after inspecting the API plan");
     }
 
     private static string BuildCliMessage(PaidApiPromptRisk risk)

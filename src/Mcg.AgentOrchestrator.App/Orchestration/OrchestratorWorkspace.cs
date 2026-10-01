@@ -159,7 +159,6 @@ public sealed record OrchestratorWorkspace(
 
     public string OperatorChannelPath => Path.Combine(OrchestratorDirectory, "operator-channel.json");
 
-    public string DashboardUrlFilePath => Path.Combine(OrchestratorDirectory, ".dashboard-url");
 
     // Append-only advisory log of semantic-acceptance verdicts (one JSON object per line), kept in
     // the orchestrator state directory (NOT a goal worktree) so writing a receipt never dirties an

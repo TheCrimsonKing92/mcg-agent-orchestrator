@@ -15,12 +15,6 @@ public static partial class RepositoryChangeClassifier
         "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/"
     ];
 
-    // Dashboard is hosted in a separate process; its in-process console control is display-only.
-    internal static readonly string[] ConductorExcludedPathPrefixes =
-    [
-        "src/Mcg.AgentOrchestrator.App/Dashboard/"
-    ];
-
     private static readonly string[] ConductorLauncherPaths =
     [
         "scripts/resolve-run-dir.ps1",
@@ -58,17 +52,6 @@ public static partial class RepositoryChangeClassifier
         if (file.IsGeneratedArtifact)
         {
             return "generated";
-        }
-
-        if (file.Path.StartsWith("src/Mcg.AgentOrchestrator.Dashboard/", StringComparison.OrdinalIgnoreCase))
-        {
-            return "excluded-dashboard-project";
-        }
-
-        if (ConductorExcludedPathPrefixes.Any(prefix =>
-                file.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
-        {
-            return "excluded-dashboard";
         }
 
         if (file.Categories.Contains(RepositoryChangeCategory.Documentation))

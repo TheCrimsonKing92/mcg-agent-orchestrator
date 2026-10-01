@@ -230,8 +230,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                     false,
                     4,
                     observedAt)
-            ],
-            "/api/goals/abc12345/events/stream");
+            ]);
         using var output = new StringWriter();
 
         GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
@@ -257,8 +256,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 [
                     new ApplicationTaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
                 ]),
-            [],
-            "/api/goals/abc12345/events/stream");
+            []);
         using var output = new StringWriter();
 
         GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
@@ -284,8 +282,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 [
                     new ApplicationTaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
                 ]),
-            [],
-            "/api/goals/abc12345/events/stream");
+            []);
         using var output = new StringWriter();
 
         GoalMonitoringSubscriptionCommand.PrintBatch(batch, output, "Friendly backlog title");
@@ -337,8 +334,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 [
                     new ApplicationTaskMonitoringSnapshotDto(1, "task1", AgentRole.Developer, WorkTaskStatus.Completed, null, null)
                 ]),
-            [],
-            "/api/goals/abc12345/events/stream");
+            []);
         using var output = new StringWriter();
 
         GoalMonitoringSubscriptionCommand.PrintBatch(batch, output);
@@ -1475,8 +1471,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
                 1,
                 new ApplicationQueryMonitorDto(goal.Status.ToString(), []),
                 []),
-            [],
-            "/events/stream");
+            []);
     }
 
     private static int CountOccurrences(string text, string value)
