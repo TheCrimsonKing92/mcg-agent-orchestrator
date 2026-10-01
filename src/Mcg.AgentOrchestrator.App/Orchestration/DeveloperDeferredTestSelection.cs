@@ -10,8 +10,11 @@ internal sealed record DeveloperDeferredTestSelection(
 internal static class DeveloperDeferredTestSelections
 {
     internal static DeveloperDeferredTestSelection Resolve(string worktreePath, string testsField)
+        => ResolveNames(worktreePath, DeveloperDeferredTestClassNames.Parse(testsField));
+
+    internal static DeveloperDeferredTestSelection ResolveNames(
+        string worktreePath, IReadOnlyList<string> distinctNames, bool requireUniqueSourceFile = false)
     {
-        var distinctNames = DeveloperDeferredTestClassNames.Parse(testsField);
         var root = Path.Combine(worktreePath, "tests");
         if (!Directory.Exists(root)) return new DeveloperDeferredTestSelection([], distinctNames);
 
@@ -26,12 +29,13 @@ internal static class DeveloperDeferredTestSelections
         var notRun = new List<string>();
         foreach (var name in distinctNames)
         {
-            var matches = projects.SelectMany(project =>
+            var declaringProjects = projects.SelectMany(project =>
                     sourceFiles[project][name + ".cs"]
                         .Where(path => DeclaresClass(path, name))
                         .Select(_ => project))
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (matches.Length != 1)
+                .ToArray();
+            var matches = declaringProjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (matches.Length != 1 || requireUniqueSourceFile && declaringProjects.Length != 1)
             {
                 notRun.Add(name);
                 continue;
