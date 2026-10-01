@@ -14,7 +14,9 @@ public static partial class RepositoryTestImpactPlanner
             .Order(StringComparer.Ordinal).ToArray();
         var presentSummary = removedPaths.Length == 0 ? summary : RepositoryChangeClassifier.Classify(
             summary.Files.Select(file => file.Path).Except(removedPaths, StringComparer.OrdinalIgnoreCase));
-        var plan = PlanPresentPaths(presentSummary, declarationReader);
+        // Escalation belongs to the whole change; absence only narrows test selection.
+        var escalates = summary.HasBuildSystemChanges || summary.HasSecuritySensitiveChanges;
+        var plan = PlanPresentPaths(escalates ? summary : presentSummary, declarationReader);
         var absentProjects = plan.Checks.Select(TestProjectPath).OfType<string>()
             .Where(project => !candidateTree.Exists(project))
             .Distinct(StringComparer.OrdinalIgnoreCase)
