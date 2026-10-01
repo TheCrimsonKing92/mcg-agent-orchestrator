@@ -81,6 +81,8 @@ internal sealed partial class ConductorDriver
         }
         IReadOnlyList<MergeTrainMemberBinding> composition = originalBindings;
         var admitted = false;
+        MergeTrainMemberBinding? redNewest = null;
+        MergeTrainReceipt? redReceipt = null;
 
         for (var attempt = 0; attempt <= 1; attempt++)
         {
@@ -258,6 +260,8 @@ internal sealed partial class ConductorDriver
 
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
+                if (redNewest is not null && redReceipt is not null)
+                    RecordTrainImplicatedMember(redNewest, redReceipt);
                 if (gateOnly)
                 {
                     return new ConductorMergeTrainRunResult(receipt,
@@ -334,12 +338,15 @@ internal sealed partial class ConductorDriver
 
             if (receipt.Outcome != MergeTrainGateOutcome.Failed || members.Count == 2 || attempt == 1)
             {
+                RecordTrainRedPair(selection, members, receipt);
                 return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
             }
 
             // The bounded bisection is deliberately drop-newest, not a full search. The dropped member
             // remains absent from MemberResults so ordinary admission attributes its later solo gate.
             var dropped = members[^1];
+            redNewest = dropped;
+            redReceipt = receipt;
             var ejection = new MergeTrainEjection(
                 dropped.GoalId,
                 MergeTrainEjectionReason.RedNewestMember,
