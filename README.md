@@ -1,6 +1,6 @@
 # MCG Agent Orchestrator
 
-This repository runs software development goals through local Codex CLI and Claude CLI workers, verifies their work, and lands accepted changes in `main`. See the [architecture map](docs/architecture.md) for the projects, dependencies, and state ownership.
+This repository runs software development goals through local Codex CLI and Claude CLI workers, verifies their work, and lands accepted changes in `main`. Most commits in this history were written by the orchestrator's own worker agents and landed through its acceptance gates, while the operator sets goals and owns the design, as [Reading the history](#reading-the-history) explains. See the [architecture map](docs/architecture.md) for the projects, dependencies, and state ownership.
 
 ## Architecture
 
@@ -43,7 +43,7 @@ Attribution partitions silently ran sequentially because their caller supplied n
 
 ## Reading the history
 
-The git log records goal landings as `Integrate goal/<id>`. Older worker commits use templated subjects beginning with the task purpose, such as `Implement the scoped slice and keep changes narrow.:`, followed by the worker's first words. Current worker commits use `<Role>(<goal-id8>): <goal title>` with `Goal`, `Task-Id`, and `Dispatch` trailers, as defined by [OrchestratorCommitMessage.ForWorker](src/Mcg.AgentOrchestrator.Core/Domain/OrchestratorCommitMessage.cs) and used by the [dispatch committer](src/Mcg.AgentOrchestrator.Infrastructure/Processes/DispatchWorktreeCommitter.cs).
+A goal landed on its own appears as an `Integrate goal/<id>` merge commit; goals landed together as a merge train appear as their rebased commits in order, without an Integrate merge. Older worker commits use templated subjects beginning with the task purpose, such as `Implement the scoped slice and keep changes narrow.:`, followed by the worker's first words. Current worker commits use `<Role>(<goal-id8>): <goal title>` with `Goal`, `Task-Id`, and `Dispatch` trailers, as defined by [OrchestratorCommitMessage.ForWorker](src/Mcg.AgentOrchestrator.Core/Domain/OrchestratorCommitMessage.cs) and used by the [dispatch committer](src/Mcg.AgentOrchestrator.Infrastructure/Processes/DispatchWorktreeCommitter.cs).
 
 `Integrate main into goal/<id> before <Role> dispatch` records a branch refresh for the named role, as defined by [pre-dispatch integration](src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreDispatchIntegration.cs). Operator commits have hand-written subjects outside these generated patterns; read the diffs to see the resulting changes.
 
