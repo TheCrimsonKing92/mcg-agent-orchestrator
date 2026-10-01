@@ -572,8 +572,7 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
               "checks": [
                 { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
                 { "name": "core tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
-                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
-                { "name": "dashboard tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration"] }
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
               ],
               "forbiddenChangedPathGlobs": [
                 "bin/**",
