@@ -306,7 +306,8 @@ public sealed record TaskDispatchRecord(
     int ConductorRoutingRevision = 0,
     PreDispatchIntegrationReceipt? PreDispatchIntegrationReceipt = null,
     GoalId? GoalId = null,
-    CandidateIdentity? CandidateIdentity = null)
+    CandidateIdentity? CandidateIdentity = null,
+    DispatchProviderUsage? ProviderUsage = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
@@ -317,6 +318,21 @@ public sealed record TaskDispatchRecord(
     public int ConductorRoutingRevision { get; internal set; } = ConductorRoutingRevision;
 
     public GoalId? GoalId { get; internal set; } = GoalId;
+}
+
+public sealed record DispatchProviderUsage(
+    ProviderUsageValue InputTokens,
+    ProviderUsageValue CachedInputTokens,
+    ProviderUsageValue OutputTokens)
+{
+    public static DispatchProviderUsage From(ProviderReportedUsage? usage, string? unavailableReason) => new(
+        Value(usage?.InputTokens, unavailableReason),
+        Value(usage?.CachedInputTokens, unavailableReason),
+        Value(usage?.OutputTokens, unavailableReason));
+
+    private static ProviderUsageValue Value(long? count, string? reason) => count is { } value
+        ? ProviderUsageValue.Reported(value)
+        : ProviderUsageValue.Unknown(string.IsNullOrWhiteSpace(reason) ? "absent" : reason);
 }
 
 public sealed record ReviewRetryCapReceipt(int Round, int StopRound)
