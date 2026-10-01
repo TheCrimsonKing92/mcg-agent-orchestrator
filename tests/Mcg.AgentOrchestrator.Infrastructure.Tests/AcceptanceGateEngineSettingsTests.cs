@@ -1032,12 +1032,12 @@ public sealed class AcceptanceGateEngineSettingsTests
             variables["MCG_ACCEPTANCE_FULL_SHARDS"] = null;
             var ordinaryChange = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
                 root,
-                ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/WorkspaceConsolidator.cs"]);
+                ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWorkspaceIntegrityPreparer.cs"]);
             var buildSystemChange = GoalAcceptanceVerifier.BuildEffectiveAcceptanceChecksForTests(
                 root,
                 [
                     "Directory.Build.props",
-                    "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/WorkspaceConsolidator.cs"
+                    "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWorkspaceIntegrityPreparer.cs"
                 ]);
 
             Xunit.Assert.DoesNotContain(
