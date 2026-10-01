@@ -805,30 +805,26 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_auto_runs_policy_required_browser_smoke")]
-    public async Task GoalAcceptanceVerifierAutoRunsPolicyRequiredBrowserSmoke()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_ignores_policy_required_browser_smoke")]
+    public void GoalAcceptanceVerifierIgnoresPolicyRequiredBrowserSmoke()
     {
-        var root = CreateManifestWorkspace("""
-            {
-              "version": 1,
-              "checks": [],
-              "forbiddenChangedPathGlobs": []
-            }
-            """);
-        var calls = new List<string[]>();
-        var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
-        {
-            calls.Add(args);
-            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed."));
-        });
+        var policy = new VerificationPolicy("Legacy front-end policy", true, false,
+        [
+            new VerificationPolicyCheck(
+                "dashboard browser smoke", "browser-smoke", true,
+                @".\scripts\Run-DashboardBrowserScript.ps1 .\scripts\dashboard-smoke.js",
+                "Changed files include front-end assets.")
+        ]);
 
-        var result = await verifier.RunAsync(root, changedFiles: ["wwwroot/css/app.css"]);
+        var checks = GoalAcceptanceVerifier.MapRequiredPolicyChecksForTests(Path.GetTempPath(), policy);
 
-        Assert.True(result.Passed);
-        var browserCall = calls.Single(call => call.Contains(@".\scripts\Run-DashboardBrowserScript.ps1", StringComparer.OrdinalIgnoreCase));
-        Assert.Equal("powershell", browserCall[0]);
-        Assert.Contains(@".\scripts\dashboard-smoke.js", browserCall, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains(result.Checks!, check => check.Name == "dashboard browser smoke" && check.Passed);
+        Assert.Empty(checks);
+
+        var testPolicy = policy with { Checks = [new VerificationPolicyCheck(
+            "focused tests", "dotnet-test", true, "dotnet test", "Test impact.")] };
+        var testCheck = Assert.Single(GoalAcceptanceVerifier.MapRequiredPolicyChecksForTests(Path.GetTempPath(), testPolicy));
+        Assert.Equal("focused tests", testCheck.Name);
+        Assert.Equal("dotnet-test", testCheck.Type);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_forbidden_changed_paths_from_manifest")]

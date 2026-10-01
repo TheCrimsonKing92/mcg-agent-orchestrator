@@ -108,7 +108,7 @@ internal static class OperatorIntentTemplates
             ],
             [
                 "Invoke-DashboardBuildTestCycle.ps1 when a dashboard process may hold locks.",
-                "Run-DashboardBrowserScript.ps1 for real browser smokes.",
+                "Run-DashboardBrowserScript.ps1 for manual browser checks.",
                 "monitor-goal for subscription event consumers."
             ]),
         new(

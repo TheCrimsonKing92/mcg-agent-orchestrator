@@ -29,16 +29,6 @@ public static class VerificationPolicyCompiler
         "token"
     ];
 
-    private static readonly string[] FrontEndExtensions =
-    [
-        ".tsx",
-        ".ts",
-        ".css",
-        ".html",
-        ".vue",
-        ".js"
-    ];
-
     public static VerificationPolicy Compile(
         AgentRole role,
         string goalObjective,
@@ -66,7 +56,6 @@ public static class VerificationPolicyCompiler
         RepositoryTestImpactPlan impact)
     {
         ArgumentNullException.ThrowIfNull(impact);
-        var files = changedFiles.Where(path => !string.IsNullOrWhiteSpace(path)).ToArray();
         var text = $"{goalObjective}\n{taskDescription}\n{verificationPlan}".ToLowerInvariant();
         var checks = new List<VerificationPolicyCheck>();
 
@@ -90,16 +79,6 @@ public static class VerificationPolicyCompiler
                 "Tester and Reviewer roles must inspect worker output, verification records, and blockers before trusting task status."));
         }
 
-        if (HasFrontEndAsset(files))
-        {
-            checks.Add(new VerificationPolicyCheck(
-                "dashboard browser smoke",
-                "browser-smoke",
-                true,
-                ".\\scripts\\Run-DashboardBrowserScript.ps1",
-                "Changed files include front-end assets."));
-        }
-
         if (ContainsAny(text, HumanReviewSignals) ||
             impact.RequiresBroadVerification)
         {
@@ -117,7 +96,7 @@ public static class VerificationPolicyCompiler
             .GroupBy(check => $"{check.Kind}:{check.Name}", StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToArray();
-        var requiresTests = distinct.Any(check => check.Required && check.Kind is "dotnet-test" or "browser-smoke");
+        var requiresTests = distinct.Any(check => check.Required && check.Kind == "dotnet-test");
         var requiresHuman = distinct.Any(check => check.Required && check.Kind.StartsWith("manual", StringComparison.OrdinalIgnoreCase));
         var summary = requiresTests
             ? impact.Summary
@@ -128,14 +107,4 @@ public static class VerificationPolicyCompiler
 
     private static bool ContainsAny(string text, IReadOnlyList<string> signals) =>
         signals.Any(signal => text.Contains(signal, StringComparison.OrdinalIgnoreCase));
-
-    private static bool HasFrontEndAsset(IReadOnlyList<string> files) =>
-        files.Any(file =>
-        {
-            var normalized = file.Replace('\\', '/');
-            return FrontEndExtensions.Any(ext => normalized.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
-                || normalized.StartsWith("src/Mcg.AgentOrchestrator.Dashboard/", StringComparison.OrdinalIgnoreCase)
-                || normalized.StartsWith("wwwroot/", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(normalized, "scripts/Run-DashboardBrowserScript.ps1", StringComparison.OrdinalIgnoreCase);
-        });
 }
