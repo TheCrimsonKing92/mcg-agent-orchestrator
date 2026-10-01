@@ -19,7 +19,7 @@ The [operator runbook](docs/operator-runbook.md#1-golden-path-conductor-first) d
 
 ## How it works
 
-An operator creates a goal with an objective and acceptance criteria. Automatic intake selects the Scout pipeline: Planner, Developer, Tester, and Reviewer; `--pipeline five-role` also includes a Researcher. The [intake planner](src/Mcg.AgentOrchestrator.App/Orchestration/GoalObjectivePlanner.cs) selects the pipeline, and the [Scout definition](src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.Scout.cs) declares its roles.
+An operator creates a goal with an objective and acceptance criteria. Automatic intake selects the Scout pipeline: Planner, Developer, Tester, and Reviewer; `--pipeline five-role` also includes a Researcher. The [intake planner](src/Mcg.AgentOrchestrator.App/Orchestration/GoalObjectivePlanner.cs) selects the pipeline and defines its task boundaries and role order.
 
 The conductor creates an isolated git worktree, dispatches the workers, and waits for their results. After review, it runs the acceptance suite against the candidate and applies the change-risk gate. A passing candidate allowed by policy lands in `main`; failures, conflicts, and requests for human input return to the operator. The loop records the landing in SQLite and removes the worktree. Follow the [runbook](docs/operator-runbook.md#1-golden-path-conductor-first) for the complete operating sequence.
 
@@ -43,7 +43,9 @@ Attribution partitions silently ran sequentially because their caller supplied n
 
 ## Reading the history
 
-The git log records goal landings as `Integrate goal/<id>`. Worker commits use templated subjects beginning with the task purpose, such as `Implement the scoped slice and keep changes narrow.:`, followed by the worker's first words. `Integrate main into goal/<id> before Developer dispatch` records a branch refresh. Hand-written subjects are operator commits; read the diffs to see the resulting changes.
+The git log records goal landings as `Integrate goal/<id>`. Older worker commits use templated subjects beginning with the task purpose, such as `Implement the scoped slice and keep changes narrow.:`, followed by the worker's first words. Current worker commits use `<Role>(<goal-id8>): <goal title>` with `Goal`, `Task-Id`, and `Dispatch` trailers, as defined by [OrchestratorCommitMessage.ForWorker](src/Mcg.AgentOrchestrator.Core/Domain/OrchestratorCommitMessage.cs) and used by the [dispatch committer](src/Mcg.AgentOrchestrator.Infrastructure/Processes/DispatchWorktreeCommitter.cs).
+
+`Integrate main into goal/<id> before <Role> dispatch` records a branch refresh for the named role, as defined by [pre-dispatch integration](src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreDispatchIntegration.cs). Operator commits have hand-written subjects outside these generated patterns; read the diffs to see the resulting changes.
 
 Goal briefs and orchestrator state live under `.orchestrator/`, which is [ignored by git](.gitignore), so the log does not contain the complete goal context. The earlier operator diary is preserved in [docs/history/handoff-2026-09.md](docs/history/handoff-2026-09.md).
 

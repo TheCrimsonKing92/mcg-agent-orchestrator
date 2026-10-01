@@ -42,7 +42,7 @@ The CLI centers on six alias verbs. All other verbs are covered in [ADVANCED](#a
 
 Use `conduct --loop` as the main execution primitive. The conductor advances active goals through workspace creation, role dispatch, verification, acceptance, landing, dogfood logging, and cleanup until every goal is done or escalated.
 
-The automatic default is the Scout pipeline: Planner -> Developer -> Tester -> Reviewer. Pass --pipeline five-role to select Planner -> Researcher -> Developer -> Tester -> Reviewer. Intake and policy gates route engagement by risk, so trivial slices can use a minimal path while broader or riskier work gets the roles and human attention it needs.
+The automatic default is the Scout pipeline: Planner -> Developer -> Tester -> Reviewer. Pass `--pipeline five-role` to select Researcher -> Planner -> Developer -> Tester -> Reviewer. Intake and policy gates route engagement by risk, so trivial slices can use a minimal path while broader or riskier work gets the roles and human attention it needs.
 
 The acceptance gate remains the safety boundary: a goal lands only after its task gates, configured build/test verification, and change-risk checks pass. For operating details, policies, stuck-goal recovery, and manual fallback commands, use [`docs/operator-runbook.md`](operator-runbook.md).
 
@@ -80,7 +80,7 @@ goal <objective> --simple
 goal --brief-file <path> --simple
 ```
 
-`goal <objective>` creates and activates a goal for delegation; the automatic default is the Scout pipeline (Planner → Developer → Tester → Reviewer). Pass `--pipeline five-role` to request five roles (Planner → Researcher → Developer → Tester → Reviewer). Pass `--brief-file <path>` to read the objective from a file instead of the command line — useful for long multi-line briefs.
+`goal <objective>` creates and activates a goal for delegation; the automatic default is the Scout pipeline (Planner → Developer → Tester → Reviewer). Pass `--pipeline five-role` to request five roles (Researcher → Planner → Developer → Tester → Reviewer). Pass `--brief-file <path>` to read the objective from a file instead of the command line — useful for long multi-line briefs.
 
 Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`). `simple-goal <objective>` and `simple-goal --brief-file <path>` are the direct single-task forms.
 
@@ -435,7 +435,7 @@ conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]
 
 ### Autonomous execution
 
-For a full SDLC goal, the conductor advances the automatic default Scout worker chain from Planner → Developer → Tester → Reviewer; `--pipeline five-role` selects Planner → Researcher → Developer → Tester → Reviewer.
+For a full SDLC goal, the conductor advances the automatic default Scout worker chain from Planner → Developer → Tester → Reviewer; `--pipeline five-role` selects Researcher → Planner → Developer → Tester → Reviewer.
 Workers make edits only in the goal worktree; the orchestrator owns committing verified worker edits.
 After review, the acceptance gate runs the configured build and test suite against that worktree.
 If the goal is clean and low risk under the active policy, the conductor auto-promotes it by merging to `main` without human sign-off.
