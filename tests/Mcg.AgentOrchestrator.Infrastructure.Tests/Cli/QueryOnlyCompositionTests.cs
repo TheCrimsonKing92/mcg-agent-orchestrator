@@ -18,11 +18,13 @@ public sealed class QueryOnlyCompositionTests
     }
 
     [Theory]
+    [InlineData("dashboard")]
     [InlineData("serve-dashboard")]
     [InlineData("hosted-dashboard")]
     [InlineData("simple-hosted-dashboard")]
     [InlineData("open-dashboard")]
     [InlineData("prototype-ui")]
+    [InlineData("transcript")]
     public void RemovedDashboardCommandsSelectUnknownCommandComposition(string command)
     {
         Assert.Equal(CliCommandCapabilities.Classify(["unknown-command"]), CliCommandCapabilities.Classify([command]));
