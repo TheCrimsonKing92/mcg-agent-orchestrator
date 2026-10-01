@@ -20,6 +20,14 @@ internal static partial class AcceptancePolicyShardPlanner
             .Where(path => !removedPaths.Contains(NormalizePath(path), StringComparer.OrdinalIgnoreCase))
             .ToArray();
         var plan = BuildPresentPolicyShardPlan(presentPaths, switches);
+        if (!plan.ForceFull && removedPaths.Length > 0 &&
+            FullShardReason(removedPaths, RepositoryChangeClassifier.Classify([]), [], switches,
+                pathClausesOnly: true) is { } removedReason)
+        {
+            plan = PolicyShardPlan.Full(
+                $"{removedReason}; {(plan.Applies ? plan.Evidence : BuildPolicyShardEvidence([], plan.DependencyClosure))}",
+                plan.DependencyClosure);
+        }
         // Include manifest projects even outside the dependency closure: force-full and
         // focused manifest checks must obey the same absence rule as scoped selections.
         var projects = ReferencingProjectsByProject.Keys.Concat(

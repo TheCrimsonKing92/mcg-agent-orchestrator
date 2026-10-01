@@ -182,12 +182,13 @@ internal static partial class AcceptancePolicyShardPlanner
         IReadOnlyList<string> changedFiles,
         RepositoryChangeSummary summary,
         IReadOnlyList<string> changedProjects,
-        AcceptanceShardPolicySwitches? switches)
+        AcceptanceShardPolicySwitches? switches,
+        bool pathClausesOnly = false)
     {
-        if (FullShardOverrideEnabled(switches))
+        if (!pathClausesOnly && FullShardOverrideEnabled(switches))
             return "MCG_ACCEPTANCE_FULL_SHARDS=1";
 
-        if (!ChangeScopedAcceptanceEnabled(switches))
+        if (!pathClausesOnly && !ChangeScopedAcceptanceEnabled(switches))
             return "MCG_ACCEPTANCE_CHANGE_SCOPED disabled";
 
         foreach (var path in changedFiles)
@@ -209,7 +210,7 @@ internal static partial class AcceptancePolicyShardPlanner
 
         }
 
-        if (!summary.IsDocsOnly && summary.HasBehaviorChanges && changedProjects.Count == 0)
+        if (!pathClausesOnly && !summary.IsDocsOnly && summary.HasBehaviorChanges && changedProjects.Count == 0)
             return "changed files did not map to a known project";
 
         return null;
