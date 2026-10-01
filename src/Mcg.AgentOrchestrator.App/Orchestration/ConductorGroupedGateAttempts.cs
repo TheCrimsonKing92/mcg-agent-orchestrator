@@ -279,10 +279,60 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         { ReconciledAt = _utcNow(), Outcome = "Reconciled", Detail = detail });
 
     internal ConductorGroupedGateAttempt TryReconcileDead(
-        ConductorGroupedGateAttempt attempt, string detail) =>
-        Update(attempt.MetadataPath, current => IsAlive(current.OwnerProcessId)
-            ? current
-            : current with { ReconciledAt = _utcNow(), Outcome = "Reconciled", Detail = detail });
+        ConductorGroupedGateAttempt attempt, string detail)
+    {
+        var reconciled = false;
+        attempt = Update(attempt.MetadataPath, current =>
+        {
+            reconciled = false;
+            if (current.ReconciledAt is not null || IsAlive(current.OwnerProcessId)) return current;
+            reconciled = true;
+            return current with { ReconciledAt = _utcNow(), Outcome = "Reconciled", Detail = detail };
+        });
+        if (reconciled) EmitReconciledDead(attempt);
+        return attempt;
+    }
+
+    private void EmitReconciledDead(ConductorGroupedGateAttempt attempt)
+    {
+        if (_event is null) return;
+        try
+        {
+            _event($"ACCEPTANCE_COHORT_RECONCILED_DEAD kind={attempt.Kind} attempt={attempt.AttemptId} " +
+                $"members={string.Join('+', attempt.Members.Select(member => member.GoalId))} " +
+                $"identity={attempt.IdentityValue} owner={attempt.OwnerProcessId} reason={attempt.Detail} " +
+                DescribeChildResult(attempt.ResultPath));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static string DescribeChildResult(string path)
+    {
+        if (!File.Exists(path)) return "result=none";
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("Status", out var status) || status.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(status.GetString()))
+                return "result=unreadable error=missing Status";
+            var error = root.TryGetProperty("Error", out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString() : null;
+            return $"result={FirstLine(status.GetString()!)}" +
+                (string.IsNullOrEmpty(error) ? "" : $" error={FirstLine(error)}");
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or
+            UnauthorizedAccessException or InvalidOperationException)
+        {
+            return $"result=unreadable error={FirstLine(exception.Message)}";
+        }
+    }
+
+    private static string FirstLine(string text)
+    {
+        var end = text.IndexOfAny(['\r', '\n']);
+        return end < 0 ? text : text[..end];
+    }
 
     private static bool IsProcessAlive(int pid)
     {
