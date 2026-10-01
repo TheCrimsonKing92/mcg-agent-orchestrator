@@ -8,7 +8,7 @@ The orchestrator lands agent-written changes only after an acceptance gate runs 
 
 On 2026-09-29, goals c4abdb65 and 423c801b were gated as a cohort. The combined gate failed at 03:53:13Z after 1,011 seconds. Its lane phase took 739 seconds, running four test lanes at a time.
 
-Attribution started immediately. The first partition, c4abdb65 alone, finished at 04:40:08Z after 2,807 seconds, about 2.8 times the combined gate on the same code. The second partition started at 04:40:17Z. While it ran, another goal landed and the conductor relaunched itself to pick up the new code. At 05:13:16Z the new conductor process refused to adopt the orphaned attribution, because `main` had moved since the attempt started, which is the correct response. About 80 minutes of attribution work ended without a verdict, and both goals had to be gated again.
+Attribution started immediately. The first partition, c4abdb65 alone, finished at 04:40:08Z after 2,807 seconds, about 2.8 times the combined gate. The two runs used the same acceptance runner and verifier but tested different candidate trees: the combined gate tested the cohort's `main` revision merged with both goals, and the partition tested that `main` revision merged with c4abdb65 alone. The second partition started at 04:40:17Z. While it ran, another goal landed and the conductor relaunched itself to pick up the new code. At 05:13:16Z the new conductor process refused to adopt the orphaned attribution, because `main` had moved since the attempt started, which is the correct response. About 80 minutes of attribution work ended without a verdict, and both goals had to be gated again.
 
 ## Diagnosis
 

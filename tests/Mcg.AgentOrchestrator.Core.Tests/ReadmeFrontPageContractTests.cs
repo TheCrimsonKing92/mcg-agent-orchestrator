@@ -195,6 +195,72 @@ public sealed class ReadmeFrontPageContractTests
             .Where(path => Path.GetFileName(path).StartsWith("LICENSE", StringComparison.OrdinalIgnoreCase)));
     }
 
+    private const string LandedStateStatus = @"**Current status (2026-10-01):** Remediated by later goals, with residual backlog items still open; the original record below is unchanged. Goal `81f85740` (landed as `cd5b6d28e` on 2026-07-27) made the conductor tick the only writer of goal state: recovery commands such as `retry`, `progress` and `verify-manual` now submit typed intents that the tick applies; see the [state model](../state-model.md) and the [operator runbook](../operator-runbook.md). Goal `38ae793c` (landed as `8d70e552f` on 2026-08-13) made branch integration conductor-owned, so workers no longer rebase; see Branch integration ownership in the [role capability matrix](../role-capability-matrix.md). Backlog items `b940ad5c`, `79ab3324` and `bb6f496a` remain open.";
+
+    private const string DormantRedsStatus = @"**Current status (2026-10-01):** Remediated by later goals, with residual backlog items still open; the original record below is unchanged. The two red tests were fixed by goal `e42c2c9b` (landed as `087191daf`), as the Fix section records. Goal `4bc184e2` (landed as `70269c3a2` on 2026-07-23) moved acceptance gates out of the tick into background attempts, closing backlog item `fdb75163`, so one goal's gate no longer holds the tick. Goal `6251e612` (landed as `42db8d9b4` on 2026-07-30) added the clean-test baseline from backlog item `cca13692`, and goal `5d57fe95` (landed as `d910eaed3` on 2026-09-17) requires executed evidence before a candidate failure is called inherited from `main`; see [baseline attribution](../baseline-attribution-replay.md). Backlog items `76d770ac` and `4d63661a` remain open.";
+
+    private const string SlotStarvationStatus = @"**Current status (2026-10-01):** Remediated by later goals, with residual backlog items still open; the original record below is unchanged. Goal `cee1d2da` (landed as `73482780a` on 2026-07-15) retries a slot lock that has no identifiable holder and keeps a lock-blocked gate scheduled on later ticks. Goal `5f4bb7de` (landed as `5da60a7d6` on 2026-07-15) makes the gate wait for its own test child to exit before the next build, and goal `6e08860f` (landed as `2f747b72f` on 2026-07-15) followed up on the same gate lock path. Goal `4bc184e2` (landed as `70269c3a2` on 2026-07-23) moved gates out of the tick, and goal `7f488dfa` (landed as `b3da492a0` on 2026-09-29) gives acceptance gate lanes shard permits ahead of focused evidence lanes; see [acceptance resource isolation](../acceptance-gate-resource-isolation.md). Backlog items `c31f7ca5` and `88e2fd9e` remain open, and goal `a5340f2b` named below was cancelled.";
+
+    private const string CaseStudyCorrection = @"The first partition, c4abdb65 alone, finished at 04:40:08Z after 2,807 seconds, about 2.8 times the combined gate. The two runs used the same acceptance runner and verifier but tested different candidate trees: the combined gate tested the cohort's `main` revision merged with both goals, and the partition tested that `main` revision merged with c4abdb65 alone.";
+
+    [Xunit.Theory]
+    [Xunit.InlineData("docs/incidents/2026-07-15-landed-state-races.md",
+        "2026-07-15 Landed-State Races and Shared-Git Collisions", LandedStateStatus,
+        "Operator recoveries only (branch reset to accepted tip; cherry-pick completion; status-tool repairs). No structural fix landed yet.", true)]
+    [Xunit.InlineData("docs/incidents/2026-07-15-dormant-reds-gate-monopoly.md",
+        "2026-07-15 Dormant Red Tests Monopolize the Gate and Throttle the Board", DormantRedsStatus,
+        "because gates run inline in the tick (`fdb75163`, unfixed)", false)]
+    [Xunit.InlineData("docs/incidents/2026-07-14-acceptance-gate-slot-starvation.md",
+        "2026-07-14 Acceptance Gate Slot Starvation", SlotStarvationStatus,
+        "No completed fix is recorded here.", false)]
+    public void IncidentRecordsOpenWithDatedStatusLineAndKeepOriginalText(
+        string documentPath, string title, string expectedStatus, string preservedText, bool wholeLine)
+    {
+        var lines = ReadLines(documentPath);
+        Xunit.Assert.Equal("# " + title, lines[0]);
+        Xunit.Assert.Equal("", lines[1]);
+        Xunit.Assert.Equal(expectedStatus, lines.Skip(1).First(line => !string.IsNullOrWhiteSpace(line)));
+        Xunit.Assert.Equal(expectedStatus, lines[2]);
+        Xunit.Assert.Equal("", lines[3]);
+
+        var originalBody = lines.Skip(4).ToArray();
+        if (wholeLine)
+            Xunit.Assert.Contains(preservedText, originalBody);
+        else
+            Xunit.Assert.Contains(preservedText, string.Join('\n', originalBody), StringComparison.Ordinal);
+
+        var path = Path.Combine(VerifiedRepositoryRoot.Find(), documentPath);
+        var targets = MarkdownLinkTargets(new[] { lines[2] }).ToArray();
+        Xunit.Assert.NotEmpty(targets);
+        foreach (var target in targets)
+        {
+            if (target.StartsWith('#') || Regex.IsMatch(target, @"^[a-zA-Z][a-zA-Z0-9+.-]*:"))
+                continue;
+
+            var relativePath = Uri.UnescapeDataString(target.Split('#')[0]);
+            Xunit.Assert.False(string.IsNullOrWhiteSpace(relativePath),
+                $"{documentPath} has an empty relative link: {target}");
+            Xunit.Assert.False(Path.IsPathRooted(relativePath),
+                $"{documentPath} has a rooted link: {target}");
+            var resolved = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, relativePath));
+            Xunit.Assert.True(File.Exists(resolved),
+                $"{documentPath} status link '{target}' does not resolve: {resolved}");
+        }
+    }
+
+    [Xunit.Fact]
+    public void CaseStudyDistinguishesTheCandidateTreesItCompared()
+    {
+        var document = string.Join('\n', ReadLines("docs/case-studies/cohort-attribution-partitions.md"));
+        Xunit.Assert.DoesNotContain("on the same code", document, StringComparison.Ordinal);
+        Xunit.Assert.Contains(CaseStudyCorrection, document, StringComparison.Ordinal);
+        Xunit.Assert.Contains("after 2,807 seconds, about 2.8 times the combined gate",
+            document, StringComparison.Ordinal);
+        Xunit.Assert.Contains("| Total | 1,011 s | 2,807 s |", document, StringComparison.Ordinal);
+        Xunit.Assert.Contains("These are different goals, so the comparison is not a controlled experiment.",
+            document, StringComparison.Ordinal);
+    }
+
     private static string[] ReadLines(string relativePath)
     {
         var path = Path.Combine(VerifiedRepositoryRoot.Find(), relativePath);

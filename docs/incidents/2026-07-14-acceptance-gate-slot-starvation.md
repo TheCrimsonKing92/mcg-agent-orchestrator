@@ -1,5 +1,7 @@
 # 2026-07-14 Acceptance Gate Slot Starvation
 
+**Current status (2026-10-01):** Remediated by later goals, with residual backlog items still open; the original record below is unchanged. Goal `cee1d2da` (landed as `73482780a` on 2026-07-15) retries a slot lock that has no identifiable holder and keeps a lock-blocked gate scheduled on later ticks. Goal `5f4bb7de` (landed as `5da60a7d6` on 2026-07-15) makes the gate wait for its own test child to exit before the next build, and goal `6e08860f` (landed as `2f747b72f` on 2026-07-15) followed up on the same gate lock path. Goal `4bc184e2` (landed as `70269c3a2` on 2026-07-23) moved gates out of the tick, and goal `7f488dfa` (landed as `b3da492a0` on 2026-09-29) gives acceptance gate lanes shard permits ahead of focused evidence lanes; see [acceptance resource isolation](../acceptance-gate-resource-isolation.md). Backlog items `c31f7ca5` and `88e2fd9e` remain open, and goal `a5340f2b` named below was cancelled.
+
 ## Symptom
 
 Verified goals sat unlanded for more than two hours while dev-lane worker self-verification kept using the same stable slot grid that acceptance gates need. Backlog item `c31f7ca53c314433a5f3e1292bb16bb1` records `483594c1` as Verified before 13:37Z and still held at 16:00Z, with `d67a086f`, `4f970f1d`, and `2f03c3a7` also waiting. The only autonomous landing in that window was docs-only goal `5f9789c4`, which did not need a slot rebuild.
