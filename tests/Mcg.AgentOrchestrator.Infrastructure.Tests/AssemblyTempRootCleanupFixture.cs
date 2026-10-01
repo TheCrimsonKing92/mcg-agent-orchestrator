@@ -9,16 +9,21 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     private readonly StateDbOpenConnectionTracker connectionTracker = new();
     private readonly Func<TempRootDeleteOutcome?> releaseOwnedRoot;
     private readonly TextWriter? diagnostics;
+    private readonly Func<ProcessCommandLineSnapshot> processSnapshot;
 
     public AssemblyTempRootCleanupFixture()
         : this(() => AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture), null)
     {
     }
 
-    internal AssemblyTempRootCleanupFixture(Func<TempRootDeleteOutcome?> releaseOwnedRoot, TextWriter? diagnostics)
+    internal AssemblyTempRootCleanupFixture(
+        Func<TempRootDeleteOutcome?> releaseOwnedRoot,
+        TextWriter? diagnostics,
+        Func<ProcessCommandLineSnapshot>? processSnapshot = null)
     {
         this.releaseOwnedRoot = releaseOwnedRoot;
         this.diagnostics = diagnostics;
+        this.processSnapshot = processSnapshot ?? ProcessCommandLines.Snapshot;
     }
 
     public ValueTask DisposeAsync()
@@ -44,7 +49,9 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
                 }
             }
 
-            EnsureSuccessful(outcome);
+            EnsureSuccessful(outcome, outcome?.Status == TempRootDeleteStatus.Failed
+                ? AssemblyTempRootCleanupHolderDiagnostics.Describe(outcome.Path, processSnapshot)
+                : null);
             return ValueTask.CompletedTask;
         }
         finally
@@ -164,6 +171,9 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     }
 
     internal static void EnsureSuccessful(TempRootDeleteOutcome? outcome)
+        => EnsureSuccessful(outcome, null);
+
+    private static void EnsureSuccessful(TempRootDeleteOutcome? outcome, string? holderDiagnostics)
     {
         if (outcome?.Status != TempRootDeleteStatus.Failed)
         {
@@ -176,7 +186,8 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
             $"hresult={FormatHResult(outcome.ExceptionHResult)}, " +
             $"attempts={outcome.DeleteAttempts}, " +
             $"at '{outcome.FailurePath ?? "unknown"}'): " +
-            $"{outcome.ExceptionMessage ?? "message unavailable"}");
+            $"{outcome.ExceptionMessage ?? "message unavailable"}" +
+            (holderDiagnostics is null ? string.Empty : Environment.NewLine + holderDiagnostics));
     }
 
     private static string FormatHResult(int? hresult) =>
