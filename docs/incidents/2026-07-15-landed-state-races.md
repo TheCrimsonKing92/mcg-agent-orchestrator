@@ -1,5 +1,7 @@
 # 2026-07-15 Landed-State Races and Shared-Git Collisions
 
+**Current status (2026-10-01):** Remediated by later goals, with residual backlog items still open; the original record below is unchanged. Goal `81f85740` (landed as `cd5b6d28e` on 2026-07-27) made the conductor tick the only writer of goal state: recovery commands such as `retry`, `progress` and `verify-manual` now submit typed intents that the tick applies; see the [state model](../state-model.md) and the [operator runbook](../operator-runbook.md). Goal `38ae793c` (landed as `8d70e552f` on 2026-08-13) made branch integration conductor-owned, so workers no longer rebase; see Branch integration ownership in the [role capability matrix](../role-capability-matrix.md). Backlog items `b940ad5c`, `79ab3324` and `bb6f496a` remain open.
+
 ## Symptom
 
 Two related incidents during the 2026-07-14/15 landing waves:
