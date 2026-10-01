@@ -61,8 +61,8 @@ Start with the [operator runbook](docs/operator-runbook.md) for setup, operation
 
 ## Projects
 
-The current project inventory is derived from `src/**/*.csproj` (6 production projects) and
-`tests/**/*.csproj` (10 test/support projects). See the
+The current project inventory is derived from `src/**/*.csproj` (5 production projects) and
+`tests/**/*.csproj` (9 test/support projects). See the
 [architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
 and the separately labelled modular-monolith target.
 
@@ -74,11 +74,9 @@ and the separately labelled modular-monolith target.
 | `src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | Operator-channel implementations and message transport behavior. | Goal state, conductor policy, or host composition. |
 | `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | SQLite stores, process and worker execution, worktrees, and acceptance verification. | CLI, dashboard, or executable composition. |
 | `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | Headless executable composition root containing the conductor, CLI, maintenance, and application contracts. | ASP.NET hosting and dashboard HTTP endpoints. |
-| `src/Mcg.AgentOrchestrator.Dashboard/Mcg.AgentOrchestrator.Dashboard.csproj` | Optional ASP.NET dashboard host that consumes the headless application contracts. | Workflow or maintenance ownership. |
 | `tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj` | Core policy and repository-documentation contract tests. | Infrastructure or hosted-dashboard integration coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | Broad infrastructure, orchestration, worker, workspace, and acceptance tests. | The separately scoped CLI, dashboard, and provider-environment suites. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj` | Focused acceptance execution-owner and invocation-pipeline tests. | Broad infrastructure, CLI, dashboard, or provider-environment coverage. |
-| `tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj` | Dashboard API and UI behavior tests. | A production Dashboard assembly or general infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj` | CLI parsing, command, and console-contract tests. | Executable hosting or non-CLI infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj` | Process-isolated provider environment and configuration tests. | General provider implementation ownership. |
 | `tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj` | Shared test fixtures and helpers. | A runnable test suite or production behavior. |

@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Cli;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -1119,48 +1118,6 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains("Brief capability warning", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("gh CLI", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("remote repository URL", output, StringComparison.Ordinal);
-    }
-
-    [Xunit.Fact(DisplayName = "Dashboard_retry_records_capability_warning_for_gh_cli_instruction")]
-    public async Task DashboardRetryRecordsCapabilityWarningForGhCliInstruction()
-    {
-        var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal(
-            "Retry lint",
-            [new TaskSpec(TaskId.New(), "Do retryable work", AgentRole.Developer)]);
-        var task = goal.Tasks.Single();
-        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "needs retry");
-
-        var queued = await GoalManagementCommandService.ApplyTaskActionAsync(
-            kernel,
-            AgentCatalog.Default().Agents,
-            new InMemoryModelProviderRegistry([]),
-            workspace,
-            goal,
-            task,
-            "retry",
-            """{"message":"Retry after running gh pr checkout and git push.","cause":"ContractClarification"}""");
-
-        var queuedIntent = Xunit.Assert.IsType<OperatorIntentDto>(queued);
-        Xunit.Assert.Equal(OperatorIntentStatus.Pending, queuedIntent.Status);
-        Xunit.Assert.DoesNotContain(
-            goal.Timeline,
-            evt => evt.Message.Contains("Brief capability warning", StringComparison.Ordinal));
-
-        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace);
-        var execution = coordinator.ExecutePending(kernel, goal);
-        coordinator.CompletePersisted([goal.Id]);
-
-        Xunit.Assert.True(execution.MutatedGoalState);
-        var warnings = goal.Timeline
-            .Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
-                evt.Message.Contains("Brief capability warning", StringComparison.Ordinal))
-            .Select(evt => evt.Message)
-            .ToArray();
-        Xunit.Assert.Contains(warnings, warning => warning.Contains("gh CLI", StringComparison.Ordinal));
-        Xunit.Assert.Contains(warnings, warning => warning.Contains("git push", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_selects_named_refiner_binding_when_not_first")]

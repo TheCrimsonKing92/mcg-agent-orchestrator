@@ -159,10 +159,6 @@ public sealed class GoalAcceptanceEvidenceBundleTests
         "full dotnet tests: cli",
         "dotnet test --project tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj --verbosity minimal",
         "cli tests")]
-    [Xunit.InlineData(
-        "full dotnet tests: dashboard",
-        "dotnet test tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj --verbosity minimal",
-        "dashboard tests")]
     public void AcceptancePolicyRecognizesEquivalentAggregateProjectTestEvidence(
         string policyName,
         string commandLine,

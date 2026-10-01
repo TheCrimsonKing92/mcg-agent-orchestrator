@@ -601,11 +601,6 @@ internal static partial class CliPersistentStateRunner
     {
         return command.ToLowerInvariant() switch
         {
-            "dashboard" or
-            "serve-dashboard" or
-            "hosted-dashboard" or
-            "simple-hosted-dashboard" or
-            "open-dashboard" or
             "repo-process-info" or
             "repo-process-stop" or
             "monitor-goal" or

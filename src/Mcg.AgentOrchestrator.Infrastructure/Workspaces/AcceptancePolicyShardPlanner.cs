@@ -13,23 +13,21 @@ internal static partial class AcceptancePolicyShardPlanner
     internal const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     internal const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     internal const string AcceptanceTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj";
-    internal const string DashboardTestsProject = "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj";
     internal const string TestSupportProject = "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj";
     internal const string ProviderEnvironmentTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
     internal const string CliTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [CoreProject] = [ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [ProvidersProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
-        [OperatorCommsProject] = [AppProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [AppProject] = [InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [OperatorCommsProject] = [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [AppProject] = [InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
         [InfrastructureTestsProject] = [],
         [AcceptanceTestsProject] = [],
-        [DashboardTestsProject] = [],
-        [TestSupportProject] = [InfrastructureTestsProject, DashboardTestsProject],
+        [TestSupportProject] = [InfrastructureTestsProject],
         [ProviderEnvironmentTestsProject] = [],
         [CliTestsProject] = []
     };
@@ -289,7 +287,6 @@ internal static partial class AcceptancePolicyShardPlanner
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :
         project.Equals(CoreTestsProject, StringComparison.OrdinalIgnoreCase) ? "Core.Tests" :
         project.Equals(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.Tests" :
-        project.Equals(DashboardTestsProject, StringComparison.OrdinalIgnoreCase) ? "Dashboard.Tests" :
         project.Equals(TestSupportProject, StringComparison.OrdinalIgnoreCase) ? "TestSupport" :
         IsExtractedInfrastructureProject(project) ? ExtractedInfrastructureProjectLabel(project) :
         project;
@@ -324,7 +321,6 @@ internal static partial class AcceptancePolicyShardPlanner
         !string.IsNullOrWhiteSpace(check.Project) &&
         (ProjectMatches(check.Project, CoreTestsProject) ||
          ProjectMatches(check.Project, InfrastructureTestsProject) ||
-         ProjectMatches(check.Project, DashboardTestsProject) ||
          IsExtractedInfrastructureProject(check.Project));
 
     internal static bool IsSkippedPolicyShardCheck(AcceptanceManifestCheck check, PolicyShardPlan policyShardPlan) =>

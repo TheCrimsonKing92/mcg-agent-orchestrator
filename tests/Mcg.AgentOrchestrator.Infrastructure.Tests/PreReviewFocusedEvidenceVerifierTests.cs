@@ -7,10 +7,10 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
     [Xunit.Fact(DisplayName = "PreReviewFocusedEvidenceVerifier_accepts_mapped_project_and_safe_exclusion")]
     public async Task AcceptsMappedProjectAndSafeExclusion()
     {
-        const string dashboardTestName =
-            "Mcg.AgentOrchestrator.Dashboard.Tests.DashboardHostTests.RendersDashboard";
+        const string infrastructureTestName =
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.GoalAcceptanceVerifierTests.VerifiesSafeCommand";
         var calls = new List<string[]>();
-        string? dashboardTrxPath = null;
+        string? infrastructureTrxPath = null;
         var root = CreateManifestWorkspace("""
             {
               "version": 1,
@@ -23,16 +23,15 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Dashboard.Tests"))
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    dashboardTrxPath = WriteMtpTrx(args, dashboardTestName);
+                    infrastructureTrxPath = WriteMtpTrx(args, infrastructureTestName);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         0,
                         "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
-                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests") ||
-                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
                 {
                     _ = WriteMtpTrx(args);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
@@ -46,20 +45,20 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
             var result = await verifier.RunFocusedEvidenceAsync(
                 root,
                 new GoalId("abcdef12abcdef12abcdef12abcdef12"),
-                "Core.Tests: mapped-project; Dashboard.Tests: FullyQualifiedName~DashboardHostTests&Category!=HostIntegration");
+                "Core.Tests: mapped-project; Infrastructure.Tests: FullyQualifiedName~GoalAcceptanceVerifierTests&Category!=HostIntegration");
 
             Assert.True(result.Accepted);
             Assert.True(result.Passed);
             Assert.Equal(FindingEvidenceArm.Candidate, Assert.Single(result.Arms!).Arm);
             var coreCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
             Assert.DoesNotContain("--filter-class", coreCall);
-            var dashboardCall = calls.Single(call =>
-                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Dashboard.Tests"));
-            AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardHostTests*");
-            AssertArgumentPair(dashboardCall, "--filter-not-trait", "Category=HostIntegration");
-            var dashboardTrx = File.ReadAllText(Assert.IsType<string>(dashboardTrxPath));
-            Assert.Contains($"testName=\"{dashboardTestName}\"", dashboardTrx, StringComparison.Ordinal);
-            Assert.DoesNotContain("Mcg.Tests.PassingTest", dashboardTrx, StringComparison.Ordinal);
+            var infrastructureCall = calls.Single(call =>
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            AssertArgumentPair(infrastructureCall, "--filter-class", "*GoalAcceptanceVerifierTests*");
+            AssertArgumentPair(infrastructureCall, "--filter-not-trait", "Category=HostIntegration");
+            var infrastructureTrx = File.ReadAllText(Assert.IsType<string>(infrastructureTrxPath));
+            Assert.Contains($"testName=\"{infrastructureTestName}\"", infrastructureTrx, StringComparison.Ordinal);
+            Assert.DoesNotContain("Mcg.Tests.PassingTest", infrastructureTrx, StringComparison.Ordinal);
             Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
                 call[0] == "dotnet" &&

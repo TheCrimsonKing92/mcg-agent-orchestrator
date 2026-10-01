@@ -81,7 +81,6 @@ public sealed class MtpTestRunnerScriptTests
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"
         ];
         foreach (var project in testProjects)
         {
@@ -111,7 +110,6 @@ public sealed class MtpTestRunnerScriptTests
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests"),
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests"),
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests"),
-            ("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "DashboardValidationHarnessTests")
         ];
         var theoryMethods = new[]
         {
@@ -153,7 +151,6 @@ public sealed class MtpTestRunnerScriptTests
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests"),
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests"),
             ("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests"),
-            ("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "DashboardValidationHarnessTests")
         ];
         Xunit.Assert.Equal(expectedRebuild.OrderBy(item => item.Project, StringComparer.Ordinal), rebuild);
         Xunit.Assert.Equal(ordinary.Length + rebuild.Length,
@@ -1398,25 +1395,6 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("& dotnet @oneStepArguments", isolatedRunner, StringComparison.Ordinal);
         Xunit.Assert.Contains("& dotnet $builtArtifacts.AssemblyPath @mtpArguments", isolatedRunner, StringComparison.Ordinal);
 
-        var dashboardCycle = File.ReadAllText(Path.Combine(root, "scripts", "Invoke-DashboardBuildTestCycle.ps1"));
-        Xunit.Assert.DoesNotContain("dotnet test", dashboardCycle, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("Invoke-TestSummary.ps1", dashboardCycle, StringComparison.Ordinal);
-
-        var systemEndpoints = File.ReadAllText(Path.Combine(
-            root,
-            "src",
-            "Mcg.AgentOrchestrator.App",
-            "Dashboard",
-            "Api",
-            "DashboardEndpoints.System.cs"));
-        Xunit.Assert.DoesNotContain(
-            "Invoke-IsolatedDotnet.ps1 test Mcg.AgentOrchestrator.sln",
-            systemEndpoints,
-            StringComparison.Ordinal);
-        Xunit.Assert.Contains(
-            "Invoke-TestSummary.ps1 -Target .\\\\Mcg.AgentOrchestrator.sln",
-            systemEndpoints,
-            StringComparison.Ordinal);
     }
 
     internal static ProcessResult RunPowerShellCommand(string workingDirectory, string command)
@@ -2517,7 +2495,6 @@ public sealed class MtpTestRunnerScriptTestsManagedProjectRebuild
 {
     [Xunit.Theory(DisplayName = "Managed_MTP_runner_executes_large_repository_test_projects_after_isolated_build")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "ProcessStartInfoSourceGuardTests")]
-    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "DashboardValidationHarnessTests")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "ProviderDefaultTests")]
     [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "CliArgumentNormalizationTests")]
     public void ManagedMtpRunnerExecutesEveryRepositoryTestProjectAfterIsolatedBuild(string project, string testClass)

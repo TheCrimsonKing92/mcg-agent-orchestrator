@@ -315,10 +315,6 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             StringComparison.OrdinalIgnoreCase)
             ? "infrastructure tests"
             : check.CommandLine.Contains(
-                "Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
-                StringComparison.OrdinalIgnoreCase)
-                ? "dashboard tests"
-            : check.CommandLine.Contains(
                 "Mcg.AgentOrchestrator.Core.Tests.csproj",
                 StringComparison.OrdinalIgnoreCase)
                 ? "core tests"

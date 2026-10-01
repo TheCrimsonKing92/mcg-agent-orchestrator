@@ -1,4 +1,3 @@
-using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -48,25 +47,4 @@ public sealed class Gpt61SolCatalogParityTests
         Assert.Equal("medium", subscription.ReasoningEffort);
     }
 
-    [Fact]
-    public void DashboardOffersGpt61SolWithGpt6SolReasoningAndApiModels()
-    {
-        var options = DashboardAgentOptionCatalog.ForProvider("OpenAI");
-        Assert.Contains(options.SubscriptionModels, option =>
-            option.Value == AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias && option.Label == "GPT-6.1 Sol");
-        Assert.Equal(
-            DashboardAgentOptionCatalog.SubscriptionReasoningOptions("OpenAI", AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias).Select(option => option.Value),
-            DashboardAgentOptionCatalog.SubscriptionReasoningOptions("OpenAI", AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias).Select(option => option.Value));
-        Assert.Contains(options.SubscriptionReasoningByModel[AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias], option => option.Value == "ultra");
-        Assert.Equal("medium", options.DefaultSubscriptionReasoningByModel[AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias]);
-        Assert.Equal("gpt-5.4-mini", options.ApiModels[0].Value);
-        foreach (var alias in new[] {
-            AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias,
-            AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias,
-            AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias,
-            AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias })
-        {
-            Assert.Contains(options.ApiModels, option => option.Value == alias);
-        }
-    }
 }

@@ -60,12 +60,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
                     argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
             Assert.DoesNotContain(infrastructureCalls, call =>
                 call.Any(argument => argument.Contains("Dashboard", StringComparison.Ordinal)));
-            Assert.Contains(calls, call =>
-                call.Any(argument => argument.Contains(
-                    "Mcg.AgentOrchestrator.Dashboard.Tests",
-                    StringComparison.Ordinal)) &&
-                call.Contains("--filter-not-trait") &&
-                call.Contains("Category=HostIntegration"));
         }
         finally
         {

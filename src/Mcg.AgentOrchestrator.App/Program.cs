@@ -107,10 +107,6 @@ catch (InvalidOperationException ex)
 }
 
 var commandCapability = CliCommandCapabilities.Classify(startupArgs);
-if (commandCapability == CliCommandCapability.DashboardHost)
-{
-    return OptionalDashboardHostLauncher.Run(args);
-}
 
 // MCG_ORCHESTRATOR_REPOSITORY_ROOT pins the workspace root explicitly (used by tests and launchers
 // that set CWD to a temp or non-repo directory). When absent, walk up the directory tree to find
@@ -488,8 +484,6 @@ Console.WriteLine("  config <agents|profiles|policy|doctor>");
 Console.WriteLine("    View configuration: agents=agent catalog, profiles=worker profiles, policy=autonomy policies, doctor=health check.");
 Console.WriteLine("  project list|show [name]|create <name> --root <path>|select <name>");
 Console.WriteLine("    Manage global project registry and active project selection.");
-Console.WriteLine("  dashboard [path] [--refresh seconds] | --mode local|hosted|read-only [port|url] [--refresh seconds] [--open] [--no-open]");
-Console.WriteLine("    Render static dashboard HTML or launch a hosted dashboard server.");
 Console.WriteLine();
 Console.WriteLine("Advanced/Internal (used by automation, tests, and advanced workflows):");
 Console.WriteLine("  Inspection verbs folded into 'next --full': status, monitor, readiness, evidence, stages, gates,");
@@ -497,13 +491,8 @@ Console.WriteLine("    verify-needed, input-needed, subscription-plan, model-out
 Console.WriteLine("    goal-recovery, supervisor, operator-inbox. All still work standalone.");
 Console.WriteLine("  doctor, architecture, tenant, project");
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");
-Console.WriteLine("  prototype [objective], prototype-ui [url] [--refresh seconds] [--open] [--no-open]");
-Console.WriteLine("  serve-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
+Console.WriteLine("  prototype [objective]");
 Console.WriteLine("  operator-listen");
-Console.WriteLine("  hosted-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
-Console.WriteLine("  simple-hosted-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
-Console.WriteLine("  open-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
-Console.WriteLine("  transcript [path]");
 Console.WriteLine("  simple-goal <objective>, goal-plan [heading-filter] [--create-goals|--create-simple-goals] [--backlog-coverage full|slice]");
 Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|scout|five-role|developer-reviewer|developer-only]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
 Console.WriteLine("  intent-template [template request] [--create-goal|--create-simple-goal]");
@@ -513,7 +502,6 @@ Console.WriteLine("  agent-add <role> <provider> <model> [name] [--complex-model
 Console.WriteLine("  reassign-agent <task-number> <agent-id> (persist exact task agent assignment)");
 Console.WriteLine("  goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal]");
 Console.WriteLine("  monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal]");
-Console.WriteLine("  monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]");
 Console.WriteLine("  acceptance [goal-id] [--autonomy <policy>], workspace [create|merge|remove] [goal-id-prefix] [--force-terminal-cleanup] [--autonomy <policy>]");
 Console.WriteLine("  advance [goal-id], advance-subscription [goal-id] --confirm-subscription-advance [--autonomy <policy>]");
 Console.WriteLine("  run-goal [goal-id] --confirm-batch-start [--confirm-readiness-risk] [--autonomy <policy>]");
@@ -589,13 +577,7 @@ static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
         return false;
 
     var command = startupArgs[0];
-    return command.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
+    return command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }
 
 // Worktree cleanup remains lifecycle-owning. Worker registry setup and orphan classification are safe for

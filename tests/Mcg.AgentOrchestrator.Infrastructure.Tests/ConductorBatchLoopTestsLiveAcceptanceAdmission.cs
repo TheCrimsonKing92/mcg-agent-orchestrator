@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;

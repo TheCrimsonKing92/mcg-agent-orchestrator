@@ -16,8 +16,7 @@ public sealed record OperatorEscalation(
     string Title,
     string Summary,
     string KeyEvidence,
-    IReadOnlyList<OperatorEscalationAction> Actions,
-    string? DashboardDeepLink);
+    IReadOnlyList<OperatorEscalationAction> Actions);
 
 public sealed record OperatorDecision(
     string InboxItemId,

@@ -205,17 +205,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return args;
     }
 
-    if (command.Equals("dashboard", StringComparison.OrdinalIgnoreCase))
-    {
-        return args;
-    }
-
-    if (command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase))
     {
         return args;
     }

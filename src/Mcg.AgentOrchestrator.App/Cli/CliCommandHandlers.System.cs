@@ -787,34 +787,6 @@ internal static partial class CliCommandHandlers
                     context.ReloadKernel).GetAwaiter().GetResult();
                 return false;
 
-            case "dashboard":
-            {
-                var exitCode = CliCommandCapabilities.Classify(parts) == CliCommandCapability.DashboardHost
-                    ? OptionalDashboardHostLauncher.Run(parts)
-                    : OptionalDashboardHostLauncher.RunStatic(parts, context);
-                if (exitCode != 0)
-                    throw new CliExitException(exitCode);
-                return false;
-            }
-
-            case "serve-dashboard":
-            case "hosted-dashboard":
-            case "simple-hosted-dashboard":
-            case "open-dashboard":
-            {
-                var exitCode = OptionalDashboardHostLauncher.Run(parts);
-                if (exitCode != 0)
-                    throw new CliExitException(exitCode);
-                return false;
-            }
-
-            case "transcript":
-                context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, null);
-                var transcriptExitCode = OptionalDashboardHostLauncher.RunStatic(parts, context);
-                if (transcriptExitCode != 0)
-                    throw new CliExitException(transcriptExitCode);
-                return false;
-
             default:
                 return null;
         }
@@ -1161,18 +1133,10 @@ internal static partial class CliCommandHandlers
         var projection = StatusProjector.Project(StatusProjector.BuildInput(
             kernel.Goals,
             openEscalations,
-            BuildOperatorInboxUrl(catalog.DashboardBaseUrl),
+            null,
             DateTimeOffset.UtcNow,
             factProvider: goal => GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(context.Workspace, goal)));
         await progressView.ReconcileAsync(projection, cancellationToken);
-    }
-
-    private static string? BuildOperatorInboxUrl(string? dashboardBaseUrl)
-    {
-        if (string.IsNullOrWhiteSpace(dashboardBaseUrl))
-            return null;
-
-        return dashboardBaseUrl.TrimEnd('/') + "/api/operator-inbox";
     }
 
     private static bool? HandleOperatorChannelCommand(IReadOnlyList<string> parts, CliExecutionContext context)
@@ -1184,9 +1148,8 @@ internal static partial class CliCommandHandlers
             {
                 var channelType = parts.Count > 2 ? parts[2].ToLowerInvariant() : null;
                 if (string.IsNullOrWhiteSpace(channelType))
-                    throw new ArgumentException("Usage: operator-channel set discord [--forum-channel-id <id>] [--dashboard-url <url>] [--operator-user-id <id>]... [--operator-user-ids <id1,id2,...>]");
+                    throw new ArgumentException("Usage: operator-channel set discord [--forum-channel-id <id>] [--operator-user-id <id>]... [--operator-user-ids <id1,id2,...>]");
                 var forumChannelId = GetFlagValue(parts, "--forum-channel-id");
-                var dashboardUrl = GetFlagValue(parts, "--dashboard-url");
                 var userIdList = new List<string>(GetFlagValues(parts, "--operator-user-id"));
                 var csvIds = GetFlagValue(parts, "--operator-user-ids");
                 if (!string.IsNullOrWhiteSpace(csvIds))
@@ -1196,11 +1159,10 @@ internal static partial class CliCommandHandlers
                 var catalog = MergeOperatorChannelCatalog(
                     existing,
                     channelType,
-                    dashboardUrl,
                     forumChannelId,
                     operatorUserIds);
                 OperatorChannelStore.Save(context.Workspace.OperatorChannelPath, catalog);
-                Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} dashboardUrl={catalog.DashboardBaseUrl ?? "(none)"} operatorUserIds={catalog.OperatorUserIds?.Count ?? 0}");
+                Console.WriteLine($"Operator channel set: type={catalog.ChannelType} forumChannelId={catalog.ForumChannelId ?? "(none)"} operatorUserIds={catalog.OperatorUserIds?.Count ?? 0}");
                 Console.WriteLine("Note: bot token (MCGO_DISCORD_BOT_TOKEN) is read from env at startup and is not stored.");
                 return false;
             }
@@ -1214,7 +1176,6 @@ internal static partial class CliCommandHandlers
                 Console.WriteLine($"  progressStatusMessageId: {catalog.ProgressStatusMessageId ?? "(none)"}");
                 Console.WriteLine($"  controlPlaneMutedUntil: {catalog.ControlPlaneMutedUntil?.ToString("O") ?? "(none)"}");
                 Console.WriteLine($"  deadManHeartbeat: {(catalog.DeadManHeartbeatEnabled ? "enabled" : "disabled")}");
-                Console.WriteLine($"  dashboardUrl: {catalog.DashboardBaseUrl ?? "(none)"}");
                 Console.WriteLine($"  bot token: {(string.IsNullOrWhiteSpace(botToken) ? "not set" : "set (MCGO_DISCORD_BOT_TOKEN)")}");
                 Console.WriteLine($"  active channel: {context.Channel.ChannelType}");
                 var userIds = catalog.OperatorUserIds;
@@ -1246,13 +1207,11 @@ internal static partial class CliCommandHandlers
     internal static OperatorChannelCatalog MergeOperatorChannelCatalog(
         OperatorChannelCatalog existing,
         string channelType,
-        string? dashboardUrl,
         string? forumChannelId,
         IReadOnlyList<string>? operatorUserIds) =>
         existing with
         {
             ChannelType = channelType,
-            DashboardBaseUrl = dashboardUrl ?? existing.DashboardBaseUrl,
             ForumChannelId = forumChannelId ?? existing.ForumChannelId,
             OperatorUserIds = operatorUserIds ?? existing.OperatorUserIds
         };

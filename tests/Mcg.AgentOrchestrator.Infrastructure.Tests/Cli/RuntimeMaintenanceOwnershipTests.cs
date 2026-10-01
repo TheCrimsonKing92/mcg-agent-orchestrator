@@ -47,9 +47,6 @@ public sealed class RuntimeMaintenanceOwnershipTests
     {
         var repositoryRoot = FindRepositoryRoot();
         var dashboardRoot = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Dashboard");
-        var dashboardSource = Directory.EnumerateFiles(dashboardRoot, "*.cs", SearchOption.AllDirectories)
-            .Select(File.ReadAllText)
-            .ToList();
         var runtimeSource = File.ReadAllText(Path.Combine(
             repositoryRoot,
             "src",
@@ -57,12 +54,7 @@ public sealed class RuntimeMaintenanceOwnershipTests
             "Cli",
             "CliCommandHandlers.Goals.cs"));
 
-        Assert.DoesNotContain(dashboardSource, source =>
-            source.Contains("SweepNow(", StringComparison.Ordinal) ||
-            source.Contains("SweepIfDue(", StringComparison.Ordinal) ||
-            source.Contains("AddHostedService", StringComparison.Ordinal) ||
-            source.Contains("BackgroundService", StringComparison.Ordinal) ||
-            source.Contains("PeriodicTimer", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(dashboardRoot));
         Assert.Equal(1, CountOccurrences(runtimeSource, "context.CleanupContext.Scheduler.SweepIfDue"));
         Assert.Contains("measuredSweepWithCheckpointHolds: reconcileSweep", runtimeSource, StringComparison.Ordinal);
     }

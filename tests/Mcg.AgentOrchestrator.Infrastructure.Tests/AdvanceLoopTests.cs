@@ -1,10 +1,8 @@
 using System.Diagnostics;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.Extensions.Hosting;
 
 [Xunit.Collection("EnvMutation")]
 public sealed class AdvanceLoopTests
@@ -15,37 +13,6 @@ public sealed class AdvanceLoopTests
         SeedLocalSkillCatalog(path);
         _ = StateDbMigrations.EnsureUpToDate(OrchestratorWorkspace.ForDirectory(path).SqliteStatePath);
         return path;
-    }
-
-    private static readonly TimeSpan WatchCompletionTimeout = TimeSpan.FromSeconds(60);
-
-    /// <summary>
-    /// Awaits the per-watch completion signal instead of polling IsRunning against a wall clock.
-    /// On timeout the failure names IterationCount, elapsed milliseconds, and StopReason so a gate
-    /// TRX distinguishes a watch that never stopped from one that stopped late.
-    /// </summary>
-    private static async Task AwaitWatchCompletionAsync(
-        DashboardContinuationService service,
-        string goalId,
-        Stopwatch clock)
-    {
-        try
-        {
-            await service.WaitForWatchCompletionAsync(goalId).WaitAsync(WatchCompletionTimeout);
-        }
-        catch (TimeoutException)
-        {
-            var elapsedMs = clock.ElapsedMilliseconds;
-            var statuses = service.GetStatuses();
-            var status = statuses.FirstOrDefault(row =>
-                string.Equals(row.GoalId, goalId, StringComparison.OrdinalIgnoreCase));
-            var prefix = goalId.Length <= 8 ? goalId : goalId[..8];
-            Assert.Fail(status is null
-                ? $"no continuation status row for goal {prefix} after {elapsedMs} ms; rows present: {statuses.Count}"
-                : $"continuation watch for goal {prefix} did not stop within {WatchCompletionTimeout.TotalSeconds:0} s: " +
-                  $"IsRunning={status.IsRunning}, IterationCount={status.IterationCount}, " +
-                  $"elapsed={elapsedMs} ms, StopReason='{status.StopReason}'");
-        }
     }
 
     internal const string WorkerReleaseFileName = "advance-loop-worker.release";
@@ -303,12 +270,6 @@ public sealed class AdvanceLoopTests
     Assert.Null(DispatchRecoveryView.EvaluateState(goal, outcome.Action!, commandLineSnapshot: null));
     Assert.NotNull(outcome.ActionDispatchState);
 
-    var dto = GoalManagementCommandService.ToAdvanceResultDto(
-        goal, outcome, WorkerProfileCatalog.Default(), [agent]);
-    Assert.NotNull(dto.Action);
-    Assert.NotNull(dto.Action!.DispatchState);
-    Assert.NotNull(dto.Action.Recovery);
-    Assert.Equal(outcome.ActionDispatchState!.Kind, dto.Action.DispatchState!.Kind);
 }
 
     [Xunit.Fact(DisplayName = "Advance_results_trim_verbose_automation_failures")]
@@ -341,15 +302,6 @@ public sealed class AdvanceLoopTests
     Assert.Contains("profile-tail", single.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
 
-    // Timeline trimming is the transport's text policy, so the adapter owns it after the move.
-    // The application keeps the full failure text; the dashboard DTO must still be trimmed.
-    var singleDto = GoalManagementCommandService.ToAdvanceResultDto(
-        goal, single, WorkerProfileCatalog.Default(), [agent]);
-    Assert.Contains("profile-start", singleDto.Message, StringComparison.Ordinal);
-    Assert.Contains("profile-tail", singleDto.Message, StringComparison.Ordinal);
-    Assert.Contains("[truncated", singleDto.Message, StringComparison.Ordinal);
-    Assert.True(!singleDto.Message.Contains(new string('p', 2000), StringComparison.Ordinal));
-
     var loopKernel = new AgentOrchestratorKernel();
     var loopTask = new TaskSpec(TaskId.New(), "Run missing subscription profile", AgentRole.Developer, "Record explicit verification.");
     var loopGoal = CreateRefinedGoal(loopKernel, "Trim advance loop automation failure", [loopTask]);
@@ -366,12 +318,6 @@ public sealed class AdvanceLoopTests
     Assert.Contains("profile-tail", loop.StopReason, StringComparison.Ordinal);
     Assert.True(loopTask.LastDispatch is null);
 
-    var loopDto = GoalManagementCommandService.ToAdvanceLoopResultDto(
-        loopGoal, loop, WorkerProfileCatalog.Default(), [agent]);
-    Assert.Contains("profile-start", loopDto.StopReason, StringComparison.Ordinal);
-    Assert.Contains("profile-tail", loopDto.StopReason, StringComparison.Ordinal);
-    Assert.Contains("[truncated", loopDto.StopReason, StringComparison.Ordinal);
-    Assert.True(!loopDto.StopReason.Contains(new string('p', 2000), StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "AdvanceGoalUntilBlocked_blocks_prefer_subscription_before_api_fallback")]
@@ -515,15 +461,8 @@ public sealed class AdvanceLoopTests
     kernel.ActivateGoal(goal.Id, [agent]);
     var provider = new FakeSmokeProvider();
 
-    await GoalManagementCommandService.ApplyTaskActionAsync(
-        kernel,
-        [agent],
-        new InMemoryModelProviderRegistry([provider]),
-        workspace,
-        goal,
-        task,
-        "api-run",
-        string.Empty);
+    await new GoalAdvancementOperations().ApiRunAssignedTaskAsync(
+        kernel, [agent], new InMemoryModelProviderRegistry([provider]), workspace, goal, task.Id);
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(task.LastExecution is not null);
@@ -557,15 +496,8 @@ public sealed class AdvanceLoopTests
         [agent],
         WorkerProfileCatalog.Default());
 
-    var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await GoalManagementCommandService.ApplyTaskActionAsync(
-        kernel,
-        [agent],
-        new InMemoryModelProviderRegistry([provider]),
-        workspace,
-        goal,
-        task,
-        "run",
-        string.Empty));
+    var ex = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(async () => await new GoalAdvancementOperations().RunAssignedTaskAsync(
+        kernel, [agent], new InMemoryModelProviderRegistry([provider]), workspace, goal, task.Id));
 
     Assert.Contains("stopped before API fallback", ex.Message, StringComparison.Ordinal);
     Assert.Contains("status is Running", ex.Message, StringComparison.Ordinal);
@@ -592,15 +524,8 @@ public sealed class AdvanceLoopTests
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
 
-    await GoalManagementCommandService.ApplyTaskActionAsync(
-        kernel,
-        agents,
-        new InMemoryModelProviderRegistry([]),
-        workspace,
-        goal,
-        task,
-        "subscription-dispatch",
-        string.Empty);
+    await Task.FromResult(new GoalDispatchOperations().SubscriptionDispatchTask(
+        kernel, workspace, goal, task, agents, profiles));
 
     Assert.Equal(executionRoot, task.LastDispatch!.WorkingDirectory);
     var profile = profiles.GetRequired(task.LastDispatch.WorkerName);
@@ -1300,9 +1225,6 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     Assert.Equal(NextActionKind.RunAssignedTask, result.BlockingAction!.Kind);
     Assert.Contains("Subscription retry window is deferred", result.StopReason, StringComparison.Ordinal);
     Assert.Equal(task.SubscriptionRetryAfter, result.ContinueAfter);
-    // The dashboard adapter must still classify this outcome as watchable after the ownership move.
-    Assert.True(DashboardContinuationService.ShouldContinueWatching(
-        GoalManagementCommandService.ToAdvanceLoopResultDto(goal, result, WorkerProfileCatalog.Default(), agents)));
 }
     [Xunit.Fact(DisplayName = "AdvanceGoalWithSubscriptionsUntilBlocked_continues_prompt_below_new_large_threshold")]
     public void AdvanceGoalWithSubscriptionsUntilBlockedContinuesPromptBelowNewLargeThreshold()
@@ -1342,351 +1264,6 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
     Assert.False(blocked.StopReason.Contains("--confirm-large-paid-subscription-start", StringComparison.Ordinal));
     Assert.True(task.LastDispatch is not null);
 }
-    [Xunit.Fact(DisplayName = "DashboardContinuationService_refreshes_running_process_until_handoff_is_blocked")]
-    public async Task DashboardContinuationServiceRefreshesRunningProcessUntilHandoffIsBlocked()
-{
-    var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-    var agents = new AgentCatalog(
-    [
-        new AgentDefinition(
-            new AgentId("developer"),
-            "Developer",
-            AgentRole.Developer,
-            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
-            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly)
-    ]);
-    AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
-    WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
-
-    var kernel = new AgentOrchestratorKernel();
-    var goal = CreateRefinedGoal(kernel, "Watch process", [new TaskSpec(TaskId.New(), "Run short process", AgentRole.Developer)]);
-    kernel.ActivateGoal(goal.Id, agents.Agents);
-    var task = goal.Tasks.Single();
-    kernel.RecordTaskDispatch(
-        goal.Id,
-        task.Id,
-        new TaskDispatchRecord(
-            "local",
-            "Start-Sleep -Milliseconds 50; Write-Output ok",
-            workspace.ExecutionDirectory,
-            DateTimeOffset.UtcNow));
-    new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
-    await repository.SaveAsync(kernel);
-
-    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(75), 80);
-    using var lifetime = new FakeHostLifetime();
-    var services = new DashboardEndpointServices(
-        new DashboardStateService(repository),
-        workspace,
-        new InMemoryModelProviderRegistry([]),
-        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
-        lifetime,
-        service);
-
-    var clock = Stopwatch.StartNew();
-    var started = service.StartSubscriptionWatch(services, goal.Id.Value);
-
-    Assert.True(started.IsRunning);
-
-    await AwaitWatchCompletionAsync(service, goal.Id.Value, clock);
-
-    var status = service.GetStatuses().Single();
-    var restored = await repository.LoadAsync();
-    var restoredTask = restored.GetTask(goal.Id, task.Id);
-    Assert.False(status.IsRunning, $"watch still running after completion signal; StopReason='{status.StopReason}'");
-    Assert.True(status.IterationCount > 0, $"expected at least one iteration; StopReason='{status.StopReason}'");
-    Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
-    Assert.True(restoredTask.LastVerification?.Succeeded is true);
-}
-
-    [Xunit.Fact(DisplayName = "DashboardContinuationService_applies_safe_supervisor_recovery")]
-    public async Task DashboardContinuationServiceAppliesSafeSupervisorRecovery()
-{
-    var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-    var primary = new AgentDefinition(
-        new AgentId("primary-planner"),
-        "Primary Planner",
-        AgentRole.Planner,
-        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
-        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("primary-planner"));
-    var alternate = primary with
-    {
-        Id = new AgentId("alternate-planner"),
-        Name = "Alternate Planner",
-        Subscription = new SubscriptionLaunchProfile("alternate-planner")
-    };
-    var agents = new AgentCatalog([primary, alternate]);
-    AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
-    WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
-
-    var kernel = new AgentOrchestratorKernel();
-    var task = new TaskSpec(TaskId.New(), "Recover stalled worker", AgentRole.Planner);
-    var goal = CreateRefinedGoal(kernel, "Continuation applies supervisor recovery", [task]);
-    kernel.ActivateGoal(goal.Id, agents.Agents);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, DateTimeOffset.UtcNow));
-    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
-        "claude prompt",
-        root,
-        1,
-        string.Empty,
-        "Background dispatch made no observable progress before the stall timeout; wrapper heartbeat state=running.",
-        DateTimeOffset.UtcNow));
-    await repository.SaveAsync(kernel);
-
-    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(10), 1);
-    using var lifetime = new FakeHostLifetime();
-    var services = new DashboardEndpointServices(
-        new DashboardStateService(repository),
-        workspace,
-        new InMemoryModelProviderRegistry([]),
-        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
-        lifetime,
-        service);
-
-    var clock = Stopwatch.StartNew();
-    var started = service.StartSubscriptionWatch(services, goal.Id.Value);
-    Assert.True(started.IsRunning);
-
-    await AwaitWatchCompletionAsync(service, goal.Id.Value, clock);
-
-    var restored = await repository.LoadAsync();
-    var restoredTask = restored.GetTask(goal.Id, task.Id);
-    var status = service.GetStatuses().Single();
-    Assert.False(status.IsRunning, $"watch still running after completion signal; StopReason='{status.StopReason}'");
-    Assert.Equal(alternate.Id, restoredTask.AssignedAgentId);
-    Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
-    Assert.True(restored.GetTimeline(goal.Id).Any(evt =>
-        evt.Kind == ProgressKind.GoalPolicyDecision &&
-        evt.Message.Contains("allowed supervisor re-delegate", StringComparison.Ordinal)));
-    Assert.True(status.StopReason.Contains("Supervisor applied safe recovery action", StringComparison.Ordinal));
-}
-
-    [Xunit.Fact(DisplayName = "DashboardContinuationService_restores_active_subscription_watch_after_restart")]
-    public async Task DashboardContinuationServiceRestoresActiveSubscriptionWatchAfterRestart()
-{
-    var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-    var agents = new AgentCatalog(
-    [
-        new AgentDefinition(
-            new AgentId("developer"),
-            "Developer",
-            AgentRole.Developer,
-            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
-            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly)
-    ]);
-    AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
-    WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
-
-    var kernel = new AgentOrchestratorKernel();
-    var goal = CreateRefinedGoal(kernel, "Resume persisted continuation", [new TaskSpec(TaskId.New(), "Wait for retry window", AgentRole.Developer)]);
-    kernel.ActivateGoal(goal.Id, agents.Agents);
-    var task = goal.Tasks.Single();
-    var now = DateTimeOffset.UtcNow;
-    var retryAfter = now.AddHours(1);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workspace.ExecutionDirectory, now, WorkerProviderKind: ProviderKind.OpenAICodexCli));
-    kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
-        "codex exec",
-        workspace.ExecutionDirectory,
-        1,
-        string.Empty,
-        $"ERROR: You've hit your usage limit. Visit settings to purchase more credits or try again at {retryAfter:h:mm tt}.",
-        now));
-    await repository.SaveAsync(kernel);
-
-    var storePath = Path.Combine(workspace.RootDirectory, DashboardContinuationService.StoreFileName);
-    using (var firstService = new DashboardContinuationService(TimeSpan.FromMilliseconds(250), 20))
-    using (var lifetime = new FakeHostLifetime())
-    {
-        var services = new DashboardEndpointServices(
-            new DashboardStateService(repository),
-            workspace,
-            new InMemoryModelProviderRegistry([]),
-            new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
-            lifetime,
-            firstService);
-
-        var started = firstService.StartSubscriptionWatch(services, goal.Id.Value);
-
-        Assert.True(started.IsRunning);
-        Assert.False(started.RestoredFromStore);
-        Assert.True(File.Exists(storePath));
-        Assert.True(File.ReadAllText(storePath).Contains(goal.Id.Value, StringComparison.Ordinal));
-    }
-
-    using var secondService = new DashboardContinuationService(TimeSpan.FromMilliseconds(250), 20);
-    using var secondLifetime = new FakeHostLifetime();
-    var secondServices = new DashboardEndpointServices(
-        new DashboardStateService(repository),
-        workspace,
-        new InMemoryModelProviderRegistry([]),
-        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
-        secondLifetime,
-        secondService);
-
-    var restored = secondService.RestoreSubscriptionWatches(secondServices);
-    var status = restored.Single();
-
-    Assert.True(status.IsRunning);
-    Assert.True(status.RestoredFromStore);
-    Assert.Equal(goal.Id.Value, status.GoalId);
-    Assert.True(status.StopReason.Contains("Waiting for running background work or retry window", StringComparison.Ordinal));
-    Assert.True(File.Exists(storePath));
-}
-
-    [Xunit.Fact(DisplayName = "DashboardContinuationService_bounds_restored_status_text")]
-    public async Task DashboardContinuationServiceBoundsRestoredStatusText()
-{
-    var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-    var kernel = new AgentOrchestratorKernel();
-    var goal = CreateRefinedGoal(kernel, "Restore bounded continuation text", [new TaskSpec(TaskId.New(), "Wait", AgentRole.Developer)]);
-    await repository.SaveAsync(kernel);
-
-    var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
-    var stopReason = "stop-head-" + new string('s', 1200) + "-stop-tail";
-    var lastError = "error-head-" + new string('e', 1200) + "-error-tail";
-    File.WriteAllText(
-        Path.Combine(workspace.RootDirectory, DashboardContinuationService.StoreFileName),
-        $$"""
-        {
-          "watches": [
-            {
-              "goalId": "{{goal.Id.Value}}",
-              "startedAt": "{{startedAt:O}}",
-              "lastCheckedAt": null,
-              "iterationCount": 0,
-              "stopReason": "{{stopReason}}",
-              "lastError": "{{lastError}}",
-              "nextCheckAt": null
-            }
-          ]
-        }
-        """);
-
-    using var service = new DashboardContinuationService(TimeSpan.FromHours(1), 1);
-    using var lifetime = new FakeHostLifetime();
-    var services = new DashboardEndpointServices(
-        new DashboardStateService(repository),
-        workspace,
-        new InMemoryModelProviderRegistry([]),
-        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
-        lifetime,
-        service);
-
-    var status = service.RestoreSubscriptionWatches(services).Single();
-
-    Assert.True(status.StopReason.Contains("stop-head", StringComparison.Ordinal));
-    Assert.True(status.StopReason.Contains("stop-tail", StringComparison.Ordinal));
-    Assert.True(status.StopReason.Contains("[truncated", StringComparison.Ordinal));
-    Assert.False(status.StopReason.Contains(new string('s', 700), StringComparison.Ordinal));
-    Assert.True(status.LastError is not null);
-    Assert.True(status.LastError!.Contains("error-head", StringComparison.Ordinal));
-    Assert.True(status.LastError.Contains("error-tail", StringComparison.Ordinal));
-    Assert.True(status.LastError.Contains("[truncated", StringComparison.Ordinal));
-    Assert.False(status.LastError.Contains(new string('e', 700), StringComparison.Ordinal));
-}
-
-    [Xunit.Fact(DisplayName = "DashboardContinuationService_prunes_restored_watch_that_is_no_longer_watchable")]
-    public async Task DashboardContinuationServicePrunesRestoredWatchThatIsNoLongerWatchable()
-{
-    var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-    var agents = AgentCatalog.Default();
-    AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
-    WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
-
-    var kernel = new AgentOrchestratorKernel();
-    var task = new TaskSpec(TaskId.New(), "Already done", AgentRole.Developer);
-    var goal = CreateRefinedGoal(kernel, "Prune stale restored watch", [task]);
-    kernel.ActivateGoal(goal.Id, agents.Agents);
-    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "done");
-    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("manual", workspace.ExecutionDirectory, 0, "ok", string.Empty, DateTimeOffset.UtcNow));
-    await repository.SaveAsync(kernel);
-
-    var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
-    File.WriteAllText(
-        workspace.ContinuationStorePath,
-        $$"""
-        {
-          "watches": [
-            {
-              "goalId": "{{goal.Id.Value}}",
-              "startedAt": "{{startedAt:O}}",
-              "lastCheckedAt": null,
-              "iterationCount": 0,
-              "stopReason": "Waiting for running background work or retry window to complete.",
-              "lastError": null,
-              "nextCheckAt": null
-            }
-          ]
-        }
-        """);
-
-    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(10), 3);
-    using var lifetime = new FakeHostLifetime();
-    var services = new DashboardEndpointServices(
-        new DashboardStateService(repository),
-        workspace,
-        new InMemoryModelProviderRegistry([]),
-        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
-        lifetime,
-        service);
-
-    var restored = service.RestoreSubscriptionWatches(services);
-    Assert.Equal(1, restored.Count);
-    Assert.True(restored.Single().RestoredFromStore);
-
-    var deadline = DateTimeOffset.UtcNow.AddSeconds(3);
-    while (DateTimeOffset.UtcNow < deadline && service.GetStatuses().Count > 0)
-    {
-        await Task.Delay(25);
-    }
-
-    Assert.Equal(0, service.GetStatuses().Count);
-    Assert.False(File.Exists(workspace.ContinuationStorePath));
-}
-
-    [Xunit.Fact(DisplayName = "DashboardEndpointServices_loads_agent_catalog_with_local_fallback")]
-    public void DashboardEndpointServicesLoadsAgentCatalogWithLocalFallback()
-{
-    var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-    using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(10), 3);
-    using var lifetime = new FakeHostLifetime();
-    var services = new DashboardEndpointServices(
-        new DashboardStateService(repository),
-        workspace,
-        new InMemoryModelProviderRegistry([]),
-        new DashboardHostArgs("http://localhost:5087/", null, false, "prototype-ui"),
-        lifetime,
-        service,
-        AgentCatalog.OllamaDefault());
-
-    var loaded = services.LoadAgentCatalog();
-    var health = DashboardEndpoints.BuildHealthReport(services);
-
-    Assert.False(File.Exists(workspace.AgentCatalogPath));
-    foreach (var agent in loaded.Agents)
-    {
-        Assert.Equal("Ollama", agent.Model.ProviderName);
-    }
-
-    foreach (var agent in health.Agents)
-    {
-        Assert.Equal("Ollama", agent.ProviderName);
-    }
-}
-
 private static Goal CreateRefinedGoal(AgentOrchestratorKernel kernel, string objective, IReadOnlyList<TaskSpec> tasks)
 {
     var goal = kernel.CreateGoal(objective, tasks);
@@ -1763,29 +1340,4 @@ private static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)
     ]));
 }
 
-private sealed class FakeHostLifetime : IHostApplicationLifetime, IDisposable
-{
-    private readonly CancellationTokenSource _started = new();
-    private readonly CancellationTokenSource _stopping = new();
-    private readonly CancellationTokenSource _stopped = new();
-
-    public CancellationToken ApplicationStarted => _started.Token;
-
-    public CancellationToken ApplicationStopping => _stopping.Token;
-
-    public CancellationToken ApplicationStopped => _stopped.Token;
-
-    public void StopApplication()
-    {
-        _stopping.Cancel();
-        _stopped.Cancel();
-    }
-
-    public void Dispose()
-    {
-        _started.Dispose();
-        _stopping.Dispose();
-        _stopped.Dispose();
-    }
-}
 }

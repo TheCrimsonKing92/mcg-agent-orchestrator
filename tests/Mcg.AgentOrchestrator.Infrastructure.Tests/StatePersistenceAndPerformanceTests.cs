@@ -1,5 +1,4 @@
 using Mcg.AgentOrchestrator.Core;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Prototype;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -11,213 +10,6 @@ using System.Net.Sockets;
 
 public sealed class StatePersistenceAndPerformanceTests
 {
-    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_reuses_persistent_workspace_without_overwriting_state")]
-    public void PrototypeWorkspaceSeederReusesPersistentWorkspaceWithoutOverwritingState()
-    {
-        var root = CreateTempDirectory();
-        var workspace = PrototypeWorkspaceSeeder.Create(root);
-        var expectedWorkspace = Path.Combine(root, PrototypeWorkspaceSeeder.PrototypeDirectoryName, PrototypeWorkspaceSeeder.PrototypeWorkspaceName);
-        var statePath = Path.Combine(workspace, ".orchestrator", "state.db");
-        var workerPath = Path.Combine(workspace, ".orchestrator", "workers.json");
-
-        Assert.Equal(expectedWorkspace, workspace);
-        Assert.True(File.Exists(statePath));
-
-        var kernel = LoadState(statePath);
-        kernel.CreateGoal("Persisted dogfood goal");
-        SaveState(statePath, kernel);
-        WorkerProfileStore.Save(
-            workerPath,
-            new WorkerProfileCatalog(
-            [
-                new WorkerProfile("custom-dogfood", "Write-Output custom"),
-            new WorkerProfile("codex-cli", "Write-Output {promptPath}"),
-            new WorkerProfile("claude-cli", "Write-Output {promptPath}")
-            ]));
-
-        var secondWorkspace = PrototypeWorkspaceSeeder.Create(root);
-        var restored = LoadState(statePath);
-        var restoredWorkers = WorkerProfileStore.Load(workerPath);
-
-        Assert.Equal(workspace, secondWorkspace);
-        Assert.True(restored.Goals.Any(goal => goal.Objective == "Persisted dogfood goal"));
-        Assert.Equal("Write-Output custom", restoredWorkers.GetRequired("custom-dogfood").CommandTemplate);
-        Assert.Equal("Write-Output {promptPath}", restoredWorkers.GetRequired("local-echo").CommandTemplate);
-        Assert.Contains("codex exec", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--model {subscriptionModelName}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--sandbox {sandboxMode}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--cd {workingDirectory}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("claude -p --model {subscriptionModelName} --permission-mode {permissionMode}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.DoesNotContain("{promptPath}", restoredWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
-
-        File.Delete(workerPath);
-        File.Delete(Path.Combine(workspace, ".orchestrator", "agents.json"));
-
-        var repairedWorkspace = PrototypeWorkspaceSeeder.Create(root);
-        var repairedWorkers = WorkerProfileStore.Load(workerPath);
-
-        Assert.Equal(workspace, repairedWorkspace);
-        Assert.True(File.Exists(workerPath));
-        Assert.True(File.Exists(Path.Combine(workspace, ".orchestrator", "agents.json")));
-        Assert.True(LoadState(statePath).Goals.Any(goal => goal.Objective == "Persisted dogfood goal"));
-        Assert.Contains("codex exec", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--model {subscriptionModelName}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--sandbox {sandboxMode}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--cd {workingDirectory}", repairedWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("claude -p --model {subscriptionModelName} --permission-mode {permissionMode}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.DoesNotContain("{promptPath}", repairedWorkers.GetRequired("claude-cli").CommandTemplate, StringComparison.Ordinal);
-    }
-    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_uses_local_agent_fallback_when_supplied")]
-    public void PrototypeWorkspaceSeederUsesLocalAgentFallbackWhenSupplied()
-    {
-        var root = CreateTempDirectory();
-        var workspace = PrototypeWorkspaceSeeder.Create(root, AgentCatalog.OllamaDefault());
-        var agentPath = Path.Combine(workspace, ".orchestrator", "agents.json");
-
-        var restored = AgentCatalogStore.Load(agentPath);
-
-        foreach (var role in Enum.GetValues<AgentRole>())
-        {
-            var agent = restored.GetRequired(role);
-            Assert.Equal("Ollama", agent.Model.ProviderName);
-            Assert.Equal("qwen2.5-coder:7b", agent.Model.ModelName);
-            Assert.True(agent.Subscription is null);
-            Assert.Equal("qwen3:8b", agent.ComplexModel!.ModelName);
-        }
-    }
-    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_repairs_paid_defaults_to_local_fallback")]
-    public void PrototypeWorkspaceSeederRepairsPaidDefaultsToLocalFallback()
-    {
-        var root = CreateTempDirectory();
-        var workspace = PrototypeWorkspaceSeeder.Create(root);
-        var agentPath = Path.Combine(workspace, ".orchestrator", "agents.json");
-        AgentCatalogStore.Save(agentPath, AgentCatalog.Default());
-
-        PrototypeWorkspaceSeeder.Create(root, AgentCatalog.OllamaDefault());
-
-        var restored = AgentCatalogStore.Load(agentPath);
-        foreach (var role in Enum.GetValues<AgentRole>())
-        {
-            Assert.Equal("Ollama", restored.GetRequired(role).Model.ProviderName);
-        }
-    }
-    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_preserves_custom_real_subscription_profiles")]
-    public void PrototypeWorkspaceSeederPreservesCustomRealSubscriptionProfiles()
-    {
-        var root = CreateTempDirectory();
-        var workspace = PrototypeWorkspaceSeeder.Create(root);
-        var statePath = Path.Combine(workspace, ".orchestrator", "state.db");
-        var workerPath = Path.Combine(workspace, ".orchestrator", "workers.json");
-        const string customCodex = "codex exec --sandbox {sandboxMode} --cd {workingDirectory} --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --custom-stdin-profile";
-
-        var kernel = LoadState(statePath);
-        kernel.CreateGoal("Keep custom subscription profile");
-        SaveState(statePath, kernel);
-        WorkerProfileStore.Save(
-            workerPath,
-            WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", customCodex)));
-
-        PrototypeWorkspaceSeeder.Create(root);
-
-        var restoredWorkers = WorkerProfileStore.Load(workerPath);
-        Assert.Equal(customCodex, restoredWorkers.GetRequired("codex-cli").CommandTemplate);
-        Assert.True(LoadState(statePath).Goals.Any(goal => goal.Objective == "Keep custom subscription profile"));
-    }
-    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_upgrades_readonly_codex_subscription_profiles")]
-    public void PrototypeWorkspaceSeederUpgradesReadonlyCodexSubscriptionProfiles()
-    {
-        var root = CreateTempDirectory();
-        var workspace = PrototypeWorkspaceSeeder.Create(root);
-        var workerPath = Path.Combine(workspace, ".orchestrator", "workers.json");
-        WorkerProfileStore.Save(
-            workerPath,
-            WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check (Get-Content -Raw {promptPath})")));
-
-        PrototypeWorkspaceSeeder.Create(root);
-
-        var restoredWorkers = WorkerProfileStore.Load(workerPath);
-        Assert.Contains("--sandbox {sandboxMode}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--cd {workingDirectory}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("--model {subscriptionModelName}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-    }
-    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_upgrades_codex_profiles_missing_model_or_reasoning_propagation")]
-    public void PrototypeWorkspaceSeederUpgradesCodexProfilesMissingModelOrReasoningPropagation()
-    {
-        var root = CreateTempDirectory();
-        var workspace = PrototypeWorkspaceSeeder.Create(root);
-        var workerPath = Path.Combine(workspace, ".orchestrator", "workers.json");
-        WorkerProfileStore.Save(
-            workerPath,
-            WorkerProfileCatalog.Default().Upsert(new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")));
-
-        PrototypeWorkspaceSeeder.Create(root);
-
-        var restoredWorkers = WorkerProfileStore.Load(workerPath);
-        Assert.Contains("--model {subscriptionModelName}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-        Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", restoredWorkers.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
-    }
-    [Xunit.Fact(DisplayName = "PrototypeWorkspaceSeeder_upgrades_stale_persisted_agent_catalog")]
-    public void PrototypeWorkspaceSeederUpgradesStalePersistedAgentCatalog()
-    {
-        var root = CreateTempDirectory();
-        var workspace = PrototypeWorkspaceSeeder.Create(root);
-        var agentPath = Path.Combine(workspace, ".orchestrator", "agents.json");
-
-        var matchingPlanner = new AgentDefinition(
-            new AgentId("custom-openai-planner"),
-            "Custom OpenAI planner",
-            AgentRole.Planner,
-            new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high"),
-            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, "high"),
-            ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high", AgentCatalog.ComplexApiMaxOutputTokens));
-
-        AgentCatalogStore.Save(
-            agentPath,
-            new AgentCatalog(
-            [
-                matchingPlanner,
-            new(
-                new AgentId("anthropic-researcher"),
-                "Anthropic researcher",
-                AgentRole.Researcher,
-                new ModelProfile("Anthropic", "claude-sonnet", ModelCapability.Text | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
-                ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet")),
-            new(
-                new AgentId("openai-developer-old"),
-                "OpenAI developer old",
-                AgentRole.Developer,
-                new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "low"),
-                ExecutionPolicy: AgentExecutionPolicy.ApiOnly),
-            new(
-                new AgentId("openai-tester-old"),
-                "OpenAI tester old",
-                AgentRole.Tester,
-                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "medium"),
-                ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-                Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "medium")),
-            new(
-                new AgentId("anthropic-reviewer"),
-                "Anthropic reviewer",
-                AgentRole.Reviewer,
-                new ModelProfile("Anthropic", "claude-sonnet", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey),
-                ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-                Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet"))
-            ]));
-
-        PrototypeWorkspaceSeeder.Create(root);
-
-        var restored = AgentCatalogStore.Load(agentPath);
-        AssertPrototypeAgent(restored.GetRequired(AgentRole.Planner), "openai-planner");
-        AssertPrototypeAgent(restored.GetRequired(AgentRole.Researcher), "openai-researcher");
-        AssertPrototypeAgent(restored.GetRequired(AgentRole.Developer), "openai-developer");
-        AssertPrototypeAgent(restored.GetRequired(AgentRole.Tester), "openai-tester");
-        AssertPrototypeAgent(restored.GetRequired(AgentRole.Reviewer), "openai-reviewer");
-    }
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_kernel_snapshot")]
     public async Task SqliteOrchestratorStateRepositoryRoundtripsKernelSnapshot()
     {
@@ -262,7 +54,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal("tenant_a", tenantWorkspace.TenantName);
         Assert.True(tenantWorkspace.IsTenantScoped);
         Assert.True(tenantWorkspace.SqliteStatePath.Contains(Path.Combine(".orchestrator", "tenants", "tenant_a", "state.db"), StringComparison.Ordinal));
-        Assert.True(tenantWorkspace.ContinuationStorePath.Contains(Path.Combine(".orchestrator", "tenants", "tenant_a", DashboardContinuationService.StoreFileName), StringComparison.Ordinal));
+        Assert.True(tenantWorkspace.ContinuationStorePath.Contains(Path.Combine(".orchestrator", "tenants", "tenant_a", OrchestratorWorkspace.ContinuationStoreFileName), StringComparison.Ordinal));
         Assert.False(defaultWorkspace.SqliteStatePath.Equals(tenantWorkspace.SqliteStatePath, StringComparison.Ordinal));
     }
 
@@ -470,12 +262,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var tenTasks = await MeasureSaveLoadStatementsAsync(10);
         var hundredTasks = await MeasureSaveLoadStatementsAsync(100);
-        var html = DashboardRenderer.Render(hundredTasks.Restored, new DashboardRenderOptions(
-            AutoRefreshSeconds: 5,
-            WorkerProfiles: WorkerProfileCatalog.Default()));
-
         Assert.True(hundredTasks.Restored.Goals.Single().Tasks.Count >= 100);
-        Assert.True(html.Contains("Synthetic performance task 99", StringComparison.Ordinal));
         AssertGoalReadAndWriteWereTraced(tenTasks.Statements);
         AssertGoalReadAndWriteWereTraced(hundredTasks.Statements);
         Assert.True(IsBoundedStatementGrowth(tenTasks.Count, hundredTasks.Count),

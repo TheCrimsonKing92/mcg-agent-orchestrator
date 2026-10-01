@@ -221,26 +221,6 @@
         ]
       },
       {
-        "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
-        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
-        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
-        "arguments": [
-          "{executable}",
-          "--no-ansi",
-          "--progress",
-          "off",
-          "--results-directory",
-          "{resultsDirectory}",
-          "--report-trx",
-          "--report-trx-filename",
-          "{trxFileName}",
-          "--long-running",
-          "120",
-          "--minimum-expected-tests",
-          "1"
-        ]
-      },
-      {
         "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
         "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
         "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
@@ -342,13 +322,6 @@
       "runner": "mtp",
       "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
       "arguments": [ "--verbosity", "minimal" ]
-    },
-    {
-      "name": "dashboard tests",
-      "type": "dotnet-test",
-      "runner": "mtp",
-      "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
-      "arguments": [ "--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration" ]
     },
     {
       "name": "provider environment tests",

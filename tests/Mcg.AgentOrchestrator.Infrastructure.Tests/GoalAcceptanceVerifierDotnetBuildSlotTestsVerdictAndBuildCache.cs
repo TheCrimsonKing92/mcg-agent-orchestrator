@@ -551,7 +551,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
@@ -726,7 +725,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains(buildCalls, call => call.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
-            Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"));
@@ -741,11 +739,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("Infrastructure=changed", output, StringComparison.Ordinal);
             Assert.Contains("App=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", output, StringComparison.Ordinal);
-            Assert.Contains("Dashboard.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("TestSupport=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=changed", output, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Infrastructure,App,Infrastructure.Tests,Dashboard.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", output, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Infrastructure,App,Infrastructure.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -774,7 +771,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
@@ -884,11 +880,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("App=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", firstOutput, StringComparison.Ordinal);
-            Assert.Contains("Dashboard.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("TestSupport=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=miss", firstOutput, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Core,Infrastructure.Providers,Infrastructure.OperatorComms,Infrastructure,App,Core.Tests,Infrastructure.Tests,Dashboard.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Core,Infrastructure.Providers,Infrastructure.OperatorComms,Infrastructure,App,Core.Tests,Infrastructure.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.OperatorComms=hit", secondOutput, StringComparison.Ordinal);
@@ -896,7 +891,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("App=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", secondOutput, StringComparison.Ordinal);
-            Assert.Contains("Dashboard.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("TestSupport=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=hit", secondOutput, StringComparison.Ordinal);

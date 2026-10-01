@@ -3,7 +3,6 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 public sealed class ProgressiveReviewGlanceTests
 {
@@ -670,57 +669,6 @@ public sealed class ProgressiveReviewGlanceTests
 
         Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.FundamentalMisdirection, evaluation.Result.Verdict);
         Xunit.Assert.Equal("Subsystem", evaluation.Receipt!.ReasonCode);
-    }
-
-    [Xunit.Fact]
-    public void GuardReceipt_DashboardWorkSummary_SurfacesExactInputs()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-dto-{Guid.NewGuid():N}");
-        try
-        {
-            var now = new DateTimeOffset(2026, 8, 3, 1, 2, 3, TimeSpan.Zero);
-            var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
-            var receipt = new ProgressiveReviewGlanceGuardReceipt(
-                "Precise",
-                ["docs/test-design-discipline.md"],
-                ["docs/test-design-discipline.md"],
-                IncidentScopeNote,
-                string.Empty,
-                "absent",
-                false,
-                "FundamentalMisdirection",
-                "Concern",
-                true,
-                "all changed files are within the trusted scope",
-                "all-changes-within-trusted-scope",
-                ["gate=console; record=clarification:gate"],
-                OperatorContextTruncated: true,
-                CancellationWithheld: true);
-            var workspace = OrchestratorWorkspace.ForDirectory(root);
-            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, new TestClock(now))
-                .AppendProgressiveReviewGlanceGuardReceipt(goal.Id, task.Id, receipt);
-
-            var dto = DashboardResponseMapper.ToGoalWorkSummaryDto(
-                kernel,
-                goal,
-                WorkerProfileCatalog.Default(),
-                ProcessCommandLineSnapshot.Empty,
-                executionDirectory: root);
-
-            var visible = Xunit.Assert.Single(dto.ProgressiveReviewGlanceGuards!);
-            Xunit.Assert.Equal(receipt.Note, visible.Note);
-            Xunit.Assert.Equal(receipt.EvidenceLine, visible.EvidenceLine);
-            Xunit.Assert.Equal(receipt.ChangedFiles, visible.ChangedFiles);
-            Xunit.Assert.True(visible.Downgraded);
-            Xunit.Assert.Equal(receipt.GateAnnotations, visible.GateAnnotations);
-            Xunit.Assert.True(visible.OperatorContextTruncated);
-            Xunit.Assert.True(visible.CancellationWithheld);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-                Directory.Delete(root, recursive: true);
-        }
     }
 
     [Xunit.Fact]

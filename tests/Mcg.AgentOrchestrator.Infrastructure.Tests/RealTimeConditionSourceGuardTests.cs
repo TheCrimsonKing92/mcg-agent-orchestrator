@@ -7,7 +7,6 @@ public sealed class RealTimeConditionSourceGuardTests
         ("SqliteOrchestratorStateRepositoryTests.cs", "SlowWriteAndBlockedWriterEmitJsonlReceipts"),
         ("GoalWorktreeTestsRemoveCleanupDebt.cs", "GoalWorktreesRemoveRetriesAndSucceedsWhenTransientLockReleases"),
         ("LocalProcessVerifierTests.cs", "LocalProcessVerifierReportsConfiguredTimeoutAsStructuredEvidence"),
-        ("GoalMonitoringSubscriptionCommandTests.cs", "GoalMonitoringStreamContinuousEmitsInitialSnapshotBeforePollInterval")
     ];
 
     [Xunit.Fact]

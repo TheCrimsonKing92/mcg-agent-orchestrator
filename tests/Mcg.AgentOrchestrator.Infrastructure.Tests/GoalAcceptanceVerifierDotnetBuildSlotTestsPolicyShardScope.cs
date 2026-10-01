@@ -57,7 +57,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         Assert.True(infrastructureRollup.Passed);
         Assert.Equal(
             $"covered by {laneCount} partitioned checks; changed file in dependency closure; " +
-            "changed projects: Infrastructure; dependency closure: App, Dashboard.Tests, Infrastructure, " +
+            "changed projects: Infrastructure; dependency closure: App, Infrastructure, " +
             "Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.ProviderEnvironment.Tests, " +
             "Infrastructure.Tests, TestSupport",
             infrastructureRollup.ResultSummary);
@@ -460,14 +460,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
                 check.Passed &&
                 check.ResultSummary == $"covered by {laneCount} partitioned checks");
             Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
-            Assert.Contains(calls, call =>
-                call.Length > 2 &&
-                call[0] == "dotnet" &&
-                call[1] == "test" &&
-                call[2] == "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj");
-            Assert.Contains(result.Checks!, check =>
-                check.Name == "dashboard tests" &&
-                check.ResultSummary?.Contains("skipped: no changed file in dependency closure", StringComparison.Ordinal) != true);
         }
 
         await AssertFullShardRunAsync(

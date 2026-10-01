@@ -13,9 +13,7 @@ internal static partial class PreReviewFocusedRequestSplitter
             ? "Core.Tests"
             : project.Contains("Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)
                 ? "Infrastructure.Tests"
-                : project.Contains("Dashboard.Tests", StringComparison.OrdinalIgnoreCase)
-                    ? "Dashboard.Tests"
-                    : null;
+                : null;
         return alias is not null;
     }
 

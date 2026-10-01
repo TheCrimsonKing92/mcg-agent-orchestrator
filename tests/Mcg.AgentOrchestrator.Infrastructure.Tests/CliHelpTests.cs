@@ -802,7 +802,7 @@ public sealed class CliHelpTests
     [Xunit.Theory(DisplayName = "Cli_generic_commands_reject_flags_owned_by_other_commands")]
     [Xunit.InlineData("doctor", "--backlog-item")]
     [Xunit.InlineData("run", "--refresh")]
-    [Xunit.InlineData("prototype-ui", "--confirm-paid-api-run")]
+    [Xunit.InlineData("operator-listen", "--confirm-paid-api-run")]
     [Xunit.InlineData("durations", "--backlog-coverage")]
     public void CliGenericCommandsRejectFlagsOwnedByOtherCommands(string command, string flag)
     {

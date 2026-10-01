@@ -1,50 +1,10 @@
 using System.Text.Json;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class OperatorIntentStoreTestsManualVerificationRequest
 {
-    [Xunit.Theory]
-    [Xunit.InlineData(false)]
-    [Xunit.InlineData(true)]
-    public async Task DashboardRequestReplayKeepsOneIntentWithoutMutatingGoal(bool passed)
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var workspace = OrchestratorWorkspace.ForDirectory(root);
-            var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("API manual evidence replay", [new TaskSpec(TaskId.New(), "Existing result", AgentRole.Tester)]);
-            var agents = AgentCatalog.Default().Agents;
-            kernel.ActivateGoal(goal.Id, agents);
-            var task = goal.Tasks.Single();
-            var initialStatus = task.Status;
-            var providers = new InMemoryModelProviderRegistry([]);
-            var body = JsonSerializer.Serialize(new { passed, note = "Original API evidence", idempotencyKey = "api-replay-key" });
-            await GoalManagementCommandService.ApplyTaskActionAsync(kernel, agents, providers, workspace, goal, task, "verify-manual", body);
-            await GoalManagementCommandService.ApplyTaskActionAsync(kernel, agents, providers, workspace, goal, task, "verify-manual", body);
-            var store = SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory);
-            var intent = Xunit.Assert.Single(await store.ListForGoalAsync(goal.Id.Value));
-            Xunit.Assert.Equal("api-replay-key", intent.IdempotencyKey);
-            Xunit.Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
-            // Provenance is now supplied by the calling adapter; the dashboard row must be unchanged.
-            Xunit.Assert.Equal("operator", intent.Actor);
-            Xunit.Assert.Equal("dashboard", intent.Channel);
-            Xunit.Assert.Equal("dashboard-operator-control", intent.AuthenticationAssurance);
-            Xunit.Assert.Equal(initialStatus, task.Status);
-            Xunit.Assert.Null(task.LastVerification);
-            var payload = JsonSerializer.Deserialize<ManualVerificationOperatorIntentPayload>(intent.PayloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
-            Xunit.Assert.Equal(passed, payload.Request!.Passed);
-            Xunit.Assert.Equal(intent.CreatedAt, payload.ResolveVerification(intent.CreatedAt).CompletedAt);
-        }
-        finally
-        {
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
-        }
-    }
-
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]

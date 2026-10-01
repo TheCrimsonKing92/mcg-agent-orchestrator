@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
@@ -4398,24 +4397,6 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
 
         Xunit.Assert.False(facts.IsBlocked);
         Xunit.Assert.Equal(GoalLifecycleState.Verified, lifecycle);
-    }
-
-    [Xunit.Fact(DisplayName = "Dashboard_acceptance_status_ignores_superseded_candidate_failure")]
-    public void DashboardAcceptanceStatusIgnoresSupersededCandidateFailure()
-    {
-        var (root, workspace, kernel, goal) = CreateSupersededAcceptanceFailureProjection();
-        var facts = GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, kernel.GetGoal(goal.Id));
-        var lifecycle = GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts);
-        var summary = GoalAcceptanceStatusProjector.Build(kernel, kernel.GetGoal(goal.Id), root);
-        var dto = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(kernel.GetGoal(goal.Id), summary, lifecycle);
-
-        Xunit.Assert.Equal(GoalStatus.Verified, dto.Status);
-        Xunit.Assert.False(dto.IsAccepted);
-        Xunit.Assert.DoesNotContain(dto.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed);
-        var current = Xunit.Assert.Single(dto.Outcomes);
-        Xunit.Assert.Equal("unverified (needs a gate run)", current.Outcome);
-        Xunit.Assert.True(current.IsCurrentCandidate);
-        Xunit.Assert.Equal("unverified (needs a gate run)", current.Message);
     }
 
     [Xunit.Fact(DisplayName = "Operator_inbox_ignores_superseded_candidate_failure")]

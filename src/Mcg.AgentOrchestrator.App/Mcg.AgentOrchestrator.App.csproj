@@ -15,9 +15,6 @@
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**/obj/**;**/artifacts/**</DefaultItemExcludesInProjectFolder>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Remove="Dashboard\Hosting\**\*.cs" />
-    <Compile Remove="Dashboard\Api\**\*.cs" />
-    <Compile Remove="Dashboard\Rendering\**\*.cs" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" />

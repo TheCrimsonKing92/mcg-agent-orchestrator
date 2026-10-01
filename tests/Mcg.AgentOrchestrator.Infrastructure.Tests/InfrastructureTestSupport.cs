@@ -713,15 +713,6 @@ public static void SeedBacklog(string root, string markdown)
     Flush();
 }
 
-public static Process StartPrototypeDashboardProcess(string appProject, string workingDirectory, string url) =>
-    SharedTestSupport.StartPrototypeDashboardProcess(appProject, workingDirectory, url);
-
-public static Process StartDashboardProcess(string appProject, string workingDirectory, string command, string url)
-    => SharedTestSupport.StartDashboardProcess(appProject, workingDirectory, command, url);
-
-public static async Task WaitForHealthAsync(HttpClient client, string url, Process process)
-    => await SharedTestSupport.WaitForHealthAsync(client, url, process);
-
 public static int GetAvailablePort()
     => SharedTestSupport.GetAvailablePort();
 

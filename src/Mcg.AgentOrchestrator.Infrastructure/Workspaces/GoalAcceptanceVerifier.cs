@@ -510,7 +510,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CoreTestsProject,
         InfrastructureTestsProject,
         AcceptanceTestsProject,
-        DashboardTestsProject,
         TestSupportProject,
         ProviderEnvironmentTestsProject,
         CliTestsProject
@@ -6342,14 +6341,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var explicitFilter = ExtractFilterArguments(check.Arguments, args);
 
-        // Exclude host-integration tests that spawn a real Kestrel dashboard server (binds a port,
-        // needs an interactive firewall allow) — they hang in the unattended, relocated gate. Match
-        // both by class name (works on a worktree built before the trait existed) and by the
-        // [Trait("Category","HostIntegration")] tag (covers any future such tests).
+        // Exclude host-integration tests from unattended gates by their
+        // [Trait("Category","HostIntegration")] tag.
         if (string.IsNullOrWhiteSpace(explicitFilter) && NeedsUnattendedHostIntegrationExclusion(check))
         {
             args.Add("--filter");
-            args.Add("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration");
+            args.Add("Category!=HostIntegration");
         }
 
         // Fail a hung test fast and by name before the whole check budget is exhausted. A test that
@@ -6569,7 +6566,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string.IsNullOrWhiteSpace(check.Project) ||
         check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
         ProjectMatches(check.Project, InfrastructureTestsProject) ||
-        ProjectMatches(check.Project, DashboardTestsProject) ||
         IsExtractedInfrastructureProject(check.Project);
 
     private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>
