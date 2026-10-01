@@ -221,6 +221,9 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
             var exitCodePath = Assert.IsType<string>(dispatch.GetProperty("exitCodePath").GetString());
             var heartbeatPath = Assert.IsType<string>(dispatch.GetProperty("heartbeatPath").GetString());
             var standardErrorPath = Assert.IsType<string>(dispatch.GetProperty("stderrPath").GetString());
+            var standardOutputPath = Assert.IsType<string>(dispatch.GetProperty("stdoutPath").GetString());
+            var hostDiagnosticPath = dispatch.TryGetProperty("hostDiagnosticPath", out var diagnosticPath)
+                ? diagnosticPath.GetString() : null;
             Assert.False(File.Exists(exitCodePath));
             using var hostProcess = Process.GetProcessById(ownership.ProcessId);
             Assert.Equal(ownership.ProcessStartedAt.UtcDateTime, hostProcess.StartTime.ToUniversalTime());
@@ -245,7 +248,8 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
             SpawnProcessIdentity childIdentity;
             try
             {
-                childIdentity = await WaitForHeartbeatChildIdentityAsync(heartbeatPath);
+                childIdentity = await WaitForHeartbeatChildIdentityAsync(
+                    heartbeatPath, hostDiagnosticPath, standardOutputPath, standardErrorPath);
             }
             catch (InvalidOperationException failure)
             {
@@ -597,9 +601,11 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
         return await completion.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
     }
 
-    private static async Task<SpawnProcessIdentity> WaitForHeartbeatChildIdentityAsync(string heartbeatPath)
+    private static async Task<SpawnProcessIdentity> WaitForHeartbeatChildIdentityAsync(
+        string heartbeatPath, string? hostDiagnosticPath, string stdoutPath, string stderrPath)
     {
         var completion = new TaskCompletionSource<SpawnProcessIdentity>(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? lastObservedState = null;
 
         void TryRead()
         {
@@ -607,6 +613,9 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
             {
                 using var heartbeat = JsonDocument.Parse(ReadAllTextShared(heartbeatPath));
                 var root = heartbeat.RootElement;
+                var state = root.TryGetProperty("state", out var stateElement) ? stateElement.GetString() : null;
+                Volatile.Write(ref lastObservedState, state);
+                if (state is not ("launched" or "running" or "exited")) return;
                 if (!root.TryGetProperty("childPid", out var childPidElement) ||
                     childPidElement.ValueKind != JsonValueKind.Number ||
                     !childPidElement.TryGetInt32(out var childProcessId) ||
@@ -661,11 +670,27 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
                 return completion.Task.Result;
             }
 
-            var heartbeatTail = File.Exists(heartbeatPath) ? Tail(ReadAllTextShared(heartbeatPath)) : "missing";
             throw new InvalidOperationException(
-                $"Heartbeat did not publish an identity-bound child. heartbeat-tail={heartbeatTail}",
+                DescribeMissingLaunchedHeartbeat(
+                    heartbeatPath, Volatile.Read(ref lastObservedState), hostDiagnosticPath, stdoutPath, stderrPath),
                 timeout);
         }
+    }
+
+    internal static string DescribeMissingLaunchedHeartbeat(
+        string heartbeatPath, string? lastObservedState, string? hostDiagnosticPath, string stdoutPath, string stderrPath)
+    {
+        static string ReadTail(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return "missing";
+            try { return Tail(ReadAllTextShared(path)); }
+            catch (IOException failure) { return $"unreadable:{failure.GetType().Name}"; }
+        }
+
+        return $"Launched heartbeat with an identity-bound child was not observed. last-state={lastObservedState ?? "none"}; " +
+            $"heartbeat-tail={ReadTail(heartbeatPath)}; host-diagnostic-tail={ReadTail(hostDiagnosticPath)}; " +
+            $"stdout-log={(File.Exists(stdoutPath) ? "present" : "absent")}; " +
+            $"stderr-log={(File.Exists(stderrPath) ? "present" : "absent")}";
     }
 
     private static string[] BuildArguments(params string[] arguments) =>

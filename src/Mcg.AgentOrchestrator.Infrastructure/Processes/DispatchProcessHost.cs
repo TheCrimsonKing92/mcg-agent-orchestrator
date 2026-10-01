@@ -1066,10 +1066,16 @@ public static class DispatchProcessHost
 
     internal static IWorkerIntegrityLabeler? IntegrityLabelerOverrideForTests;
 
-    internal sealed class HeartbeatWriteGuard(string destinationPath, bool durable)
+    internal sealed record HeartbeatWriteFailure(string State, Exception Exception);
+
+    internal sealed class HeartbeatWriteGuard(
+        string destinationPath, bool durable, Action<HeartbeatWriteFailure>? onFailure = null)
     {
         private readonly object _gate = new();
         private bool _terminalWritten;
+        private HeartbeatWriteFailure? _lastFailure;
+
+        internal HeartbeatWriteFailure? LastFailure => Volatile.Read(ref _lastFailure);
 
         internal static Action<string, string>? BeforeMoveForTests;
 
@@ -1115,9 +1121,12 @@ public static class DispatchProcessHost
                     }
                 }
             }
-            catch
+            catch (Exception failure)
             {
                 // Heartbeats are best-effort; publication failures must not fail the dispatch.
+                var surfacedFailure = new HeartbeatWriteFailure(state, failure);
+                Volatile.Write(ref _lastFailure, surfacedFailure);
+                try { onFailure?.Invoke(surfacedFailure); } catch { }
             }
             finally
             {
@@ -1388,6 +1397,7 @@ public static void DropToLow() {
         var selectedChildLock = new object();
         var diagnosticLock = new object();
         var loggedHeartbeatFailures = new HashSet<Type>();
+        var loggedHeartbeatWriteFailures = new HashSet<(string State, Type ExceptionType)>();
         var heartbeatStopping = 0;
         var heartbeatProcessIdentities = new DispatchHeartbeatProcessIdentityTracker();
         string? hostDiagnosticWriteFailure = null;
@@ -1396,16 +1406,20 @@ public static void DropToLow() {
             : HeartbeatInterval;
         var heartbeatWriter = string.IsNullOrWhiteSpace(parameters.HeartbeatPath)
             ? null
-            : new HeartbeatWriteGuard(parameters.HeartbeatPath, durable: false);
+            : new HeartbeatWriteGuard(parameters.HeartbeatPath, durable: false,
+                onFailure: failure => RecordHeartbeatWriteFailure(failure.State, failure.Exception));
         var prepHeartbeatWriter = string.IsNullOrWhiteSpace(parameters.PrepHeartbeatPath)
             ? null
             : new HeartbeatWriteGuard(parameters.PrepHeartbeatPath, durable: true);
 
-        void RecordFallbackDiagnostic(string diagnostic)
+        void RecordFallbackDiagnostic(string diagnostic, bool heartbeatWriteFailure = false)
         {
             lock (diagnosticLock)
             {
-                hostDiagnosticWriteFailure = diagnostic;
+                if (!heartbeatWriteFailure)
+                {
+                    hostDiagnosticWriteFailure = diagnostic;
+                }
                 heartbeatHooks?.DiagnosticRecorded?.Invoke(diagnostic);
                 if (string.IsNullOrWhiteSpace(parameters.HostDiagnosticPath))
                 {
@@ -1421,6 +1435,40 @@ public static void DropToLow() {
                     hostDiagnosticWriteFailure +=
                         $"; fallback diagnostic write failed: {fallbackFailure.GetType().Name}: {fallbackFailure.Message}";
                 }
+            }
+        }
+
+        void RecordHeartbeatWriteFailure(string state, Exception failure)
+        {
+            try
+            {
+                lock (diagnosticLock)
+                {
+                    if (loggedHeartbeatWriteFailures.Add((state, failure.GetType())))
+                    {
+                        RecordFallbackDiagnostic(
+                            $"[dispatch-host] heartbeat write failed: state={state}; {failure.GetType().Name}: {failure.Message}",
+                            heartbeatWriteFailure: true);
+                    }
+                }
+            }
+            catch
+            {
+                // The failure report is best-effort, just like the heartbeat itself.
+            }
+        }
+
+        string? ReadHostDiagnosticWriteFailure()
+        {
+            lock (diagnosticLock)
+            {
+                if (loggedHeartbeatWriteFailures.Count == 0) return hostDiagnosticWriteFailure;
+                var summary = string.Join("; ", loggedHeartbeatWriteFailures
+                    .OrderBy(failure => failure.State, StringComparer.Ordinal)
+                    .ThenBy(failure => failure.ExceptionType.FullName, StringComparer.Ordinal)
+                    .Select(failure => $"heartbeat write failed: state={failure.State}; {failure.ExceptionType.Name}"));
+                return string.IsNullOrEmpty(hostDiagnosticWriteFailure)
+                    ? summary : $"{hostDiagnosticWriteFailure}; {summary}";
             }
         }
 
@@ -1609,7 +1657,7 @@ public static void DropToLow() {
                 sessionCaptureGaveUp = stderrSessionCapture.GaveUp,
                 worktreeHeadSha = parameters.WorktreeHeadSha,
                 dirtyStateHash = parameters.DirtyStateHash,
-                hostDiagnosticWriteFailure,
+                hostDiagnosticWriteFailure = ReadHostDiagnosticWriteFailure(),
                 exitFileExists = File.Exists(parameters.ExitCodePath)
             };
 
@@ -1791,6 +1839,9 @@ public static void DropToLow() {
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
             worker = ProcessTreeGuiSuppression.Start(startInfo);
             workerGroup = OwnedProcessGroup.Attach(worker);
+
+            try { WriteHeartbeat("launched"); }
+            catch (Exception failure) { RecordHeartbeatWriteFailure("launched", failure); }
 
             WritePromptToWorkerStdin(worker, parameters);
 
