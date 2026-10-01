@@ -152,7 +152,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion : Acce
     public void InfrastructureRed_LeavesCompositionEligibleWithoutSuppression()
     {
         WithTrain(_ => [new AcceptanceVerificationResult(false, false, null, "missing exit code",
-            [new AcceptanceCheckResult("combined", false, null, "missing exit code")], [])], scenario =>
+            Checks: [new AcceptanceCheckResult("combined", false, null, "missing exit code")], TestResultPaths: [])], scenario =>
         {
             Assert.Equal(1, scenario.Verifier.RunCount);
             Assert.Empty(scenario.Result.Ejections);
@@ -171,7 +171,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion : Acce
     public void InfrastructureRemainder_DoesNotImplicateTheEjectedCandidate()
     {
         WithTrain(repo => [FailedVerification(repo, "red.trx", "train"),
-            new AcceptanceVerificationResult(false, true, null, "deferred", [], [])], scenario =>
+            new AcceptanceVerificationResult(false, true, null, "deferred", Checks: [], TestResultPaths: [])], scenario =>
         {
             Assert.Equal(2, scenario.Verifier.RunCount);
             Assert.Equal(scenario.Goals[2].Id, Assert.Single(scenario.Result.Ejections).GoalId);
@@ -242,7 +242,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion : Acce
     }
 
     private static AcceptanceVerificationResult Passing(string repo) => new(true, false, 0, null,
-        [new AcceptanceCheckResult("remainder", true, 0, null)], [WritePassingTrx(repo, "pass.trx")]);
+        Checks: [new AcceptanceCheckResult("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")]);
 
     private static AcceptanceVerificationResult ApparatusRed(string repo, string fileName)
     {
@@ -254,7 +254,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion : Acce
             StringComparison.Ordinal));
         Assert.Contains("DotnetBuildSlotsBusyException", File.ReadAllText(path));
         var verification = new AcceptanceVerificationResult(false, false, 1, "apparatus",
-            [new AcceptanceCheckResult("combined", false, 1, "apparatus")], [path]);
+            Checks: [new AcceptanceCheckResult("combined", false, 1, "apparatus")], TestResultPaths: [path]);
         Assert.Equal(AcceptanceCohortGateOutcome.Failed, ConductorDriver.ClassifyCohortVerification(verification));
         Assert.All(AcceptanceTrxFailureReader.Read(path).Failures, failure =>
             Assert.NotNull(ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace)));
