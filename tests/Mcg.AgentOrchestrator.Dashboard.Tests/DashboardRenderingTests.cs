@@ -2566,10 +2566,12 @@ public sealed class DashboardRenderingTests
         FocusGoalPrefix: goal.Id.Value[..8],
         Workspace: dashboardWorkspace));
 
-    Assert.Equal("focused dashboard infrastructure tests", Assert.Single(workSummary.TestImpact!.Checks).Name);
-    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("FullyQualifiedName~DashboardHostTests", StringComparison.Ordinal));
-    Assert.True(workSummary.TestImpact.Checks[0].CommandLine.Contains("Category!=HostIntegration", StringComparison.Ordinal));
-    Assert.True(html.Contains("Test impact: Selected focused dashboard infrastructure tests from changed file scope.", StringComparison.Ordinal));
+    Assert.NotEmpty(workSummary.TestImpact!.Checks);
+    Assert.DoesNotContain(workSummary.TestImpact.Checks, check =>
+        check.Name.Contains("dashboard", StringComparison.OrdinalIgnoreCase)
+        || check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal)
+        || check.CommandLine.Contains("DashboardHostTests", StringComparison.Ordinal));
+    Assert.True(html.Contains("Test impact:", StringComparison.Ordinal));
     Assert.False(html.Contains("Test impact: No changed files detected; no build verification required.", StringComparison.Ordinal));
 }
 

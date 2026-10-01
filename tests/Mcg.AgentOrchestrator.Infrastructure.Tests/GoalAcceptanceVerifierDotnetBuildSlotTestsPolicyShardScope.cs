@@ -403,16 +403,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         Assert.True(result.Passed);
         var infrastructureCall = Assert.Single(calls, candidate => IsMtpExecutableCall(candidate, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
-        var dashboardCall = Assert.Single(calls, candidate => IsMtpExecutableCall(candidate, "Mcg.AgentOrchestrator.Dashboard.Tests"));
         Assert.DoesNotContain(calls, candidate => candidate.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
         AssertArgumentPair(infrastructureCall, "--filter-class", "*CliCommandTests*");
         AssertArgumentPair(infrastructureCall, "--filter-class", "*CliHelpTests*");
-        AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardRenderingTests*");
-        AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardHostTests*");
-        AssertArgumentPair(dashboardCall, "--filter-not-trait", "Category=HostIntegration");
-        AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardValidationHarnessTests*");
         Assert.Contains(result.Checks!, check => check.Name == "focused CLI infrastructure tests");
-        Assert.Contains(result.Checks!, check => check.Name == "focused dashboard infrastructure tests");
+        Assert.DoesNotContain(result.Checks!, check => check.Name == "focused dashboard infrastructure tests");
         var infrastructureReceipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure tests");
         Assert.True(infrastructureReceipt.Passed);
         Assert.Contains(

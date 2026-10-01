@@ -1066,7 +1066,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
     {
         var emitted = ConductorDriver.BuildPreReviewEvidenceContext(
             "abc1234",
-            ["src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"]);
+            ["src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.cs"]);
         var emittedRequest = Assert.IsType<string>(emitted.FocusedRequest);
         var separator = emittedRequest.IndexOf(':', StringComparison.Ordinal);
         var project = emittedRequest[..separator];
@@ -1100,7 +1100,6 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Contains("|", originalFilter, StringComparison.Ordinal);
-        Assert.Contains("Category!=HostIntegration", originalFilter, StringComparison.Ordinal);
         Assert.Equal(project + ":" + originalFilter, observedRequest);
     }
 

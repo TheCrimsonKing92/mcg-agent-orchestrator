@@ -14,11 +14,9 @@ internal static class DeclaredTestProjectInventory
 
     internal const string LegacyAliasProjectForms =
         "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
-        "Mcg.AgentOrchestrator.Infrastructure.Tests, Dashboard, Dashboard.Tests, " +
-        "Mcg.AgentOrchestrator.Dashboard.Tests, or a full .csproj path ending in " +
+        "Mcg.AgentOrchestrator.Infrastructure.Tests, or a full .csproj path ending in " +
         "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj";
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
 
     /// <summary>
     /// The eligibility shape rule for a declared project: repository-relative, rooted under
