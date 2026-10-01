@@ -264,7 +264,7 @@ public sealed class ConductorDriverTestsOwnerReviewHold
 
     private sealed class Fixture : IDisposable
     {
-        internal readonly string Root = CreateTempDirectory();
+        internal readonly string Root = ConductorDriverTests.CreateTempDirectory();
         internal readonly AgentOrchestratorKernel Kernel;
         internal readonly Goal Goal;
         internal readonly ICollaborationItemStore Decisions;
