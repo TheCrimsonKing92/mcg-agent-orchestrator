@@ -85,6 +85,7 @@ public static class AcceptanceShardCompletionPredicates
     public const string ZeroTests = "zero-tests";
     public const string IncompleteExecution = "incomplete-execution";
     public const string FailingTrx = "failing-trx";
+    public const string AssemblyCleanupFailure = AcceptanceFailureClassifications.AssemblyCleanupFailure;
     public const string CheckFailed = "check-failed";
     public const string RetryEvidenceRetentionFailed = "retry-evidence-retention-failed";
 }
@@ -248,6 +249,7 @@ public static class AcceptanceFailureClassifications
     public const string SeededRepositoryProcessOutputApparatus = "seeded-repository-process-output-apparatus";
     public const string SeededRepositoryApparatus = "seeded-repository-apparatus";
     public const string SharedGateApparatusInvalidated = "shared-gate-apparatus-invalidated";
+    public const string AssemblyCleanupFailure = "assembly-cleanup-failure";
 
     public static bool IsEnvironmentalApparatus(string? classification) =>
         classification is GateEnvironmentInterference or
@@ -256,6 +258,7 @@ public static class AcceptanceFailureClassifications
             FocusedSelectionReceiptUnreadable or
             SeededRepositoryProcessOutputApparatus or
             SeededRepositoryApparatus or
+            AssemblyCleanupFailure or
             SharedGateApparatusInvalidated;
 }
 
@@ -1300,6 +1303,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
         }
 
+        check = AcceptanceAssemblyCleanupEvidence.AttachCleanupCause(check);
         var classification = string.IsNullOrWhiteSpace(check.FailureClassification)
             ? null
             : check.FailureClassification.Trim();
@@ -1309,6 +1313,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
             AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
             AcceptanceFailureClassifications.SeededRepositoryProcessOutputApparatus or
+            AcceptanceFailureClassifications.AssemblyCleanupFailure or
             AcceptanceFailureClassifications.SeededRepositoryApparatus =>
                 AcceptanceFailureCause.EnvironmentalApparatus,
             _ => (AcceptanceFailureCause?)null
@@ -7124,6 +7129,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var notExecuted = 0;
         var sawReceipt = false;
         var allPassed = true;
+        AcceptanceAssemblyCleanupEvidence.RowCounts cleanupCounts = default;
         var outcomes = new List<string>();
         foreach (var path in paths.Where(File.Exists))
         {
@@ -7143,6 +7149,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     element.Name.LocalName.Equals("ResultSummary", StringComparison.Ordinal));
                 var summaryOutcome = resultSummary?.Attribute("outcome")?.Value;
                 var receiptPassed = IsPassingTrxReceipt(summaryOutcome, counters, results);
+                cleanupCounts = cleanupCounts.Add(AcceptanceAssemblyCleanupEvidence.Classify(results));
 
                 sawReceipt = true;
                 discovered = checked(discovered + receiptDiscovered);
@@ -7168,7 +7175,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             notExecuted,
             string.Join('+', outcomes.Distinct(StringComparer.OrdinalIgnoreCase)),
             allPassed,
-            null);
+            null,
+            outcomes.Count == paths.Length && cleanupCounts.IsCleanupOnly);
     }
 
     private static bool IsPassingTrxReceipt(
@@ -7231,7 +7239,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             trx.DiscoveredTestCount != (trx.ExecutedTestCount ?? 0) + (trx.NotExecutedTestCount ?? 0))
             failedPredicate = AcceptanceShardCompletionPredicates.IncompleteExecution;
         if (failedPredicate is null && !missingTrxCompatibility && !trx.Passed)
-            failedPredicate = AcceptanceShardCompletionPredicates.FailingTrx;
+            failedPredicate = trx.AssemblyCleanupOnly
+                ? AcceptanceShardCompletionPredicates.AssemblyCleanupFailure
+                : AcceptanceShardCompletionPredicates.FailingTrx;
         if (failedPredicate is null && result.ExitCode != 0 && !allowNonzeroExit)
             failedPredicate = AcceptanceShardCompletionPredicates.NonzeroExit;
 
@@ -9080,7 +9090,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? NotExecutedTestCount,
         string Outcome,
         bool Passed,
-        string? FailedPredicate);
+        string? FailedPredicate,
+        bool AssemblyCleanupOnly = false);
 
     private sealed record DotnetBaseBuildCachePlan(
         string MainSha,

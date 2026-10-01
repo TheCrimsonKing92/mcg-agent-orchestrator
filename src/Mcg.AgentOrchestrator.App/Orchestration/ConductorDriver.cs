@@ -4080,6 +4080,7 @@ internal sealed partial class ConductorDriver
         return requiredUnmetCriteria.All(check =>
             check.FailureClassification is
                 AcceptanceFailureClassifications.GateEnvironmentInterference or
+                AcceptanceFailureClassifications.AssemblyCleanupFailure or
                 AcceptanceFailureClassifications.InheritedBaselineApparatus or AcceptanceFailureClassifications.SharedGateApparatusInvalidated ||
             acceptance.CheckAttributions is { Count: > 0 } attributions &&
             attributions.Any(attribution =>
@@ -6258,6 +6259,7 @@ internal sealed partial class ConductorDriver
                     evidence.Add($"{omittedFailures} more failures omitted — see {receipt.Path}.");
                 }
             }
+            AppendAssemblyCleanupStderrEvidence(evidence, criterion, testResultPaths);
         }
 
         return evidence;
