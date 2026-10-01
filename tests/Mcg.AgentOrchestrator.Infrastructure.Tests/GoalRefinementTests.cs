@@ -1120,6 +1120,51 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains("remote repository URL", output, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Dashboard_retry_records_capability_warning_for_gh_cli_instruction")]
+    public async Task DashboardRetryRecordsCapabilityWarningForGhCliInstruction()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Retry lint",
+            [new TaskSpec(TaskId.New(), "Do retryable work", AgentRole.Developer)]);
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "needs retry");
+
+        var queued = await new Mcg.AgentOrchestrator.App.Application.GoalTaskCommandOperations()
+            .EnqueueOperatorIntentAsync(
+                workspace,
+                goal,
+                task,
+                OperatorIntentVerbs.Retry,
+                new RetryOperatorIntentPayload(
+                    "Retry after running gh pr checkout and git push.",
+                    RetryRoundKind: null,
+                    RetryCause: RetryCause.ContractClarification),
+                idempotencyKey: null,
+                channel: "test",
+                authenticationAssurance: "test");
+
+        Xunit.Assert.Equal(OperatorIntentStatus.Pending, queued.Persisted.Status);
+        Xunit.Assert.DoesNotContain(
+            goal.Timeline,
+            evt => evt.Message.Contains("Brief capability warning", StringComparison.Ordinal));
+
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace);
+        var execution = coordinator.ExecutePending(kernel, goal);
+        coordinator.CompletePersisted([goal.Id]);
+
+        Xunit.Assert.True(execution.MutatedGoalState);
+        var warnings = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.Contains("Brief capability warning", StringComparison.Ordinal))
+            .Select(evt => evt.Message)
+            .ToArray();
+        Xunit.Assert.Contains(warnings, warning => warning.Contains("gh CLI", StringComparison.Ordinal));
+        Xunit.Assert.Contains(warnings, warning => warning.Contains("git push", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "GoalRefinementService_selects_named_refiner_binding_when_not_first")]
     public async Task SelectsNamedRefinerBindingWhenNotFirst()
     {
