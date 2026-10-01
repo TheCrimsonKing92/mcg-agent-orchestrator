@@ -129,22 +129,7 @@ public sealed class CliAttentionNextReadOnlyWriterHeldTests : CliTaskQueryTestSu
         foreach (var arg in args)
             start.ArgumentList.Add(arg);
         start.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start query process.");
-        process.StandardInput.Close();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        var output = process.StandardOutput.ReadToEndAsync(timeout.Token);
-        var error = process.StandardError.ReadToEndAsync(timeout.Token);
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync();
-            throw;
-        }
-        return (process.ExitCode, await output, await error);
+        var result = await CliChildProcessRunner.RunAsync(start);
+        return (result.ExitCode, result.StandardOutput, result.StandardError);
     }
 }

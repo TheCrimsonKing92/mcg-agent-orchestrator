@@ -74,14 +74,12 @@ public sealed class QueryOnlyCompositionTests
             startInfo.Environment["OLLAMA_BASE_URL"] = $"http://127.0.0.1:{endpoint.Port}";
             startInfo.Environment["LLAMA_CPP_BASE_URL"] = $"http://127.0.0.1:{endpoint.Port}";
 
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start query process.");
-            using var processTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            await process.WaitForExitAsync(processTimeout.Token);
-            var standardError = await process.StandardError.ReadToEndAsync(processTimeout.Token);
+            var result = await CliChildProcessRunner.RunAsync(startInfo);
+            var standardError = result.StandardError;
 
             acceptCancellation.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await connectionAttempt);
-            Assert.Equal(0, process.ExitCode);
+            Assert.Equal(0, result.ExitCode);
             Assert.DoesNotContain("Now listening on", standardError, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -112,13 +110,11 @@ public sealed class QueryOnlyCompositionTests
             startInfo.ArgumentList.Add("--help");
             startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workspace;
 
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start help process.");
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            await process.WaitForExitAsync(timeout.Token);
-            var standardOutput = await process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var standardError = await process.StandardError.ReadToEndAsync(timeout.Token);
+            var result = await CliChildProcessRunner.RunAsync(startInfo);
+            var standardOutput = result.StandardOutput;
+            var standardError = result.StandardError;
 
-            Assert.Equal(0, process.ExitCode);
+            Assert.Equal(0, result.ExitCode);
             Assert.Contains("Usage: dashboard", standardOutput, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("component is not installed", standardError, StringComparison.OrdinalIgnoreCase);
         }
@@ -149,15 +145,11 @@ public sealed class QueryOnlyCompositionTests
             startInfo.ArgumentList.Add("local");
             startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workspace;
 
-            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start dashboard process.");
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var standardOutputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
-            var standardErrorTask = process.StandardError.ReadToEndAsync(timeout.Token);
-            await process.WaitForExitAsync(timeout.Token);
-            var standardOutput = await standardOutputTask;
-            var standardError = await standardErrorTask;
+            var result = await CliChildProcessRunner.RunAsync(startInfo);
+            var standardOutput = result.StandardOutput;
+            var standardError = result.StandardError;
 
-            Assert.Equal(OptionalDashboardHostLauncher.MissingComponentExitCode, process.ExitCode);
+            Assert.Equal(OptionalDashboardHostLauncher.MissingComponentExitCode, result.ExitCode);
             Assert.Empty(standardOutput);
             Assert.Contains("Dashboard component is not installed", standardError, StringComparison.Ordinal);
         }
