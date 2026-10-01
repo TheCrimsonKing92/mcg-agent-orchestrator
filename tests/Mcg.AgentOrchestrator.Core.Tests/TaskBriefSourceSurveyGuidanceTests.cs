@@ -33,8 +33,10 @@ public sealed class TaskBriefSourceSurveyGuidanceTests
         {
             File.WriteAllText(Path.Combine(context.FullName, "research-notes.md"), "The label is defined in source.");
             var kernel = new AgentOrchestratorKernel();
+            var researcher = new TaskSpec(TaskId.New(), "Inspect the current label.", AgentRole.Researcher);
             var planner = new TaskSpec(TaskId.New(), "Plan the label update.", AgentRole.Planner);
-            var goal = kernel.CreateGoal("Maintain the label.", [planner]);
+            var goal = kernel.CreateGoal("Maintain the label.", [researcher, planner]);
+            Assert.False(ScoutRoundPolicy.IsScoutPlanner(goal, planner));
 
             var brief = kernel.BuildTaskBrief(goal.Id, planner.Id,
                 workingDirectory: context.FullName, contextDirectory: context.FullName).Content;
