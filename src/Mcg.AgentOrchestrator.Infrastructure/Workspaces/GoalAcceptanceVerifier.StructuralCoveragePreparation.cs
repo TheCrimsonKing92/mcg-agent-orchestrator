@@ -11,7 +11,8 @@ public sealed partial class GoalAcceptanceVerifier
         AcceptanceManifestCheck Check,
         AcceptanceStructuralCoverageRequest? Request,
         AcceptanceStructuralCoveragePrepared? Prepared,
-        ExceptionDispatchInfo? Fault);
+        ExceptionDispatchInfo? Fault,
+        RemovedTestProjectRecord? Removed = null);
 
     private sealed record StructuralCoveragePreparation(
         IReadOnlyList<StructuralCoverageProject> Projects,
@@ -27,6 +28,9 @@ public sealed partial class GoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         string? currentAttemptId,
         IReadOnlyList<string> sanctionedRemovedTests,
+        IReadOnlyList<AcceptanceManifestCheck> candidateManifestChecks,
+        AcceptanceGateEngineSettings candidateSettings,
+        bool ownerApprovalSatisfied,
         CancellationToken cancellationToken)
     {
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
@@ -60,6 +64,13 @@ public sealed partial class GoalAcceptanceVerifier
         IReadOnlyList<AcceptanceCheckResult>? completedChecks = null;
         foreach (var broadCheck in broadChecks)
         {
+            if (ClassifyRemovedTestProject(worktreePath, mainWorktreePath, broadCheck.Project!,
+                    candidateManifestChecks, candidateSettings, ownerApprovalSatisfied) is { } removal)
+            {
+                projects.Add(await PrepareRemovedTestProjectAsync(broadCheck, removal, mainWorktreePath,
+                    environment, goalId, stableSlotIndex, stableSlotLease, cancellationToken).ConfigureAwait(false));
+                continue;
+            }
             try
             {
             var deletedTestFiles = ResolveDeletedTestFiles(worktreePath, broadCheck.Project!);
@@ -97,92 +108,14 @@ public sealed partial class GoalAcceptanceVerifier
                     .ToArray();
             }
 
-            async Task<AcceptanceStructuralCoverageBaseline?> PrepareBaselineAsync(
+            Task<AcceptanceStructuralCoverageBaseline?> PrepareBaselineAsync(
                 string baselineWorktreePath,
                 string artifactsDirectoryName,
                 string operationName,
-                CancellationToken baselineCancellationToken)
-            {
-                var baselineProjectPath = Path.Combine(
-                    baselineWorktreePath,
-                    broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
-                if (!File.Exists(baselineProjectPath))
-                {
-                    return null;
-                }
-
-                var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, artifactsDirectoryName);
-                var mainEnvironment = environment.DeriveArtifactsPath(mainArtifactsPath);
-                var mainBuildArguments = new[]
-                {
-                    "dotnet",
-                    "build",
-                    broadCheck.Project,
-                    "--verbosity",
-                    "minimal"
-                };
-                AcceptanceCheckResult mainBuild;
-                var lockRemediationApplied = false;
-                try
-                {
-                    if (operationName == "acceptance-main-coverage-baseline")
-                        _testOverrides.OnTrustedMainBaselineBuildStartingForTests?.Invoke(broadCheck.Project!);
-                    var managedBuild = await RunManagedDotnetCheckAsync(
-                        operationName == "acceptance-main-coverage-baseline"
-                            ? WithTrustedBaselineBuildIdentity(broadCheck)
-                            : broadCheck,
-                        mainBuildArguments,
-                        baselineWorktreePath,
-                        goalId,
-                        stableSlotIndex,
-                        stableSlotLease,
-                        operationName,
-                        baselineCancellationToken,
-                        executionEnvironment: mainEnvironment,
-                        waitForPermit: true)
-                        .ConfigureAwait(false);
-                    mainBuild = managedBuild.Result;
-                    lockRemediationApplied = managedBuild.Retried;
-                }
-                catch (BuildLockBlockedException ex)
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        "trusted-main-build-lock",
-                        exitCode: null,
-                        outputTail: null,
-                        buildLockAttribution: ex.Attribution);
-                }
-                catch (Exception ex) when (
-                    IsBuildArtifactIoException(ex) &&
-                    ex is not DotnetBuildSlotsBusyException)
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        "trusted-main-build-io",
-                        exitCode: null,
-                        outputTail: ex.Message);
-                }
-
-                if (!mainBuild.Passed)
-                {
-                    throw new AcceptanceInfrastructureDeferredException(
-                        mainBuild.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true
-                            ? "trusted-main-build-timeout"
-                            : "trusted-main-build-failed",
-                        mainBuild.ExitCode,
-                        mainBuild.OutputTail);
-                }
-
-                var mainDiscoveryArguments = BuildUnattendedDiscoveryArguments(
-                    broadCheck,
-                    EngineSettings,
-                    mainEnvironment);
-                return new AcceptanceStructuralCoverageBaseline(
-                    mainDiscoveryArguments,
-                    baselineWorktreePath,
-                    baselineWorktreePath,
-                    UsesMicrosoftTestingPlatform(broadCheck),
-                    lockRemediationApplied);
-            }
+                CancellationToken baselineCancellationToken) =>
+                PrepareStructuralCoverageBaselineAsync(broadCheck, EngineSettings, environment,
+                    goalId, stableSlotIndex, stableSlotLease, baselineWorktreePath,
+                    artifactsDirectoryName, operationName, baselineCancellationToken);
 
             Task<AcceptanceContainedGenerationBaseline> PrepareContainedBaselineAsync(
                 CancellationToken baselineCancellationToken) =>
@@ -242,9 +175,18 @@ public sealed partial class GoalAcceptanceVerifier
 
         preparation.SetCompletedChecks(completedChecks);
         var allSummaries = new List<string>();
+        var removalFailures = new List<AcceptanceCheckResult>();
         var baselineLockRemediationApplied = false;
         foreach (var project in preparation.Projects)
         {
+            if (project.Removed is { } removal)
+            {
+                var result = EvaluateRemovedTestProject(project.Check, removal);
+                baselineLockRemediationApplied |= result.LockRemediationApplied;
+                if (result.Passed) allSummaries.Add(result.ResultSummary!);
+                else removalFailures.Add(result);
+                continue;
+            }
             project.Fault?.Throw();
             var broadCheck = project.Check;
             var evaluation = await _structuralCoverageEvaluator.CompareAsync(
@@ -310,6 +252,9 @@ public sealed partial class GoalAcceptanceVerifier
 
             allSummaries.Add(coverage.Summary);
         }
+
+        if (removalFailures.Count > 0)
+            return CombineRemovedTestProjectFailures(removalFailures, allSummaries, baselineLockRemediationApplied);
 
         return new AcceptanceCheckResult(
             "structural test coverage",

@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
-    internal sealed record OwnerProtectedDecision(AcceptanceCheckResult? Failure, AcceptanceCheckResult? Pass);
+    internal sealed record OwnerProtectedDecision(AcceptanceCheckResult? Failure, AcceptanceCheckResult? Pass,
+        bool OwnerApprovalSatisfied = false);
 
     private OwnerProtectedDecision EvaluateOwnerProtectedConfiguration(string worktreePath, GoalId? goalId,
         IReadOnlyList<string>? changedFiles, IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? cohortMembers)
@@ -37,19 +38,28 @@ public sealed partial class GoalAcceptanceVerifier
         if (goalId is { } singleGoal && decisions is not null &&
             IsApproved(worktreePath, changedFiles, gitText, decisions, singleGoal, candidateSha(),
                 "HEAD", readCommittedCandidate: false))
-            return new(null, null);
+        {
+            if (cohortMembers is { Count: > 0 })
+            {
+                var cohortApproved = CohortChangesAreApproved(worktreePath, cohortMembers, gitText, decisions,
+                    inventory, out var manifestApproved);
+                return new(null, null, OwnerApprovalSatisfied: cohortApproved && manifestApproved);
+            }
+            return new(null, null, OwnerApprovalSatisfied: true);
+        }
         var equivalent = IsEquivalentManifestChange(worktreePath, changedFiles, gitText, inventory, "HEAD",
                 gitText(worktreePath, ["show", "main:config/acceptance-manifest.json"]),
                 File.Exists(Path.Combine(worktreePath, "config", "acceptance-manifest.json"))
                     ? File.ReadAllText(Path.Combine(worktreePath, "config", "acceptance-manifest.json")) : null);
         if (cohortMembers is { Count: > 0 })
         {
-            if (!CohortChangesAreApproved(worktreePath, cohortMembers, gitText, decisions, inventory))
+            if (!CohortChangesAreApproved(worktreePath, cohortMembers, gitText, decisions, inventory,
+                    out var manifestOwnerApproved))
                 return new(failure, null);
             return equivalent
                 ? new(null, new AcceptanceCheckResult("owner-protected configuration", true, 0,
-                    "partition-equivalent", ResultSummary: "partition-equivalent"))
-                : new(null, null);
+                    "partition-equivalent", ResultSummary: "partition-equivalent"), manifestOwnerApproved)
+                : new(null, null, manifestOwnerApproved);
         }
         if (equivalent)
             return new(null, new AcceptanceCheckResult("owner-protected configuration", true, 0,
@@ -96,9 +106,10 @@ public sealed partial class GoalAcceptanceVerifier
     private static bool CohortChangesAreApproved(string worktreePath,
         IReadOnlyList<AcceptanceOwnerProtectedCohortMember> members,
         Func<string, string[], string?> gitText, ICollaborationItemStore? decisions,
-        Func<AcceptanceTestInventory> inventory)
+        Func<AcceptanceTestInventory> inventory, out bool manifestOwnerApproved)
     {
         const string manifest = "config/acceptance-manifest.json";
+        manifestOwnerApproved = false;
         try
         {
             var combinedDiff = gitText(worktreePath, ["diff", "--name-only", "--no-renames", "main...HEAD", "--"]);
@@ -122,17 +133,21 @@ public sealed partial class GoalAcceptanceVerifier
                 var combinedText = gitText(worktreePath, ["show", $"HEAD:{path}"]);
                 if (!string.Equals(memberText, combinedText, StringComparison.Ordinal)) return false;
             }
+            var hasManifestChange = changes.Any(change => change.Protected.Contains(manifest));
+            var allManifestChangesApproved = true;
             foreach (var change in changes.Where(change => change.Protected.Count > 0))
             {
                 if (change.Protected.Any(path => !combined.Contains(path))) return false;
                 if (decisions is not null && IsApproved(worktreePath, change.Files, gitText, decisions, change.Member.GoalId,
                         change.Member.CandidateSha, change.Member.CandidateSha, readCommittedCandidate: true)) continue;
+                if (change.Protected.Contains(manifest)) allManifestChangesApproved = false;
                 if (change.Protected.Count == 1 && change.Protected.Contains(manifest) &&
                     IsEquivalentManifestChange(worktreePath, change.Files, gitText, inventory, change.Member.CandidateSha,
                         gitText(worktreePath, ["show", $"main:{manifest}"]),
                         gitText(worktreePath, ["show", $"{change.Member.CandidateSha}:{manifest}"]))) continue;
                 return false;
             }
+            manifestOwnerApproved = combined.Count > 0 && hasManifestChange && allManifestChangesApproved;
             return combined.Count > 0;
         }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException or
