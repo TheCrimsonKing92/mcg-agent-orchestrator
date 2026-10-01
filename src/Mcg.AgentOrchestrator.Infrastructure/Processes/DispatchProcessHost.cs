@@ -1681,7 +1681,8 @@ public static void DropToLow() {
                 candidateOwnedPids,
                 () => workerGroup?.TryGetActiveProcessIds(out var currentOwnedPids) == true
                     ? currentOwnedPids
-                    : candidateOwnedPids);
+                    : candidateOwnedPids,
+                processId => ReadHeartbeatProcessIdentity(processId, worker));
             var identityBoundOwnedPids = identitySnapshot.Current
                 .Where(identity => identity.ProcessId != Environment.ProcessId && candidateSet.Contains(identity.ProcessId))
                 .Select(identity => identity.ProcessId)
@@ -2224,6 +2225,19 @@ public static void DropToLow() {
             .Concat(descendants)
             .Distinct()
             .ToArray();
+    }
+
+    internal static SpawnProcessIdentity? ReadHeartbeatProcessIdentity(int processId, Process? worker)
+    {
+        if (!OperatingSystem.IsWindows() || worker is null || processId != worker.Id)
+            return DispatchProcessIdentityEvidence.ReadCurrent(processId);
+
+        // The launch handle identifies the worker before its loader exposes MainModule.
+        var read = WindowsNativeProcessInspection.ReadLifecycleIdentity(processId, worker.SafeHandle);
+        return read.Status == ProcessInspectionStatus.Available && read.StartedAt is { } startedAt &&
+            !string.IsNullOrWhiteSpace(read.ExecutablePath)
+            ? new SpawnProcessIdentity(processId, startedAt, read.ExecutablePath)
+            : null;
     }
 
     internal static IReadOnlyList<SpawnProcessIdentity> CaptureHeartbeatProcessIdentities(

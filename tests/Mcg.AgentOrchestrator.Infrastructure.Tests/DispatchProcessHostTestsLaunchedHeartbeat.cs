@@ -8,6 +8,29 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class DispatchProcessHostTestsLaunchedHeartbeat
 {
     [Xunit.Fact]
+    public void WorkerIdentity_BeforeLoaderInitialization_IsCapturedFromLaunchHandle()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var workerImagePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+        using var suspended = OwnedProcessGroup.StartSuspended(new ProcessStartInfo(workerImagePath, "/c exit 0")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        });
+        var worker = suspended.Process;
+        Assert.Null(DispatchProcessIdentityEvidence.ReadCurrent(worker.Id));
+        var identities = DispatchProcessHost.CaptureHeartbeatProcessIdentities(
+            Environment.ProcessId, [worker.Id],
+            () => suspended.Group.TryGetActiveProcessIds(out var ownedPids) ? ownedPids : null,
+            processId => DispatchProcessHost.ReadHeartbeatProcessIdentity(processId, worker));
+        var identity = Assert.Single(identities, entry => entry.ProcessId == worker.Id);
+        Assert.Equal(worker.StartTime.ToUniversalTime(), identity.StartedAt.UtcDateTime);
+        Assert.Equal(workerImagePath, identity.ImagePath, StringComparer.OrdinalIgnoreCase);
+        Assert.False(worker.HasExited);
+    }
+
+    [Xunit.Fact]
     public async Task AttachedWorker_PublishesLaunchedIdentityBeforePeriodicHeartbeat()
     {
         var directory = NewDirectory();
