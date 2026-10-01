@@ -976,41 +976,7 @@ public sealed class CliHelpTests
             startInfo.ArgumentList.Add(arg);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start app CLI.");
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30000))
-        {
-            var termination = TryTerminateProcess(process);
-            throw new TimeoutException(
-                $"CLI did not exit for: {string.Join(' ', args)}; {termination}. stdout={CompletedOutput(outputTask)} stderr={CompletedOutput(errorTask)}");
-        }
-
-        var output = outputTask.GetAwaiter().GetResult();
-        var error = errorTask.GetAwaiter().GetResult();
-        return (process.ExitCode, output, error);
+        var result = CliChildProcessRunner.Run(startInfo);
+        return (result.ExitCode, result.StandardOutput, result.StandardError);
     }
-
-    private static string TryTerminateProcess(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-            return process.WaitForExit(5000)
-                ? "process tree terminated"
-                : "process tree did not exit within 5 seconds after termination";
-        }
-        catch (InvalidOperationException)
-        {
-            return "process exited before termination";
-        }
-        catch (System.ComponentModel.Win32Exception ex)
-        {
-            return $"process termination failed: {ex.Message}";
-        }
-    }
-
-    private static string CompletedOutput(Task<string> outputTask) =>
-        outputTask.IsCompletedSuccessfully ? outputTask.Result : "<stream still open>";
 }
