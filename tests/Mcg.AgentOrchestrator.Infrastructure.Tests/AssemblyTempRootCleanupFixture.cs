@@ -10,6 +10,7 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     private readonly Func<TempRootDeleteOutcome?> releaseOwnedRoot;
     private readonly TextWriter? diagnostics;
     private readonly Func<ProcessCommandLineSnapshot> processSnapshot;
+    private readonly Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader;
 
     public AssemblyTempRootCleanupFixture()
         : this(() => AssemblyTempRedirect.ReleaseOwnedRoot(AssemblyTempRootCleanupOwner.AssemblyFixture), null)
@@ -19,11 +20,13 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
     internal AssemblyTempRootCleanupFixture(
         Func<TempRootDeleteOutcome?> releaseOwnedRoot,
         TextWriter? diagnostics,
-        Func<ProcessCommandLineSnapshot>? processSnapshot = null)
+        Func<ProcessCommandLineSnapshot>? processSnapshot = null,
+        Func<int, ProcessCurrentDirectoryReadResult>? currentDirectoryReader = null)
     {
         this.releaseOwnedRoot = releaseOwnedRoot;
         this.diagnostics = diagnostics;
         this.processSnapshot = processSnapshot ?? ProcessCommandLines.Snapshot;
+        this.currentDirectoryReader = currentDirectoryReader;
     }
 
     public ValueTask DisposeAsync()
@@ -49,9 +52,25 @@ public sealed class AssemblyTempRootCleanupFixture : IAsyncDisposable
                 }
             }
 
-            EnsureSuccessful(outcome, outcome?.Status == TempRootDeleteStatus.Failed
-                ? AssemblyTempRootCleanupHolderDiagnostics.Describe(outcome.Path, processSnapshot)
-                : null);
+            AssemblyTempRootCleanupHolderReport? report = null;
+            if (outcome?.Status == TempRootDeleteStatus.Failed)
+            {
+                report = AssemblyTempRootCleanupHolderDiagnostics.Describe(
+                    outcome.Path, processSnapshot, currentDirectoryReader);
+                try
+                {
+                    foreach (var line in report.DiagnosticLines)
+                    {
+                        (diagnostics ?? Console.Error).WriteLine(line);
+                    }
+                }
+                catch
+                {
+                    // A diagnostic writer failure must not replace the cleanup failure.
+                }
+            }
+
+            EnsureSuccessful(outcome, report?.MessageText);
             return ValueTask.CompletedTask;
         }
         finally

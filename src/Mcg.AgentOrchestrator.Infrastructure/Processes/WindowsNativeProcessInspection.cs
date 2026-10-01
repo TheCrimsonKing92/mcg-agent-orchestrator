@@ -29,7 +29,7 @@ public sealed record ProcessInspectionFailure(
     int NativeError,
     string Operation);
 
-internal static class WindowsNativeProcessInspection
+internal static partial class WindowsNativeProcessInspection
 {
     private const uint SnapshotProcesses = 0x00000002;
     private const int ProcessQueryLimitedInformation = 0x1000;
