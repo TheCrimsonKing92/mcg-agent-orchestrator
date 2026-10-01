@@ -764,7 +764,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
 
         Assert.True(result.Passed);
         Assert.Equal(
-            CountChangeScopedInfrastructureTestLanes(root) + 4,
+            CountChangeScopedInfrastructureTestLanes(root) + 3,
             calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[1][2]);
         var infrastructureCalls = calls
