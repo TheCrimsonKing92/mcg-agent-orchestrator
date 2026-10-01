@@ -118,11 +118,6 @@ function Get-LockKind {
         return "conduct-loop"
     }
 
-    if ($command.IndexOf("serve-dashboard", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-        $command.IndexOf("-dashboard", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-        return "dashboard"
-    }
-
     return "app-host"
 }
 

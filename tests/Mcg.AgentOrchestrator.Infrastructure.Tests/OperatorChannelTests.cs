@@ -27,14 +27,44 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, "operator-channel.json");
-        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001");
+        var catalog = new OperatorChannelCatalog("discord");
 
         OperatorChannelStore.Save(path, catalog);
         var restored = OperatorChannelStore.Load(path);
 
         Assert.Equal("discord", restored.ChannelType);
-        Assert.Equal("https://localhost:5001", restored.DashboardBaseUrl);
         Assert.False(restored.IsNull);
+    }
+
+    [Xunit.Fact]
+    public void OperatorChannelStoreLoadsLegacyDashboardUrlAndDropsItWhenSaved()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "operator-channel.json");
+        File.WriteAllText(path, """
+            { "channelType": "discord", "dashboardBaseUrl": "https://localhost:5001",
+              "forumChannelId": "42", "operatorUserIds": ["user1"] }
+            """);
+
+        var catalog = OperatorChannelStore.Load(path);
+
+        Assert.Equal("discord", catalog.ChannelType);
+        Assert.Equal("42", catalog.ForumChannelId);
+        Assert.Equal(["user1"], catalog.OperatorUserIds);
+        OperatorChannelStore.Save(path, catalog);
+        Assert.DoesNotContain("dashboardBaseUrl", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task DiscordOperatorChannelRendersNoDashboardLine()
+    {
+        var store = CollaborationItemStore.ForDirectory(CreateTempDirectory());
+        var channel = new DiscordOperatorChannel(store);
+
+        await channel.SendEscalationAsync(BuildEscalation("inbox-without-dashboard"));
+
+        var content = (await store.GetAttentionQueueAsync()).Single().Body;
+        Assert.DoesNotContain("**Dashboard:**", content, StringComparison.Ordinal);
+        Assert.Contains("**Response:**", content, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "OperatorChannelStore_load_missing_file_returns_null_default")]
@@ -71,7 +101,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var mutedUntil = DateTimeOffset.Parse("2026-07-26T05:00:00Z");
         var existing = new OperatorChannelCatalog(
             "discord",
-            "https://old.example",
             "41",
             ["old-user"],
             ProgressThreadId: "progress-thread",
@@ -86,14 +115,11 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             root,
             "operator-channel",
             "set",
-            "discord",
-            "--dashboard-url",
-            "https://new.example");
+            "discord");
         var merged = OperatorChannelStore.Load(workspace.OperatorChannelPath);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("operatorUserIds=1", result.Stdout);
-        Assert.Equal("https://new.example", merged.DashboardBaseUrl);
         Assert.Equal("41", merged.ForumChannelId);
         Assert.Equal(["old-user"], merged.OperatorUserIds);
         Assert.Equal("progress-thread", merged.ProgressThreadId);
@@ -166,18 +192,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var escalation = OperatorEscalationProjection.Project(item);
 
         Assert.True(escalation is null);
-    }
-
-    [Xunit.Fact(DisplayName = "Projection_adds_dashboard_deep_link_when_base_url_provided")]
-    public void ProjectionAddsDashboardDeepLinkWhenBaseUrlProvided()
-    {
-        var item = BuildInboxItem(OperatorInboxKind.FailedTask, OperatorInboxSeverity.Blocker,
-            suggestedCommand: "next abc123");
-
-        var escalation = OperatorEscalationProjection.Project(item, "https://localhost:5001");
-
-        Assert.True(escalation is not null);
-        Assert.Equal($"https://localhost:5001/goals/{item.GoalPrefix}", escalation!.DashboardDeepLink);
     }
 
     [Xunit.Fact(DisplayName = "Projection_ProjectAll_excludes_acknowledged_items")]
@@ -566,8 +580,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             "Land required",
             "Promote to main requested",
             "escalated at ...",
-            [new OperatorEscalationAction("Promote to Main", "land abc123", RequiresConfirm: true)],
-            null);
+            [new OperatorEscalationAction("Promote to Main", "land abc123", RequiresConfirm: true)]);
 
         await channel.SendEscalationAsync(escalation);
 
@@ -590,8 +603,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             "Acceptance blocked for goal",
             "Goal: Improve escalation content\nReason: Acceptance output tail: test failure",
             "tail: Xunit failed in OperatorChannelTests",
-            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)],
-            null);
+            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)]);
 
         await channel.SendEscalationAsync(escalation);
 
@@ -619,8 +631,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             "Acceptance ready",
             "Goal ready",
             "evidence",
-            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)],
-            null);
+            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)]);
 
         await channel.SendEscalationAsync(escalation);
 
@@ -646,8 +657,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
                 new OperatorEscalationAction("Retry", "retry 2 <note> --autonomy safe-auto"),
                 new OperatorEscalationAction("Refresh", "refresh-dispatch 3"),
                 new OperatorEscalationAction("Re-delegate", "re-delegate 4 --autonomy safe-auto")
-            ],
-            null);
+            ]);
 
         await channel.SendEscalationAsync(escalation);
 
@@ -677,8 +687,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             "Acceptance",
             "summary",
             "evidence",
-            [new OperatorEscalationAction("Accept", "acceptance abc12345 --autonomy supervised-auto")],
-            null);
+            [new OperatorEscalationAction("Accept", "acceptance abc12345 --autonomy supervised-auto")]);
 
         await channel.SendEscalationAsync(escalation);
 
@@ -700,7 +709,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_token_missing")]
     public void OperatorChannelFactoryReturnsNullChannelWhenTokenMissing()
     {
-        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "123456789");
+        var catalog = new OperatorChannelCatalog("discord", "123456789");
         var channel = OperatorChannelComposition.Create(catalog, null, CreateTempDirectory());
         Assert.Equal("null", channel.ChannelType);
     }
@@ -708,7 +717,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_forum_channel_id_missing")]
     public void OperatorChannelFactoryReturnsNullChannelWhenForumChannelIdMissing()
     {
-        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", ForumChannelId: null);
+        var catalog = new OperatorChannelCatalog("discord", ForumChannelId: null);
         var channel = OperatorChannelComposition.Create(catalog, "token", CreateTempDirectory());
         Assert.Equal("null", channel.ChannelType);
     }
@@ -717,7 +726,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     public void OperatorChannelFactoryReturnsDiscordChannelWhenFullyConfigured()
     {
         var fakeApi = new FakeDiscordForumApi(nextThreadId: 1UL);
-        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "42");
+        var catalog = new OperatorChannelCatalog("discord", "42");
         var channel = OperatorChannelComposition.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
         Assert.Equal("discord", channel.ChannelType);
     }
@@ -731,7 +740,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var path = Path.Combine(root, "operator-channel.json");
         var catalog = new OperatorChannelCatalog(
             "discord",
-            "https://localhost:5001",
             ForumChannelId: "987654321",
             OperatorUserIds: ["111", "222"]);
 
@@ -749,7 +757,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, "operator-channel.json");
-        var catalog = new OperatorChannelCatalog("discord", null, "X", ["A", "B"]);
+        var catalog = new OperatorChannelCatalog("discord", "X", ["A", "B"]);
 
         OperatorChannelStore.Save(path, catalog);
         var restored = OperatorChannelStore.Load(path);
@@ -765,7 +773,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         var csv = "A,B,C";
         var userIds = (IReadOnlyList<string>)csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var catalog = new OperatorChannelCatalog("discord", null, null, userIds);
+        var catalog = new OperatorChannelCatalog("discord", null, userIds);
 
         Assert.Equal(3, catalog.OperatorUserIds?.Count ?? 0);
         Assert.True(catalog.OperatorUserIds!.Contains("A"));
@@ -790,7 +798,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     public async Task OperatorChannelFactorySendTestEscalationConfiguredChannelRaisesQueueItem()
     {
         var fakeApi = new FakeDiscordForumApi(nextThreadId: 100UL);
-        var catalog = new OperatorChannelCatalog("discord", null, "42");
+        var catalog = new OperatorChannelCatalog("discord", "42");
         var stateDir = CreateTempDirectory();
         var channel = OperatorChannelComposition.CreateWithApi(catalog, fakeApi, stateDir);
         var output = new StringWriter();
@@ -1116,21 +1124,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
 
     // ---- Deep link rendered in message content ----
 
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_renders_deep_link_in_content")]
-    public async Task DiscordOperatorChannelRendersDeepLinkInContent()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var escalation = BuildEscalation("inbox-deep-link", goalPrefix: "abc123")
-            with { DashboardDeepLink = "https://localhost:5001/goals/abc123" };
-
-        await channel.SendEscalationAsync(escalation);
-
-        var sentContent = (await store.GetAttentionQueueAsync()).Single().Body;
-        Assert.Contains("https://localhost:5001/goals/abc123", sentContent);
-    }
-
     // ---- helpers ----
 
     private static Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace BuildTestWorkspace()
@@ -1207,8 +1200,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     {
         return new OperatorEscalation(
             inboxItemId, goalId, goalPrefix, kind, title, summary, keyEvidence,
-            actions ?? [new OperatorEscalationAction("Retry", "next testgoal", RequiresConfirm: false)],
-            null);
+            actions ?? [new OperatorEscalationAction("Retry", "next testgoal", RequiresConfirm: false)]);
     }
 
     private static OperatorInboxItem BuildInboxItem(

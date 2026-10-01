@@ -555,13 +555,6 @@ internal static class CliCommandHelp
             ["hermes-acp-verify-identity"] = Flags(
                 "--executable", "--working-directory", "--hermes-home", "--receipt"),
             ["provider-smoke"] = Flags("--confirm-all", "--confirm-paid-smoke"),
-            ["dashboard"] = DashboardFlags(),
-            ["prototype-ui"] = DashboardFlags(),
-            ["serve-dashboard"] = DashboardFlags(),
-            ["hosted-dashboard"] = DashboardFlags(),
-            ["simple-hosted-dashboard"] = DashboardFlags(),
-            ["open-dashboard"] = DashboardFlags(),
-            ["transcript"] = Flags(),
             ["monitor-goal"] = Flags(
                 "--event-kind", "--format", "--from-cursor", "--goal-prefix", "--once", "--since",
                 "--task", "--timeout", "--wait-terminal"),
@@ -584,7 +577,7 @@ internal static class CliCommandHelp
             ["operator-inbox"] = Flags("--show-acknowledged"),
             ["operator-inbox-ack"] = Flags("--goal"),
             ["operator-channel"] = Flags(
-                "--dashboard-url", "--forum-channel-id", "--operator-user-id", "--operator-user-ids", "--spine"),
+                "--forum-channel-id", "--operator-user-id", "--operator-user-ids", "--spine"),
             ["operator-control-plane"] = Flags("--hours"),
             ["next"] = Flags("--autonomy", "--autonomy-policy", "--full"),
             ["advance-subscription"] = Flags(
@@ -630,9 +623,6 @@ internal static class CliCommandHelp
 
     private static IReadOnlySet<string> Flags(params string[] flags) =>
         flags.Concat(["--help", "-h"]).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-    private static IReadOnlySet<string> DashboardFlags() =>
-        Flags("--lan", "--mode", "--no-open", "--open", "--refresh");
 
     private static IReadOnlySet<string> LifecycleGoalFlags() =>
         Flags(
@@ -1235,7 +1225,7 @@ internal static class CliCommandHelp
 
         if (!args[0].Equals("workspace", StringComparison.OrdinalIgnoreCase))
         {
-            if (IsDashboardAdapterCommand(args[0]) || CliArgumentParser.IsRecognizedCommand(args[0]))
+            if (CliArgumentParser.IsRecognizedCommand(args[0]))
             {
                 entry = CommandHelpEntry.Generic(args[0]);
                 return true;
@@ -1253,15 +1243,6 @@ internal static class CliCommandHelp
         entry = Workspace;
         return true;
     }
-
-    private static bool IsDashboardAdapterCommand(string command) =>
-        command.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("serve-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("simple-hosted-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("open-dashboard", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("transcript", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryPrintHelpCommand(IReadOnlyList<string> args)
     {

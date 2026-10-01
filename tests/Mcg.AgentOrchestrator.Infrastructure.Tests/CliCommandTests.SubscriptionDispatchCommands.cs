@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
@@ -213,56 +212,6 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Equal("subscription-dispatch 1", command);
     }
 
-
-    [Xunit.Fact(DisplayName = "Cli_static_dashboard_export_uses_workspace_worker_profiles_for_light_role_next_actions")]
-    public void CliStaticDashboardExportUsesWorkspaceWorkerProfilesForLightRoleNextActions()
-    {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal(
-            "Plan with a light role",
-            [new TaskSpec(TaskId.New(), "Summarize the implementation path.", AgentRole.Planner)]);
-        IReadOnlyList<AgentDefinition> agents =
-        [
-            new AgentDefinition(
-                new AgentId("planner"),
-                "Planner",
-                AgentRole.Planner,
-                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
-                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-                Subscription: new SubscriptionLaunchProfile("codex-cli"))
-        ];
-        var providers = new InMemoryModelProviderRegistry([]);
-        var claudeLauncher = Path.Combine(root, "claude.cmd");
-        File.WriteAllText(claudeLauncher, "@echo off\r\n");
-        var profiles = new WorkerProfileCatalog(
-        [
-            new WorkerProfile("claude-cli", $"\"{claudeLauncher}\" --model {{subscriptionModelName}} --print {{promptPath}}")
-        ]);
-        Goal? currentGoal = goal;
-        kernel.ActivateGoal(goal.Id, agents);
-        var dashboardPath = Path.Combine(root, "static-dashboard.html");
-
-        var output = CaptureConsole(() =>
-        {
-            var changed = CliCommandDispatcher.ExecuteCommand(
-                ["dashboard", dashboardPath],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal);
-            Xunit.Assert.False(changed);
-        });
-        var html = File.ReadAllText(dashboardPath);
-
-        Xunit.Assert.Contains($"Dashboard: {Path.GetFullPath(dashboardPath)}", output);
-        Xunit.Assert.Contains("subscription-dispatch 1", html, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("<code>run 1</code>", html, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain($"OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias}", html, StringComparison.Ordinal);
-    }
 
 
     [Xunit.Fact(DisplayName = "Cli_next_reports_dispatch_recovery_policy_action_for_refresh")]
@@ -521,22 +470,6 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Assert.True(plan.FirstBatchCandidates.Any(candidate => candidate.GoalId == first.Id.Value));
         Assert.True(plan.FirstBatchCandidates.Any(candidate => candidate.GoalId == second.Id.Value));
         Assert.True(plan.ParallelPlan.Decisions.Any(decision =>
-            decision.IntentId == conflict.Id.Value &&
-            decision.Disposition == ParallelExecutionDisposition.Serialized));
-        var dto = DashboardResponseMapper.ToCrossGoalStartPlanDto(plan, new GoalDrainPolicy(
-            "overnight-safe",
-            2,
-            ["Planner", "Researcher"],
-            ["OpenAI", "Anthropic"],
-            "defer",
-            RequireReadinessRiskConfirmation: true,
-            RequireAcceptanceGate: true));
-        Assert.Equal(3, dto.CandidateCount);
-        Xunit.Assert.NotNull(dto.DrainPolicy);
-        Assert.Equal("overnight-safe", dto.DrainPolicy!.Name);
-        Assert.Equal(2, dto.DrainPolicy.MaxSubscriptionStartsPerDrain);
-        Assert.True(dto.DrainPolicy.AllowedRoles.Any(role => role == "Planner"));
-        Assert.True(dto.ParallelPlan.Decisions.Any(decision =>
             decision.IntentId == conflict.Id.Value &&
             decision.Disposition == ParallelExecutionDisposition.Serialized));
     }
@@ -1401,37 +1334,6 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Null(task.LastProcess);
     }
 
-
-    [Xunit.Fact(DisplayName = "Dashboard_subscription_dispatch_ready_result_exposes_ready_blocked_diagnostics")]
-    public void DashboardSubscriptionDispatchReadyResultExposesReadyBlockedDiagnostics()
-    {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
-        var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), "Update src/one.txt", AgentRole.Developer);
-        var goal = kernel.CreateGoal("Expose blocked ready tasks", [task]);
-        MarkGoalRefined(kernel, goal);
-        IReadOnlyList<AgentDefinition> agents = [SubscriptionDeveloper()];
-        kernel.ActivateGoal(goal.Id, agents);
-        WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
-        DirtyGoalWorktree(root, goal);
-
-        var result = GoalManagementCommandService.ApplySubscriptionDispatchReady(
-            kernel,
-            workspace,
-            agents,
-            goal,
-            new InMemoryModelProviderRegistry([]));
-
-        Xunit.Assert.Equal(0, result.Count);
-        var diagnostic = Xunit.Assert.Single(result.ReadyBlocked!);
-        Xunit.Assert.Equal(goal.Id.Value[..8], diagnostic.Goal);
-        Xunit.Assert.Equal(1, diagnostic.Task);
-        Xunit.Assert.Equal("codex-spark", diagnostic.Provider);
-        Xunit.Assert.Equal("dirty-worktree", diagnostic.Reason);
-        Xunit.Assert.Contains("dirty.txt", diagnostic.Line, StringComparison.Ordinal);
-        Xunit.Assert.Contains(diagnostic.Details!, detail => detail.Contains("dirty.txt", StringComparison.Ordinal));
-    }
 
 
     [Xunit.Fact(DisplayName = "Cli_start_subscription_ready_policy_gate_writes_distinct_ready_blocked_reason")]

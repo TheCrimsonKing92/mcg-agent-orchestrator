@@ -1,4 +1,3 @@
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -20,16 +19,8 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
             ["supersede", goal.Id.Value[..8], request.Id.Value[..8], "Use five seconds."],
             kernel,
             workspace);
-        var dto = DashboardResponseMapper.ToHumanInputDto(kernel, request);
 
         Assert.Contains("Authoritative answer: Use five seconds.", output, StringComparison.Ordinal);
-        Assert.Equal("Use five seconds.", dto.Answer);
-        Assert.Equal(2, dto.AnswerHistory.Count);
-        Assert.True(dto.AnswerHistory[0].IsRetracted);
-        Assert.False(dto.AnswerHistory[0].IsAuthoritative);
-        Assert.Equal(dto.AnswerHistory[1].Id, dto.AnswerHistory[0].SupersededByAnswerId);
-        Assert.True(dto.AnswerHistory[1].IsAuthoritative);
-        Assert.Equal("Use one second.", dto.AnswerHistory[0].Text);
     }
 
     [Xunit.Fact]

@@ -33,11 +33,10 @@ public sealed class CandidateTreeAbsenceSkipTests
             var shards = AcceptancePolicyShardPlanner.BuildPolicyShardPlan(paths,
                 new(FullShards: false, ChangeScoped: true), CandidateTreeProbe.ForRepositoryRoot(root));
             Assert.DoesNotContain(AcceptancePolicyShardPlanner.CoreTestsProject, shards.DependencyClosure);
-            Assert.DoesNotContain(AcceptancePolicyShardPlanner.DashboardTestsProject, shards.DependencyClosure);
+            Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", shards.DependencyClosure);
             Assert.StartsWith("changed projects: Core;", shards.Evidence);
             Assert.Contains(RemovedPath, shards.Evidence);
             Assert.Contains(AcceptancePolicyShardPlanner.CoreTestsProject, shards.Evidence);
-            Assert.Contains(AcceptancePolicyShardPlanner.DashboardTestsProject, shards.Evidence);
             Assert.True(AcceptancePolicyShardPlanner.IsSkippedPolicyShardCheck(
                 TestCheck(AcceptancePolicyShardPlanner.CoreTestsProject), shards));
             Assert.False(AcceptancePolicyShardPlanner.IsRunnablePolicyShardCheck(
@@ -80,7 +79,7 @@ public sealed class CandidateTreeAbsenceSkipTests
         Assert.Empty(plan.DependencyClosure);
         Assert.True(plan.Applies);
         Assert.False(plan.ForceFull);
-        Assert.False(plan.IncludesProject(AcceptancePolicyShardPlanner.DashboardTestsProject));
+        Assert.False(plan.IncludesProject("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"));
         Assert.Equal("changed projects: (none); dependency closure: (none)", plan.Evidence);
     }
 

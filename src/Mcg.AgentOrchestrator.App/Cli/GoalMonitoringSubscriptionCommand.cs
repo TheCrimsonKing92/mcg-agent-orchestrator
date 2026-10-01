@@ -1,8 +1,6 @@
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Net.Http.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -42,25 +40,14 @@ internal static class GoalMonitoringSubscriptionCommand
         string? goalPrefix = null;
         string? taskId = null;
         var eventKinds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        Uri? dashboardUri = null;
-        string goalId;
-        var optionStart = 2;
-        if (IsDashboardUri(parts[1]))
+        var goalId = parts[1];
+        if (Uri.TryCreate(goalId, UriKind.Absolute, out var uri) &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            if (parts.Count < 3)
-            {
-                throw new ArgumentException(Usage);
-            }
-
-            dashboardUri = CreateDashboardUri(parts[1]);
-            goalId = parts[2];
-            optionStart = 3;
-        }
-        else
-        {
-            goalId = parts[1];
+            throw new ArgumentException($"Invalid goal argument '{goalId}'. {Usage}");
         }
 
+        const int optionStart = 2;
         for (var index = optionStart; index < parts.Count; index++)
         {
             var part = parts[index];
@@ -166,7 +153,6 @@ internal static class GoalMonitoringSubscriptionCommand
         }
 
         return new GoalMonitoringSubscriptionOptions(
-            dashboardUri,
             goalId,
             sinceEventId,
             once,
@@ -205,48 +191,6 @@ internal static class GoalMonitoringSubscriptionCommand
         return normalized;
     }
 
-    public static Uri BuildSnapshotUri(GoalMonitoringSubscriptionOptions options)
-    {
-        return BuildUri(options, stream: false);
-    }
-
-    public static Uri BuildStreamUri(GoalMonitoringSubscriptionOptions options)
-    {
-        return BuildUri(options, stream: true);
-    }
-
-    public static async Task RunAsync(IReadOnlyList<string> parts, TextWriter output, CancellationToken cancellationToken = default)
-    {
-        var options = Parse(parts);
-        if (options.IsLocal)
-        {
-            throw new ArgumentException("Local monitor-goal requires orchestrator state. Use: monitor-goal <goal-id> [--since <event-id>] [--once]");
-        }
-
-        using var client = new HttpClient();
-
-        if (options.Once)
-        {
-            var batch = await client.GetFromJsonAsync<GoalMonitoringBatch>(
-                BuildSnapshotUri(options),
-                ApplicationQueryJson.Options(),
-                cancellationToken).ConfigureAwait(false);
-            if (batch is null)
-            {
-                throw new InvalidOperationException("Dashboard returned an empty monitoring response.");
-            }
-
-            PrintBatch(batch, output);
-            return;
-        }
-
-        await using var stream = await client.GetStreamAsync(BuildStreamUri(options), cancellationToken).ConfigureAwait(false);
-        await foreach (var serverEvent in ReadServerSentEventsAsync(stream, cancellationToken).ConfigureAwait(false))
-        {
-            PrintServerSentEvent(serverEvent, output);
-        }
-    }
-
     public static async Task RunAsync(
         IReadOnlyList<string> parts,
         TextWriter output,
@@ -258,12 +202,6 @@ internal static class GoalMonitoringSubscriptionCommand
         CancellationToken cancellationToken = default)
     {
         var options = Parse(parts);
-        if (!options.IsLocal)
-        {
-            await RunAsync(parts, output, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
         var runEvents = new SqliteRunEventStore(workspace.RunEventStorePath);
         var outcome = await RunHeadlessLocalAsync(
             options,
@@ -298,97 +236,6 @@ internal static class GoalMonitoringSubscriptionCommand
         foreach (var evt in batch.Events)
         {
             PrintTimelineEvent(evt, output);
-        }
-    }
-
-    public static void PrintServerSentEvent(ServerSentEvent serverEvent, TextWriter output)
-    {
-        if (serverEvent.Event.Equals(ApplicationMonitoringContract.KeepAliveEventName, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        if (serverEvent.Event.Equals("goal.snapshot", StringComparison.OrdinalIgnoreCase))
-        {
-            var snapshot = JsonSerializer.Deserialize<GoalMonitoringSnapshot>(serverEvent.Data, ApplicationQueryJson.Options());
-            if (snapshot is not null)
-            {
-                PrintSnapshot(snapshot, output);
-            }
-
-            return;
-        }
-
-        if (serverEvent.Event.Equals("timeline", StringComparison.OrdinalIgnoreCase))
-        {
-            var evt = JsonSerializer.Deserialize<GoalMonitoringEvent>(serverEvent.Data, ApplicationQueryJson.Options());
-            if (evt is not null)
-            {
-                PrintTimelineEvent(evt, output);
-            }
-
-            return;
-        }
-
-        output.WriteLine($"event {serverEvent.Event} id={serverEvent.Id ?? "-"}");
-    }
-
-    public static async IAsyncEnumerable<ServerSentEvent> ReadServerSentEventsAsync(
-        Stream stream,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
-    {
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        string? id = null;
-        string? eventName = null;
-        var data = new StringBuilder();
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-            if (line is null)
-            {
-                break;
-            }
-
-            if (line.Length == 0)
-            {
-                if (eventName is not null || data.Length > 0)
-                {
-                    yield return new ServerSentEvent(id, eventName ?? "message", data.ToString());
-                }
-
-                id = null;
-                eventName = null;
-                data.Clear();
-                continue;
-            }
-
-            if (line.StartsWith(':'))
-            {
-                continue;
-            }
-
-            if (line.StartsWith("id:", StringComparison.Ordinal))
-            {
-                id = line["id:".Length..].Trim();
-                continue;
-            }
-
-            if (line.StartsWith("event:", StringComparison.Ordinal))
-            {
-                eventName = line["event:".Length..].Trim();
-                continue;
-            }
-
-            if (line.StartsWith("data:", StringComparison.Ordinal))
-            {
-                if (data.Length > 0)
-                {
-                    data.AppendLine();
-                }
-
-                data.Append(line["data:".Length..].TrimStart());
-            }
         }
     }
 
@@ -1059,42 +906,7 @@ internal static class GoalMonitoringSubscriptionCommand
         return null;
     }
 
-    private static Uri BuildUri(GoalMonitoringSubscriptionOptions options, bool stream)
-    {
-        if (options.DashboardUri is null)
-        {
-            throw new InvalidOperationException("Dashboard URI is not available for local monitor-goal mode.");
-        }
-
-        var goalId = Uri.EscapeDataString(options.GoalId);
-        var path = stream ? $"api/goals/{goalId}/events/stream" : $"api/goals/{goalId}/events";
-        var builder = new UriBuilder(new Uri(options.DashboardUri, path));
-        if (options.SinceEventId > 0)
-        {
-            builder.Query = $"since={options.SinceEventId}";
-        }
-
-        return builder.Uri;
-    }
-
-    private static bool IsDashboardUri(string value)
-    {
-        return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
-    }
-
-    private static Uri CreateDashboardUri(string value)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-        {
-            throw new ArgumentException("Dashboard URL must be an absolute http or https URL.");
-        }
-
-        return value.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(value + "/");
-    }
-
-    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>], or monitor-goal <dashboard-url> <goal-id> [--since <event-id>] [--once]. --wait-terminal wakes on completed, failed, abandoned/cancelled, blocked, or awaiting-human-input states; timeout accepts TimeSpan, ms, s, or m.";
+    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>]. --wait-terminal wakes on completed, failed, abandoned/cancelled, blocked, or awaiting-human-input states; timeout accepts TimeSpan, ms, s, or m.";
 
     private sealed class TextWriterStream(TextWriter writer) : Stream
     {
@@ -1115,7 +927,6 @@ internal static class GoalMonitoringSubscriptionCommand
         }
     }
 }
-
 internal enum GoalMonitoringOutputFormat
 {
     Sse,
@@ -1279,7 +1090,6 @@ internal enum GoalStateCursorDomain
 }
 
 internal sealed record GoalMonitoringSubscriptionOptions(
-    Uri? DashboardUri,
     string GoalId,
     long SinceEventId,
     bool Once,
@@ -1291,9 +1101,7 @@ internal sealed record GoalMonitoringSubscriptionOptions(
     string? FromCursor = null,
     TimeSpan? Timeout = null)
 {
-    public bool IsLocal => DashboardUri is null;
+    public bool IsLocal => true;
 
     public GoalStateSubscriptionCursor ResumeCursor => GoalStateSubscriptionCursor.Parse(FromCursor, SinceEventId);
 }
-
-internal sealed record ServerSentEvent(string? Id, string Event, string Data);

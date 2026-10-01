@@ -1,7 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -1438,7 +1437,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.InlineData(AgentRole.Reviewer)]
     public void WorkerProfileDispatcherOperatorOpenAiSelectionConstrainsAllLightRoles(AgentRole role)
 {
-    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+    var agent = AgentDefinitionFactory.Create(new AgentDefinitionInput(
         role.ToString(),
         "OpenAI",
         "gpt-5.4-mini",
@@ -1468,7 +1467,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     [Xunit.InlineData(AgentRole.Reviewer)]
     public void WorkerProfileDispatcherOperatorAnthropicSelectionConstrainsAllLightRoles(AgentRole role)
 {
-    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+    var agent = AgentDefinitionFactory.Create(new AgentDefinitionInput(
         role.ToString(),
         "Anthropic",
         "claude-sonnet-4-6",
@@ -1501,7 +1500,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
     var dispatchedAt = DateTimeOffset.Parse("2026-07-29T12:00:00Z");
-    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+    var agent = AgentDefinitionFactory.Create(new AgentDefinitionInput(
         AgentRole.Planner.ToString(),
         "OpenAI",
         "gpt-5.4-mini",
@@ -1956,12 +1955,6 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var catalogAwareDeclarations = new (string RelativePath, string MethodName)[]
     {
         (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "NextActionControls.cs"), "Build"),
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionsDto"),
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionDto"),
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionControlDto"),
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToGoalWorkSummaryDto"),
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToTaskWorkContextDto"),
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Rendering", "GoalTranscriptRenderer.cs"), "Render"),
         (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "ConsoleViews.DispatchAndNextActions.cs"), "PrintNextActions")
     };
 

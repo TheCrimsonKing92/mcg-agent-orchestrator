@@ -11,7 +11,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj" />
-    <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj" />
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" />
     <ProjectReference Include="..\..\src\Mcg.AgentOrchestrator.Infrastructure.OperatorComms\Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj" />

@@ -16,12 +16,12 @@ public sealed class InfrastructureProductionProjectGraphTests
     private const string DashboardProject =
         "src/Mcg.AgentOrchestrator.Dashboard/Mcg.AgentOrchestrator.Dashboard.csproj";
 
-    [Xunit.Fact(DisplayName = "Dashboard depends on App while App remains headless")]
+    [Xunit.Fact(DisplayName = "Dashboard is absent and App remains headless")]
     public void DashboardDependencyDirectionIsOneWay()
     {
         var projects = LoadProductionProjects(InfrastructureTestSupport.FindRepositoryRoot());
 
-        Assert.Equal([AppProject], projects[DashboardProject].References);
+        Assert.DoesNotContain(DashboardProject, projects.Keys);
         Assert.DoesNotContain(DashboardProject, projects[AppProject].References);
         AssertAcyclic(projects);
     }

@@ -1,6 +1,5 @@
 ﻿using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
@@ -744,24 +743,6 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Equal(ParallelExecutionDisposition.Serialized, second.ParallelDisposition);
     }
 
-
-    [Xunit.Fact(DisplayName = "Dashboard_goal_plan_dto_exposes_compiled_graph_before_goal_creation")]
-    public void DashboardGoalPlanDtoExposesCompiledGraphBeforeGoalCreation()
-    {
-        var root = CreateTempDirectory();
-        WriteCompilationBacklog(root);
-        var intake = BacklogIntakePlanner.Build(BacklogStorePathFor(root), maxItems: 2);
-        var plan = GoalDependencyPlanner.Build(intake);
-
-        var dto = DashboardResponseMapper.ToBacklogGoalPlanDto(intake, plan);
-
-        Xunit.Assert.Equal(2, dto.NodeCount);
-        Xunit.Assert.Equal(plan.CompiledGraph.GraphId, dto.CompiledGraph.GraphId);
-        Xunit.Assert.True(dto.CompiledGraph.IsRunnable);
-        Xunit.Assert.Equal(2, dto.CompiledGraph.Nodes.Count);
-        Xunit.Assert.Contains(dto.CompiledGraph.Nodes[0].FileScopes, scope => scope.Contains("src/FeatureA", StringComparison.Ordinal));
-        Xunit.Assert.Equal(2, dto.ParallelPlan.Batches.Count);
-    }
 
 
     [Xunit.Fact(DisplayName = "Cli_goal_plan_create_simple_goals_embeds_explicit_dependencies")]
@@ -1635,10 +1616,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var intake = BacklogIntakePlanner.Build(workspace.BacklogStorePath, maxItems: 5);
         var plan = GoalDependencyPlanner.Build(intake);
-        var dto = DashboardResponseMapper.ToBacklogGoalPlanDto(intake, plan);
 
         Xunit.Assert.Equal(["Current visible"], intake.Items.Select(item => item.Heading));
-        Xunit.Assert.Equal(1, dto.NodeCount);
+        Xunit.Assert.Equal(1, plan.Nodes.Count);
     }
 
 

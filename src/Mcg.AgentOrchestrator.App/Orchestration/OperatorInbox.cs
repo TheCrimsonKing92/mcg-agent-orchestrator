@@ -605,8 +605,7 @@ internal static class OperatorInbox
                 reason,
                 BuildEscalationSuggestedAction(integrationBranch)),
             $"escalated at {DateTimeOffset.UtcNow:u}; branch={integrationBranch}",
-            [new OperatorEscalationAction(actionLabel, command, RequiresConfirm: requiresConfirm, RequiresInput: command.Contains('<'))],
-            null);
+            [new OperatorEscalationAction(actionLabel, command, RequiresConfirm: requiresConfirm, RequiresInput: command.Contains('<'))]);
         var channelClock = Stopwatch.StartNew();
         var channelOutcome = RunBoundedAsync(
             () => channel.SendEscalationAsync(escalation),

@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptancePolicyShardPlannerTests
 {
     private const string AppEvidence =
-        "changed projects: App; dependency closure: App, Dashboard.Tests, Infrastructure.Cli.Tests, " +
+        "changed projects: App; dependency closure: App, Infrastructure.Cli.Tests, " +
         "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Tests, TestSupport";
 
     [Fact]
@@ -31,7 +31,7 @@ public sealed class AcceptancePolicyShardPlannerTests
             variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
             Assert.Equal(
                 "build-system file changed: src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj; " +
-                "changed projects: Core; dependency closure: App, Core, Core.Tests, Dashboard.Tests, " +
+                "changed projects: Core; dependency closure: App, Core, Core.Tests, " +
                 "Infrastructure, Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.OperatorComms, " +
                 "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Providers, Infrastructure.Tests, TestSupport",
                 AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
@@ -88,7 +88,7 @@ public sealed class AcceptancePolicyShardPlannerTests
             ["src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/OperatorChannelFactory.cs"]);
 
         Assert.Equal(
-            "changed projects: Infrastructure.OperatorComms; dependency closure: App, Dashboard.Tests, " +
+            "changed projects: Infrastructure.OperatorComms; dependency closure: App, " +
             "Infrastructure.Cli.Tests, Infrastructure.OperatorComms, Infrastructure.ProviderEnvironment.Tests, " +
             "Infrastructure.Tests, TestSupport",
             plan.Evidence);

@@ -11,8 +11,6 @@ internal static class RepositoryLayoutConventions
     internal static IReadOnlyList<string> SeededMultiPublicTypeFiles { get; } = Array.AsReadOnly(
         new[]
         {
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/AssemblyInfo.cs",
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/DashboardRenderingTests.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyInfo.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyTempRedirectTests.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalBoard.cs",

@@ -4,7 +4,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record OperatorChannelCatalog(
     string ChannelType,
-    string? DashboardBaseUrl = null,
     string? ForumChannelId = null,
     IReadOnlyList<string>? OperatorUserIds = null,
     string? ProgressThreadId = null,

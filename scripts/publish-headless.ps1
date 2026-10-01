@@ -22,9 +22,6 @@ $runtimeConfig = Join-Path $Output "Mcg.AgentOrchestrator.App.runtimeconfig.json
 if (-not (Test-Path -LiteralPath $runtimeConfig -PathType Leaf)) {
     throw "Headless publish did not produce Mcg.AgentOrchestrator.App.runtimeconfig.json; dependency inventory cannot be verified."
 }
-if (Test-Path (Join-Path $Output "Mcg.AgentOrchestrator.Dashboard.dll")) {
-    throw "Headless publish unexpectedly contains Mcg.AgentOrchestrator.Dashboard.dll."
-}
 if (Select-String -LiteralPath $runtimeConfig -Pattern "Microsoft.AspNetCore.App" -Quiet) {
     throw "Headless publish unexpectedly requires Microsoft.AspNetCore.App."
 }

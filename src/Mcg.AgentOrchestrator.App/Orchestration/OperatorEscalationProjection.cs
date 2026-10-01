@@ -11,13 +11,12 @@ public static class OperatorEscalationProjection
         OperatorInboxKind.OwnershipHold
     ];
 
-    public static OperatorEscalation? Project(OperatorInboxItem item, string? dashboardBaseUrl = null)
+    public static OperatorEscalation? Project(OperatorInboxItem item)
     {
         if (item.Severity != OperatorInboxSeverity.Blocker)
             return null;
 
         var actions = DeriveActions(item);
-        var deepLink = BuildDeepLink(dashboardBaseUrl, item.GoalPrefix);
 
         return new OperatorEscalation(
             item.Id,
@@ -27,17 +26,15 @@ public static class OperatorEscalationProjection
             item.Title,
             FormatSummary(item.Objective, item.Message, item.SuggestedAction),
             item.Evidence,
-            actions,
-            deepLink);
+            actions);
     }
 
     public static IReadOnlyList<OperatorEscalation> ProjectAll(
-        IReadOnlyList<OperatorInboxItem> items,
-        string? dashboardBaseUrl = null)
+        IReadOnlyList<OperatorInboxItem> items)
     {
         return items
             .Where(item => item.Severity == OperatorInboxSeverity.Blocker && !item.Acknowledged)
-            .Select(item => Project(item, dashboardBaseUrl))
+            .Select(item => Project(item))
             .Where(e => e is not null)
             .Cast<OperatorEscalation>()
             .ToList();
@@ -96,14 +93,6 @@ public static class OperatorEscalationProjection
             OperatorInboxKind.ReadinessPreflight => "View Readiness",
             _ => "Take Action"
         };
-
-    private static string? BuildDeepLink(string? dashboardBaseUrl, string goalPrefix)
-    {
-        if (string.IsNullOrWhiteSpace(dashboardBaseUrl))
-            return null;
-        var trimmed = dashboardBaseUrl.TrimEnd('/');
-        return $"{trimmed}/goals/{goalPrefix}";
-    }
 
     internal static string FormatSummary(string objective, string reason, string suggestedAction)
     {

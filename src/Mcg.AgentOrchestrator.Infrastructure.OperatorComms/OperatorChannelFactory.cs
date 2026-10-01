@@ -161,7 +161,7 @@ public static class OperatorChannelFactory
         if (channel is NullOperatorChannel)
         {
             await output.WriteLineAsync("operator-channel test: channel not configured or bot token (MCGO_DISCORD_BOT_TOKEN) missing.");
-            await output.WriteLineAsync("  To configure: operator-channel set discord --forum-channel-id <id> --operator-user-id <id> [--dashboard-url <url>]");
+            await output.WriteLineAsync("  To configure: operator-channel set discord --forum-channel-id <id> --operator-user-id <id>");
             await output.WriteLineAsync("  To set token: export MCGO_DISCORD_BOT_TOKEN=<token>");
             return;
         }
@@ -174,8 +174,7 @@ public static class OperatorChannelFactory
             "[Test] Operator channel verification",
             "This is a test escalation. If you see this in Discord, the outbound channel is working correctly.",
             "Sent from: operator-channel test",
-            [new OperatorEscalationAction("Check Status (safe)", "doctor", RequiresConfirm: false)],
-            null);
+            [new OperatorEscalationAction("Check Status (safe)", "doctor", RequiresConfirm: false)]);
 
         await channel.SendEscalationAsync(testEscalation);
         await output.WriteLineAsync($"Test escalation queued via {channel.ChannelType}. The operator-listen collaboration view will render it in Discord.");

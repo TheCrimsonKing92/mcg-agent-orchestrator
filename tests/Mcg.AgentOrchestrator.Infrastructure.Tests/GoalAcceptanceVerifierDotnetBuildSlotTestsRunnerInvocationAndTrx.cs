@@ -67,7 +67,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             AssertIsolatedTestCommand(dotnetArgs);
             Assert.Equal("Mcg.AgentOrchestrator.sln", dotnetArgs[2]);
             Assert.Contains("--filter", dotnetArgs);
-            Assert.Contains("FullyQualifiedName!~DashboardHostTests&Category!=HostIntegration", dotnetArgs);
+            Assert.Contains("Category!=HostIntegration", dotnetArgs);
             Assert.Contains("--blame-hang-timeout", dotnetArgs);
             Assert.Contains("120s", dotnetArgs);
             Assert.Equal("goal-abcdef12", result.Checks!.Single().LeaseId);
@@ -199,15 +199,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_unfiltered_mtp_dashboard_run_excludes_host_integration")]
-    public async Task GoalAcceptanceVerifierUnfilteredMtpDashboardRunExcludesHostIntegration()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_unfiltered_mtp_cli_run_excludes_host_integration")]
+    public async Task GoalAcceptanceVerifierUnfilteredMtpCliRunExcludesHostIntegration()
     {
         var calls = new List<string[]>();
         var root = CreateManifestWorkspace("""
             {
               "version": 1,
               "checks": [
-                { "name": "full dotnet tests: dashboard", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+                { "name": "full dotnet tests: cli", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
               ],
               "forbiddenChangedPathGlobs": []
             }
@@ -217,7 +217,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
-                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Dashboard.Tests"))
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests"))
                 {
                     WriteMtpTrx(args);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2."));
@@ -234,7 +234,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
                 stableSlotIndex: 0);
 
             Assert.True(result.Passed);
-            var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Dashboard.Tests"));
+            var mtpCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests"));
             AssertArgumentPair(mtpCall, "--filter-not-trait", "Category=HostIntegration");
         }
         finally

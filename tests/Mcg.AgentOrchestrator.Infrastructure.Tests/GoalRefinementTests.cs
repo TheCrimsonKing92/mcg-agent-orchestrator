@@ -1,6 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Cli;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -1133,18 +1132,21 @@ public sealed class GoalRefinementTests
         var task = goal.Tasks.Single();
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "needs retry");
 
-        var queued = await GoalManagementCommandService.ApplyTaskActionAsync(
-            kernel,
-            AgentCatalog.Default().Agents,
-            new InMemoryModelProviderRegistry([]),
-            workspace,
-            goal,
-            task,
-            "retry",
-            """{"message":"Retry after running gh pr checkout and git push.","cause":"ContractClarification"}""");
+        var queued = await new Mcg.AgentOrchestrator.App.Application.GoalTaskCommandOperations()
+            .EnqueueOperatorIntentAsync(
+                workspace,
+                goal,
+                task,
+                OperatorIntentVerbs.Retry,
+                new RetryOperatorIntentPayload(
+                    "Retry after running gh pr checkout and git push.",
+                    RetryRoundKind: null,
+                    RetryCause: RetryCause.ContractClarification),
+                idempotencyKey: null,
+                channel: "test",
+                authenticationAssurance: "test");
 
-        var queuedIntent = Xunit.Assert.IsType<OperatorIntentDto>(queued);
-        Xunit.Assert.Equal(OperatorIntentStatus.Pending, queuedIntent.Status);
+        Xunit.Assert.Equal(OperatorIntentStatus.Pending, queued.Persisted.Status);
         Xunit.Assert.DoesNotContain(
             goal.Timeline,
             evt => evt.Message.Contains("Brief capability warning", StringComparison.Ordinal));

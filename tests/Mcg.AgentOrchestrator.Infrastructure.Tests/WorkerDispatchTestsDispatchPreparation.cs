@@ -2,7 +2,6 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -2433,54 +2432,6 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains(state.Worktree.StatusEntries, entry => entry.Contains("operator-state-surface.txt", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "Dashboard_work_summary_surfaces_authoritative_dispatch_state")]
-    public void DashboardWorkSummarySurfacesAuthoritativeDispatchState()
-{
-    var root = CreateSeededDispatchRepository();
-    var now = DateTimeOffset.Parse("2026-07-03T06:35:00Z");
-    var clock = new TestClock(now);
-    var (_, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
-        root,
-        AgentRole.Developer,
-        "worker output",
-        string.Empty,
-        clock);
-    File.WriteAllText(Path.Combine(process.WorkingDirectory, "dispatch-state-evidence.txt"), "dirty evidence");
-    WriteHeartbeat(
-        process,
-        now.AddSeconds(-12),
-        now.AddSeconds(-12),
-        "exiting",
-        stdoutBytes: 13,
-        stderrBytes: 0,
-        childPid: 222,
-        ownedPids: [process.ProcessId, 222],
-        exitFileExists: true);
-
-    var summary = DashboardResponseMapper.ToTaskWorkSummaryDto(goal, task);
-    var state = Assert.IsType<DispatchAuthoritativeStateDto>(summary.DispatchState);
-
-    Assert.Equal(DispatchStateKind.ExitedAwaitingReconcile, state.Kind);
-    Assert.Equal("refresh-dispatch", state.RecommendedAction);
-    Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, state.RecoveryDecision.Action);
-    Assert.Equal(process.ProcessId, state.ProcessTree.WrapperProcessId);
-    Assert.Null(state.ProcessTree.ChildProcessId);
-    Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == process.ProcessId);
-    Assert.Contains(state.ProcessTree.Processes, node => node.ProcessId == 222);
-    Assert.DoesNotContain(state.ProcessTree.Processes, node => node.IsAlive);
-    Assert.True(state.Artifacts.StandardOutputExists);
-    Assert.Equal(13, state.Artifacts.StandardOutputBytes);
-    Assert.True(state.Artifacts.ExitCodeExists);
-    Assert.True(state.Artifacts.HeartbeatExists);
-    Assert.True(state.Worktree.IsDirty == true);
-    Assert.False(string.IsNullOrWhiteSpace(state.Worktree.HeadCommit));
-    Assert.NotNull(state.Worktree.CommitsAfterDispatch);
-    Assert.Contains(state.Worktree.StatusEntries, entry => entry.Contains("dispatch-state-evidence.txt", StringComparison.Ordinal));
-    Assert.True(state.StaleThresholds.RecentHeartbeatGraceSeconds > 0);
-    Assert.True(state.StaleThresholds.LiveIdleTimeoutSeconds > state.StaleThresholds.RecentHeartbeatGraceSeconds);
-    Assert.Contains("dirty_worktree=True", state.Summary);
-}
-
     [Xunit.Fact(DisplayName = "GoalOperatorDisposition_waits_for_quiet_live_worker")]
     public void GoalOperatorDispositionWaitsForQuietLiveWorker()
 {
@@ -2739,34 +2690,6 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     {
         try { Directory.Delete(root, recursive: true); } catch { }
     }
-}
-
-    [Xunit.Fact(DisplayName = "Dashboard_task_summary_exposes_worker_result_skill_usage")]
-    public void DashboardTaskSummaryExposesWorkerResultSkillUsage()
-{
-    var root = CreateTempDirectory();
-    var kernel = new AgentOrchestratorKernel();
-    var task = new TaskSpec(TaskId.New(), "Implement with selected skills", AgentRole.Developer);
-    var goal = kernel.CreateGoal("Expose skill evidence", [task]);
-    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
-        "worker refresh",
-        root,
-        0,
-        "Done." + Environment.NewLine + WorkerResultBlock(
-            "src/Feature.cs",
-            "dotnet test --filter Feature",
-            "Passed: 1",
-            "abc123",
-            skills: "dotnet-windows-build-hygiene, orchestrator-dogfood"),
-        string.Empty,
-        DateTimeOffset.UtcNow));
-
-    var summary = DashboardResponseMapper.ToTaskSummaryDto(goal, task);
-
-    Assert.True(summary.HasWorkerResultSkillEvidence);
-    Assert.True(summary.WorkerResultSkills!.Any(skill => skill == "dotnet-windows-build-hygiene"));
-    Assert.True(summary.WorkerResultSkills!.Any(skill => skill == "orchestrator-dogfood"));
 }
 
     [Xunit.Fact(DisplayName = "LocalDispatchRunner_rejects_inactive_dispatch_execution")]

@@ -368,7 +368,7 @@ public sealed class DiscordGatewayTests
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_gateway_listener_returns_null_when_token_missing")]
     public void OperatorChannelFactoryGatewayListenerReturnsNullWhenTokenMissing()
     {
-        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", "123456789", ["user1"]);
+        var catalog = new OperatorChannelCatalog("discord", "123456789", ["user1"]);
         var auditDir = CreateTempDirectory();
         var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
 
@@ -380,7 +380,7 @@ public sealed class DiscordGatewayTests
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_gateway_listener_returns_null_when_forum_channel_id_missing")]
     public void OperatorChannelFactoryGatewayListenerReturnsNullWhenForumChannelIdMissing()
     {
-        var catalog = new OperatorChannelCatalog("discord", "https://localhost:5001", ForumChannelId: null, OperatorUserIds: ["user1"]);
+        var catalog = new OperatorChannelCatalog("discord", ForumChannelId: null, OperatorUserIds: ["user1"]);
         var auditDir = CreateTempDirectory();
         var store = new CollaborationItemStore(Path.Combine(auditDir, "items.db"));
 
@@ -1083,8 +1083,7 @@ public sealed class DiscordGatewayTests
             "Landing needs review",
             "Goal: Render escalation through queue\nReason: integration conflict",
             "acceptance output tail",
-            [new OperatorEscalationAction("Accept Goal", "acceptance render12 --autonomy supervised-auto", RequiresConfirm: true)],
-            null);
+            [new OperatorEscalationAction("Accept Goal", "acceptance render12 --autonomy supervised-auto", RequiresConfirm: true)]);
         var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
 
         await channel.SendEscalationAsync(escalation);

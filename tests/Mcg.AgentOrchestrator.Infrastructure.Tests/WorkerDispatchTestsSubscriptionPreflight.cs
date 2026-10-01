@@ -1,7 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
-using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -944,7 +943,6 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.Contains("Recoverable subscription usage limit", item.Detail, StringComparison.Ordinal);
     Assert.Contains("2 previous recoverable subscription usage limit failures", item.Detail, StringComparison.Ordinal);
     Assert.Contains("retry after", item.Detail, StringComparison.Ordinal);
-    Assert.Equal(developer.SubscriptionRetryAfter, DashboardResponseMapper.ToTaskSummaryDto(goal, developer).SubscriptionRetryAfter);
 }
 
     [Xunit.Fact(DisplayName = "Provider_connectivity_retry_backoff_defers_subscription_dispatch_until_not_before")]

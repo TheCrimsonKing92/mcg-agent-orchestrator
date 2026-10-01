@@ -63,11 +63,7 @@ public sealed class HeadlessRuntimeDependencyGraphTests
 
         var dashboardProject = Path.Combine(
             root, "src", "Mcg.AgentOrchestrator.Dashboard", "Mcg.AgentOrchestrator.Dashboard.csproj");
-        var dashboard = XDocument.Load(dashboardProject);
-        Assert.Equal("Microsoft.NET.Sdk.Web", dashboard.Root?.Attribute("Sdk")?.Value);
-        Assert.Contains(dashboard.Descendants(), element =>
-            element.Name.LocalName == "ProjectReference" &&
-            element.Attribute("Include")?.Value.Contains("Mcg.AgentOrchestrator.App", StringComparison.Ordinal) == true);
+        Assert.False(File.Exists(dashboardProject));
     }
 
     [Fact]

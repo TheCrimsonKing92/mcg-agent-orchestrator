@@ -1,5 +1,4 @@
 using Mcg.AgentOrchestrator.Core;
-using Mcg.AgentOrchestrator.App.Dashboard.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
@@ -43,48 +42,6 @@ public sealed class AgentCatalogTests
         var subscription = restored.GetRequired(AgentRole.Developer).Subscription!;
         Assert.Equal(AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias, subscription.ModelAlias);
         Assert.Equal("medium", subscription.ReasoningEffort);
-    }
-
-    [Xunit.Fact(DisplayName = "DashboardAgentOptionCatalog_OpenAI_offers_GPT_6_with_supported_reasoning")]
-    public void DashboardAgentOptionCatalogOpenAiOffersGpt6WithSupportedReasoning()
-    {
-        var subscriptionModels = DashboardAgentOptionCatalog.SubscriptionModelOptions("OpenAI");
-        string[] expectedModelAliases =
-        [
-            AgentCatalog.OpenAiSolSubscriptionModelAlias,
-            AgentCatalog.OpenAiTerraSubscriptionModelAlias,
-            AgentCatalog.OpenAiLunaSubscriptionModelAlias,
-            AgentCatalog.OpenAiSubscriptionModelAlias,
-            AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias,
-            AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias,
-            AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias
-        ];
-        Assert.All(expectedModelAliases, alias => Assert.Contains(subscriptionModels, option => option.Value == alias));
-
-        var solReasoning = DashboardAgentOptionCatalog.SubscriptionReasoningOptions(
-            "OpenAI",
-            AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias);
-        var lunaReasoning = DashboardAgentOptionCatalog.SubscriptionReasoningOptions(
-            "OpenAI",
-            AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias);
-        var astraReasoning = DashboardAgentOptionCatalog.SubscriptionReasoningOptions(
-            "OpenAI",
-            AgentCatalog.OpenAiGpt6AstraSubscriptionModelAlias);
-        Assert.Contains(solReasoning, option => option.Value == "ultra");
-        Assert.DoesNotContain(lunaReasoning, option => option.Value == "ultra");
-        Assert.Contains(lunaReasoning, option => option.Value == "max");
-        Assert.Contains(astraReasoning, option => option.Value == "ultra");
-
-        var defaults = DashboardAgentOptionCatalog.ForProvider("OpenAI").DefaultSubscriptionReasoningByModel;
-        foreach (var alias in expectedModelAliases[^3..])
-        {
-            Assert.Equal("medium", defaults[alias]);
-            Assert.Equal(AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", alias), defaults[alias]);
-        }
-
-        Assert.Equal(
-            AgentCatalog.OpenAiSubscriptionModelAlias,
-            DashboardAgentOptionCatalog.DefaultSubscriptionModelAlias("OpenAI"));
     }
 
     [Xunit.Fact(DisplayName = "AgentCatalog_default_contains_sdlc_roles")]
@@ -172,23 +129,6 @@ public sealed class AgentCatalogTests
         Assert.Equal("claude-sonnet-5-5", agent.ComplexModel.ModelName);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
-}
-    [Xunit.Fact(DisplayName = "DashboardAgentOptionCatalog_Anthropic_contains_pinned_Opus_5_without_Fable")]
-    public void DashboardAgentOptionCatalogAnthropicContainsPinnedOpus5WithoutFable()
-{
-    var subscriptionModels = DashboardAgentOptionCatalog.SubscriptionModelOptions("Anthropic");
-    var apiModels = DashboardAgentOptionCatalog.ApiModelOptions("Anthropic");
-
-    Assert.Contains(
-        subscriptionModels,
-        option => option.Value == "opus-5"
-            && option.Label.Contains("Opus 5", StringComparison.Ordinal)
-            && option.Label.Contains("pinned", StringComparison.OrdinalIgnoreCase));
-    Assert.Contains(
-        subscriptionModels,
-        option => option.Value == "opus" && option.Label == "Claude Opus (latest)");
-    Assert.DoesNotContain(subscriptionModels, option => option.Value == "fable");
-    Assert.Contains(apiModels, option => option.Value == "claude-opus-5");
 }
     [Xunit.Fact(DisplayName = "Agents_configuration_Opus_5_alternates_preserve_counts_and_primaries")]
     public void AgentsConfigurationOpus5AlternatesPreserveCountsAndPrimaries()

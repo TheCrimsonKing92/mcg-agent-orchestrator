@@ -24,7 +24,7 @@ public sealed class AppAssemblyDashboardIndependenceTests
         var compileElements = XDocument.Load(project).Descendants()
             .Where(element => element.Name.LocalName == "Compile").ToArray();
 
-        Assert.Contains(compileElements, element => element.Attribute("Remove") is not null);
+        Assert.False(Directory.Exists(Path.Combine(Path.GetDirectoryName(project)!, "Dashboard")));
         Assert.DoesNotContain(compileElements, element =>
             element.Attribute("Include")?.Value.Replace('\\', '/').StartsWith(
                 "Dashboard/", StringComparison.OrdinalIgnoreCase) == true);

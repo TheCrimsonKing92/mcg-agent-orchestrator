@@ -106,11 +106,6 @@ public sealed class DiscordOperatorChannel : IOperatorChannel
 
         sb.AppendLine();
         sb.AppendLine($"**Response:** {BuildResponseInstructions(escalation.Actions)}");
-        if (!string.IsNullOrWhiteSpace(escalation.DashboardDeepLink))
-        {
-            sb.AppendLine();
-            sb.AppendLine($"**Dashboard:** {escalation.DashboardDeepLink}");
-        }
         return sb.ToString().Trim();
     }
 
