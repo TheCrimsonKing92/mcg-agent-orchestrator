@@ -18,8 +18,7 @@ public enum RepositoryTestProject
     Infrastructure,
     Acceptance,
     ProviderEnvironment,
-    Cli,
-    Dashboard
+    Cli
 }
 
 public sealed record RepositoryTestImpactPlan(
@@ -28,7 +27,7 @@ public sealed record RepositoryTestImpactPlan(
     string Summary,
     IReadOnlyList<RepositoryTestImpactCheck> Checks);
 
-public static class RepositoryTestImpactPlanner
+public static partial class RepositoryTestImpactPlanner
 {
     private sealed record TestClassFilterBuildResult(
         string? Filter,
@@ -85,31 +84,10 @@ public static class RepositoryTestImpactPlanner
         "minimal"
     ];
 
-    private static readonly string[] DashboardTests =
-    [
-        "dotnet",
-        "test",
-        "--project",
-        "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
-        "--verbosity",
-        "minimal"
-    ];
-
     private static readonly string[] CliInfrastructureClasses =
         ["CliCommandTests", "CliHelpTests"];
 
     private static readonly string CliInfrastructureFilter = BuildClassFilter(CliInfrastructureClasses);
-
-    private static readonly string[] DashboardClasses =
-    [
-        "DashboardRenderingTests",
-        "DashboardHostTests",
-        "DashboardDispatchStartFailureEndpointTests",
-        "DashboardValidationHarnessTests"
-    ];
-
-    private static readonly string DashboardFilter =
-        $"({BuildClassFilter(DashboardClasses)})&Category!=HostIntegration";
 
     // The full suite is expressed as per-project runs rather than one solution-level
     // "dotnet test": the test projects are Microsoft.Testing.Platform, and a project-less
@@ -142,10 +120,15 @@ public static class RepositoryTestImpactPlanner
             .IsDeliberatelyPartialRepositoryRoot(repositoryRoot)
                 ? UnavailableTestClassDeclarationReader.Instance
                 : new FileSystemTestClassDeclarationReader(repositoryRoot);
-        return Plan(summary, declarationReader);
+        return Plan(summary, declarationReader, CandidateTreeProbe.ForRepositoryRoot(repositoryRoot));
     }
 
     internal static RepositoryTestImpactPlan Plan(
+        RepositoryChangeSummary summary,
+        ITestClassDeclarationReader declarationReader) =>
+        Plan(summary, declarationReader, CandidateTreeProbe.AssumeAllPresent);
+
+    private static RepositoryTestImpactPlan PlanPresentPaths(
         RepositoryChangeSummary summary,
         ITestClassDeclarationReader declarationReader)
     {
@@ -185,8 +168,6 @@ public static class RepositoryTestImpactPlanner
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/") &&
             !StartsWith(file.Path, acceptanceTestsPrefix));
-        var touchesDashboardTests = summary.Files.Any(file =>
-            StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Dashboard.Tests/"));
         var coreTestFilter = BuildChangedTestClassFilter(
             summary,
             "tests/Mcg.AgentOrchestrator.Core.Tests/",
@@ -200,19 +181,12 @@ public static class RepositoryTestImpactPlanner
             summary,
             acceptanceTestsPrefix,
             declarationReader);
-        var dashboardTestFilter = BuildChangedTestClassFilter(
-            summary,
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/",
-            declarationReader);
         var appSubsystems = summary.Files
             .Select(file => AppSubsystem(file.Path))
             .OfType<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var touchesApp = appSubsystems.Length > 0;
-        var touchesDashboardApp = appSubsystems.Any(IsDashboardSubsystem);
-        var touchesDashboard = touchesDashboardApp || touchesDashboardTests;
-        var touchesNonDashboardApp = appSubsystems.Any(subsystem => !IsDashboardSubsystem(subsystem));
         var touchesScriptsOrConfig = summary.Files.Any(file =>
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
             file.Categories.Contains(RepositoryChangeCategory.Configuration));
@@ -277,31 +251,6 @@ public static class RepositoryTestImpactPlanner
                 RepositoryTestProject.Infrastructure));
         }
 
-        if (touchesDashboard)
-        {
-            var mappedDashboardFilter = touchesDashboardApp
-                ? JoinFilters(DashboardFilter, dashboardTestFilter.Filter)
-                : dashboardTestFilter.Filter;
-            var mappedDashboardClasses = touchesDashboardApp
-                ? DashboardClasses.Concat(dashboardTestFilter.TestClasses).Distinct(StringComparer.Ordinal).ToArray()
-                : dashboardTestFilter.TestClasses;
-            var useFocusedDashboardFilter =
-                mappedDashboardFilter is not null &&
-                dashboardTestFilter.AbandonReason is null &&
-                CanUseFocusedAppFilters(summary);
-            checks.Add(new RepositoryTestImpactCheck(
-                useFocusedDashboardFilter ? "focused dashboard infrastructure tests" : "dashboard tests",
-                useFocusedDashboardFilter
-                    ? [.. DashboardTests, "--filter", mappedDashboardFilter!]
-                    : DashboardTests,
-                useFocusedDashboardFilter
-                    ? "Dashboard or API behavior changed; run the mapped Dashboard test classes."
-                    : dashboardTestFilter.AbandonReason ??
-                        "Dashboard behavior changed alongside shared behavior; run the full Dashboard test suite.",
-                RepositoryTestProject.Dashboard,
-                useFocusedDashboardFilter ? mappedDashboardClasses : null));
-        }
-
         if (touchesAcceptanceTests)
         {
             checks.Add(new RepositoryTestImpactCheck(
@@ -341,15 +290,15 @@ public static class RepositoryTestImpactPlanner
                 RepositoryTestProject.Infrastructure,
                 infrastructureTestFilter.TestClasses));
         }
-        else if (touchesInfrastructure || touchesNonDashboardApp || touchesScriptsOrConfig)
+        else if (touchesInfrastructure || touchesApp || touchesScriptsOrConfig)
         {
             checks.Add(new RepositoryTestImpactCheck(
                 "infrastructure tests",
                 InfrastructureTests,
                 infrastructureTestFilter.AbandonReason ??
-                (touchesNonDashboardApp && appSubsystems.Length > 1
+                (touchesApp && appSubsystems.Length > 1
                     ? "Multiple App subsystems changed; run the full Infrastructure test suite."
-                    : touchesNonDashboardApp
+                    : touchesApp
                     ? "App behavior lacks a focused test-impact mapping; run the full Infrastructure test suite."
                     : "Infrastructure, script, or configuration behavior changed."),
                 RepositoryTestProject.Infrastructure));
@@ -426,12 +375,7 @@ public static class RepositoryTestImpactPlanner
                     "cli tests",
                     CliTests,
                     summary,
-                    RepositoryTestProject.Cli),
-                new RepositoryTestImpactCheck(
-                    "full dotnet tests: dashboard",
-                    DashboardTests,
-                    summary,
-                    RepositoryTestProject.Dashboard)
+                    RepositoryTestProject.Cli)
             ]);
 
     private static bool StartsWith(string path, string prefix) =>
@@ -569,9 +513,6 @@ public static class RepositoryTestImpactPlanner
         var testClasses = new List<string>();
         foreach (var subsystem in appSubsystems.Order(StringComparer.OrdinalIgnoreCase))
         {
-            if (IsDashboardSubsystem(subsystem))
-                continue;
-
             if (subsystem.Equals("cli", StringComparison.OrdinalIgnoreCase))
             {
                 filters.Add(CliInfrastructureFilter);
@@ -679,20 +620,10 @@ public static class RepositoryTestImpactPlanner
             file.Categories.Contains(RepositoryChangeCategory.Configuration)) &&
         summary.Files.Count(file => file.Categories.Contains(RepositoryChangeCategory.Source)) <= 5;
 
-    private static bool IsDashboardSubsystem(string subsystem) =>
-        subsystem.Equals("dashboard", StringComparison.OrdinalIgnoreCase) ||
-        subsystem.Equals("api", StringComparison.OrdinalIgnoreCase);
-
     private static string? AppSubsystem(string path)
     {
         if (StartsWith(path, "src/Mcg.AgentOrchestrator.App/Cli/"))
             return "cli";
-
-        if (StartsWith(path, "src/Mcg.AgentOrchestrator.App/Dashboard/Api/"))
-            return "api";
-
-        if (StartsWith(path, "src/Mcg.AgentOrchestrator.App/Dashboard/"))
-            return "dashboard";
 
         if (StartsWith(path, "src/Mcg.AgentOrchestrator.App/Orchestration/"))
             return "orchestration";

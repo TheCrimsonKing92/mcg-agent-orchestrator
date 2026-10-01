@@ -3,7 +3,7 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal static class AcceptancePolicyShardPlanner
+internal static partial class AcceptancePolicyShardPlanner
 {
     internal const string CoreProject = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
     internal const string ProvidersProject = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj";
@@ -145,7 +145,12 @@ internal static class AcceptancePolicyShardPlanner
 
     internal static PolicyShardPlan BuildPolicyShardPlan(
         IReadOnlyList<string>? changedFiles,
-        AcceptanceShardPolicySwitches? switches = null)
+        AcceptanceShardPolicySwitches? switches = null) =>
+        BuildPolicyShardPlan(changedFiles, switches, CandidateTreeProbe.AssumeAllPresent);
+
+    private static PolicyShardPlan BuildPresentPolicyShardPlan(
+        IReadOnlyList<string>? changedFiles,
+        AcceptanceShardPolicySwitches? switches)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return PolicyShardPlan.NotApplicable("no changed files");
@@ -264,8 +269,6 @@ internal static class AcceptancePolicyShardPlanner
             return AppProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Core.Tests/", StringComparison.OrdinalIgnoreCase))
             return CoreTestsProject;
-        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Dashboard.Tests/", StringComparison.OrdinalIgnoreCase))
-            return DashboardTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.TestSupport/", StringComparison.OrdinalIgnoreCase))
             return TestSupportProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/", StringComparison.OrdinalIgnoreCase))
@@ -320,14 +323,16 @@ internal static class AcceptancePolicyShardPlanner
         !string.IsNullOrWhiteSpace(check.Project) &&
         (ProjectMatches(check.Project, CoreTestsProject) ||
          ProjectMatches(check.Project, InfrastructureTestsProject) ||
-         IsDashboardTestProject(check.Project) ||
+         ProjectMatches(check.Project, DashboardTestsProject) ||
          IsExtractedInfrastructureProject(check.Project));
 
     internal static bool IsSkippedPolicyShardCheck(AcceptanceManifestCheck check, PolicyShardPlan policyShardPlan) =>
-        policyShardPlan.Applies &&
+        (check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
+         policyShardPlan.IsAbsentProject(check.Project)) ||
+        (policyShardPlan.Applies &&
         !policyShardPlan.ForceFull &&
         IsFullPolicyShardCheck(check) &&
-        !policyShardPlan.IncludesProject(check.Project);
+        !policyShardPlan.IncludesProject(check.Project));
 
     internal static bool IsRunnablePolicyShardCheck(AcceptanceManifestCheck check, PolicyShardPlan policyShardPlan) =>
         policyShardPlan.Applies &&
@@ -355,14 +360,6 @@ internal static class AcceptancePolicyShardPlanner
         NormalizePath(project)?.EndsWith(
             NormalizePath(expectedProject),
             StringComparison.OrdinalIgnoreCase) == true;
-
-    internal static bool IsDashboardTestProject(string project) =>
-        project.EndsWith(
-            DashboardTestsProject,
-            StringComparison.OrdinalIgnoreCase) ||
-        project.EndsWith(
-            "tests\\Mcg.AgentOrchestrator.Dashboard.Tests\\Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
-            StringComparison.OrdinalIgnoreCase);
 
     internal static bool IsReplacedByFocusedProjectCheck(
         AcceptanceManifestCheck manifestCheck,
@@ -445,6 +442,12 @@ internal sealed record PolicyShardPlan(
     string Evidence,
     IReadOnlySet<string> DependencyClosure)
 {
+    public IReadOnlySet<string> AbsentProjects { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    public bool IsAbsentProject(string? project) =>
+        !string.IsNullOrWhiteSpace(project) && AbsentProjects.Any(absent =>
+            AcceptancePolicyShardPlanner.ProjectMatches(project, absent));
+
     public static PolicyShardPlan NotApplicable(string evidence) =>
         new(false, false, evidence, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
@@ -455,8 +458,8 @@ internal sealed record PolicyShardPlan(
         new(true, false, evidence, dependencyClosure);
 
     public bool IncludesProject(string? project) =>
-        ForceFull ||
+        !IsAbsentProject(project) && (ForceFull ||
         !Applies ||
         (!string.IsNullOrWhiteSpace(project) &&
-            DependencyClosure.Contains(AcceptancePolicyShardPlanner.NormalizePath(project)!));
+            DependencyClosure.Contains(AcceptancePolicyShardPlanner.NormalizePath(project)!)));
 }

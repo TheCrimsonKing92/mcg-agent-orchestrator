@@ -847,12 +847,6 @@ public sealed class ConductorDriverTestsPreReviewEvidence
                 NoApplicableTests: true,
                 RequestFragment: (string?)null),
             (
-                Name: "dashboard",
-                Files: new[] { "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs" },
-                MappingNeedsInput: false,
-                NoApplicableTests: false,
-                RequestFragment: "Category!=HostIntegration"),
-            (
                 Name: "orchestration",
                 Files: new[] { "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs" },
                 MappingNeedsInput: false,

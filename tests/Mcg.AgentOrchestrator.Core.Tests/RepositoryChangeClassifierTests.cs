@@ -779,37 +779,30 @@ public sealed class RepositoryChangeClassifierTests
         throw new DirectoryNotFoundException("Repository root was not found from the test source path.");
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_dashboard_filter_for_dashboard_only_changes")]
+    [Xunit.Fact(DisplayName = "Dashboard source no longer selects dashboard checks")]
     public void RepositoryTestImpactPlannerSelectsFocusedDashboardFilterForDashboardOnlyChanges()
     {
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
         ]);
 
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("focused dashboard infrastructure tests", check.Name);
-        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", check.Command);
-        Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
-        Assert.Contains("--filter", check.Command);
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardDispatchStartFailureEndpointTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan.Checks, check =>
+            check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan.Checks, check =>
+            check.CommandLine.Contains("DashboardRenderingTests", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_touched_dashboard_test_class_filter")]
+    [Xunit.Fact(DisplayName = "Dashboard test changes no longer select dashboard class filters")]
     public void RepositoryTestImpactPlannerSelectsTouchedDashboardTestClassFilter()
     {
         var plan = RepositoryTestImpactPlanner.Plan([
             "tests/Mcg.AgentOrchestrator.Dashboard.Tests/DashboardDispatchStartFailureEndpointTests.cs"
         ]);
 
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("focused dashboard infrastructure tests", check.Name);
-        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", check.Command);
-        Assert.Contains("--filter", check.Command);
-        Assert.Equal("FullyQualifiedName~DashboardDispatchStartFailureEndpointTests", check.Command[^1]);
+        Assert.DoesNotContain(plan.Checks, check =>
+            check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan.Checks, check =>
+            check.CommandLine.Contains("DashboardDispatchStartFailureEndpointTests", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
@@ -833,16 +826,12 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
         ]);
 
-        Assert.Equal(2, plan.Checks.Count);
+        Assert.Single(plan.Checks);
         var cliCheck = Assert.Single(plan.Checks, check => check.Name == "focused CLI infrastructure tests");
-        var dashboardCheck = Assert.Single(plan.Checks, check => check.Name == "focused dashboard infrastructure tests");
         Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", cliCheck.Command);
         Assert.Contains(cliCheck.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
         Assert.Contains(cliCheck.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
-        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
-        Assert.Contains(dashboardCheck.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
-        Assert.Contains(dashboardCheck.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
-        Assert.Contains(dashboardCheck.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan.Checks, check => check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal));
         Assert.All(plan.Checks, check => Assert.DoesNotContain(check.Command, argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
     }
 
@@ -854,11 +843,9 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
         ]);
 
-        Assert.Equal(2, plan.Checks.Count);
-        var dashboardCheck = Assert.Single(plan.Checks, check => check.Name == "dashboard tests");
+        Assert.Single(plan.Checks);
         var infrastructureCheck = Assert.Single(plan.Checks, check => check.Name == "infrastructure tests");
-        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
-        Assert.DoesNotContain("--filter", dashboardCheck.Command);
+        Assert.DoesNotContain(plan.Checks, check => check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal));
         Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", infrastructureCheck.Command);
         Assert.DoesNotContain("--filter", infrastructureCheck.Command);
     }
@@ -880,11 +867,9 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", scriptCheck.Command);
         Assert.DoesNotContain("--filter", scriptCheck.Command);
 
-        Assert.Equal(2, configPlan.Checks.Count);
-        var dashboardCheck = Assert.Single(configPlan.Checks, check => check.Name == "dashboard tests");
+        Assert.Single(configPlan.Checks);
         var infrastructureCheck = Assert.Single(configPlan.Checks, check => check.Name == "infrastructure tests");
-        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
-        Assert.DoesNotContain("--filter", dashboardCheck.Command);
+        Assert.DoesNotContain(configPlan.Checks, check => check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal));
         Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", infrastructureCheck.Command);
         Assert.DoesNotContain("--filter", infrastructureCheck.Command);
     }
@@ -1004,7 +989,7 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.True(plan.RequiresBroadVerification);
-        Assert.Equal(6, plan.Checks.Count);
+        Assert.Equal(5, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
         {
             Assert.Equal("dotnet", check.Command[0]);
@@ -1019,8 +1004,7 @@ public sealed class RepositoryChangeClassifierTests
                 "infrastructure tests",
                 "acceptance execution owner tests",
                 "provider environment tests",
-                "cli tests",
-                "full dotnet tests: dashboard"
+                "cli tests"
             ],
             plan.Checks.Select(check => check.Name));
         Assert.Equal(
@@ -1029,8 +1013,7 @@ public sealed class RepositoryChangeClassifierTests
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
-                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
             ],
             plan.Checks.Select(check => check.Command[3]));
     }

@@ -2939,10 +2939,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             "Core.Tests" or "Core" or "Mcg.AgentOrchestrator.Core.Tests" => CoreTestsProject,
             "Infrastructure.Tests" or "Infrastructure" or "Mcg.AgentOrchestrator.Infrastructure.Tests" => InfrastructureTestsProject,
-            "Dashboard.Tests" or "Dashboard" or "Mcg.AgentOrchestrator.Dashboard.Tests" => DashboardTestsProject,
             _ when normalized.EndsWith(CoreTestsProject, StringComparison.OrdinalIgnoreCase) => CoreTestsProject,
             _ when normalized.EndsWith(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) => InfrastructureTestsProject,
-            _ when normalized.EndsWith(DashboardTestsProject, StringComparison.OrdinalIgnoreCase) => DashboardTestsProject,
             _ => string.Empty
         };
         if (project.Length > 0)
@@ -3345,12 +3343,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         PolicyShardPlan? policyShardPlan = null,
         IReadOnlyList<AcceptanceTestLane>? infrastructureTestLanes = null)
     {
+        policyShardPlan ??= BuildPolicyShardPlan(changedFiles, null,
+            CandidateTreeProbe.ForRepositoryRoot(worktreePath), manifestChecks.Select(check => check.Project).OfType<string>());
         if (changedFiles is null || changedFiles.Count == 0)
-            return manifestChecks;
+            return manifestChecks.Where(check => !IsSkippedPolicyShardCheck(check, policyShardPlan)).ToArray();
 
-        policyShardPlan ??= BuildPolicyShardPlan(changedFiles);
         var requiredPolicyChecks = policyRequiredChecks ?? BuildRequiredPolicyChecks(worktreePath, changedFiles);
         var plannedChecks = requiredPolicyChecks
+            .Where(check => !IsSkippedPolicyShardCheck(check, policyShardPlan))
             .Where(check => !policyShardPlan.ForceFull ||
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
             .SelectMany(check => ExpandBroadInfrastructureCheck(check, infrastructureTestLanes))
@@ -3396,7 +3396,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
-        var policyShardPlan = BuildPolicyShardPlan(changedFiles);
+        var policyShardPlan = BuildPolicyShardPlan(changedFiles, null,
+            CandidateTreeProbe.ForRepositoryRoot(worktreePath), manifest.Checks.Select(check => check.Project).OfType<string>());
         if (dotnetShardDisposition == DotnetShardDisposition.RunDotnetShards &&
             !policyShardPlan.ForceFull &&
             manifest.Checks.Any(check =>
@@ -3405,9 +3406,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                 policyShardPlan.IncludesProject(check.Project)))
         {
-            policyShardPlan = PolicyShardPlan.Full(
-                $"strict candidate path disposition requires dotnet shards; {policyShardPlan.Evidence}",
-                policyShardPlan.DependencyClosure);
+            policyShardPlan = policyShardPlan with
+            {
+                Applies = true,
+                ForceFull = true,
+                Evidence = $"strict candidate path disposition requires dotnet shards; {policyShardPlan.Evidence}"
+            };
         }
 
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
@@ -6566,7 +6570,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string.IsNullOrWhiteSpace(check.Project) ||
         check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
         ProjectMatches(check.Project, InfrastructureTestsProject) ||
-        IsDashboardTestProject(check.Project) ||
+        ProjectMatches(check.Project, DashboardTestsProject) ||
         IsExtractedInfrastructureProject(check.Project);
 
     private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>
