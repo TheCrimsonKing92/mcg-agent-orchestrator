@@ -47,8 +47,15 @@ public sealed class OwnerProtectedApprovalSatisfiedTests : IDisposable
     [Xunit.Fact]
     public void NoOwnerProtectedChangeDoesNotAssertOwnerApproval()
     {
+        WriteCandidate(Main);
+        string? Git(string _, string[] args)
+        {
+            // Source-only changes still check for renamed protected files.
+            Assert.Equal(new[] { "diff", "--name-only", "--no-renames", "main...HEAD", "--" }, args);
+            return "src/Sample.cs\n";
+        }
         var result = GoalAcceptanceVerifier.EvaluateOwnerProtectedConfigurationForTests(_root, GoalId.New(),
-            ["src/Sample.cs"], null, (_, _) => throw new InvalidOperationException("No protected diff should be read"),
+            ["src/Sample.cs"], null, Git,
             null, Inventory, MemberSha);
         Assert.Null(result.Failure);
         Assert.Null(result.Pass);
