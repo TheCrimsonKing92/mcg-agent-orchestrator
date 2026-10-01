@@ -20,7 +20,7 @@ Use this skill before trusting a worker result or accepting a goal.
 4. Compare worker claims against actual files, commits, tests, and commands.
 5. Reject false-positive completions when the worker claims nonexistent files, endpoints, commands, or tests.
 6. Ignore generated or irrelevant noise such as `.qwen/settings.json`, logs, scratch files, build output, and empty directories.
-7. Run focused verification independently; broaden when shared code, CLI contracts, dashboard APIs, or worker policy changed.
+7. Run focused verification independently; broaden when shared code, CLI contracts, or worker policy changed.
 
 ## Decision Rules
 

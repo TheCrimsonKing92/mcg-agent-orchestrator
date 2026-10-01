@@ -17,7 +17,7 @@ Shared anchors:
 - architecture-and-design-discipline
 - specification-discipline
 - diagnosis-discipline
-- dashboard-dogfood-boundary
+- dogfood-boundary
 - operating-the-goal-loop
 - safety
 - evidence
@@ -49,7 +49,7 @@ Use the runbook's manual-bounce procedure after loop-affecting landings and its 
 
 To reopen an AcceptanceFailed goal whose verdict genuinely stands (flake or environment-caused gate failure) without a paid worker round, leave the loop running and submit one atomic `adjudicate --goal <goal> <task#> reopen-regate --text-file <explanation> --evidence <reference>` (use `close` for a task that genuinely passed, `route --cause <cause>` to retry); the runbook's adjudicate section lists the evidence reference forms. It records a decision with its evidence in one intent, replacing the older `retry --mechanical` / `progress` / `verify-manual` sequence. These verbs always append typed records to `operator-intents.db`; the tick is the sole `state.db` writer and each submitting surface can poll the recorded outcome. If the loop is down, the intents remain pending until a conductor starts; the CLI never applies them directly.
 
-Use dashboard cancel/refresh controls or exact known process ids for stuck workers. Never run broad process cleanup.
+For a stuck worker, use `cancel-dispatch <task-number>` (add `--goal <goal-prefix>` for another goal) or stop an exact known process id with `repo-process-stop --id <pid>`. Never run broad process cleanup.
 
 ## Orchestrator Notes
 

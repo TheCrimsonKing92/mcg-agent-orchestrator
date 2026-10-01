@@ -18,7 +18,7 @@ Shared anchors:
 - architecture-and-design-discipline
 - specification-discipline
 - diagnosis-discipline
-- dashboard-dogfood-boundary
+- dogfood-boundary
 - operating-the-goal-loop
 - safety
 - evidence
@@ -58,19 +58,18 @@ Codex harness command guidance:
 - Do not dump full files unless known small. Prefer targeted search or narrow line windows.
 - For `git diff`, use `git diff --stat` first, then inspect one file at a time.
 - For build/test commands, use minimal verbosity and expand only failing output.
-- For dashboard/API checks, use focused endpoints or helpers that return exact fields, not broad HTML/JSON/log payloads.
 - If a command returns more than about 100 lines, stop, summarize the signal, and narrow the next command.
 
-Good shape: `rg -n --count "DashboardHost" src/Mcg.AgentOrchestrator.App tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g "!**/bin/**" -g "!**/obj/**"`
+Good shape: `rg -n --count "ConductorDriver" src/Mcg.AgentOrchestrator.App tests/Mcg.AgentOrchestrator.Infrastructure.Tests -g "!**/bin/**" -g "!**/obj/**"`
 
-Bad shape: `rg -n "dashboard|goal|task|hosted|source-survey" .. -C 4`
+Bad shape: `rg -n "goal|task|hosted|source-survey" .. -C 4`
 
 <!-- shared-discipline:retry-and-loop-control -->
 ## Retry and Loop Control
 
 Before repeating a command, state what changed or what is being narrowed.
 
-Do not repeatedly run broad searches, diffs, dashboard reads, browser scripts, build/test cycles, or dogfood actions hoping for a different result. If two attempts do not produce useful signal, switch strategy or ask for direction.
+Do not repeatedly run broad searches, diffs, build/test cycles, or dogfood actions hoping for a different result. If two attempts do not produce useful signal, switch strategy or ask for direction.
 
 This repository implements an AI agent orchestrator. Avoid recursive or high-fanout behavior.
 
@@ -133,16 +132,10 @@ Reproduce before you theorize. When something fails — especially an external C
 - **Never durably record an unproven contention hypothesis; it will be re-read as fact.** This failure mode is specific and costly: once "resource contention" is written into a handoff, backlog note, commit message, memory, or code comment, every agent that later reads it inherits it as an established finding and re-derives conclusions from it, so one cheap guess steers days of work and crowds out the real cause. Unproven mechanisms either stay out of durable records entirely or are written in a clearly-labeled hypothesis section that states what evidence would confirm or kill them. When you inherit a contention claim, treat it as suspect until you find its receipt — and if the receipt is missing, say so and re-derive rather than building on it.
 - **Cross-check a consequential result against a different model *family* before acting on it.** A driving agent that reaches a diagnosis, result, or fix it intends to act on or land first gets it independently verified by a different lineage — sol/codex → Opus 5 or Fable, and Opus 5/Fable → sol. Same-family agreement is a weak check: shared lineage means shared blind spots, so concurrence confirms little. The value is in the *disagreement* — that is where the missed defect hides. Required for anything load-bearing, not a courtesy.
 
-<!-- shared-discipline:dashboard-dogfood-boundary -->
-## Dashboard / Dogfood Boundary
+<!-- shared-discipline:dogfood-boundary -->
+## Dogfood Boundary
 
 For ordinary implementation or debugging, inspect and edit source directly.
-
-Use dashboard workflow controls only when the task explicitly involves dogfood validation, dashboard orchestration, subscription handoff behavior, or prototype workflow testing.
-
-For live prototype dashboard work, prefer `.\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open`.
-
-Keep prototype state isolated from repository state. Prototype dashboard state lives under `src/Mcg.AgentOrchestrator.App\.orchestrator-prototype\workspace`; launcher-backed task execution should run from the repository root through `MCG_ORCHESTRATOR_REPOSITORY_ROOT`.
 
 API model runs (`run`/`api-run`) are pure text completion with no file access; embed any data the model needs in the task description, and route file-touching work through subscription dispatches. Task descriptions also drive complexity classification: start inspection work with `Summarize `/`Report `/`Inspect ` and avoid risk keywords (auth, migration, rollback) unless the task genuinely carries that risk.
 
@@ -176,21 +169,17 @@ When the task involves subscription/dogfood execution:
 - Treat `Write-Output {promptPath}` profiles as echo-only, not real execution.
 - After dispatch, confirm evidence, process logs, exit code, and verification records; never trust task status alone.
 - When credits are constrained, inspect existing continuations/evidence/logs and cancel stale work before starting new agents.
-- Prefer focused checks such as `/api/goals/{goalPrefix}/work-summary` and `Invoke-DashboardApi.ps1 -Path api/goals/<prefix>/work-summary` before broad dashboard JSON or HTML reads.
-- Prefer checked-in helpers (`Invoke-DashboardApi.ps1`, `Run-DashboardBrowserScript.ps1`, `Invoke-DashboardDogfoodAction.ps1`) over one-off browser/API scripts.
 
 <!-- shared-discipline:safety -->
 ## Safety
 
-Use dashboard cancel/refresh controls or exact known process ids for stuck workers. Never run broad cleanup such as `Get-Process codex | Stop-Process`; it can kill the active Codex session.
+For a stuck worker, use `cancel-dispatch <task-number>` (add `--goal <goal-prefix>` for another goal) or stop an exact known process id with `repo-process-stop --id <pid>`. Never run broad cleanup such as `Get-Process codex | Stop-Process`; it can kill the active Codex session.
 
-On Windows, a running dashboard can lock app binaries. Prefer `.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/`.
-
-Windows Firewall prompts once per executable path that binds a non-loopback address. Spawn the app as `dotnet <App.dll>` (covered by the standing ".NET Host" allow rule), never `dotnet run`/direct apphost exe, for anything that binds `0.0.0.0` from a worktree or fresh build output; hosted-dashboard launches from new exe paths will otherwise prompt (root cause and one-time setup: DOGFOOD_LOG 2026-06-11 firewall entry).
+Windows Firewall prompts once per executable path that binds a non-loopback address. Spawn the app as `dotnet <App.dll>` (covered by the standing ".NET Host" allow rule), never `dotnet run`/direct apphost exe, for anything that binds `0.0.0.0` from a worktree or fresh build output (root cause and one-time setup: DOGFOOD_LOG 2026-06-11 firewall entry).
 
 `mcg-orchestrator.cmd` with no arguments starts an interactive REPL that stays alive and holds build outputs. Always pass a command. Build/compiler servers are disabled repo-wide (`Directory.Build.props`/`Directory.Build.rsp`), so stale-node CS2012 locks should not recur; if builds still fail with "file in use", check for lingering `Mcg.AgentOrchestrator.App`/`dotnet run` processes and run `dotnet build-server shutdown` before blaming antivirus.
 
-Tests that spawn the real app inherit the machine environment; pin provider env vars (see `StartPrototypeDashboardProcess`) so assertions do not depend on which providers are live on the dev machine.
+Tests that spawn the real app inherit the machine environment; pin provider env vars so assertions do not depend on which providers are live on the dev machine.
 
 Quote PowerShell test filters containing `|`, for example `--filter 'AgentCatalog|PrototypeWorkspaceSeeder|WorkerProfile|WorkerDispatch'`.
 
@@ -201,7 +190,7 @@ Record dogfood goal-boundary evidence with `dogfood-log add <goal-prefix>` or re
 
 For subscription/API-authored work, include a `Model fit:` note with the selected model or launcher, the task shape, and whether it was adequate, overkill, or underpowered. Use this evidence to tune future model selection.
 
-Do not paste full dashboard responses, full prompts, full logs, or long API payloads.
+Do not paste full prompts, full logs, or long API payloads.
 
 Keep `DOGFOOD_LOG.md` as a pointer to the SQLite-backed command surface. Do not append durable entries there. Do not load historical archives into context for routine work.
 

@@ -16,7 +16,6 @@ From a checkout, use the launcher when you do not want to repeat the project pat
 ```cmd
 mcg-orchestrator.cmd doctor
 mcg-orchestrator.cmd goal "Build feature X"
-mcg-orchestrator.cmd open-dashboard http://localhost:5087/ --refresh 5
 ```
 
 To publish a local Windows executable:
@@ -117,15 +116,6 @@ config doctor
 
 Displays read-only configuration state. `agents` lists role-to-model assignments; `profiles` lists saved worker command templates; `policy` lists autonomy policy presets; `doctor` runs the setup health check (equivalent to the standalone `doctor` verb).
 
-## `dashboard`
-
-```text
-dashboard [path] [--refresh seconds]
-dashboard --mode local|hosted|read-only [url] [--refresh seconds]
-```
-
-Without `--mode`, writes a static HTML dashboard to `.orchestrator/dashboard.html` (or the specified path). Add `--refresh 10` to embed a browser auto-refresh interval. With `--mode local` or `--mode hosted`, hosts the live interactive dashboard on a local HTTP endpoint. Use `--mode read-only` for a browsable read-only view. See [Dashboard & SSE Monitoring](#dashboard--sse-monitoring) for the full hosted dashboard, browser scripting, and JSON API endpoints.
-
 ---
 
 # ADVANCED
@@ -143,9 +133,6 @@ The same verbs run as one-shot CLI commands:
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- goal "Build feature X"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- doctor
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- provider-smoke openai --confirm-paid-smoke 4
-dotnet run --project src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj -- dashboard
-dotnet run --project src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj -- serve-dashboard http://localhost:5087/ --refresh 5
-dotnet run --project src\Mcg.AgentOrchestrator.Dashboard\Mcg.AgentOrchestrator.Dashboard.csproj -- open-dashboard
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agents
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- agent Reviewer OpenAI gpt-5.2 "OpenAI reviewer"
 dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj -- status
@@ -166,11 +153,6 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 ```text
 doctor
 provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]
-prototype-ui [url] [--refresh seconds] [--no-open]
-dashboard [path] [--refresh seconds]
-serve-dashboard [url] [--refresh seconds]
-open-dashboard [url] [--refresh seconds] [--no-open]
-transcript [path]
 goal <objective>
 goals
 agents
@@ -236,7 +218,7 @@ conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]
 exit
 ```
 
-`task` accepts either a display number or a task id prefix. `tasks` lists the current goal's tasks and can filter by `status`, `role`, task `id` prefix, evidence kind, and timeline event kind. Evidence kinds include `none`, `execution`, `dispatch`, `process`, `running-process`, `completed-process`, `verification`, `passed-verification`, and `failed-verification`. Timeline event kinds match `ProgressKind` names such as `TaskDispatchRecorded` or `TaskVerificationRecorded`. `add-task` appends a custom task to the current goal and delegates it immediately when a matching available agent role exists. Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. `verification-plan <task-number>` prints the current task plan; add plan text to update the pre-work verification checklist included in task details, prompts, transcripts, and the dashboard. Use `task-timeline` to inspect only the events for one task.
+`task` accepts either a display number or a task id prefix. `tasks` lists the current goal's tasks and can filter by `status`, `role`, task `id` prefix, evidence kind, and timeline event kind. Evidence kinds include `none`, `execution`, `dispatch`, `process`, `running-process`, `completed-process`, `verification`, `passed-verification`, and `failed-verification`. Timeline event kinds match `ProgressKind` names such as `TaskDispatchRecorded` or `TaskVerificationRecorded`. `add-task` appends a custom task to the current goal and delegates it immediately when a matching available agent role exists. Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. `verification-plan <task-number>` prints the current task plan; add plan text to update the pre-work verification checklist included in task details and prompts. Use `task-timeline` to inspect only the events for one task.
 
 `advance` executes the top-priority next action only when it is safe and fully specified, such as starting or refreshing a recorded dispatch or delegating pending work; it stops before API-backed model execution so `run <task-number>` or `api-run <task-number>` remains an explicit operator choice. `advance-subscription` follows the same safety policy, but prepares a provider-mapped subscription worker dispatch instead of directly running an assigned OpenAI or Anthropic task; add `--confirm-subscription-advance` when deliberately using that path, and add `--confirm-large-paid-subscription-start` when the selected paid subscription prompt is large enough to require explicit cost confirmation. `delegate` reruns role-based assignment for pending tasks.
 
@@ -258,7 +240,7 @@ exit
 
 `cancel-dispatch` terminates the tracked background process tree and marks the task cancelled.
 
-`verify` runs a local command and appends the result to the task history. `verify-manual` appends human-observed pass/fail evidence without running a command. Both update the latest verification shown in `task`, `monitor`, task briefs, and the dashboard. Use `verifications <task-number>` to inspect the retained evidence trail.
+`verify` runs a local command and appends the result to the task history. `verify-manual` appends human-observed pass/fail evidence without running a command. Both update the latest verification shown in `task`, `monitor`, and task briefs. Use `verifications <task-number>` to inspect the retained evidence trail.
 
 ## Agent Configuration
 
@@ -274,7 +256,7 @@ Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. 
 
 ## Model Providers
 
-Without credentials, API-backed execution uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access. Use `subscription-dispatch <task-number>` for subscription-capable agents first; `api-run <task-number>` is the explicit API-backed fallback and refuses subscription-capable tasks once subscription work, model output, or verification evidence exists. Add `--confirm-paid-api-run` in the CLI, or `confirmPaidApiRun=true` in dashboard API calls, when intentionally running an OpenAI or Anthropic task through the API. Large paid API prompts also require `--confirm-large-paid-api-prompt` in the CLI or `confirmLargePaidApiPrompt=true` in dashboard API calls. Local Ollama execution does not require those flags.
+Without credentials, API-backed execution uses deterministic offline providers named `OpenAI` and `Anthropic`. This keeps orchestration behavior verifiable without network access. Use `subscription-dispatch <task-number>` for subscription-capable agents first; `api-run <task-number>` is the explicit API-backed fallback and refuses subscription-capable tasks once subscription work, model output, or verification evidence exists. Add `--confirm-paid-api-run` in the CLI when intentionally running an OpenAI or Anthropic task through the API. Large paid API prompts also require `--confirm-large-paid-api-prompt` in the CLI. Local Ollama execution does not require those flags.
 
 Set these environment variables to use live API providers:
 
@@ -324,7 +306,7 @@ Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to
 
 `model-functions` lists the orchestrator's internal model function bindings — models the orchestrator invokes for its own functions such as acceptance judges, not worker agents assigned to goal tasks. `model-function-add <purpose> <lane> <provider> <model> [name]` registers a new binding. Unlike agent role assignments, model functions use an open `purpose` string and are stored under `.orchestrator/model-functions.json`. They compose with deterministic gates — LLM judgment results land advisory and never replace a deterministic acceptance gate.
 
-## Dashboard & SSE Monitoring
+## Monitoring
 
 `monitor [goal-id]` reports task status counts, pending human input, last timeline event time, and attention items for:
 
@@ -333,97 +315,6 @@ Use `provider-smoke [openai|anthropic|ollama]` after configuring one provider to
 - failed verification results
 - running dispatches
 - completed tasks that do not yet have verification evidence
-
-`dashboard [path] [--refresh seconds]` writes an HTML dashboard. If no path is provided, it writes `.orchestrator/dashboard.html`. Add `--refresh 10` when you want the opened browser tab to reload itself while workers are running. The dashboard includes status counts, attention items, the goal acceptance summary, the goal evidence summary, SDLC stage readiness, row-level task gate status, latest task evidence, verification gates, the open human-input and verification worklists, and the same prioritized next-action suggestions as the `next` command.
-
-`prototype-ui [url] [--refresh seconds] [--no-open]` serves the hosted dashboard from a persistent prototype state workspace under `src/Mcg.AgentOrchestrator.App\.orchestrator-prototype\workspace`, seeds sample state only when needed, keeps `local-echo` as the explicit harmless echo profile, and configures model-pinned subscription worker profiles for real local CLI execution (`codex-cli` and `claude-cli`). Existing persisted legacy echo or unpinned subscription profiles are repaired on startup. When launched through `mcg-orchestrator.cmd`, task execution runs from the repository root while state remains isolated from the real `.orchestrator/state.db`. Use `--no-open` for scripts or smoke tests that should host the dashboard without launching a browser.
-
-`serve-dashboard [url] [--refresh seconds]` hosts the same dashboard from current state on a local HTTP endpoint, defaulting to `http://localhost:5087/` with a five-second browser refresh. The hosted dashboard includes setup doctor status, agent role/model and worker-profile configuration controls, direct controls for safe next actions, and browser controls for creating goals, adding custom SDLC tasks, updating verification plans, delegating work, running assigned model-backed tasks, advancing with subscription-backed dispatches, preparing worker dispatches, preparing subscription-backed worker dispatches, reporting task progress, asking goal-scoped and task-scoped human questions, starting and refreshing batch dispatches, answering pending human input, running verification commands, and recording manual pass/fail verification. When continuation stops only because background subscription work is still running, the host starts a server-side continuation watch that refreshes the process and resumes handoff after it exits; `/api/continuations` and the operator panel show watcher status. The host reloads `.orchestrator/state.db` on each request, so the page reflects changes made by other CLI commands while it is open. Press Ctrl+C in the hosting console to stop it.
-
-`open-dashboard [url] [--refresh seconds] [--no-open]` uses the same host as `serve-dashboard` and opens the dashboard URL in the default Windows browser. Use `--no-open` for scripts or smoke tests that should host the dashboard without launching a browser.
-
-For repeatable headless dashboard validation, start the prototype dashboard and run the checked-in Edge DevTools harness:
-
-```powershell
-.\mcg-orchestrator.cmd prototype-ui http://localhost:5087/ --refresh 5 --no-open
-.\scripts\Run-DashboardBrowserScript.ps1 .\scripts\dashboard-smoke.js
-```
-
-The smoke script checks the rendered operator page, source survey link, goal-detail link, and build/test stop control without stopping the dashboard. Custom dashboard validation scripts can be placed anywhere under the repository and run through the same wrapper.
-
-For routine dogfood actions through the dashboard, use the parameterized helper instead of creating one-off scratch JavaScript:
-
-```powershell
-.\scripts\Invoke-DashboardDogfoodAction.ps1 -Action create-goal -Objective "Dogfood: validate a dashboard workflow" -Workflow simple
-.\scripts\Invoke-DashboardDogfoodAction.ps1 -Action complete-task -Goal <goal-id-or-prefix> -TaskNumber 1 -Note "Verified through dashboard and tests."
-.\scripts\Invoke-DashboardDogfoodAction.ps1 -Action smoke
-```
-
-For a full Windows build/test cycle while the dashboard is running, use the coordinated helper:
-
-```powershell
-.\scripts\Invoke-DashboardBuildTestCycle.ps1 -DashboardUrl http://localhost:5087/
-```
-
-The helper consumes `/api/system/build-test-cleanup`, stops only exact dashboard PIDs listed by the dashboard plan, runs `dotnet build` and `dotnet test` sequentially, restarts `prototype-ui`, and waits for `/health`.
-
-The dashboard host exposes local JSON endpoints for scripted monitoring and future UI surfaces:
-
-- `/health`
-- `/api/health` or `/api/doctor`
-- `/api/agents`
-- `POST /api/agents` with JSON like `{ "role": "Developer", "providerName": "OpenAI", "modelName": "gpt-5-codex", "name": "OpenAI developer" }`
-- `/api/worker-profiles` returns saved worker profiles plus `executable`, `isResolvable`, `isOptional`, and `detail` availability fields
-- `POST /api/worker-profiles` with JSON like `{ "name": "codex", "commandTemplate": "codex exec {promptPath}" }`
-- `/api/goals`
-- `POST /api/goals` with either a raw objective body or JSON like `{ "objective": "Build feature X" }`; include `{ "autoHandoff": true, "confirmAutoHandoff": true }` only when deliberately starting subscription handoff during goal creation
-- `/api/monitor?goal=<goal-id-prefix>`
-- `/api/acceptance?goal=<goal-id-prefix>` returns the goal acceptance summary, blocker list, and suggested commands
-- `/api/evidence?goal=<goal-id-prefix>` returns the goal evidence summary with per-task latest evidence and rollup counts
-- `/api/stages?goal=<goal-id-prefix>` returns SDLC stage readiness with per-stage status, evidence, verification gate, suggested action, and suggested command
-- `/api/next?goal=<goal-id-prefix>` returns prioritized next actions, suggested CLI commands, and optional `Control` metadata with `Label`, `Method`, and `Url` for safe direct actions
-- `/api/gates?goal=<goal-id-prefix>`
-- `/api/verification-worklist?goal=<goal-id-prefix>` returns only open verification work with suggested actions and commands
-- `/api/human-input-worklist?goal=<goal-id-prefix>` returns only pending human input with task context, suggested actions, and suggested answer commands
-- `/api/pending-input?goal=<goal-id-prefix>`
-- `POST /api/input/<request-id-prefix>/answer` with either a raw text body or JSON like `{ "answer": "Use main." }`
-- `/api/tasks?goal=<goal-id-prefix>&status=<status>&role=<role>&evidence=<kind>&event=<kind>`
-- `/api/task/<task-number-or-id-prefix>?goal=<goal-id-prefix>`
-- `POST /api/goals/<goal-id-prefix>/tasks` with JSON like `{ "role": "Developer", "description": "Implement retry handling", "delegate": true, "verificationPlan": "Run dotnet build." }`
-- `/api/goals/<goal-id-prefix>/transcript`
-- `/api/goals/<goal-id-prefix>/subscription-plan`
-- `POST /api/goals/<goal-id-prefix>/ask` with either a raw question body or JSON like `{ "question": "Which repository should this goal target?" }`
-- `POST /api/goals/<goal-id-prefix>/advance`
-- `POST /api/goals/<goal-id-prefix>/advance-subscription?confirmSubscriptionAdvance=true`
-- `POST /api/goals/<goal-id-prefix>/advance-subscription-until-blocked?confirmSubscriptionAdvance=true`
-- `POST /api/goals/<goal-id-prefix>/delegate`
-- `POST /api/goals/<goal-id-prefix>/profile-dispatch-ready` with either a raw profile name body or JSON like `{ "profileName": "local-echo" }`; the response includes `Dispatches` entries with `Task`, generated `PromptPath`, and `LastDispatch` values
-- `POST /api/goals/<goal-id-prefix>/subscription-dispatch-ready`; the response includes provider-selected `Dispatches` entries with `Task`, generated `PromptPath`, and `LastDispatch` values
-- `POST /api/goals/<goal-id-prefix>/start-subscription-ready?confirmBatchStart=true`; add `confirmLargePaidSubscriptionStart=true` when starting a large paid prepared subscription batch. The response includes provider-selected `Dispatches`, `ProcessPlan` ready/skipped reasons, and `Processes` for started tasks
-- `POST /api/goals/<goal-id-prefix>/start-dispatches?confirmBatchStart=true`; add `confirmLargePaidSubscriptionStart=true` when starting a large paid prepared dispatch. The response includes `ProcessPlan` ready/skipped reasons and `Processes` for changed tasks
-- `POST /api/goals/<goal-id-prefix>/refresh-dispatches`; the response includes `ProcessPlan` ready/skipped reasons and `Processes` for changed tasks
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/run?confirmTaskRun=true`; add `confirmPaidApiRun=true` when this will run OpenAI or Anthropic through the API, and add `confirmLargePaidApiPrompt=true` when the exact prompt preview reports a large paid prompt
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/api-run?confirmTaskRun=true`; add `confirmPaidApiRun=true` when this will run OpenAI or Anthropic through the API, and add `confirmLargePaidApiPrompt=true` when the exact prompt preview reports a large paid prompt
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/retry` with either a raw note body or JSON like `{ "message": "Retry after failed verification" }`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/dispatch` with JSON like `{ "workerName": "local", "command": "Write-Output ok" }`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/profile-dispatch` with either a raw profile name body or JSON like `{ "profileName": "codex-cli" }`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/subscription-dispatch`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/start?confirmDispatchStart=true`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/refresh`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/cancel`
-- `/api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/brief`
-- `/api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/timeline`
-- `/api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/gate`
-- `/api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/verification-plan`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/verification-plan` with either a raw plan body or JSON like `{ "plan": "Run dotnet test." }`
-- `/api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/verifications`
-- `/api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/logs`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/progress` with JSON like `{ "status": "completed", "message": "Implementation finished" }`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/ask` with either a raw question body or JSON like `{ "question": "Which branch should I use?" }`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/verify` with either a raw command body or JSON like `{ "command": "dotnet --version" }`
-- `POST /api/goals/<goal-id-prefix>/tasks/<task-number-or-id-prefix>/verify-manual` with JSON like `{ "passed": true, "note": "Manual smoke passed" }`
-
-`transcript [path]` writes a Markdown snapshot of the current goal. If no path is provided, it writes `.orchestrator/transcript.md`. The transcript includes monitor status, next actions, attention items, the goal acceptance summary, the goal evidence summary, SDLC stage readiness, the open human-input worklist, verification gates, the open verification worklist, task verification plans, task evidence, verification history, task timelines, and the goal timeline.
 
 ## Autonomous Conductor
 

@@ -12,7 +12,7 @@ $sharedSections = @(
     @{ Anchor = 'architecture-and-design-discipline'; Heading = '## Architecture & Design Discipline' },
     @{ Anchor = 'specification-discipline'; Heading = '## Specification Discipline' },
     @{ Anchor = 'diagnosis-discipline'; Heading = '## Diagnosis Discipline' },
-    @{ Anchor = 'dashboard-dogfood-boundary'; Heading = '## Dashboard / Dogfood Boundary' },
+    @{ Anchor = 'dogfood-boundary'; Heading = '## Dogfood Boundary' },
     @{ Anchor = 'operating-the-goal-loop'; Heading = '## Operating the goal loop' },
     @{ Anchor = 'safety'; Heading = '## Safety' },
     @{ Anchor = 'evidence'; Heading = '## Evidence' }
