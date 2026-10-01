@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class SdlcRolePromptRequirements
 {
+    private const string NegativeControlRequestRule = "- Prove RED with evidence_request negative_control:\"revert-src\".";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private const string TesterFindingRequestRule =
         "- Put failures in structured findings JSON with stable IDs and locations; carry distinct prior findings until resolved. Open blocking test-evidence MUST carry evidence_request:{selections:[{test_project,test_class}]}.";
@@ -84,6 +85,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                NegativeControlRequestRule,
                 TesterReceiptFirstContract,
                 TesterInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
@@ -107,13 +109,14 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
+                NegativeControlRequestRule,
                 "### 1. Spec compliance (do this first)",
                 "- Walk criteria in order: report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
                 "- A not-met criterion is a blocking finding with `category: spec-compliance`. If a criterion contradicts the pre-change contract observable on main, report `category: spec-defect` so it escalates to the operator instead of enforcing it against the implementation.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
                 "### 2. Code quality (only after section 1)",
-                "- Review in code-review form: findings first, ordered by severity. First-review breadth must cover every in-scope changed file end-to-end; state coverage or name exactly what you could not examine. A SHALLOW later-round finding on unchanged code is a coverage defect; going DEEPER later (concurrency, durability, fault ordering, security) is desired. Never withhold an identified finding.",
+                "- Review findings first by severity. Cover every in-scope changed file end-to-end; state coverage or gaps. Later SHALLOW findings on unchanged code are coverage defects; DEEPER review (concurrency, durability, fault ordering, security) is desired. Never withhold an identified finding.",
                 "- For independent scope checks use git diff main...HEAD; do not use two-dot, HEAD-only, status, or working-tree-only comparisons. Branch-behind-main alone is NOT a blocker; require concrete merge conflict, semantic overlap, or non-applying diff evidence, otherwise record staleness as advisory.",
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
@@ -248,9 +251,10 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                NegativeControlRequestRule,
                 TesterCompactReceiptFirstContract,
                 TesterCompactInconclusiveReceiptContract,
-                "- PRIMARY PATH: prefer Conductor-side runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming requested work. The Conductor returns receipts. Execute directly only if selection cannot settle it.",
+                "- PRIMARY PATH: prefer Conductor runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming work. The Conductor sends receipts. Execute directly only if selection cannot settle it.",
                 "- A Developer-owned finding still waiting on execution MUST carry `evidence_request`; the conductor runs it once per candidate before re-dispatching Developer. In `evidence_index`, `state=pending-execution` means no run exists for that `candidate_sha` and is NOT a pass; `state=executed-on-candidate` means the receipt for that exact candidate exists. Never call the source correct, or resolve a finding, from narrative or a run that did not happen.",
                 "- Derive focused checks from requested behavior; report concrete evidence.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
@@ -266,6 +270,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
+                NegativeControlRequestRule,
                 "### 1. Spec compliance (do this first)",
                 "- Record met/not-met/not-verifiable with file+line evidence. Use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; main conflicts use `category: spec-defect`.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",

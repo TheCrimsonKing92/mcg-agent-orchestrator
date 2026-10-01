@@ -417,7 +417,8 @@ internal sealed class AcceptanceFocusedVerificationOwner : AcceptanceRunExecutio
         string request,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
-        bool runBaselineArm)
+        bool runBaselineArm,
+        FindingEvidenceNegativeControl? negativeControl = null)
     {
         if (stableSlotLease is not null)
             TrackOwnedRootEnvironment(stableSlotLease.Environment);
@@ -431,7 +432,7 @@ internal sealed class AcceptanceFocusedVerificationOwner : AcceptanceRunExecutio
                 stableSlotIndex,
                 stableSlotLease,
                 runBaselineArm,
-                CancellationToken).ConfigureAwait(false);
+                CancellationToken, negativeControl).ConfigureAwait(false);
             if (result.Passed)
             {
                 stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Succeeded);
