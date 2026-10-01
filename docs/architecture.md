@@ -14,14 +14,14 @@ Infrastructure has no reference to OperatorComms.
 <!-- current-project-inventory:begin -->
 | Project | Direct production references | Responsibility | Explicit non-responsibility |
 | --- | --- | --- | --- |
-| `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | none | Domain model, application contracts, deterministic workflow policy, conductor policy types, and current filesystem access through helpers such as `SharedJsonlFile` and policy/document readers. | No database access, child-process execution, network access, provider adapters, CLI, dashboard, or host composition. |
-| `src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Concrete model-provider adapters, provider defaults, smoke behavior, and agent-catalog persistence. | No executable composition, conductor lifecycle, CLI, or dashboard. |
+| `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | none | Domain model, application contracts, deterministic workflow policy, conductor policy types, and current filesystem access through helpers such as `SharedJsonlFile` and policy/document readers. | No database access, child-process execution, network access, provider adapters, CLI, or host composition. |
+| `src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Concrete model-provider adapters, provider defaults, smoke behavior, and agent-catalog persistence. | No executable composition, conductor lifecycle, or CLI. |
 | `src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj` | Operator-channel implementations, including transport and message behavior behind Core contracts. | No goal-state persistence, conductor policy, or host-level channel composition. |
-| `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | SQLite persistence, process execution, worker artifacts, worktrees, build/test integration, and acceptance verification. | No CLI, dashboard, executable host, or OperatorComms implementation. |
-| `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | Headless executable composition root; it contains conductor coordination, CLI, maintenance, provider wiring, operator-channel composition, and the application contracts the dashboard consumes. | No ASP.NET hosting or dashboard HTTP endpoints, and no reusable domain contracts, provider adapter implementations, OperatorComms implementations, or general persistence implementation. |
-| `tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj` | n/a | Core policy tests and hermetic repository-documentation contracts. | No infrastructure or hosted-dashboard integration coverage. |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | n/a | Broad infrastructure and App orchestration coverage, including persistence, workers, worktrees, conductor behavior, and acceptance. | No ownership of the separately scoped CLI, dashboard, or provider-environment suites. |
-| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | Focused acceptance execution-owner and invocation-pipeline coverage. | No ownership of broad infrastructure, CLI, dashboard, or provider-environment coverage. |
+| `src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj` | SQLite persistence, process execution, worker artifacts, worktrees, build/test integration, and acceptance verification. | No CLI, executable host, or OperatorComms implementation. |
+| `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj` | Headless executable composition root; it contains conductor coordination, CLI, maintenance, provider wiring, operator-channel composition, and the application contracts. | No ASP.NET hosting or HTTP endpoints, and no reusable domain contracts, provider adapter implementations, OperatorComms implementations, or general persistence implementation. |
+| `tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj` | n/a | Core policy tests and hermetic repository-documentation contracts. | No infrastructure integration coverage. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | n/a | Broad infrastructure and App orchestration coverage, including persistence, workers, worktrees, conductor behavior, and acceptance. | No ownership of the separately scoped CLI or provider-environment suites. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj` | `src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj`<br>`src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj` | Focused acceptance execution-owner and invocation-pipeline coverage. | No ownership of broad infrastructure, CLI, or provider-environment coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj` | n/a | CLI parsing, dispatch, command, and console-view contract tests. | No executable-host ownership or non-CLI infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj` | n/a | Process-isolated provider environment and configuration behavior. | No general provider adapter ownership or orchestration coverage. |
 | `tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj` | n/a | Shared fixtures and helpers consumed by test assemblies. | It is not a runnable suite and contains no production behavior. |
@@ -75,8 +75,6 @@ Where the code has no single owner, this table records the gap instead of invent
   landing, and retention coordination. The verifier is presently over-centralized.
 - **CLI:** parsing, handlers, persistence runners, and console views live in `App/Cli`; there is no
   CLI production project.
-- **Dashboard:** API and dashboard hosting live in `App/Dashboard`; there is no Dashboard production
-  project even though a dedicated Dashboard test assembly exists.
 - **Providers:** concrete adapters live in `Infrastructure.Providers`; App still owns registry,
   client, defaults, smoke-runner, and scripted-provider composition.
 - **Operator communications:** transport implementations live in `Infrastructure.OperatorComms`,
@@ -88,7 +86,7 @@ Where the code has no single owner, this table records the gap instead of invent
 Today, add behavior at the seam that already owns its data and invariant: domain contracts and
 deterministic policy in Core; external I/O implementations in the matching Infrastructure assembly;
 state, process, worker, worktree, and acceptance implementations in Infrastructure; and host-only
-composition, CLI, dashboard, and conductor coordination in App. Extend an existing seam before
+composition, CLI, and conductor coordination in App. Extend an existing seam before
 creating a parallel path, and do not describe a test assembly as proof that a production boundary
 already exists.
 
@@ -106,7 +104,6 @@ extraction with the compiled dependency graph.
 | Runtime/Conductor | Goal/task lifecycle, scheduling, conductor coordination, and runtime state transitions. |
 | Infrastructure | Persistence, processes, workers, worktrees, build/test execution, and acceptance mechanics behind Core/Runtime contracts. |
 | CLI | Command parsing, command handlers, terminal presentation, and CLI-specific application flow. |
-| Dashboard | Dashboard host, HTTP/API surface, rendering, and dashboard-specific application flow. |
 | Adapters | Provider and operator-communications integrations with external systems. |
 | App composition root | Executable startup and dependency wiring only; it selects modules and adapters without owning their behavior. |
 

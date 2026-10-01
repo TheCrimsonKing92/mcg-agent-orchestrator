@@ -2,13 +2,13 @@
 
 Status: normative for implementation work after 2026-07-08.
 
-This document resolves the current ambiguity around orchestrator state. The rule is simple: durable state is written by a small set of named state transitions, and every dashboard, CLI view, conductor tick, and repair command must either call those transitions or be explicitly identified as an emergency repair.
+This document resolves the current ambiguity around orchestrator state. The rule is simple: durable state is written by a small set of named state transitions, and every CLI view, conductor tick, and repair command must either call those transitions or be explicitly identified as an emergency repair.
 
 ## Decisions
 
 | Area | Decision | Rationale |
 | --- | --- | --- |
-| Authority | `Goal.Status` and `TaskSpec.Status` are the authoritative persisted states. `GoalLifecycleState`, dashboard buckets, readiness stages, health labels, and loop stop summaries are read-only projections over the persisted statuses plus external facts. | The incidents came from treating projections and statuses as peers. A projection may explain why a goal is blocked or clean, but it must not become a second truth source. |
+| Authority | `Goal.Status` and `TaskSpec.Status` are the authoritative persisted states. `GoalLifecycleState`, readiness stages, health labels, and loop stop summaries are read-only projections over the persisted statuses plus external facts. | The incidents came from treating projections and statuses as peers. A projection may explain why a goal is blocked or clean, but it must not become a second truth source. |
 | Escalated state | Escalation is a waiting state, not a terminal state. It is represented by an open `HumanInputRequest` and `Goal.Status = WaitingForHuman`; if scoped to a task, that task is `WaitingForHuman`. The loop may stop because every active goal is terminal or waiting, but "escalated" is not a durable terminal status. | Operators can answer, dismiss, park, cancel, or supersede an escalation. Calling it terminal caused loops to stop without defining the resume transition. |
 | Artifact lifecycle | `dispatch.json`, heartbeat, stdout, stderr, and exit-code files are consumed-once evidence inputs. Their normalized truth is `TaskDispatchRecord`, `TaskProcessRecord`, and `TaskVerificationRecord` in the snapshot/store. After a successful consume, files are retained only for audit and display; they must never re-drive a second state mutation unless the stored cursor/token says they have not been consumed. | Re-reading artifacts after a crash caused duplicate rewind/reconcile behavior. The store must record whether evidence was applied. |
 | Concurrency | State writes use an optimistic lease token: load snapshot version, compute one transition, save only if the version is unchanged, then retry from a fresh snapshot on conflict. No writer may hold an in-memory goal across external process execution and then save over newer CLI or tick changes. | Mid-tick reconciliation and CLI verbs both need to work. Last-writer-wins is the source of lost task/goal rewinds. |
@@ -19,7 +19,7 @@ This document resolves the current ambiguity around orchestrator state. The rule
 
 The persisted state currently appears in `GoalSnapshot`, `TaskSnapshot`, `HumanInputRequestSnapshot`, and durable auxiliary stores such as run events and dogfood log entries. This table names who may write the state in normal operation.
 
-Canonical writer names in this document are closed: classifier, CLI verbs, tick reconcile, landing, and SQLite repair. Dashboard actions, conductor actions, dispatch/start/refresh/cancel commands, API-only `run`, answer/dismiss commands, verification commands, and acceptance commands are CLI verbs for ownership purposes because they must enter the same transition kernel. "Tick reconcile" includes the conductor/tick work that observes launched processes and consumes dispatch artifacts. No other component owns a persisted-field write.
+Canonical writer names in this document are closed: classifier, CLI verbs, tick reconcile, landing, and SQLite repair. Conductor actions, dispatch/start/refresh/cancel commands, API-only `run`, answer/dismiss commands, verification commands, and acceptance commands are CLI verbs for ownership purposes because they must enter the same transition kernel. "Tick reconcile" includes the conductor/tick work that observes launched processes and consumes dispatch artifacts. No other component owns a persisted-field write.
 
 | Field | Authoritative meaning | Allowed writers and timing |
 | --- | --- | --- |

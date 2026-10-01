@@ -16,7 +16,7 @@ public sealed class AgentHarnessDocsDriftTests
         new("architecture-and-design-discipline", "## Architecture & Design Discipline"),
         new("specification-discipline", "## Specification Discipline"),
         new("diagnosis-discipline", "## Diagnosis Discipline"),
-        new("dashboard-dogfood-boundary", "## Dashboard / Dogfood Boundary"),
+        new("dogfood-boundary", "## Dogfood Boundary"),
         new("operating-the-goal-loop", "## Operating the goal loop"),
         new("safety", "## Safety"),
         new("evidence", "## Evidence")
@@ -44,6 +44,36 @@ public sealed class AgentHarnessDocsDriftTests
         var docs = ReadHarnessDocs(root);
 
         Validate(root, docs);
+    }
+
+    [Xunit.Fact(DisplayName = "Dogfood_boundary_anchor_rename_keeps_script_and_test_shared_sections_in_order")]
+    public void DogfoodBoundaryAnchorRenameKeepsScriptAndTestSharedSectionsInOrder()
+    {
+        var root = FindRepositoryRoot();
+        var docs = ReadHarnessDocs(root);
+        foreach (var text in new[] { docs.Agents, docs.Claude })
+        {
+            Xunit.Assert.DoesNotContain("dashboard-dogfood-boundary", text);
+            Xunit.Assert.DoesNotContain("## Dashboard / Dogfood Boundary", text.Split('\n').Select(line => line.TrimEnd('\r')));
+        }
+
+        Xunit.Assert.Contains("<!-- shared-discipline:dogfood-boundary -->", docs.Agents);
+        Xunit.Assert.Contains("## Dogfood Boundary", docs.Agents.Split('\n').Select(line => line.TrimEnd('\r')));
+        var agentsAnchors = ParseContract(AgentsPath, docs.Agents).SharedAnchors;
+        var claudeAnchors = ParseContract(ClaudePath, docs.Claude).SharedAnchors;
+        Xunit.Assert.Equal(agentsAnchors, claudeAnchors);
+        Xunit.Assert.Contains("dogfood-boundary", agentsAnchors);
+
+        var script = File.ReadAllText(Path.Combine(root, "scripts/Test-AgentHarnessDocsDrift.ps1"));
+        var block = Regex.Match(script, @"(?m)^\$sharedSections = @\(\r?\n(?<entries>[\s\S]*?)^\)\r?$");
+        Xunit.Assert.True(block.Success, "$sharedSections block not found.");
+        var scriptSections = Regex.Matches(
+                block.Groups["entries"].Value,
+                @"@\{\s*Anchor\s*=\s*'(?<anchor>[^']+)';\s*Heading\s*=\s*'(?<heading>[^']+)'\s*\}")
+            .Select(match => new SharedSection(match.Groups["anchor"].Value, match.Groups["heading"].Value))
+            .ToArray();
+        Xunit.Assert.NotEmpty(scriptSections);
+        Xunit.Assert.Equal(SharedSections, scriptSections);
     }
 
     [Xunit.Fact(DisplayName = "Harness_docs_drift_check_rejects_unpaired_contract_or_anchor_edits")]

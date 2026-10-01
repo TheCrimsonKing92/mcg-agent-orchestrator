@@ -39,7 +39,7 @@ Before accepting a goal:
 - Close finished backlog items with `backlog-close` and add newly discovered follow-ups with `backlog-add` (the SQLite store, `.orchestrator/backlog.db`, is canonical).
 - Treat backlog items as candidates. Use filtered `backlog-intake "<heading>" --create-simple-goal --backlog-coverage <full|slice>` or `backlog-intake "<heading>" --create-goal --backlog-coverage <full|slice>` for a small reviewed active set. Choose `full` only when the goal covers the complete source item; otherwise choose `slice` so remaining work stays Open. `goal-plan --create-*` also requires `--backlog-coverage <full|slice>`. Do not feed a stale backlog wholesale into daemon mode.
 - For long acceptance/conductor runs, prefer `scripts/Start-OrchestratorCommand.ps1` through `scripts/Invoke-RepoScript.ps1`, then poll `scripts/Get-OrchestratorSnapshot.ps1`, `next <goal> --full`, and bounded log helpers instead of blocking the operator seat.
-- Do not paste full prompts, full dashboard payloads, or long logs.
+- Do not paste full prompts or long logs.
 
 ## Safety
 
