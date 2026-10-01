@@ -22,6 +22,7 @@
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
     <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+    <PackageReference Include="TngTech.ArchUnitNET" Version="0.13.4" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="Cli\**\*.cs" />
