@@ -861,7 +861,7 @@ public static NextActionControlDto? ToNextActionControlDto(
     WorkerProfileCatalog workerProfiles,
     IReadOnlyList<AgentDefinition>? agents = null)
 {
-    var control = DashboardNextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
+    var control = NextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
     return control is null
         ? null
         : new NextActionControlDto(

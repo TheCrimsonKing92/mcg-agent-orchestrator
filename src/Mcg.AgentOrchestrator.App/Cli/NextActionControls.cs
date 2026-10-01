@@ -2,18 +2,18 @@ using Mcg.AgentOrchestrator.App.Providers;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Dashboard.Rendering;
+namespace Mcg.AgentOrchestrator.App.Cli;
 
-public sealed record DashboardNextActionControl(
+public sealed record NextActionControl(
     string Label,
     string Method,
     string Url,
     string? CostRisk = null,
     string? CostRecommendation = null);
 
-public static class DashboardNextActionControls
+public static class NextActionControls
 {
-    public static DashboardNextActionControl? Build(
+    public static NextActionControl? Build(
         Goal goal,
         NextActionItem item,
         WorkerProfileCatalog workerProfiles,
@@ -26,29 +26,29 @@ public static class DashboardNextActionControls
         return item.Kind switch
         {
             NextActionKind.RunAssignedTask when taskNumber is not null =>
-                new DashboardNextActionControl(
+                new NextActionControl(
                     GetRunActionLabel(goal, item.TaskId, agents, agentDefinitions),
                     "POST",
                     BuildTaskRunUrl(goal, item.TaskId!, agents, agentDefinitions),
                     BuildRunAssignedCostRiskLabel(goal, item.TaskId!, workerProfiles, agents, agentDefinitions),
                     BuildRunAssignedCostRecommendation(goal, item.TaskId!, workerProfiles, agents, agentDefinitions)),
             NextActionKind.RefreshRunningProcess when taskNumber is not null =>
-                new DashboardNextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
+                new NextActionControl("Refresh process", "POST", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/refresh"),
             NextActionKind.ExecuteRecordedDispatch when taskNumber is not null =>
-                new DashboardNextActionControl(
+                new NextActionControl(
                     "Start prepared work",
                     "POST",
                     $"/api/goals/{goalPrefix}/tasks/{taskNumber}/start?confirmDispatchStart=true",
                     BuildPreparedDispatchCostRiskLabel(goal, item.TaskId!),
                     BuildPreparedDispatchCostRecommendation(goal, item.TaskId!)),
             NextActionKind.DelegatePendingTask =>
-                new DashboardNextActionControl("Assign tasks", "POST", $"/api/goals/{goalPrefix}/delegate"),
+                new NextActionControl("Assign tasks", "POST", $"/api/goals/{goalPrefix}/delegate"),
             NextActionKind.InspectFailedTask when taskNumber is not null =>
-                new DashboardNextActionControl("Inspect task", "GET", $"/api/task/{taskNumber}?goal={goalPrefix}"),
+                new NextActionControl("Inspect task", "GET", $"/api/task/{taskNumber}?goal={goalPrefix}"),
             NextActionKind.FixFailedVerification when taskNumber is not null =>
-                new DashboardNextActionControl("Verification records", "GET", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/verifications"),
+                new NextActionControl("Verification records", "GET", $"/api/goals/{goalPrefix}/tasks/{taskNumber}/verifications"),
             NextActionKind.MonitorGoal =>
-                new DashboardNextActionControl("Monitor goal", "GET", $"/api/monitor?goal={goalPrefix}"),
+                new NextActionControl("Monitor goal", "GET", $"/api/monitor?goal={goalPrefix}"),
             _ => null
         };
     }

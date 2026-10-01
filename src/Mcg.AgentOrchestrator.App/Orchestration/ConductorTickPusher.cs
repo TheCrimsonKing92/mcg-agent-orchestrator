@@ -1,38 +1,15 @@
-using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>
-/// Pushes conductor batch-loop tick events to a running dashboard process via HTTP POST.
-/// Silently skips if no dashboard URL is configured or the dashboard is not reachable.
+/// Persists conductor batch-loop tick events in the run-event store.
 /// </summary>
 public static class ConductorTickPusher
 {
     internal const int MaxPersistedProgressLines = 32;
     internal const int MaxPersistedProgressLineChars = 240;
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
-
-    public static string? TryReadDashboardUrl(string dashboardUrlFilePath)
-    {
-        try
-        {
-            if (!File.Exists(dashboardUrlFilePath))
-                return null;
-            var url = File.ReadAllText(dashboardUrlFilePath).Trim();
-            return string.IsNullOrWhiteSpace(url) ? null : url;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public static Action<BatchTickSummary> CreateCallback(string dashboardBaseUrl)
-    {
-        return tick => TryPush(dashboardBaseUrl, tick);
-    }
 
     public static Action<BatchTickSummary> CreateStoreCallback(string runEventStorePath)
     {
@@ -59,22 +36,6 @@ public static class ConductorTickPusher
         catch
         {
             // Observability is advisory; never fail the conductor because a dashboard event write failed.
-        }
-    }
-
-    public static void TryPush(string dashboardBaseUrl, BatchTickSummary tick)
-    {
-        try
-        {
-            var dto = ToDto(tick);
-            var json = JsonSerializer.Serialize(dto);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var url = $"{dashboardBaseUrl.TrimEnd('/')}/api/conductor/tick";
-            _http.PostAsync(url, content).GetAwaiter().GetResult();
-        }
-        catch
-        {
-            // Silently ignore: dashboard may not be running.
         }
     }
 

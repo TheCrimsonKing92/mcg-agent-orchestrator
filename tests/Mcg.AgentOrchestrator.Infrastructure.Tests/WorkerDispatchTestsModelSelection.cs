@@ -1951,11 +1951,11 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         @"Advance(?:Goal)?UntilBlockedAsync\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
         RegexOptions.Singleline | RegexOptions.CultureInvariant);
     var catalogAwareDefaultParameterPattern = new Regex(
-        @"(?:DashboardNextActionControls\.Build|ToNextActionsDto|ToNextActionDto|ToNextActionControlDto|ToGoalWorkSummaryDto|ToTaskWorkContextDto|GoalTranscriptRenderer\.Render|PrintNextActions)\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+        @"(?:NextActionControls\.Build|ToNextActionsDto|ToNextActionDto|ToNextActionControlDto|ToGoalWorkSummaryDto|ToTaskWorkContextDto|GoalTranscriptRenderer\.Render|PrintNextActions)\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
         RegexOptions.Singleline | RegexOptions.CultureInvariant);
     var catalogAwareDeclarations = new (string RelativePath, string MethodName)[]
     {
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Rendering", "DashboardNextActionControls.cs"), "Build"),
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "NextActionControls.cs"), "Build"),
         (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionsDto"),
         (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionDto"),
         (Path.Combine("Mcg.AgentOrchestrator.App", "Dashboard", "Api", "DashboardResponseMapper.Reports.cs"), "ToNextActionControlDto"),

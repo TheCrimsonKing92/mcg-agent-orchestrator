@@ -1531,19 +1531,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 }
 
                 Action<BatchTickSummary>? onTick = ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath);
-                var dashboardUrl = GetFlagValue(parts, "--dashboard-url")
-                    ?? ConductorTickPusher.TryReadDashboardUrl(context.Workspace.DashboardUrlFilePath);
-                if (dashboardUrl is not null)
-                {
-                    Console.WriteLine($"[conduct --loop] Dashboard compatibility push enabled: {dashboardUrl}");
-                    var storeTick = onTick;
-                    var httpTick = ConductorTickPusher.CreateCallback(dashboardUrl);
-                    onTick = tick =>
-                    {
-                        storeTick(tick);
-                        httpTick(tick);
-                    };
-                }
 
                 var loopDriver = new ConductorDriver(
                     context.Kernel,

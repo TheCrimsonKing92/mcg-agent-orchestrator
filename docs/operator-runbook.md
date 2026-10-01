@@ -82,7 +82,6 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 | `--poll-seconds <n>` | seconds between ticks (15 is fine) |
 | `--max-duration <s>` / `--max-iterations <n>` | bound the run |
 | `--daemon` | persistent mode for controlled active-goal intake; stays alive on an empty backlog and picks up goals submitted after the loop starts |
-| `--dashboard-url <url>` | attach to a running dashboard |
 
 **Stop a loop deliberately** with `mcg-orchestrator.cmd conductor stop`. Check it with `mcg-orchestrator.cmd conductor status`; start it deliberately with `mcg-orchestrator.cmd conductor start` (`--clear-stop` clears a prior stop request). A `.conduct-stop` is a detach, not a drain: at the next stop check the loop starts no new dispatches, attempts to detach live workers, persists the detached state, and exits without waiting for those workers to finish. A successful detach leaves the task running for a successor to reconcile; if detachment fails, the fallback cancels the dispatch so it can be requeued. Prefer a quiet window with no live workers before a deliberate stop. Ctrl-C is not equivalent: the conduct-loop path has no `Console.CancelKeyPress` handler, so Ctrl-C terminates without the detach/checkpoint path.
 

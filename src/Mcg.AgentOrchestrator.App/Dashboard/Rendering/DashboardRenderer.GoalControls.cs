@@ -298,10 +298,10 @@ public static partial class DashboardRenderer
         html.AppendLine($"<a href=\"{prefix}/gate\" target=\"_blank\" rel=\"noreferrer\">Verification status</a>");
         html.AppendLine($"<a href=\"{prefix}/verification-plan\" target=\"_blank\" rel=\"noreferrer\">Verification plan</a>");
         html.AppendLine($"<a href=\"{prefix}/verifications\" target=\"_blank\" rel=\"noreferrer\">Verification records</a>");
-        html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildTaskRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">{Encode(DashboardNextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}</button>");
-        if (DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))
+        html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(NextActionControls.BuildTaskRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">{Encode(NextActionControls.GetRunActionLabel(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}</button>");
+        if (NextActionControls.CanRunApiExplicitly(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))
         {
-            html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(DashboardNextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">{Encode(DashboardNextActionControls.GetExplicitApiRunActionLabel(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}</button>");
+            html.AppendLine($"<button type=\"button\" data-action-button=\"{Encode(NextActionControls.BuildExplicitApiRunUrl(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}\">{Encode(NextActionControls.GetExplicitApiRunActionLabel(goal, task.Id, options.HealthReport?.Agents, options.AgentDefinitions))}</button>");
         }
 
         RenderApiRunPreview(html, goal, task, options.HealthReport?.Agents, options.AgentDefinitions);
@@ -616,7 +616,7 @@ public static partial class DashboardRenderer
         if (agent is null ||
             !AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy) ||
             (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly &&
-                !DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, agents, agentDefinitions)))
+                !NextActionControls.CanRunApiExplicitly(goal, task.Id, agents, agentDefinitions)))
         {
             return;
         }
@@ -659,7 +659,7 @@ public static partial class DashboardRenderer
         if (agent is null ||
             !AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy) ||
             (agent.ExecutionPolicy != AgentExecutionPolicy.ApiOnly &&
-                !DashboardNextActionControls.CanRunApiExplicitly(goal, task.Id, agents, agentDefinitions)))
+                !NextActionControls.CanRunApiExplicitly(goal, task.Id, agents, agentDefinitions)))
         {
             return null;
         }
