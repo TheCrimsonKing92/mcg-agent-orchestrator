@@ -4,6 +4,34 @@ using System.Text.RegularExpressions;
 public sealed class ReadmeFrontPageContractTests
 {
     [Xunit.Fact]
+    public void TitleParagraphCreditsWorkerAgentsAndLinksToHistory()
+    {
+        var lines = ReadLines("README.md");
+        var titleIndex = Xunit.Assert.Single(
+            Enumerable.Range(0, lines.Length).Where(index =>
+                lines[index].StartsWith("# ", StringComparison.Ordinal)));
+        var paragraphLines = lines.Skip(titleIndex + 1)
+            .SkipWhile(string.IsNullOrWhiteSpace)
+            .TakeWhile(line => !string.IsNullOrWhiteSpace(line)).ToArray();
+        Xunit.Assert.NotEmpty(paragraphLines);
+        Xunit.Assert.Contains("own worker agents", string.Join('\n', paragraphLines), StringComparison.Ordinal);
+        Xunit.Assert.Contains("#reading-the-history", MarkdownLinkTargets(paragraphLines));
+    }
+
+    [Xunit.Fact]
+    public void ReadingTheHistoryDescribesSingleGoalAndMergeTrainLandings()
+    {
+        var lines = ReadLines("README.md");
+        var start = Array.IndexOf(lines, "## Reading the history");
+        Xunit.Assert.True(start >= 0, "README.md is missing the Reading the history heading.");
+        var end = Array.FindIndex(lines, start + 1, line =>
+            line.StartsWith("# ", StringComparison.Ordinal) || line.StartsWith("## ", StringComparison.Ordinal));
+        var section = string.Join('\n', lines[(start + 1)..(end < 0 ? lines.Length : end)]);
+        Xunit.Assert.Contains("Integrate goal/", section, StringComparison.Ordinal);
+        Xunit.Assert.Contains("merge train", section, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void HeadingsAndArchitectureDiagramMatchFrontPage()
     {
         var lines = ReadLines("README.md");
