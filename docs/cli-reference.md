@@ -83,6 +83,8 @@ goal --brief-file <path> --simple
 
 Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`). `simple-goal <objective>` and `simple-goal --brief-file <path>` are the direct single-task forms.
 
+Before creation, `goal` with an inline objective, `--brief-file` or `--text-file` prints early brief diagnostics as `BRIEF-LINT <severity> <kind>: <message> remedy: <remedy>`, one line per finding. `revise <goal-id> --brief-file <path>` and `revise <goal-id> --text-file <path>` print the same diagnostics before recording the revision. Clean briefs add no output. The severity is `blocks-dispatch` for Git-directory references or unscoped skill definition filenames, `blocks-cli-start` for readiness high-risk words, or `advisory` for inline heading splits and missing test-removal declarations. These lines never block creation or revision and do not change exit codes; existing dispatch and start checks still apply. Diagnostics inspect the brief only, so later task text can introduce additional dispatch risks.
+
 ## `accept`
 
 ```text

@@ -89,6 +89,14 @@ public static class GoalReadinessPreflight
         "webhook"
     ];
 
+    public static IReadOnlyList<string> HighRiskSignalWords { get; } = Array.AsReadOnly(HighRiskSignals);
+
+    public static string[] FindHighRiskSignals(string text)
+    {
+        var tokens = BuildTokenSet(text);
+        return HighRiskSignals.Where(tokens.Contains).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     private static readonly Regex FileScopeRegex = new(
         @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents)[\\/][A-Za-z0-9_.\\/\-]+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -104,7 +112,7 @@ public static class GoalReadinessPreflight
         var findings = new List<GoalReadinessFinding>();
         var text = $"{goal.Objective}\n{string.Join('\n', goal.Tasks.Select(task => $"{task.Description}\n{task.VerificationPlan}"))}";
         var tokens = BuildTokenSet(text);
-        var highRisk = HighRiskSignals.Where(tokens.Contains).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var highRisk = FindHighRiskSignals(text);
         var external = ExternalSignals.Where(tokens.Contains).Order(StringComparer.OrdinalIgnoreCase).ToArray();
         var requiresWorkspace = goal.Tasks.Any(task => task.RequiredRole is AgentRole.Developer or AgentRole.Tester);
         var worktree = (resolveWorktree ?? GoalWorktrees.TryResolve)(executionDirectory, goal.Id);
@@ -314,7 +322,12 @@ public static class GoalReadinessPreflight
 
     private static HashSet<string> BuildTokenSet(string text)
     {
-        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return EnumerateTokens(text).Select(token => text.Substring(token.Start, token.Length))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    public static IEnumerable<(int Start, int Length)> EnumerateTokens(string text)
+    {
         var start = -1;
         for (var index = 0; index <= text.Length; index++)
         {
@@ -330,11 +343,10 @@ public static class GoalReadinessPreflight
 
             if (start >= 0)
             {
-                tokens.Add(text[start..index]);
+                yield return (start, index - start);
                 start = -1;
             }
         }
 
-        return tokens;
     }
 }
