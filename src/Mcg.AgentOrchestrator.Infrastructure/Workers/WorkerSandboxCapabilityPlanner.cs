@@ -55,12 +55,11 @@ public static class WorkerSandboxCapabilityPlanner
         Func<string, bool>? commandExists)
     {
         var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
-        var targetsRepoScopedSkill = text.Contains(".agents/skills", StringComparison.Ordinal) ||
-            text.Contains(".agents\\skills", StringComparison.Ordinal);
+        var targetsRepoScopedSkill = WorkerTargetTextRules.TargetsRepoScopedSkill(text);
         // Git metadata is always conductor-owned. Evaluate this before any positive target-specific
         // capability result so a combined repo-skill/.git request cannot bypass even a vetted
         // read-only Git-reference override.
-        if ((!allowGitReference || targetsRepoScopedSkill) && ContainsGitDirectoryReference(text))
+        if ((!allowGitReference || targetsRepoScopedSkill) && WorkerTargetTextRules.ContainsGitDirectoryReference(text))
         {
             return new WorkerSandboxCapabilityResult(
                 false,
@@ -84,7 +83,7 @@ public static class WorkerSandboxCapabilityPlanner
                 detail);
         }
 
-        if (text.Contains("skill.md", StringComparison.Ordinal))
+        if (WorkerTargetTextRules.FindUnscopedSkillDefinition(text) >= 0)
         {
             return new WorkerSandboxCapabilityResult(
                 false,
@@ -93,22 +92,6 @@ public static class WorkerSandboxCapabilityPlanner
         }
 
         return null;
-    }
-
-    // Matches ".git" only when it is a directory path segment (.git/ or .git\) or a
-    // whole-word reference (not followed by a letter/digit). This avoids false-positives
-    // on legitimate filenames such as .gitignore and .gitattributes.
-    private static bool ContainsGitDirectoryReference(string text)
-    {
-        var idx = 0;
-        while ((idx = text.IndexOf(".git", idx, StringComparison.Ordinal)) >= 0)
-        {
-            var after = idx + 4;
-            if (after >= text.Length || !char.IsLetterOrDigit(text[after]))
-                return true;
-            idx = after;
-        }
-        return false;
     }
 
     private static bool CanWriteRepoScopedSkillTarget(

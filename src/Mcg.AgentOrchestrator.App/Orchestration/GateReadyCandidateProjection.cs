@@ -17,7 +17,8 @@ internal enum GateReadyCandidateExclusionReason
     ResourcesEmpty,
     MergeConflict,
     MergeIndeterminate,
-    ApparatusHold
+    ApparatusHold,
+    OwnerReviewHold
 }
 
 internal enum GateReadyVerificationState
