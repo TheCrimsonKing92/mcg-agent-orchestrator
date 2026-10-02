@@ -102,6 +102,8 @@ internal sealed class ConductorAuthorHost
 
     internal void Stop()
     {
+        var interrupted = _rounds.Where(entry => !entry.Value.Round.IsCompleted)
+            .Select(entry => entry.Key).ToHashSet(StringComparer.Ordinal);
         _shutdown.Cancel();
         var drained = true;
         try { drained = Task.WhenAll(_rounds.Values.Select(value => value.Round)).Wait(TimeSpan.FromSeconds(30)); }
@@ -112,6 +114,13 @@ internal sealed class ConductorAuthorHost
             {
                 _claims.Preserve(running.Item, running.Round.Result);
                 Record(running.Item, "ready", "conductor-stop");
+            }
+            else if (interrupted.Contains(identity) &&
+                     (!running.Round.IsCompleted || running.Round.IsCanceled ||
+                      running.Round.Exception?.GetBaseException() is OperationCanceledException))
+            {
+                _claims.Release(identity);
+                Record(running.Item, "released", "conductor-stop");
             }
             else
             {
