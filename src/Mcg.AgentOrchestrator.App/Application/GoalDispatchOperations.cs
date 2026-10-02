@@ -566,6 +566,14 @@ internal sealed partial class GoalDispatchOperations
                 return;
 
             case GoalRefinementReadiness.Failed:
+                if (SpecRefinementTransientFailureClassifier.IsTransient(readiness.Detail))
+                {
+                    if (StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath))
+                        throw new StateDbCommitBeforeRethrowException(
+                            () => BuildTransientRetryException(workspace, goal.Id, outboxState!));
+                    throw BuildTransientRetryException(workspace, goal.Id, outboxState!);
+                }
+                SpecRefinementTransientRetryStore.ForWorkspace(workspace).Reset(goal.Id);
                 ThrowFailed(goal.Id, readiness.Detail);
                 return;
 
@@ -634,6 +642,21 @@ internal sealed partial class GoalDispatchOperations
                 $"state={stateDetail} repaired={repaired.ToString().ToLowerInvariant()} " +
                 $"pending_age={GoalRefinementWorkCoordinator.FormatPendingAge(createdAt)}" +
                 $"{failedClaimsDetail} detail={launch.Detail}", outboxStatus);
+        }
+
+        static InvalidOperationException BuildTransientRetryException(
+            OrchestratorWorkspace workspace, GoalId goalId, OrchestratorStateOutboxState failedState)
+        {
+            var retry = GoalRefinementWorkCoordinator.AdvanceTransientRetry(workspace, goalId, failedState);
+            if (retry.ExhaustionDetail is { } exhaustion)
+                return new InvalidOperationException(exhaustion);
+            return SpecRefinementPendingException(
+                $"SPEC_REFINEMENT_PENDING goal={goalId.Value} owner=durable-outbox state=transient-retry " +
+                $"reason=retrying-after-transient-lock transient_retry_attempt={retry.Attempts} " +
+                $"transient_retry_limit={GoalRefinementWorkCoordinator.ConsecutiveTransientRetryLimit} " +
+                $"executor_started={retry.Launch.Started.ToString().ToLowerInvariant()} " +
+                $"launch_detail={retry.Launch.Detail} last_failure={failedState.Detail}",
+                OrchestratorStateOutboxStatus.Pending);
         }
 
         static void ThrowFailed(GoalId goalId, string? detail)
