@@ -27,6 +27,22 @@ public static partial class GoalWorktrees
         out string evidence,
         out string refusalReason)
     {
+        if (TryComputeLinearPatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, out evidence, out refusalReason))
+            return true;
+        if (!TryComputeSquashEquivalence(executionDirectory, oldHeadSha, newHeadSha, out var squashEvidence))
+            return false;
+        evidence = squashEvidence;
+        refusalReason = string.Empty;
+        return true;
+    }
+
+    private static bool TryComputeLinearPatchEquivalence(
+        string executionDirectory,
+        string oldHeadSha,
+        string newHeadSha,
+        out string evidence,
+        out string refusalReason)
+    {
         evidence = string.Empty;
         refusalReason = string.Empty;
         if (string.IsNullOrWhiteSpace(executionDirectory) || !Directory.Exists(executionDirectory))
