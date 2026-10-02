@@ -16,7 +16,8 @@ public sealed partial class AgentOrchestratorKernel
         verification = verification with
         {
             CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal),
-            AcceptanceCriteriaVersionHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal)
+            AcceptanceCriteriaVersionHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
+            InconclusiveRoundInputs = TesterInconclusiveRoundInputsReader.RecordedDispatchInputs(task, verification)
         };
         task.RecordVerification(verification);
 
@@ -125,7 +126,8 @@ public sealed partial class AgentOrchestratorKernel
         verification = verification with
         {
             CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal),
-            AcceptanceCriteriaVersionHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal)
+            AcceptanceCriteriaVersionHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
+            InconclusiveRoundInputs = TesterInconclusiveRoundInputsReader.RecordedDispatchInputs(task, verification)
         };
         task.RecordVerification(verification);
         if (verification.AuthoritativeStandardOutput is { } dispatchOutput)
@@ -1622,6 +1624,7 @@ public sealed partial class AgentOrchestratorKernel
             PreDispatchIntegrationReceipt = task.PendingPreDispatchIntegrationReceipt ??
                 (allowPendingRecordedDispatchRefresh ? task.LastDispatch?.PreDispatchIntegrationReceipt : null)
         };
+        dispatch = dispatch with { InconclusiveRoundInputs = TesterInconclusiveRoundInputsReader.Capture(goal, task, dispatch.CandidateIdentity) };
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);

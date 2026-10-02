@@ -69,7 +69,8 @@ public sealed record FailedGoalRecoveryTaskFacts(
     ProviderFailureKind? ProviderFailureKind,
     int? ExitCode,
     string? Command,
-    TimeSpan RetryBackoff);
+    TimeSpan RetryBackoff,
+    FailedGoalInconclusiveRoundPair? InconclusiveRounds = null);
 
 public sealed record FailedGoalPendingNote(TaskId TaskId, string Message);
 
@@ -488,6 +489,11 @@ public static class FailedGoalRecoveryPolicy
                     $"({inconclusiveTester.EmptyOutputRetryCount}/{facts.MaxTransientAttempts}); operator action required. " +
                     $"Latest current-round receipt: {inconclusiveTester.EvidenceSummary}");
             }
+
+            if (inconclusiveTester.InconclusiveRounds is { InputsUnchanged: true } rounds)
+                return Decide(facts, inconclusiveTester, FailedGoalRecoveryAction.Escalate, 3,
+                    "verification-inconclusive-unchanged-inputs",
+                    $"Tester task {Short(inconclusiveTester.TaskId)} stayed verification-inconclusive on unchanged inputs; operator action required. {rounds.DescribeUnchanged(inconclusiveTester.EvidenceSummary)}");
 
             return Decide(
                 facts,

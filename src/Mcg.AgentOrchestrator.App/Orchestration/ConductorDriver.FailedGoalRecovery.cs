@@ -285,7 +285,8 @@ internal sealed partial class ConductorDriver
                 task.LastVerification?.ProviderFailureKind,
                 task.LastVerification?.ExitCode,
                 task.LastVerification?.Command,
-                ComputeEmptyOutputBackoff(policy, task.EmptyOutputRetryCount));
+                ComputeEmptyOutputBackoff(policy, task.EmptyOutputRetryCount),
+                TesterInconclusiveRoundInputsReader.Read(goal, task));
         });
 
         return new FailedGoalRecoveryFacts(

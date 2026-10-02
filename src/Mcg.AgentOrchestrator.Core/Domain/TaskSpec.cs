@@ -174,7 +174,8 @@ public sealed partial class TaskSpec
                     LastVerification.CompletionVerdictRule,
                     LastVerification.AssignedScopeComplete,
                     LastVerification.CandidateIdentity,
-                    LastVerification.AcceptanceCriteriaVersionHash),
+                    LastVerification.AcceptanceCriteriaVersionHash,
+                    LastVerification.InconclusiveRoundInputs),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -206,7 +207,8 @@ public sealed partial class TaskSpec
                     verification.CompletionVerdictRule,
                     verification.AssignedScopeComplete,
                     verification.CandidateIdentity,
-                    verification.AcceptanceCriteriaVersionHash))
+                    verification.AcceptanceCriteriaVersionHash,
+                    verification.InconclusiveRoundInputs))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -344,7 +346,8 @@ public sealed partial class TaskSpec
                     CompletionVerdictRule: verification.CompletionVerdictRule,
                     AssignedScopeComplete: verification.AssignedScopeComplete,
                     CandidateIdentity: verification.CandidateIdentity,
-                    AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash));
+                    AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash,
+                    InconclusiveRoundInputs: verification.InconclusiveRoundInputs));
             }
         }
 
@@ -386,7 +389,8 @@ public sealed partial class TaskSpec
                 CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
                 AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete,
                 CandidateIdentity: snapshot.LastVerification.CandidateIdentity,
-                AcceptanceCriteriaVersionHash: snapshot.LastVerification.AcceptanceCriteriaVersionHash);
+                AcceptanceCriteriaVersionHash: snapshot.LastVerification.AcceptanceCriteriaVersionHash,
+                InconclusiveRoundInputs: snapshot.LastVerification.InconclusiveRoundInputs);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -1075,7 +1079,8 @@ public sealed partial class TaskSpec
         dispatch.PreDispatchIntegrationReceipt,
         dispatch.GoalId,
         dispatch.CandidateIdentity,
-        dispatch.ProviderUsage);
+        dispatch.ProviderUsage,
+        dispatch.InconclusiveRoundInputs);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1116,7 +1121,8 @@ public sealed partial class TaskSpec
         dispatch.PreDispatchIntegrationReceipt,
         dispatch.GoalId,
         dispatch.CandidateIdentity,
-        dispatch.ProviderUsage);
+        dispatch.ProviderUsage,
+        dispatch.InconclusiveRoundInputs);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -1138,9 +1144,11 @@ public sealed partial class TaskSpec
             base.Add(item);
             while (Count > VerificationHistoryLimit)
             {
+                // Recovery must see the Tester outcome immediately preceding the latest round,
+                // including interruptions that reset consecutive inconclusive history.
                 var removableIndex = FindIndex(
                     0,
-                    Count - 1,
+                    role == AgentRole.Tester ? Count - 2 : Count - 1,
                     candidate => !MustPreserveStructuredOutcome(role, candidate));
                 if (removableIndex < 0)
                 {

@@ -188,7 +188,8 @@ public sealed record TaskVerificationSnapshot(
     string? CompletionVerdictRule = null,
     bool? AssignedScopeComplete = null,
     CandidateIdentity? CandidateIdentity = null,
-    string? AcceptanceCriteriaVersionHash = null)
+    string? AcceptanceCriteriaVersionHash = null,
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -238,7 +239,8 @@ public sealed record TaskDispatchSnapshot(
     CandidateIdentity? CandidateIdentity = null,
     [property: System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    DispatchProviderUsage? ProviderUsage = null);
+    DispatchProviderUsage? ProviderUsage = null,
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

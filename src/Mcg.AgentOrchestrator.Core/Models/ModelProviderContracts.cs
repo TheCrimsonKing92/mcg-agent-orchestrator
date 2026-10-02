@@ -93,7 +93,8 @@ public sealed record TaskVerificationRecord(
     HumanWaitKind? HumanInputKind = null,
     string? HumanInputEvidenceOwner = null,
     CandidateIdentity? CandidateIdentity = null,
-    string? AcceptanceCriteriaVersionHash = null)
+    string? AcceptanceCriteriaVersionHash = null,
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -143,6 +144,7 @@ public sealed record TaskVerificationRecord(
             ModelFitNote = preferred.ModelFitNote ?? ModelFitNote,
             CandidateIdentity = preferred.CandidateIdentity ?? CandidateIdentity,
             AcceptanceCriteriaVersionHash = preferred.AcceptanceCriteriaVersionHash ?? AcceptanceCriteriaVersionHash,
+            InconclusiveRoundInputs = InconclusiveRoundInputs ?? preferred.InconclusiveRoundInputs,
             HasCommittedChanges = HasCommittedChanges || preferred.HasCommittedChanges,
             HeartbeatStandardOutputBytes = preferred.HeartbeatStandardOutputBytes ?? HeartbeatStandardOutputBytes,
             HumanInputQuestion = preferred.HumanInputQuestion ?? HumanInputQuestion,
@@ -309,7 +311,8 @@ public sealed record TaskDispatchRecord(
     PreDispatchIntegrationReceipt? PreDispatchIntegrationReceipt = null,
     GoalId? GoalId = null,
     CandidateIdentity? CandidateIdentity = null,
-    DispatchProviderUsage? ProviderUsage = null)
+    DispatchProviderUsage? ProviderUsage = null,
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
