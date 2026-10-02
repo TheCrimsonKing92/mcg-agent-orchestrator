@@ -2825,7 +2825,7 @@ internal sealed partial class ConductorDriver
         {
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
-                $"Background {source} focused evidence is running in attempt {attemptDecision.Attempt.AttemptId}.");
+                $"Background {source} focused evidence is running in attempt {attemptDecision.Attempt.AttemptId}.") with { HoldOwner = ConductorHoldOwner.BackgroundAttempt };
             return false;
         }
         if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||

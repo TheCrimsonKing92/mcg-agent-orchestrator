@@ -83,7 +83,7 @@ public sealed record FailedGoalFindingObservation(
     RetryCause? ObservedCause = null,
     string? WarningMessage = null,
     string Attribution = "structured-finding-routing",
-    ImmutableArray<FailedGoalPendingNote> PendingNotes = default)
+    ImmutableArray<FailedGoalPendingNote> PendingNotes = default, Conductor.ConductorHoldOwner HoldOwner = default)
 {
     public static FailedGoalFindingObservation None { get; } = new(
         FailedGoalFindingObservationKind.None,
@@ -309,7 +309,7 @@ public sealed record FailedGoalRecoveryDecision(
     TimeSpan Backoff = default,
     string? FeedbackCommand = null,
     string? FeedbackEvidence = null,
-    string? WarningMessage = null);
+    string? WarningMessage = null, Conductor.ConductorHoldOwner HoldOwner = default);
 
 /// <summary>
 /// Selects one Failed-lifecycle recovery action from already-observed immutable facts.
@@ -767,7 +767,7 @@ public static class FailedGoalRecoveryPolicy
             observation.Evidence,
             cause,
             roundKind,
-            WarningMessage: observation.WarningMessage);
+            WarningMessage: observation.WarningMessage, HoldOwner: observation.HoldOwner);
     }
 
     private static string Short(TaskId taskId) => taskId.Value[..Math.Min(8, taskId.Value.Length)];

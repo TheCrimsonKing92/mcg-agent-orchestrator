@@ -194,7 +194,7 @@ public sealed class ConductorBatchLoopTestsGoalStallExit : ConductorBatchLoopTes
                 .ToArray()
         });
         kernel.MarkKnownDependencyGoalStatuses([
-            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Active.ToString())
+            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Parked.ToString())
         ]);
 
         var summary = new ConductorBatchLoop().Run(

@@ -92,7 +92,7 @@ internal sealed partial class ConductorDriver
                 goal.Id.Value,
                 goalPrefix,
                 policy,
-                new ConductorAdvanceOutcome.Held(state, decision.Reason));
+                new ConductorAdvanceOutcome.Held(state, decision.Reason) { Owner = decision.HoldOwner });
         }
 
         if (decision.Action == FailedGoalRecoveryAction.Escalate)
