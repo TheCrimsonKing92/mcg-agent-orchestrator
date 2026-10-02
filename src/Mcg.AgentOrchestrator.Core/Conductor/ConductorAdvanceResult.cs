@@ -9,12 +9,20 @@ public enum ConductorEscalationKind
     BackgroundAcceptanceFailed
 }
 
+public enum ConductorHoldOwner
+{
+    None,
+    BackgroundAttempt,
+    AcceptanceQueue
+}
+
 public abstract record ConductorAdvanceOutcome
 {
     public sealed record Executed(GoalLifecycleState FromState, string Description) : ConductorAdvanceOutcome;
     public sealed record Held(GoalLifecycleState State, string Reason, string? StableIdentity = null) : ConductorAdvanceOutcome
     {
         public UnchangedCandidateHoldReason? TypedReason { get; init; }
+        public ConductorHoldOwner Owner { get; init; } = ConductorHoldOwner.None;
     }
     public sealed record Escalated(GoalLifecycleState State, string Reason, ConductorEscalationKind? Kind = null) : ConductorAdvanceOutcome;
     public sealed record Done(GoalLifecycleState State) : ConductorAdvanceOutcome;

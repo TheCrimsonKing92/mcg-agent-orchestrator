@@ -2684,7 +2684,7 @@ internal sealed partial class ConductorBatchLoop
         return true;
     }
 
-    private static void TrackGoalOutcome(
+    internal static void TrackGoalOutcome(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
         Goal goal,
@@ -2705,6 +2705,12 @@ internal sealed partial class ConductorBatchLoop
             if (held.State is GoalLifecycleState.Running
                 or GoalLifecycleState.AwaitingVerification
                 or GoalLifecycleState.Verifying)
+            {
+                ClearGoalHold(kernel, goal, changedGoalIds);
+                return;
+            }
+
+            if (held.Owner is ConductorHoldOwner.BackgroundAttempt or ConductorHoldOwner.AcceptanceQueue)
             {
                 ClearGoalHold(kernel, goal, changedGoalIds);
                 return;
@@ -2760,7 +2766,7 @@ internal sealed partial class ConductorBatchLoop
                 0,
                 (long)(observedAt - observation.Hold.StartedAt).TotalSeconds);
             EmitProgress(
-                $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} " +
+                $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} owner=none " +
                 $"repeatedForSeconds={repeatedForSeconds} blocker={FormatStalledBlockerDetail(blocker)}",
                 tickLines);
         }
@@ -3409,10 +3415,7 @@ internal sealed partial class ConductorBatchLoop
             {
                 deferredByAdmission++;
                 results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(
-                        goal,
-                        policy,
-                        ordinaryAdmission.Reason),
+                    AdmissionDeniedHeld(goal, policy, ordinaryAdmission),
                     null);
                 continue;
             }
@@ -3634,7 +3637,7 @@ internal sealed partial class ConductorBatchLoop
                         ParallelAcceptanceHeld(
                             candidate,
                             policy,
-                            "acceptance verification still running in background"),
+                            "acceptance verification still running in background", ConductorHoldOwner.BackgroundAttempt),
                         candidate.SlotIndex);
                     RecordParallelAcceptanceProgress(
                         AcceptanceLifecycleEventFormatter.Format(candidate.GoalPrefix, candidate.SlotIndex, "running", decision.Attempt.AttemptId, tick),
@@ -4337,18 +4340,20 @@ internal sealed partial class ConductorBatchLoop
     private static ConductorAdvanceResult ParallelAcceptanceHeld(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        string reason) =>
-        ParallelAcceptanceHeld(candidate.Goal, policy, reason);
+        string reason,
+        ConductorHoldOwner owner = ConductorHoldOwner.None) =>
+        ParallelAcceptanceHeld(candidate.Goal, policy, reason, owner);
 
     private static ConductorAdvanceResult ParallelAcceptanceHeld(
         Goal goal,
         ConductorAutonomyPolicy policy,
-        string reason) =>
+        string reason,
+        ConductorHoldOwner owner = ConductorHoldOwner.None) =>
         new(
             goal.Id.Value,
             goal.Id.Value[..8],
             policy.Name,
-            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason));
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason) { Owner = owner });
 
     private static string BuildAcceptanceEngineHoldReason(AcceptanceEngineHealthSnapshot snapshot)
     {

@@ -208,7 +208,7 @@ internal sealed partial class ConductorDriver
                     PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
                         "started", candidateSha!, receiptId, selectionNames, notRun, null, [])));
             result = MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState, decision.Evidence));
+                FocusedEvidencePendingHeld(fromState, decision, kind));
             return true;
         }
 

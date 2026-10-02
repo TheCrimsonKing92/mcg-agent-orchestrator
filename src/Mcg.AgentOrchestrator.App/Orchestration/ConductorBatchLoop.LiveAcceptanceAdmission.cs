@@ -17,7 +17,10 @@ internal sealed partial class ConductorBatchLoop
             : $"live acceptance occupants {string.Join(',', Occupants)}";
     }
 
-    internal sealed record LiveAcceptanceAdmissionDecision(bool IsAdmitted, string Reason);
+    internal sealed record LiveAcceptanceAdmissionDecision(
+        bool IsAdmitted,
+        string Reason,
+        ConductorHoldOwner Owner = ConductorHoldOwner.None);
 
     private sealed record ActiveParallelAcceptanceReservations(
         IReadOnlyList<ConductorParallelAcceptanceAttempt> Attempts,
@@ -136,8 +139,15 @@ internal sealed partial class ConductorBatchLoop
             ? new LiveAcceptanceAdmissionDecision(true, string.Empty)
             : new LiveAcceptanceAdmissionDecision(
                 false,
-                $"acceptance width {width} reached; {census.Describe()}; retry on next conduct tick");
+                $"acceptance width {width} reached; {census.Describe()}; retry on next conduct tick",
+                ConductorHoldOwner.AcceptanceQueue);
     }
+
+    internal static ConductorAdvanceResult AdmissionDeniedHeld(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        LiveAcceptanceAdmissionDecision decision) =>
+        ParallelAcceptanceHeld(goal, policy, decision.Reason, decision.Owner);
 
     private static LiveAcceptanceCensus CaptureLiveAcceptanceCensus(
         IReadOnlyList<ConductorParallelAcceptanceAttempt> activeAttempts,
@@ -212,7 +222,8 @@ internal sealed partial class ConductorBatchLoop
             ParallelAcceptanceHeld(
                 retainedCandidate,
                 policy,
-                "acceptance verification still running in background"),
+                "acceptance verification still running in background",
+                ConductorHoldOwner.BackgroundAttempt),
             retainedCandidate.SlotIndex);
     }
 

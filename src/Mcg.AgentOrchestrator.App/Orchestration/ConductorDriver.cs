@@ -2767,6 +2767,17 @@ internal sealed partial class ConductorDriver
                 $"{candidateSha}:{findingRoundFingerprint}:{policyName}:{identity}")))
             .ToLowerInvariant()[..16];
 
+    internal static ConductorAdvanceOutcome.Held FocusedEvidencePendingHeld(
+        GoalLifecycleState state,
+        FailedGoalFindingObservation decision,
+        ConductorParallelAcceptanceAttemptDecisionKind? kind) =>
+        new(state, decision.Evidence)
+        {
+            Owner = kind == ConductorParallelAcceptanceAttemptDecisionKind.Running
+                ? ConductorHoldOwner.BackgroundAttempt
+                : ConductorHoldOwner.None
+        };
+
     private bool TryReconcileFocusedEvidenceAttempt(
         Goal goal,
         ConductorAutonomyPolicy policy,

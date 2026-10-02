@@ -118,7 +118,7 @@ internal sealed partial class ConductorDriver
              decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending))
         {
             result = MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState, decision.Evidence));
+                FocusedEvidencePendingHeld(fromState, decision, kind));
             return true;
         }
 
