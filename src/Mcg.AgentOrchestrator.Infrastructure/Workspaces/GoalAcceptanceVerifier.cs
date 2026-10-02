@@ -11,6 +11,7 @@ using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using static Mcg.AgentOrchestrator.Infrastructure.AcceptanceCheckCommandBuilder;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -3665,7 +3666,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment,
             testResultsDirectoryOverride);
         PrepareTestTelemetryForRun(telemetry);
-        var arguments = BuildMtpTestArguments(check, executableEnvironment ?? environment, telemetry);
+        var arguments = BuildMtpTestArguments(check, EngineSettings, executableEnvironment ?? environment, telemetry, NeedsUnattendedHostIntegrationExclusion(check), TranslateCheckMtpFilter);
         ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
         var result = await RunLaneTestHostWithShardPermitAsync(
             arguments,
@@ -5412,40 +5413,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static string FilterTestFileDiffSections(string diff) => TestTamperAnalysis.FilterTestFileDiffSections(diff);
 
-    private static string[] BuildDotnetTestArguments(AcceptanceManifestCheck check, bool noBuild = false)
-    {
-        var args = new List<string> { "dotnet", "test" };
-        if (!string.IsNullOrWhiteSpace(check.Project))
-        {
-            args.Add(check.Project);
-        }
-
-        var explicitFilter = ExtractFilterArguments(check.Arguments, args);
-
-        // Exclude host-integration tests from unattended gates by their
-        // [Trait("Category","HostIntegration")] tag.
-        if (string.IsNullOrWhiteSpace(explicitFilter) && NeedsUnattendedHostIntegrationExclusion(check))
-        {
-            args.Add("--filter");
-            args.Add("Category!=HostIntegration");
-        }
-
-        // Fail a hung test fast and by name before the whole check budget is exhausted. A test that
-        // spawns a process which blocks (e.g. on a firewall prompt) and then WaitForExit()s on it
-        // can otherwise stall the whole acceptance until the configured command timeout. The
-        // inactivity timeout is per-test and distinct from the full check budget.
-        args.Add("--blame-hang-timeout");
-        args.Add("120s");
-        args.Add("--blame-hang-dump-type");
-        args.Add("none");
-        if (noBuild && !args.Any(argument => argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase)))
-        {
-            args.Add("--no-build");
-        }
-
-        return [.. args];
-    }
-
     private DotnetTestBuildPhase CreateDotnetTestBuildPhase(
         string worktreePath,
         IReadOnlyList<AcceptanceManifestCheck> checks,
@@ -5593,62 +5560,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
     }
 
-    private static string[] BuildDotnetTestBuildArguments(AcceptanceManifestCheck check)
-    {
-        var testArguments = BuildDotnetTestArguments(check);
-        return BuildDotnetTestBuildArguments(testArguments);
-    }
-
-    private static string[] BuildDotnetTestBuildArguments(string[] testArguments)
-    {
-        var args = new List<string> { "dotnet", "build" };
-        var startIndex = 2;
-        if (testArguments.Length > 2 && !testArguments[2].StartsWith("-", StringComparison.Ordinal))
-        {
-            args.Add(testArguments[2]);
-            startIndex = 3;
-        }
-
-        for (var index = startIndex; index < testArguments.Length; index++)
-        {
-            var argument = testArguments[index];
-            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--logger", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--collect", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--blame-hang-timeout", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--blame-hang-dump-type", StringComparison.OrdinalIgnoreCase))
-            {
-                index++;
-                continue;
-            }
-
-            if (argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase) ||
-                argument.StartsWith("--blame", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!IsBuildCompatibleDotnetArgument(argument))
-            {
-                continue;
-            }
-
-            args.Add(argument);
-            if (ArgumentExpectsValue(argument) && index + 1 < testArguments.Length)
-            {
-                args.Add(testArguments[++index]);
-            }
-        }
-
-        return [.. args];
-    }
-
-    private static bool NeedsUnattendedHostIntegrationExclusion(AcceptanceManifestCheck check) =>
-        string.IsNullOrWhiteSpace(check.Project) ||
-        check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
-        ProjectMatches(check.Project, InfrastructureTestsProject) ||
-        IsExtractedInfrastructureProject(check.Project);
-
     private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>
         stableSlotIndex.HasValue || stableSlotLease is not null;
 
@@ -5740,188 +5651,16 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static bool UsesMicrosoftTestingPlatform(AcceptanceManifestCheck check) =>
-        check.Runner?.Equals("mtp", StringComparison.OrdinalIgnoreCase) == true;
-
-    private static bool UsesVstestRunner(AcceptanceManifestCheck check) =>
-        string.IsNullOrWhiteSpace(check.Runner) ||
-        check.Runner.Equals("vstest", StringComparison.OrdinalIgnoreCase);
+        AcceptanceCheckCommandBuilder.UsesMicrosoftTestingPlatform(check);
 
     private static bool IsDotnetTestCommand(string[] arguments) =>
         AcceptanceCheckCommandBuilder.IsDotnetTestCommand(arguments);
-
-    private static string[] EnsureDotnetTestNoBuildArguments(string[] arguments)
-    {
-        if (arguments.Any(argument => argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase)))
-        {
-            return arguments;
-        }
-
-        return [.. arguments, "--no-build"];
-    }
-
-    private static bool IsBuildCompatibleDotnetArgument(string argument) =>
-        argument.Equals("--configuration", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-c", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--framework", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-f", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--runtime", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-r", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--verbosity", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-v", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--no-restore", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--nologo", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--force", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--interactive", StringComparison.OrdinalIgnoreCase) ||
-        argument.StartsWith("-p:", StringComparison.OrdinalIgnoreCase) ||
-        argument.StartsWith("/p:", StringComparison.OrdinalIgnoreCase) ||
-        argument.StartsWith("--property:", StringComparison.OrdinalIgnoreCase);
-
-    private static bool ArgumentExpectsValue(string argument) =>
-        argument.Equals("--configuration", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-c", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--framework", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-f", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--runtime", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-r", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("--verbosity", StringComparison.OrdinalIgnoreCase) ||
-        argument.Equals("-v", StringComparison.OrdinalIgnoreCase);
-
-    private static string? ExtractFilterArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
-    {
-        string? filter = null;
-        for (var index = 0; index < sourceArguments.Count; index++)
-        {
-            var argument = sourceArguments[index];
-            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase))
-            {
-                if (index + 1 < sourceArguments.Count)
-                {
-                    filter = sourceArguments[index + 1];
-                    index++;
-                }
-
-                continue;
-            }
-
-            destinationArguments.Add(argument);
-        }
-
-        if (!string.IsNullOrWhiteSpace(filter))
-        {
-            destinationArguments.Add("--filter");
-            destinationArguments.Add(filter);
-        }
-
-        return filter;
-    }
-
-    private string[] BuildMtpTestArguments(
-        AcceptanceManifestCheck check,
-        DotnetBuildEnvironment environment,
-        DotnetTestTelemetry telemetry)
-    {
-        if (string.IsNullOrWhiteSpace(check.Project))
-        {
-            throw new InvalidDataException($"Acceptance check '{check.Name}' uses MTP but has no project.");
-        }
-
-        var invocation = EngineSettings.ResolveMtpInvocation(check.Project);
-        var managedAssemblyPath = invocation.ResolveManagedAssemblyPath(environment);
-        var resultsDirectory = Path.GetDirectoryName(telemetry.Paths[0])
-            ?? Path.Combine(environment.ArtifactsPath, "TestResults");
-        var trxFileName = Path.GetFileName(telemetry.Paths[0]);
-        var args = invocation.Arguments
-            .Select(argument => argument
-                .Replace("{executable}", managedAssemblyPath, StringComparison.Ordinal)
-                .Replace("{resultsDirectory}", resultsDirectory, StringComparison.Ordinal)
-                .Replace("{trxFileName}", trxFileName, StringComparison.Ordinal))
-            .ToList();
-        var filter = ExtractMtpCompatibleArguments(check.Arguments, args);
-        if (!string.IsNullOrWhiteSpace(filter))
-        {
-            args.AddRange(check.FocusedEvidenceTokens.Count > 0
-                ? TranslateFocusedEvidenceTokens(check.FocusedEvidenceTokens)
-                : TranslateCheckMtpFilter(check, filter));
-        }
-
-        // MTP execution does not go through BuildDotnetTestArguments. Unattended dashboard /
-        // full-suite checks often have no --filter in Arguments, so HostIntegration must be
-        // excluded here to match discovery.
-        if (NeedsUnattendedHostIntegrationExclusion(check) &&
-            !HasMtpTraitExclusion(args, "Category=HostIntegration"))
-        {
-            args.Add("--filter-not-trait");
-            args.Add("Category=HostIntegration");
-        }
-
-        return UseDotnetHostForManagedExecutable(args);
-    }
-
-    private static bool HasMtpTraitExclusion(IReadOnlyList<string> arguments, string trait)
-    {
-        for (var index = 0; index < arguments.Count - 1; index++)
-        {
-            if (arguments[index].Equals("--filter-not-trait", StringComparison.OrdinalIgnoreCase) &&
-                arguments[index + 1].Equals(trait, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     private static string[] UseDotnetHostForManagedExecutable(IReadOnlyList<string> arguments) =>
         AcceptanceCheckCommandBuilder.UseDotnetHostForManagedExecutable(arguments);
 
     internal static string? ResolveGitText(string worktreePath, params string[] arguments) =>
         AcceptanceGitTextResolver.Resolve(worktreePath, arguments);
-
-    private static string? ExtractMtpCompatibleArguments(IReadOnlyList<string> sourceArguments, List<string> destinationArguments)
-    {
-        string? filter = null;
-        for (var index = 0; index < sourceArguments.Count; index++)
-        {
-            var argument = sourceArguments[index];
-            if (argument.Equals("--filter", StringComparison.OrdinalIgnoreCase))
-            {
-                if (index + 1 < sourceArguments.Count)
-                {
-                    filter = sourceArguments[++index];
-                }
-
-                continue;
-            }
-
-            if (argument.Equals("--verbosity", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("-v", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--configuration", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("-c", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--framework", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("-f", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--logger", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--results-directory", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--blame-hang-timeout", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--blame-hang-dump-type", StringComparison.OrdinalIgnoreCase))
-            {
-                index++;
-                continue;
-            }
-
-            if (argument.Equals("--no-build", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--no-restore", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--nologo", StringComparison.OrdinalIgnoreCase) ||
-                argument.StartsWith("-p:", StringComparison.OrdinalIgnoreCase) ||
-                argument.StartsWith("/p:", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            destinationArguments.Add(argument);
-        }
-
-        return filter;
-    }
 
     internal static IEnumerable<string> TranslateMtpFilter(string filter) =>
         AcceptanceCheckCommandBuilder.TranslateMtpFilter(filter);
@@ -8101,26 +7840,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public IReadOnlyList<IReadOnlyList<FocusedEvidenceFilterToken>> FocusedEvidenceSelections { get; init; } = [];
     }
 
-    private static IEnumerable<string> TranslateFocusedEvidenceTokens(
-        IReadOnlyList<FocusedEvidenceFilterToken> tokens)
-    {
-        foreach (var token in tokens)
-        {
-            yield return token.Kind switch
-            {
-                FocusedEvidenceTokenKind.Class => "--filter-class",
-                FocusedEvidenceTokenKind.Method => "--filter-method",
-                FocusedEvidenceTokenKind.ExcludedClass => "--filter-not-class",
-                FocusedEvidenceTokenKind.ExcludedTrait => "--filter-not-trait",
-                _ => throw new InvalidOperationException(
-                    $"Unsupported focused evidence token kind '{token.Kind}'.")
-            };
-            yield return token.Kind == FocusedEvidenceTokenKind.ExcludedTrait
-                ? $"Category={token.Value}"
-                : $"*{token.Value}*";
-        }
-    }
-
     internal enum FocusedEvidenceTokenKind
     {
         Class,
@@ -8158,7 +7877,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> Identities,
         IReadOnlyList<string> UnreadableReceiptPaths);
 
-    private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
+    internal sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
 
     private sealed record TrxCompletionEvidence(
         int? DiscoveredTestCount,
