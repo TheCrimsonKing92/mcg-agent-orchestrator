@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -11,7 +12,8 @@ internal static class CliConductorCommand
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         IConductorProcessLauncher? launcher = null, IConductorLockProbe? lockProbe = null,
-        Func<DateTimeOffset>? bootTime = null, TextWriter? output = null, TextWriter? error = null)
+        Func<DateTimeOffset>? bootTime = null, Func<string?>? mainCommit = null,
+        TextWriter? output = null, TextWriter? error = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -32,7 +34,8 @@ internal static class CliConductorCommand
                     return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(), output, error);
                 case "status":
                     CliConductorStatusReader.Print(workspace, owner,
-                        (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(), output);
+                        (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(), output,
+                        mainCommit ?? (() => ResolveMainCommit(workspace)));
                     return 0;
                 case "stop":
                     if (owner is null)
@@ -55,6 +58,22 @@ internal static class CliConductorCommand
         {
             error.WriteLine($"Error: {ex.Message}");
             return 1;
+        }
+    }
+
+    private static string? ResolveMainCommit(OrchestratorWorkspace workspace)
+    {
+        try
+        {
+            var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", "--quiet", "refs/heads/main");
+            if (!result.Succeeded || result.DrainTimedOut) return null;
+            var commit = result.Output.Trim();
+            return commit.Length == 0 ? null : commit;
+        }
+        catch (Exception)
+        {
+            // Main lookup is optional status evidence; git failures must keep status successful.
+            return null;
         }
     }
 

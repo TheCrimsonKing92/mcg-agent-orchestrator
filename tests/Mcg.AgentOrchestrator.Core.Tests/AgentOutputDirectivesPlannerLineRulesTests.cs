@@ -61,6 +61,7 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
             "commit: <commit sha or none>",
             "blockers: <none|premise-invalid - fact and evidence (Planner/Researcher only)|exact-blocker - token first; blank is invalid; put deferred-verification notes in tests>",
             "assigned_scope_complete: <true|false>",
+            "criteria_self_check: <one-line JSON array, one entry per refined criterion: {criterion_index,status:proven|not-owned|unmet,evidence}; zero-based like criteria_verdicts; evidence <=200 chars: proven=test class.method + why its assertion fails without this round's change, not-owned=named owner role, unmet=missing work; whole field <3500 chars; [] when no refined criteria>",
             "model_fit: <provider/model - adequate|overkill|underpowered - task shape - reason>",
             "skills: <selected skills used or none>",
             "confidence: <high|medium|low>",

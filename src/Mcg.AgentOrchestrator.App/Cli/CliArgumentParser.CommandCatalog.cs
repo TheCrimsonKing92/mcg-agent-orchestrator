@@ -42,6 +42,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "lesson",
     "lessons",
     "context-usage",
+    "author-draft",
     "conductor",
     "retention-plan",
     "run-events-maintenance",

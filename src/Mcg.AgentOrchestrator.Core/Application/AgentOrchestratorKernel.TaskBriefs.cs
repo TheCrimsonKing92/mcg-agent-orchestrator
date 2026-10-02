@@ -304,6 +304,8 @@ public sealed partial class AgentOrchestratorKernel
             "## Instructions"
         };
         instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch));
+        if (!string.IsNullOrWhiteSpace(contextDirectory))
+            CriteriaSelfCheckPromptContext.Externalize(instructionLines, task.RequiredRole, includeReference: true);
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
         {
@@ -403,6 +405,8 @@ public sealed partial class AgentOrchestratorKernel
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
                 hasDurableResearch));
+        if (!string.IsNullOrWhiteSpace(contextDirectory))
+            CriteriaSelfCheckPromptContext.Externalize(roleLines, task.RequiredRole, includeReference: false);
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
 

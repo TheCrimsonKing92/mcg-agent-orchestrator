@@ -48,17 +48,17 @@ public sealed partial class GoalAcceptanceVerifier
 
                     try
                     {
-                        var classFiles = FindFocusedEvidenceClassFiles(
+                        var classFiles = FocusedEvidenceRequestResolver.FindFocusedEvidenceClassFiles(
                             baselinePath, check.Project, token.ContainingClass);
                         var classExists = classFiles.Count > 0;
                         var methodExists = token.Kind != FocusedEvidenceTokenKind.Method ||
-                            (classExists && FindFocusedEvidenceTestMethodNames(
+                            (classExists && FocusedEvidenceRequestResolver.FindFocusedEvidenceTestMethodNames(
                                 classFiles, token.ContainingClass).Any(method =>
                                     method.StartsWith(token.Value.Split('.').Last(),
                                         StringComparison.OrdinalIgnoreCase)));
                         var resolves = classExists && methodExists;
                         if (resolves && token.Kind == FocusedEvidenceTokenKind.Method &&
-                            !TryResolveFocusedEvidenceSelection(
+                            !FocusedEvidenceRequestResolver.TryResolveFocusedEvidenceSelection(
                                 baselinePath, check.Project, token.CanonicalToken, token.Value,
                                 out _, out var rejection))
                         {
@@ -109,7 +109,7 @@ public sealed partial class GoalAcceptanceVerifier
 
             if (survivingGroups.Count > 0)
             {
-                if (!TryBuildFocusedEvidenceChecks(
+                if (!FocusedEvidenceRequestResolver.TryBuildFocusedEvidenceChecks(
                         string.Join("; ", survivingGroups), EngineSettings, baselinePath,
                         out var rebuilt, out _, out var rejection) || rebuilt.Count != 1)
                 {

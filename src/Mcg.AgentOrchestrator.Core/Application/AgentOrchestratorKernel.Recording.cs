@@ -417,6 +417,12 @@ public sealed partial class AgentOrchestratorKernel
                 $"NO_CHANGE_DISPOSITION task={task.Id.Value} rule={TaskOutcomeRules.VerifiedNoChangeRound.Token} candidate={dispatch.BaseCommit}");
         }
 
+        if (task.RequiredRole == AgentRole.Developer && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
+        {
+            Append(goal, taskId, ProgressKind.TaskNote,
+                DeveloperCriteriaSelfCheck.ParseWorkerOutput(verification.AuthoritativeStandardOutput ?? verification.StandardOutput).ToTaskNote(taskId));
+        }
+
         ReportWorkerTaskProgress(
             goalId,
             taskId,

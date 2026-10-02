@@ -101,6 +101,7 @@ public static class AgentOutputDirectives
         else if (role == AgentRole.Developer)
         {
             lines.Add("assigned_scope_complete: <true|false>");
+            lines.Add("criteria_self_check: <one-line JSON array, one entry per refined criterion: {criterion_index,status:proven|not-owned|unmet,evidence}; zero-based like criteria_verdicts; evidence <=200 chars: proven=test class.method + why its assertion fails without this round's change, not-owned=named owner role, unmet=missing work; whole field <3500 chars; [] when no refined criteria>");
         }
         else if (role is AgentRole.Reviewer or AgentRole.Tester)
         {

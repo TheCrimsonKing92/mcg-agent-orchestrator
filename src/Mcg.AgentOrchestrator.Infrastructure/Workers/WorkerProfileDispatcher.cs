@@ -112,10 +112,10 @@ public static class WorkerProfileDispatcher
             ["workflow-brokers.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
             ["context-budget.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
             ["selected-skills.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
+            [CriteriaSelfCheckPromptContext.FileName] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
             ["source-survey.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
             ["subscription-preflight.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver)
         };
-
     internal static IReadOnlyList<string> DeliverableRegistryArtifactPaths => RegistryArtifactSources
         .Where(entry => entry.Value.Disposition == RegistryArtifactDisposition.Deliver)
         .Select(entry => entry.Key)
