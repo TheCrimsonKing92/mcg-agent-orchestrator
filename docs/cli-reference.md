@@ -85,6 +85,18 @@ Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`).
 
 Before creation, `goal` with an inline objective, `--brief-file` or `--text-file` prints early brief diagnostics as `BRIEF-LINT <severity> <kind>: <message> remedy: <remedy>`, one line per finding. `revise <goal-id> --brief-file <path>` and `revise <goal-id> --text-file <path>` print the same diagnostics before recording the revision. Clean briefs add no output. The severity is `blocks-dispatch` for Git-directory references or unscoped skill definition filenames, `blocks-cli-start` for readiness high-risk words, or `advisory` for inline heading splits and missing test-removal declarations. These lines never block creation or revision and do not change exit codes; existing dispatch and start checks still apply. Diagnostics inspect the brief only, so later task text can introduce additional dispatch risks.
 
+## `author-draft`
+
+```text
+author-draft <backlog-id-prefix>
+```
+
+Runs one synchronous Author round with the clarification Author's launcher (`claude --model sonnet --permission-mode plan -p`) and ten-minute bound, using the backlog title, body, annotations and active `author` / `author:brief` lessons. Run from the repository root checked out at current main HEAD with no tracked edits; a different checkout or a main change during the round fails with a receipt.
+
+Draft markdown and a JSON receipt go under `.orchestrator/author-drafts` (or the selected project's/tenant's state directory). The receipt records the item id, main SHA, model exit code and individual checks for the four sections, declared criteria, owner sentences with verification classes, and tracked premise file citations with valid lines. Failed checks retain the draft, print their details and exit 1. A stale premise writes only a receipt with its reason and evidence, prints the reason and exits 2. Model failures or malformed JSON exit 1 with a failure receipt.
+
+Every draft prints its path and `goal --brief-file "<draft-path>" --backlog-item <item-id> --backlog-coverage full` for separate filing; exit 0 means all checks passed. Drafting reads the backlog without schema writes; it never files a goal, submits an intent or updates the backlog.
+
 ## `accept`
 
 ```text
@@ -155,6 +167,7 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 ```text
 doctor
 provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]
+author-draft <backlog-id-prefix>
 goal <objective>
 goals
 agents

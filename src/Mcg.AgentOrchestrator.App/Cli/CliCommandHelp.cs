@@ -79,6 +79,7 @@ internal static class CliCommandHelp
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
+    public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
 
     private static readonly CommandHelpEntry Conduct = new(
@@ -545,6 +546,11 @@ internal static class CliCommandHelp
         "Report per-role and per-model worker dispatch context usage.",
         ["--since", "--role", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry AuthorDraft = new(
+        AuthorDraftUsage,
+        "Draft and check a goal brief from a backlog item without filing a goal.",
+        ["--help", "-h"]);
+
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
         "Start, report or stop the conductor from the terminal.",
@@ -697,6 +703,7 @@ internal static class CliCommandHelp
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  goal              Create a goal.");
+        Console.WriteLine("  author-draft      Draft a checked goal brief from a backlog item.");
         Console.WriteLine("  goal-intake-status Poll keyed goal creation status.");
         Console.WriteLine("  goal-replace      Replace an eligible terminal source-linked goal.");
         Console.WriteLine("  goals             List goals.");
@@ -1002,6 +1009,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("context-usage", StringComparison.OrdinalIgnoreCase))
         {
             entry = ContextUsage;
+            return true;
+        }
+
+        if (args[0].Equals("author-draft", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = AuthorDraft;
             return true;
         }
 
