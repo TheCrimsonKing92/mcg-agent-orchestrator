@@ -3179,6 +3179,14 @@ internal sealed partial class ConductorBatchLoop
                 $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', trainSelection.Members.Select(member => member.GoalId.Value[..8]))} " +
                 $"ejected={string.Join(',', trainRun.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {trainRun.Detail}",
                 changedGoalLines);
+            activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+            acceptanceCensus = CaptureLiveAcceptanceCensus(
+                liveAttempts,
+                activeAttemptIds,
+                activeCohortCapacity,
+                tick,
+                changedGoalLines,
+                blockAdmissionOnFailure: true);
             cohortEligible = cohortEligible
                 .Where(goal => !results.ContainsKey(goal.Id.Value))
                 .ToArray();
