@@ -59,6 +59,7 @@ public sealed class GoalLifecycleEventWriterTests
                 "TaskDispatched",
                 "TaskVerified",
                 "TaskNote",
+                "TaskNote",
                 "TaskCompleted",
                 "GoalLifecycleDecision",
                 "GoalLanded",

@@ -52,6 +52,8 @@ internal sealed partial class WorkerArtifactWriter
         }
 
         WriteText(Path.Combine(contextDirectory, "objective.md"), BuildObjective(goal));
+        WriteOptionalArtifact(Path.Combine(contextDirectory, CriteriaSelfCheckPromptContext.FileName),
+            CriteriaSelfCheckPromptContext.BuildArtifact(task.RequiredRole));
         WriteText(
             Path.Combine(contextDirectory, "current-task.md"),
             BuildCurrentTask(task, workingDirectory, preserveCompleteArtifacts));
@@ -238,6 +240,11 @@ internal sealed partial class WorkerArtifactWriter
         }
 
         lines.Add(string.Empty);
+        if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer)
+        {
+            AddDeveloperCriteriaSelfCheck(lines, goal.Tasks);
+            lines.Add(string.Empty);
+        }
         lines.Add("## Evidence Pointers");
         lines.Add("- current-task.md: current task brief and verification plan.");
         lines.Add("- objective.md: full goal objective.");
@@ -276,6 +283,26 @@ internal sealed partial class WorkerArtifactWriter
         }
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void AddDeveloperCriteriaSelfCheck(List<string> lines, IReadOnlyList<TaskSpec> tasks)
+    {
+        lines.Add("## Developer Criteria Self-Check");
+        var developer = tasks.Where(t => t.RequiredRole == AgentRole.Developer && t.Status == WorkTaskStatus.Completed)
+            .OrderByDescending(t => t.LastVerification?.CompletedAt)
+            .FirstOrDefault();
+        var verification = developer?.LastVerification;
+        var result = DeveloperCriteriaSelfCheck.ParseWorkerOutput(
+            verification?.AuthoritativeStandardOutput ?? verification?.StandardOutput);
+        if (result.State == DeveloperSelfCheckFieldState.Missing)
+            lines.Add("- criteria_self_check field=missing in the latest completed Developer round.");
+        else if (result.State == DeveloperSelfCheckFieldState.Malformed)
+            lines.Add($"- criteria_self_check field=malformed in the latest completed Developer round: {result.Reason}");
+        else if (result.Entries.Count == 0)
+            lines.Add("- criteria_self_check field=present with no entries.");
+        else
+            foreach (var entry in result.Entries)
+                lines.Add($"- criterion_index={entry.CriterionIndex} status={entry.StatusText} evidence={DeveloperCriteriaSelfCheck.OneLine(entry.Evidence)}");
     }
 
     private static string BuildCurrentTask(
@@ -989,6 +1016,9 @@ internal sealed partial class WorkerArtifactWriter
             lines.Add("- prior-goal-evidence.md: bounded stored classifier receipts and verification summaries for prior evidence cited by the brief.");
         }
 
+        if (CriteriaSelfCheckPromptContext.BuildArtifact(task.RequiredRole) is not null)
+            lines.Add($"- {CriteriaSelfCheckPromptContext.FileName}: full self-check procedure and role contract additions; read before WORKER_RESULT.");
+
         if (!string.IsNullOrWhiteSpace(contextDirectory) &&
             File.Exists(Path.Combine(contextDirectory, "research-notes.md")))
         {
@@ -1075,7 +1105,7 @@ internal sealed partial class WorkerArtifactWriter
             "context-package.json"
         };
 
-        foreach (var optionalArtifact in new[] { "research-notes.md", "planner-plan.md", "source-survey.md", "prior-goal-evidence.md" })
+        foreach (var optionalArtifact in new[] { "research-notes.md", "planner-plan.md", "source-survey.md", "prior-goal-evidence.md", CriteriaSelfCheckPromptContext.FileName })
         {
             if (File.Exists(Path.Combine(contextDirectory, optionalArtifact)))
             {
@@ -1141,6 +1171,7 @@ internal sealed partial class WorkerArtifactWriter
             "digest.md" => "Compact role-aware current context and evidence pointers.",
             "objective.md" => "Full goal objective and status.",
             "current-task.md" => "Current task, verification plan, retry evidence, and worker result contract schema.",
+            CriteriaSelfCheckPromptContext.FileName => "Full optional Developer criteria self-check procedure or attestation instructions.",
             "deterministic-verification.md" => "Deterministic verification checklist before LLM review.",
             "workflow-brokers.md" => "Deterministic broker action manifest for common worker chores.",
             "context-budget.md" => "Prompt budget policy with artifact retrieval handles and embed/retrieve decisions.",
@@ -1185,6 +1216,7 @@ internal sealed partial class WorkerArtifactWriter
         return relativePath switch
         {
             "deterministic-verification.md" => ["Tester", "Reviewer"],
+            CriteriaSelfCheckPromptContext.FileName => ["Developer", "Tester", "Reviewer"],
             "diff-summary.md" => ["Developer", "Tester", "Reviewer"],
             "subscription-preflight.md" => ["Developer", "Tester", "Reviewer"],
             "prior-task-evidence.md" => ["Developer", "Tester", "Reviewer"],

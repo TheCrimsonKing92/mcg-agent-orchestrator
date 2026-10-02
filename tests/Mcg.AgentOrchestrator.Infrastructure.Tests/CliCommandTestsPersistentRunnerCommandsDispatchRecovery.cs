@@ -176,12 +176,12 @@ public sealed class CliCommandTestsPersistentRunnerCommandsDispatchRecovery : Cl
             ref profiles,
             ref currentGoal));
         var timeline = output[(output.IndexOf("Task timeline:", StringComparison.Ordinal) + "Task timeline:".Length)..];
-        var newest = timeline.IndexOf("PERSISTENT_HISTORY_11", StringComparison.Ordinal);
+        var selfCheck = timeline.IndexOf($"DEVELOPER_CRITERIA_SELF_CHECK task={task.Id.Value} proven=0 not_owned=0 unmet=0 field=missing", StringComparison.Ordinal);
         var verification = timeline.IndexOf("Dispatch execution passed", StringComparison.Ordinal);
         var completion = timeline.IndexOf("Dispatch completed successfully", StringComparison.Ordinal);
 
         Xunit.Assert.Equal(4, CountNonEmptyLines(timeline));
-        Xunit.Assert.True(newest >= 0 && newest < verification && verification < completion, timeline);
+        Xunit.Assert.True(verification >= 0 && verification < selfCheck && selfCheck < completion, timeline);
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
     }

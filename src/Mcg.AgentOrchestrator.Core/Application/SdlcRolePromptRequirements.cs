@@ -16,9 +16,14 @@ internal static class SdlcRolePromptRequirements
         "- RECEIPT-FIRST: Inspect/cite. Pass iff candidate SHA/proven equivalent worktree/dispatch + `test_project`/`test_class` match; close covered/no repeat. Missing/stale/mismatched/unreadable=unproven; evidence > stale narrative.";
     private const string TesterCompactInconclusiveReceiptContract =
         "- Timeout/killed/no-results is inconclusive, not a pass. Rerun only on changed execution; only `test_project` and `test_class` define that selection. unsupported fields; cosmetic selector differences don't; full-gate/operator/acceptance owns rest. Never extend deadline/invent cause.";
-    internal const int ReviewerComplexRequirementsMaxChars = 4437;
-    internal const int ReviewerCompactRequirementsMaxChars = 3346;
-    internal const int TesterCompactRequirementsMaxChars = 3066;
+    internal const string DeveloperSelfCheckProcedure =
+        "- Before WORKER_RESULT, for each criterion naming Developer as owner, open the test written/changed for it: its assertion must check the specific named outcome, not a weaker property, and fail on pre-change code. If both hold, report proven with the test in criteria_self_check; else strengthen it or report unmet and set assigned_scope_complete: false.";
+    internal const string SelfCheckAttestation =
+        "- For each proven entry in Developer Criteria Self-Check on a criterion you attest, check the named test exists in the candidate and its assertion checks the named outcome; otherwise raise a finding against that criterion.";
+    // Goal 79061df4 adds one attestation line; preserve existing budget headroom.
+    internal static readonly int ReviewerComplexRequirementsMaxChars = 4437 + SelfCheckAttestation.Length + 2;
+    internal static readonly int ReviewerCompactRequirementsMaxChars = 3346 + SelfCheckAttestation.Length + 2;
+    internal static readonly int TesterCompactRequirementsMaxChars = 3066 + SelfCheckAttestation.Length + 2;
 
     private const string ReviewerExhaustiveFindingsContract =
         "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
@@ -76,6 +81,7 @@ internal static class SdlcRolePromptRequirements
                 "- First honor eligible typed convergence for this candidate: return fresh passed focused receipts; clean worktree, no replay or invented edits.",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 DeveloperDeferredTestsExactForm,
+                DeveloperSelfCheckProcedure,
                 "- Implement only the requested behavior and keep edits scoped.",
                 "- Before editing, name the failing test and quote its assertion output.",
                 "- Report changed files and the behavior each change enables.",
@@ -92,6 +98,7 @@ internal static class SdlcRolePromptRequirements
                 "- A Developer-owned finding (`correctness`, `spec-compliance`, `code-quality`, `test-coverage`) that is still waiting on execution MUST carry `evidence_request`; the conductor runs that selection once per candidate before it re-dispatches Developer. Read the brief's `evidence_index` line to tell the two apart: `state=pending-execution` means no run exists for this `candidate_sha` yet and is NOT a pass, `state=executed-on-candidate` means the receipt for that exact candidate is already in hand. A finding with no `evidence_request` has no `evidence_index` line at all: it is writable source work now, never a pass. Never call the source correct, and never resolve a finding, from narrative or from a run that did not happen; keep it open and either cite the receipt or request one.",
                 "- Derive a focused verification matrix from the requested behavior, changed files, and known risks.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
+                SelfCheckAttestation,
                 "- Run or attempt the exact verification commands relevant to this task.",
                 "- Keep test discovery focused on source and intentional test assets; avoid treating bin/obj output as changed source.",
                 "- Report command, exit code, and concise output summary for every check.",
@@ -113,6 +120,7 @@ internal static class SdlcRolePromptRequirements
                 "### 1. Spec compliance (do this first)",
                 "- Walk criteria in order: report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
+                SelfCheckAttestation,
                 "- A not-met criterion is a blocking finding with `category: spec-compliance`. If a criterion contradicts the pre-change contract observable on main, report `category: spec-defect` so it escalates to the operator instead of enforcing it against the implementation.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
                 "### 2. Code quality (only after section 1)",
@@ -242,6 +250,7 @@ internal static class SdlcRolePromptRequirements
                 "## Developer Requirements",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 DeveloperDeferredTestsExactForm,
+                DeveloperSelfCheckProcedure,
                 "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
                 "- Before editing, name the failing test and quote its assertion output.",
@@ -258,6 +267,7 @@ internal static class SdlcRolePromptRequirements
                 "- A Developer-owned finding still waiting on execution MUST carry `evidence_request`; the conductor runs it once per candidate before re-dispatching Developer. In `evidence_index`, `state=pending-execution` means no run exists for that `candidate_sha` and is NOT a pass; `state=executed-on-candidate` means the receipt for that exact candidate exists. Never call the source correct, or resolve a finding, from narrative or a run that did not happen.",
                 "- Derive focused checks from requested behavior; report concrete evidence.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
+                SelfCheckAttestation,
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
                 TesterFindingRequestRule,
@@ -274,6 +284,7 @@ internal static class SdlcRolePromptRequirements
                 "### 1. Spec compliance (do this first)",
                 "- Record met/not-met/not-verifiable with file+line evidence. Use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; main conflicts use `category: spec-defect`.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
+                SelfCheckAttestation,
                 "### 2. Code quality (only after section 1)",
                 "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",
                 "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",
