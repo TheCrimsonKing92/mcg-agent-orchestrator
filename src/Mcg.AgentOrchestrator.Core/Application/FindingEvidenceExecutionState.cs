@@ -69,12 +69,14 @@ public static class FindingEvidenceExecutionClassifier
         var identity = string.Join(
             "|",
             (request.Selections ?? []).Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
-        return request.NegativeControl switch
+        identity = request.NegativeControl switch
         {
             null => identity,
             FindingEvidenceNegativeControl.RevertSrc => identity + "|negative_control=revert-src",
             _ => throw new ArgumentOutOfRangeException(nameof(request))
         };
+        return request.RevertPaths is null ? identity : identity + "|revert_paths=" +
+            System.Text.Json.JsonSerializer.Serialize(FindingEvidenceRevertPaths.Canonicalize(request.RevertPaths));
     }
 
     /// <summary>
@@ -171,6 +173,7 @@ public static class FindingEvidenceExecutionClassifier
             .Where(receipt => string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))
             .Where(receipt => request.NegativeControl is null ||
                 (receipt.Request?.NegativeControl == request.NegativeControl && receipt.NegativeControlOutcome is not null))
+            .Where(receipt => FindingEvidenceRevertPaths.SamePaths(receipt.Request?.RevertPaths, request.RevertPaths))
             .Any(receipt =>
                 CoversFindingOutcome(receipt, outcomeReceiptId) ||
                 CoversFindingDisposition(receipt, finding.StableId) ||

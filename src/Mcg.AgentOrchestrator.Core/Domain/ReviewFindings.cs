@@ -200,7 +200,10 @@ public sealed record FindingEvidenceRequest(
     [property: JsonPropertyName("negative_control")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [property: JsonConverter(typeof(FindingEvidenceNegativeControlJsonConverter))]
-    FindingEvidenceNegativeControl? NegativeControl = null);
+    FindingEvidenceNegativeControl? NegativeControl = null,
+    [property: JsonPropertyName("revert_paths")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? RevertPaths = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<FindingEvidenceArm>))]
 public enum FindingEvidenceArm
@@ -387,7 +390,10 @@ public sealed record FindingEvidenceReceipt(
     string? ExecutionBasisIdentity = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [property: JsonConverter(typeof(FindingEvidenceNegativeControlOutcomeJsonConverter))]
-    FindingEvidenceNegativeControlOutcome? NegativeControlOutcome = null);
+    FindingEvidenceNegativeControlOutcome? NegativeControlOutcome = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonConverter(typeof(FindingEvidenceRevertPathsRejectionJsonConverter))]
+    FindingEvidenceRevertPathsRejection? RevertPathsRejection = null);
 
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,
@@ -1066,6 +1072,7 @@ public static class ReviewFindingConvergence
             .ToArray();
 
         return left.NegativeControl == right.NegativeControl &&
+            FindingEvidenceRevertPaths.SamePaths(left.RevertPaths, right.RevertPaths) &&
             Keys(left).SequenceEqual(Keys(right), StringComparer.Ordinal);
     }
 
@@ -1294,6 +1301,8 @@ public static class ReviewFindingConvergence
     {
         foreach (var finding in findings)
         {
+            if (finding.EvidenceRequest is { RevertPaths: not null, NegativeControl: null })
+                throw new ArgumentException("revert_paths requires negative_control 'revert-src'");
             if (string.IsNullOrWhiteSpace(finding.StableId) ||
                 string.IsNullOrWhiteSpace(finding.Description) ||
                 finding.Location is null ||

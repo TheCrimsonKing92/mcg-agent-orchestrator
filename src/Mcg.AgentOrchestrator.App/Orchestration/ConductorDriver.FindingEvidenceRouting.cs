@@ -155,6 +155,7 @@ internal sealed partial class ConductorDriver
             BatchId = requestContext.BatchId + "-baseline-arm",
             RunBaselineArm = true,
             NegativeControl = null,
+            RevertPaths = null,
             CandidateEvidenceBeforeBaseline = initialEvidence
         };
         if (!TryReconcileFocusedEvidenceAttempt(
@@ -221,7 +222,8 @@ internal sealed partial class ConductorDriver
             receiptId, candidateSha, batch.TypedRequest, candidateEvidence.Accepted,
             candidateEvidence.IsValidEvidence, candidateEvidence.Summary, candidateArms,
             FindingRoundFingerprint: findingRoundFingerprint,
-            NegativeControlOutcome: candidateEvidence.NegativeControlOutcome);
+            NegativeControlOutcome: candidateEvidence.NegativeControlOutcome,
+            RevertPathsRejection: candidateEvidence.RevertPathsRejection);
         foreach (var finding in batch.Findings)
         {
             _recordFindingEvidenceOutcome(
@@ -291,6 +293,7 @@ internal sealed partial class ConductorDriver
             BatchId = requestContext.BatchId + "-candidate-rerun",
             RunBaselineArm = false,
             NegativeControl = null,
+            RevertPaths = null,
             CandidateEvidenceBeforeBaseline = null
         };
         if (!TryReconcileFocusedEvidenceAttempt(
@@ -683,10 +686,10 @@ internal sealed partial class ConductorDriver
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm,
         CancellationToken cancellationToken,
-        FindingEvidenceNegativeControl? negativeControl = null) =>
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null) =>
         ConductorParallelAcceptanceRunResult.Focused(
             candidate,
-            SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm)(
+            SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm, revertPaths)(
                 candidate.Goal, request, stableSlotLease, cancellationToken));
 
     private static bool IsCandidateOnlyRed(

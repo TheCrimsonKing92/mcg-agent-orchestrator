@@ -2,7 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class SdlcRolePromptRequirements
 {
-    private const string NegativeControlRequestRule = "- Prove RED with evidence_request negative_control:\"revert-src\".";
+    private const string NegativeControlApplicabilityRule = "- Request a negative control only when a criterion says a test must fail against main or today's code; never for refactor, documentation or move-only criteria whose tests must pass unmodified.";
+    private const string NegativeControlRequestRule = "- RED proof: evidence_request negative_control:\"revert-src\"; if tests use members the goal adds, add revert_paths naming only the src files implementing the behavior. After negative-control-compile-red, narrow revert_paths or ask for an operator record; never repeat the same request.";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private const string TesterFindingRequestRule =
         "- Put failures in structured findings JSON with stable IDs and locations; carry distinct prior findings until resolved. Open blocking test-evidence MUST carry evidence_request:{selections:[{test_project,test_class}]}.";
@@ -21,9 +22,9 @@ internal static class SdlcRolePromptRequirements
     internal const string SelfCheckAttestation =
         "- For each proven entry in Developer Criteria Self-Check on a criterion you attest, check the named test exists in the candidate and its assertion checks the named outcome; otherwise raise a finding against that criterion.";
     // Goal 79061df4 adds one attestation line; preserve existing budget headroom.
-    internal static readonly int ReviewerComplexRequirementsMaxChars = 4437 + SelfCheckAttestation.Length + 2;
-    internal static readonly int ReviewerCompactRequirementsMaxChars = 3346 + SelfCheckAttestation.Length + 2;
-    internal static readonly int TesterCompactRequirementsMaxChars = 3066 + SelfCheckAttestation.Length + 2;
+    internal static readonly int ReviewerComplexRequirementsMaxChars = 4851 + SelfCheckAttestation.Length + 2;
+    internal static readonly int ReviewerCompactRequirementsMaxChars = 3760 + SelfCheckAttestation.Length + 2;
+    internal static readonly int TesterCompactRequirementsMaxChars = 3480 + SelfCheckAttestation.Length + 2;
 
     private const string ReviewerExhaustiveFindingsContract =
         "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
@@ -91,6 +92,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                NegativeControlApplicabilityRule,
                 NegativeControlRequestRule,
                 TesterReceiptFirstContract,
                 TesterInconclusiveReceiptContract,
@@ -116,6 +118,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
+                NegativeControlApplicabilityRule,
                 NegativeControlRequestRule,
                 "### 1. Spec compliance (do this first)",
                 "- Walk criteria in order: report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
@@ -260,6 +263,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                NegativeControlApplicabilityRule,
                 NegativeControlRequestRule,
                 TesterCompactReceiptFirstContract,
                 TesterCompactInconclusiveReceiptContract,
@@ -280,6 +284,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
+                NegativeControlApplicabilityRule,
                 NegativeControlRequestRule,
                 "### 1. Spec compliance (do this first)",
                 "- Record met/not-met/not-verifiable with file+line evidence. Use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; main conflicts use `category: spec-defect`.",

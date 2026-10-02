@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -10,14 +11,14 @@ public sealed partial class GoalAcceptanceVerifier
         IAcceptanceFocusedVerificationOwner executionOwner,
         FindingEvidenceNegativeControl negativeControl,
         int? stableSlotIndex = null, DotnetBuildEnvironmentLease? stableSlotLease = null,
-        bool runBaselineArm = false)
+        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null)
     {
         EnsureTestOverridesUnchanged();
         if (negativeControl != FindingEvidenceNegativeControl.RevertSrc)
             throw new ArgumentOutOfRangeException(nameof(negativeControl));
         return executionOwner is AcceptanceFocusedVerificationOwner owner
             ? owner.ExecuteAsync(this, worktreePath, goalId, request, stableSlotIndex,
-                stableSlotLease, runBaselineArm, negativeControl)
+                stableSlotLease, runBaselineArm, negativeControl, revertPaths)
             : throw new ArgumentException("A focused-verification execution owner is required.", nameof(executionOwner));
     }
 
@@ -29,7 +30,7 @@ public sealed partial class GoalAcceptanceVerifier
         string worktreePath, GoalId? goalId, IReadOnlyList<AcceptanceManifestCheck> checks,
         FocusedEvidenceCoverage coverage, int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease, IAcceptanceRunExecutionContext executionOwner,
-        string? mergeBase = null)
+        string? mergeBase = null, IReadOnlyList<string>? revertPaths = null)
     {
         if (mode is null) return evidence;
         if (mode != FindingEvidenceNegativeControl.RevertSrc)
@@ -39,15 +40,18 @@ public sealed partial class GoalAcceptanceVerifier
         var reverted = candidate.Disposition == FindingEvidenceArmDisposition.Green
             ? await RunSourceRevertedFocusedEvidenceArmAsync(worktreePath, candidate.Sha,
                 mergeBase ?? ResolveFocusedEvidenceMergeBase(worktreePath), goalId, checks, coverage,
-                stableSlotIndex, stableSlotLease, executionOwner).ConfigureAwait(false)
+                stableSlotIndex, stableSlotLease, executionOwner, revertPaths).ConfigureAwait(false)
             : InconclusiveSourceReverted(candidate.Sha,
                 $"Candidate arm is {candidate.Disposition}; source-reverted arm not run");
         EmitFocusedEvidenceArmResolved(reverted);
+        var compilerErrors = ExtractSourceRevertedCompilerErrors(reverted);
         var outcome = reverted.Disposition switch
         {
             FindingEvidenceArmDisposition.Red when candidate.Disposition == FindingEvidenceArmDisposition.Green =>
                 FindingEvidenceNegativeControlOutcome.Demonstrated,
             FindingEvidenceArmDisposition.Green => FindingEvidenceNegativeControlOutcome.NotDemonstrated,
+            FindingEvidenceArmDisposition.Inconclusive when compilerErrors.Count > 0 &&
+                candidate.Disposition == FindingEvidenceArmDisposition.Green => FindingEvidenceNegativeControlOutcome.CompileRed,
             _ => FindingEvidenceNegativeControlOutcome.Inconclusive
         };
         var failure = reverted.Checks.FirstOrDefault(check => !check.Passed)?.OutputTail;
@@ -55,9 +59,11 @@ public sealed partial class GoalAcceptanceVerifier
         {
             Arms = [.. evidence.Arms!, reverted],
             NegativeControlOutcome = outcome,
+            RevertPathsRejection = reverted.RevertPathsRejection,
             Summary = $"{evidence.Summary}; {FindingEvidenceNegativeControlOutcomeJsonConverter.ToWireValue(outcome)}; " +
                 $"source-reverted={reverted.Disposition} ({reverted.Summary})" +
-                (string.IsNullOrWhiteSpace(failure) ? string.Empty : $"; {TrimForReceipt(failure)}")
+                (compilerErrors.Count > 0 ? $"; compiler errors: {string.Join("; ", compilerErrors)}" :
+                    string.IsNullOrWhiteSpace(failure) ? string.Empty : $"; {TrimForReceipt(failure)}")
         };
     }
 
@@ -65,7 +71,7 @@ public sealed partial class GoalAcceptanceVerifier
         string candidatePath, string candidateSha, string? mergeBase, GoalId? goalId,
         IReadOnlyList<AcceptanceManifestCheck> checks, FocusedEvidenceCoverage coverage,
         int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease,
-        IAcceptanceRunExecutionContext executionOwner)
+        IAcceptanceRunExecutionContext executionOwner, IReadOnlyList<string>? revertPaths)
     {
         string? revertedPath = null;
         var root = OrchestratorTempRoot.GetPurposeDirectory("mcg-focused-evidence-baselines");
@@ -88,6 +94,10 @@ public sealed partial class GoalAcceptanceVerifier
             var fields = diff.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
             if (fields.Length % 2 != 0)
                 return InconclusiveSourceReverted(candidateSha, "malformed source name-status diff");
+            var selected = revertPaths is null ? null : FindingEvidenceRevertPaths.Canonicalize(revertPaths);
+            if (selected is not null && ValidateSourceRevertPaths(selected, fields) is { } rejection)
+                return InconclusiveSourceReverted(candidateSha,
+                    FindingEvidenceRevertPathsRejectionJsonConverter.ToWireValue(rejection), rejection);
             var restore = new List<string>();
             var added = new List<string>();
             for (var i = 0; i < fields.Length; i += 2)
@@ -95,6 +105,7 @@ public sealed partial class GoalAcceptanceVerifier
                 var path = fields[i + 1];
                 if (!path.StartsWith("src/", StringComparison.Ordinal))
                     return InconclusiveSourceReverted(candidateSha, "source diff contained a path outside src/");
+                if (selected is not null && !selected.Contains(path, StringComparer.Ordinal)) continue;
                 switch (fields[i])
                 {
                     case "A": added.Add(path); break;
@@ -159,7 +170,40 @@ public sealed partial class GoalAcceptanceVerifier
         }
     }
 
-    private static FocusedEvidenceArmRunResult InconclusiveSourceReverted(string sha, string summary) =>
+    private static FindingEvidenceRevertPathsRejection? ValidateSourceRevertPaths(string[] paths, string[] diff)
+    {
+        if (paths.Length == 0) return FindingEvidenceRevertPathsRejection.EmptyList;
+        var changed = diff.Where((_, index) => index % 2 == 1).ToHashSet(StringComparer.Ordinal);
+        foreach (var path in paths)
+        {
+            if (path.StartsWith("tests/", StringComparison.Ordinal)) return FindingEvidenceRevertPathsRejection.UnderTests;
+            if (Path.IsPathRooted(path) || !path.StartsWith("src/", StringComparison.Ordinal) ||
+                path.Split('/').Any(part => part is "." or ".." or ""))
+                return FindingEvidenceRevertPathsRejection.OutsideSrc;
+            if (!changed.Contains(path)) return FindingEvidenceRevertPathsRejection.NotChangedByGoal;
+        }
+        return null;
+    }
+
+    private static IReadOnlyList<string> ExtractSourceRevertedCompilerErrors(FocusedEvidenceArmRunResult arm)
+    {
+        var failed = arm.Checks.Where(check => !check.Passed).ToArray();
+        if (failed.Any(check => check.FailingTestIdentities?.Count > 0)) return [];
+        var errors = new List<string>();
+        var codes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var check in failed)
+        foreach (var output in new[] { check.OutputTail, check.ProcessStderr })
+        foreach (Match match in Regex.Matches(output ?? string.Empty, @"\berror (CS[0-9]{4}):[ \t]*([^\r\n]*)"))
+        {
+            if (!codes.Add(match.Groups[1].Value)) continue;
+            errors.Add($"error {match.Groups[1].Value}: {TrimForReceipt(match.Groups[2].Value.Trim())}");
+            if (errors.Count == 3) return errors;
+        }
+        return errors;
+    }
+
+    private static FocusedEvidenceArmRunResult InconclusiveSourceReverted(string sha, string summary,
+        FindingEvidenceRevertPathsRejection? rejection = null) =>
         new(FindingEvidenceArm.SourceReverted, sha, FindingEvidenceArmDisposition.Inconclusive,
-            Accepted: false, Passed: false, summary, []);
+            Accepted: false, Passed: false, summary, [], RevertPathsRejection: rejection);
 }

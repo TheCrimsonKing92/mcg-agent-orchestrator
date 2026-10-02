@@ -6,13 +6,14 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, bool, CancellationToken,
-        FindingEvidenceNegativeControl, FocusedEvidenceRunResult> _runNegativeControlFocusedEvidence;
+        FindingEvidenceNegativeControl, IReadOnlyList<string>?, FocusedEvidenceRunResult> _runNegativeControlFocusedEvidence;
 
     private Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult>
-        SelectFindingEvidenceRunner(FindingEvidenceNegativeControl? mode, bool runBaselineArm) =>
+        SelectFindingEvidenceRunner(FindingEvidenceNegativeControl? mode, bool runBaselineArm,
+            IReadOnlyList<string>? revertPaths = null) =>
         mode is { } control
             ? (goal, request, lease, token) =>
-                _runNegativeControlFocusedEvidence(goal, request, lease, runBaselineArm, token, control)
+                _runNegativeControlFocusedEvidence(goal, request, lease, runBaselineArm, token, control, revertPaths)
             : runBaselineArm ? _runDualArmFocusedEvidence : _runFocusedEvidence;
 
     private static FocusedEvidenceRunResult RetainNegativeControlEvidence(
@@ -22,8 +23,11 @@ internal sealed partial class ConductorDriver
         return next with
         {
             NegativeControlOutcome = prior.NegativeControlOutcome,
+            RevertPathsRejection = prior.RevertPathsRejection,
             Arms = [.. next.Arms ?? [], .. (prior.Arms ?? []).Where(arm => arm.Arm == FindingEvidenceArm.SourceReverted)],
-            Summary = $"{next.Summary}; {FindingEvidenceNegativeControlOutcomeJsonConverter.ToWireValue(prior.NegativeControlOutcome.Value)}"
+            Summary = $"{next.Summary}; " + (prior.RevertPathsRejection is not null ||
+                prior.NegativeControlOutcome == FindingEvidenceNegativeControlOutcome.CompileRed ? prior.Summary :
+                FindingEvidenceNegativeControlOutcomeJsonConverter.ToWireValue(prior.NegativeControlOutcome.Value))
         };
     }
 }
