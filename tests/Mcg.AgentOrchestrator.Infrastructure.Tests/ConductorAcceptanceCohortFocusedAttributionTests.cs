@@ -15,7 +15,7 @@ public sealed class ConductorAcceptanceCohortFocusedAttributionTests
         };
         var selection = Assert.IsType<ConductorCohortFocusedSelection>(
             ConductorAcceptanceCohortFocusedAttribution.TrySelect(Identities, checks));
-        Assert.Equal("Core: FullyQualifiedName~Tests.First.Fails; Core: FullyQualifiedName~Tests.Second.Fails", selection.Request);
+        Assert.Equal("Core.Tests: FullyQualifiedName~Tests.First.Fails; Core.Tests: FullyQualifiedName~Tests.Second.Fails", selection.Request);
         Assert.Equal(Identities, selection.Identities);
     }
 

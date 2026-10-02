@@ -112,7 +112,7 @@ public sealed class AcceptanceCohortWorkflowTestsFocusedAttribution : Acceptance
             Assert.Equal(1, verifier.FullRuns);
             Assert.Equal(new[] { first.Id, second.Id }, verifier.FocusedGoalIds);
             Assert.All(verifier.Requests, request => Assert.Equal(
-                "Infrastructure: FullyQualifiedName~Tests.First.Fails; Infrastructure: FullyQualifiedName~Tests.Second.Fails", request));
+                "Infrastructure.Tests: FullyQualifiedName~Tests.First.Fails; Infrastructure.Tests: FullyQualifiedName~Tests.Second.Fails", request));
             Assert.Equal(AcceptanceCohortAttributionSources.FocusedPass, result.Receipt?.AttributionSource);
             Assert.Equal(AcceptanceCohortAttributionOutcome.FirstMemberFailed, result.Receipt?.Attribution);
             Assert.Equal(2, leases.Count);
