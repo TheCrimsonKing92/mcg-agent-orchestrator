@@ -487,16 +487,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 cancellation.Token,
                 registrationIdentityReader: DeterministicRegistrationIdentity);
 
-            var childPid = 0;
-            while (!File.Exists(childPidPath) ||
-                   !int.TryParse(
-                       File.ReadAllText(childPidPath).Trim(),
-                       System.Globalization.CultureInfo.InvariantCulture,
-                       out childPid) ||
-                   childPid <= 0)
-            {
-                await Task.Delay(25, fixtureTimeout.Token);
-            }
+            var childPid = await PidFilePolling.WaitForPidAsync(childPidPath, fixtureTimeout.Token);
 
             try
             {
