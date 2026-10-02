@@ -22,27 +22,48 @@ internal static class DeveloperDeferredNoChangeQualifier
         string standardError,
         WorkerDispatchCompletionClassifier classifier,
         out DeferredNoChangeOutcome outcome)
+        => TryQualify(goal, task, head, clean, hasRelevantCommitAfterDispatch,
+            standardOutput, standardError, classifier, out outcome, out _);
+
+    internal static bool TryQualify(
+        Goal goal,
+        TaskSpec task,
+        string head,
+        bool clean,
+        bool hasRelevantCommitAfterDispatch,
+        string standardOutput,
+        string standardError,
+        WorkerDispatchCompletionClassifier classifier,
+        out DeferredNoChangeOutcome outcome,
+        out string? declineCode)
     {
         outcome = default!;
+        declineCode = null;
         var candidate = task.LastDispatch?.BaseCommit;
-        if (task.RequiredRole != AgentRole.Developer ||
-            (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0 &&
-                !ResumedAfterCommittedDispatchAnswer(goal, task)) ||
-            !clean || hasRelevantCommitAfterDispatch ||
-            string.IsNullOrWhiteSpace(candidate) ||
+        if (task.RequiredRole != AgentRole.Developer) return Decline("not-developer", out declineCode);
+        if (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0 &&
+            !ResumedAfterCommittedDispatchAnswer(goal, task))
+            return Decline("not-retry-or-resume", out declineCode);
+        if (!clean) return Decline("dirty", out declineCode);
+        if (hasRelevantCommitAfterDispatch) return Decline("commit-after-dispatch", out declineCode);
+        if (string.IsNullOrWhiteSpace(candidate) ||
             !Regex.IsMatch(candidate, "^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$") ||
-            !string.Equals(candidate, head, StringComparison.OrdinalIgnoreCase) ||
-            !classifier.HasExplicitNoChangeRationale(standardOutput, string.Empty) ||
-            !WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
-            result.BlockersStatus != WorkerResultParser.BlockersStatus.None ||
-            result.TestsStatus != WorkerResultParser.TestsStatus.Deferred ||
+            !string.Equals(candidate, head, StringComparison.OrdinalIgnoreCase))
+            return Decline("candidate-not-head", out declineCode);
+        if (!classifier.HasExplicitNoChangeRationale(standardOutput, string.Empty))
+            return Decline("no-rationale", out declineCode);
+        if (!WorkerResultParser.TryParseResult(standardOutput, out var result, out _))
+            return Decline("no-worker-result", out declineCode);
+        if (result.BlockersStatus != WorkerResultParser.BlockersStatus.None)
+            return Decline("blockers", out declineCode);
+        if (result.TestsStatus != WorkerResultParser.TestsStatus.Deferred ||
             !result.Fields.TryGetValue("tests", out var testsField))
-            return false;
+            return Decline("tests-not-deferred", out declineCode);
 
         var rationale = RationaleLine.Match(standardOutput);
-        if (!rationale.Success) return false;
+        if (!rationale.Success) return Decline("no-rationale", out declineCode);
         var classes = DeveloperDeferredTestClassNames.Parse(testsField);
-        if (classes.Count == 0) return false;
+        if (classes.Count == 0) return Decline("no-classes", out declineCode);
 
         var required = task.CriterionRetryFeedback
             .Append(task.AcceptedRetryFeedback?.Message ?? string.Empty)
@@ -55,32 +76,55 @@ internal static class DeveloperDeferredNoChangeQualifier
                 .SelectMany(match => match.Groups["identities"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries)))
             .Select(DeclaringClass)
             .ToArray();
-        if (required.Any(string.IsNullOrEmpty)) return false;
+        if (required.Any(string.IsNullOrEmpty)) return Decline("failing-test-unresolvable", out declineCode);
+        string[] findingClasses = [];
         if (task.PendingRetryCause == RetryCause.NewTestFinding)
         {
-            required = required.Concat(goal.Tasks
+            findingClasses = goal.Tasks
                 .SelectMany(other => other.LastVerification?.MergedReviewFindings ?? [])
                 .Where(finding => finding.State == ReviewFindingState.Open &&
                     finding.EvidenceRequest is not null &&
                     finding.Severity == FindingSeverity.Blocking &&
                     ReviewFindingRouting.Project([finding])[0].TargetRole == AgentRole.Developer)
                 .SelectMany(finding => finding.EvidenceRequest!.Selections)
-                .Select(selection => selection.TestClass)).ToArray();
-            if (required.Length == 0) return false;
+                .Select(selection => selection.TestClass).ToArray();
+            if (required.Length == 0 && findingClasses.Length == 0 && !NewestRetryIsEvidenceUnusable(goal, task))
+                return Decline("no-finding-classes", out declineCode);
         }
-        if (required.Any(name => !classes.Any(declared =>
-                string.Equals(declared, name, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(declared, name.Split(['.', '+']).Last(), StringComparison.OrdinalIgnoreCase))))
-            return false;
+        if (required.Any(name => !IsDeclared(name)))
+            return Decline("failing-test-class-undeclared", out declineCode);
+        if (findingClasses.Any(name => !IsDeclared(name)))
+            return Decline("finding-class-undeclared", out declineCode);
 
         outcome = new DeferredNoChangeOutcome(candidate, classes, rationale.Value.Trim());
         return true;
+
+        bool IsDeclared(string name) => classes.Any(declared =>
+            string.Equals(declared, name, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(declared, name.Split(['.', '+']).Last(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool Decline(string code, out string? declineCode)
+    {
+        declineCode = code;
+        return false;
+    }
+
+    private static bool NewestRetryIsEvidenceUnusable(Goal goal, TaskSpec task)
+    {
+        if (task.LatestRetryAt is not { } retryAt) return false;
+        var retry = goal.Timeline.Where(item => item.TaskId == task.Id &&
+                item.Kind == ProgressKind.TaskRetried && item.OccurredAt >= retryAt)
+            .OrderBy(item => item.OccurredAt).LastOrDefault();
+        return retry?.Message.TrimStart().StartsWith(
+            "DEFERRED_NO_CHANGE_EVIDENCE_UNUSABLE", StringComparison.Ordinal) == true;
     }
 
     private static bool ResumedAfterCommittedDispatchAnswer(Goal goal, TaskSpec task)
     {
         if (task.LastDispatch is not { } current) return false;
-        var previous = task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt < current.DispatchedAt);
+        var previous = task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt < current.DispatchedAt &&
+            !string.IsNullOrWhiteSpace(dispatch.BaseCommit));
         if (previous is null || string.IsNullOrWhiteSpace(previous.ResultCommit) ||
             string.Equals(previous.ResultCommit, previous.BaseCommit, StringComparison.OrdinalIgnoreCase))
             return false;

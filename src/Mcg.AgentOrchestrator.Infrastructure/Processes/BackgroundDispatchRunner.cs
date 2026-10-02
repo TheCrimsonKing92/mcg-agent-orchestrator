@@ -1628,13 +1628,13 @@ public sealed partial class BackgroundDispatchRunner
                 if (commitAttempted && !commitAttempt.Succeeded && commitAttempt.Diagnostic.Length > 0)
                 {
                     standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
+                        WithDeferredNoChangeDecline(kernel.GetGoal(goalId), task, worktreeEvidence, fullStandardOutput.Content is null ? null : authoritativeStandardOutput, decisionStandardError, standardErrorDiagnostic),
                         DispatchWorktreeCommitter.BuildCommitOnBehalfFailureDiagnostic(commitAttempt.Diagnostic, worktreeEvidence));
                 }
                 else
                 {
                     standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
+                        WithDeferredNoChangeDecline(kernel.GetGoal(goalId), task, worktreeEvidence, fullStandardOutput.Content is null ? null : authoritativeStandardOutput, decisionStandardError, standardErrorDiagnostic),
                         "Developer/Tester dispatch exited 0 but left the worktree dirty. " +
                         $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
                         $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.");
