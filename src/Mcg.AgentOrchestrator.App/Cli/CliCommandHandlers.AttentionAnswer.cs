@@ -93,7 +93,7 @@ internal static partial class CliCommandHandlers
             context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
             .EnqueueAsync(intent).GetAwaiter().GetResult();
         Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
-            $"goal={goal.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+            $"goal={goal.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
         if (!ConductorLoopLease.IsActive(context.Workspace.OrchestratorDirectory))
             Console.WriteLine(ConductorLoopLease.InactiveWarning);
         return false;

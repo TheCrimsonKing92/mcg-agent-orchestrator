@@ -73,7 +73,7 @@ internal static class CliLessonCommands
                 DateTimeOffset.UtcNow, ActorKind: attribution.ActorKind);
             var persisted = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory,
                 workspace.LogDirectory).EnqueueAsync(intent).GetAwaiter().GetResult();
-            writer.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} scope=workspace status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+            writer.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} scope=workspace status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
             if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
                 writer.WriteLine(ConductorLoopLease.InactiveWarning);
             return 0;

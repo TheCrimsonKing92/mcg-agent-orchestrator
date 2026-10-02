@@ -52,7 +52,7 @@ internal static partial class CliCommandHandlers
         (stopProcessTree ?? new BackgroundDispatchRunner().StopProcessTree)(process);
         Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
             $"goal={goal.Id.Value} task={task.Id.Value} status={persisted.Status}; " +
-            $"poll with operator-intent-status {persisted.Id}.");
+            $"poll with operator-intent-status {persisted.Id} (or add --wait).");
         if (!ConductorLoopLease.IsActive(context.Workspace.OrchestratorDirectory))
             Console.WriteLine(ConductorLoopLease.InactiveWarning);
         return false;

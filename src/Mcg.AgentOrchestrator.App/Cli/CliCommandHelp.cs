@@ -11,6 +11,7 @@ internal static class CliCommandHelp
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
     public const string RunGoalUsage = "Usage: run-goal [goal-id-prefix] --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--autonomy <policy>]";
     public const string GoalIntakeStatusUsage = "Usage: goal-intake-status <request-key>";
+    public const string OperatorIntentStatusUsage = "Usage: operator-intent-status <intent-id> [--wait [seconds]] (default 300 seconds; with --wait: exit 0 Applied, 2 Rejected, 3 Pending/Claimed at deadline; without --wait: one read, exit 0)";
     public const string GoalBoardUsage = GoalBoardOptions.Usage;
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
@@ -174,6 +175,11 @@ internal static class CliCommandHelp
         GoalIntakeStatusUsage,
         "Poll a keyed goal-intake request without starting or retrying work.",
         ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry OperatorIntentStatus = new(
+        OperatorIntentStatusUsage,
+        "Read an operator intent once, or wait silently for Applied, Rejected or the deadline. Accepts --wait=seconds.",
+        ["--wait", "--help", "-h"]);
 
     private static readonly CommandHelpEntry GoalReplace = new(
         GoalReplaceUsage,
@@ -672,7 +678,7 @@ internal static class CliCommandHelp
         {
             "--text", "--request-key", "--brief-file", "--text-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
-            "--developer", "--tester", "--reviewer"
+            "--developer", "--tester", "--reviewer", "--wait"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
@@ -838,6 +844,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase))
         {
             entry = GoalIntakeStatus;
+            return true;
+        }
+
+        if (args[0].Equals("operator-intent-status", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = OperatorIntentStatus;
             return true;
         }
 
