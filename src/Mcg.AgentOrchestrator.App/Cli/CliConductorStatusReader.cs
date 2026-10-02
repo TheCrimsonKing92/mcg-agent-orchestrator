@@ -12,7 +12,8 @@ internal static class CliConductorStatusReader
 {
     private sealed record Event(DateTimeOffset At, string Kind, string Detail);
 
-    internal static void Print(OrchestratorWorkspace workspace, int? owner, DateTimeOffset bootTime, TextWriter output)
+    internal static void Print(OrchestratorWorkspace workspace, int? owner, DateTimeOffset bootTime, TextWriter output,
+        Func<string?>? mainCommit = null)
     {
         var events = ReadEvents(workspace.ConductEventsLogPath);
         var lastEvent = events.MaxBy(item => item.At);
@@ -31,7 +32,9 @@ internal static class CliConductorStatusReader
             output.WriteLine("Since: unavailable");
 
         var build = events.Where(item => item.Kind == "supervisor-build").MaxBy(item => item.At);
-        output.WriteLine($"Supervisor build: {ReadBuildCommit(build?.Detail) ?? "unavailable"}");
+        var buildCommit = ReadBuildCommit(build?.Detail);
+        output.WriteLine($"Supervisor build: {buildCommit ?? "unavailable"}");
+        output.WriteLine(GenerationLine(buildCommit, mainCommit));
         var logTick = events.Where(item => item.Kind.StartsWith("tick", StringComparison.OrdinalIgnoreCase))
             .MaxBy(item => item.At)?.At;
         var dbTick = ReadLatestTick(workspace.RunEventStorePath);
@@ -69,6 +72,18 @@ internal static class CliConductorStatusReader
         output.WriteLine(landing is null
             ? "Most recent landing: unavailable"
             : $"Most recent landing: {landing.Value.Goal} at {landing.Value.At:O}");
+    }
+
+    private static string GenerationLine(string? buildCommit, Func<string?>? mainCommit)
+    {
+        if (string.IsNullOrWhiteSpace(buildCommit))
+            return "Generation: unavailable (no supervisor build recorded)";
+        var main = mainCommit?.Invoke()?.Trim();
+        if (string.IsNullOrEmpty(main)) return "Generation: main unavailable";
+        var build = buildCommit.Trim();
+        return string.Equals(build, main, StringComparison.OrdinalIgnoreCase)
+            ? $"Generation: current with main {main}"
+            : $"Generation: differs from main (running {build}, main {main})";
     }
 
     private static IReadOnlyList<Event> ReadEvents(string path)
