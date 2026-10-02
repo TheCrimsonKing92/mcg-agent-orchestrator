@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -17,7 +18,8 @@ internal static class CliConductorStatusReader
     {
         var events = ReadEvents(workspace.ConductEventsLogPath);
         var lastEvent = events.MaxBy(item => item.At);
-        var lifecycle = events.Where(item => item.Kind is "loop-start" or "loop-stop").MaxBy(item => item.At);
+        var lifecycle = Latest(events, workspace.ConductEventsLogPath, item => item.Kind is "loop-start" or "loop-stop");
+        if (lifecycle is not null && (lastEvent is null || lifecycle.At > lastEvent.At)) lastEvent = lifecycle;
         output.WriteLine(owner is null ? "Conductor: stopped" : $"Conductor: running (pid {owner})");
         if (owner is null && lastEvent is not null && bootTime > lastEvent.At)
             output.WriteLine($"stopped since host restart at {bootTime:O}");
@@ -31,7 +33,7 @@ internal static class CliConductorStatusReader
         else
             output.WriteLine("Since: unavailable");
 
-        var build = events.Where(item => item.Kind == "supervisor-build").MaxBy(item => item.At);
+        var build = Latest(events, workspace.ConductEventsLogPath, item => item.Kind == "supervisor-build");
         var buildCommit = ReadBuildCommit(build?.Detail);
         output.WriteLine($"Supervisor build: {buildCommit ?? "unavailable"}");
         output.WriteLine(GenerationLine(buildCommit, mainCommit));
@@ -84,6 +86,36 @@ internal static class CliConductorStatusReader
         return string.Equals(build, main, StringComparison.OrdinalIgnoreCase)
             ? $"Generation: current with main {main}"
             : $"Generation: differs from main (running {build}, main {main})";
+    }
+
+    private static Event? Latest(IReadOnlyList<Event> live, string path, Func<Event, bool> kind) =>
+        live.Where(kind).MaxBy(item => item.At) ?? RotatedGenerations(path)
+            .Select(file => ReadRotatedEvents(file).Where(kind).MaxBy(item => item.At))
+            .FirstOrDefault(item => item is not null);
+
+    private static IEnumerable<string> RotatedGenerations(string path)
+    {
+        var directory = Path.GetDirectoryName(path) ?? ".";
+        if (!Directory.Exists(directory)) return [];
+        var pattern = new Regex($@"^{Regex.Escape(Path.GetFileNameWithoutExtension(path))}-(?<stamp>\d{{14}})(?:-(?<index>\d+))?{Regex.Escape(Path.GetExtension(path))}$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        try
+        {
+            return Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                .Select(file => (File: file, Match: pattern.Match(Path.GetFileName(file))))
+                .Where(item => item.Match.Success)
+                .OrderByDescending(item => item.Match.Groups["stamp"].Value, StringComparer.Ordinal)
+                .ThenByDescending(item => BigInteger.TryParse(item.Match.Groups["index"].Value,
+                    NumberStyles.None, CultureInfo.InvariantCulture, out var index) ? index : BigInteger.Zero)
+                .Select(item => item.File).ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+    }
+
+    private static IReadOnlyList<Event> ReadRotatedEvents(string path)
+    {
+        try { return ReadEvents(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
     }
 
     private static IReadOnlyList<Event> ReadEvents(string path)
