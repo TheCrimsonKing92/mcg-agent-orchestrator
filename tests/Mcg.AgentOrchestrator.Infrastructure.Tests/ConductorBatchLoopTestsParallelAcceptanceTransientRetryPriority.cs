@@ -225,7 +225,8 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
         {
             var directory = Path.Combine(_attemptRoot, goal.Id.Value);
             return !Directory.Exists(directory) ? [] : Directory.EnumerateFiles(directory, "*.attempt.json")
-                .Select(path => JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(path))!)
+                .Select(path => JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                    File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
                 .ToArray();
         }
 
