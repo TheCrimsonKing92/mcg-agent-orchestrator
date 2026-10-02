@@ -3,9 +3,14 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Places orchestrator-owned temporary artifacts below the scanner-excluded mcg-run root.</summary>
 public static class OrchestratorTempRoot
 {
+    public const string RootDirectoryName = "mcg-run";
+
+    public static string GetRoot(string? tempPath = null) =>
+        Path.Combine(tempPath ?? Path.GetTempPath(), RootDirectoryName);
+
     public static string GetParent(string? tempPath = null)
     {
-        var parent = Path.Combine(tempPath ?? Path.GetTempPath(), "mcg-run", "tmp");
+        var parent = Path.Combine(GetRoot(tempPath), "tmp");
         Directory.CreateDirectory(parent);
         return parent;
     }

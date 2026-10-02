@@ -11,6 +11,8 @@ dotnet run --no-build --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestra
 
 ## Windows Setup
 
+On a new host, run `.\mcg-orchestrator.cmd host-exclusions --apply` once from an elevated PowerShell using the same account that runs the orchestrator. `host-exclusions` without a switch reports each required root as `present` or `missing` and changes nothing. Without elevation it prints the required roots and one command to run in an elevated PowerShell. `--apply` requires elevation, adds only missing exclusions, re-reads the list, and returns nonzero if any required root remains missing or a cmdlet fails. The verb never removes exclusions and is never run automatically. NuGet packages follow `NUGET_PACKAGES` when set, otherwise the user profile's `.nuget\packages`; a `globalPackagesFolder` set only in NuGet.Config is not detected.
+
 From a checkout, use the launcher when you do not want to repeat the project path:
 
 ```cmd
@@ -166,6 +168,7 @@ dotnet run --project src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csp
 
 ```text
 doctor
+host-exclusions [--apply]
 provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]
 author-draft <backlog-id-prefix>
 goal <objective>

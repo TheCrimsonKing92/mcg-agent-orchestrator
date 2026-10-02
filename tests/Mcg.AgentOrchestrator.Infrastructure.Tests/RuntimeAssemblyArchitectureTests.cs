@@ -42,6 +42,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorLoopHandoff", "Detached conduct loop successor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorLoopHandoff.cs:870"),
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorSelfRelaunch", "Successor preparation commands", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorSelfRelaunch.cs:367"),
         new("Mcg.AgentOrchestrator.Infrastructure.BackgroundDispatchRunner", "Default start delegate, method group", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs:125"),
+        new("Mcg.AgentOrchestrator.Infrastructure.DefenderPreferenceCmdletAdapter", "Defender preference PowerShell child for the explicit host-exclusions CLI verb", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DefenderExclusionPreferences.cs:70"),
         new("Mcg.AgentOrchestrator.Infrastructure.DispatchProcessHost", "where.exe resolution and low-integrity preflight", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DispatchProcessHost.cs:856,956"),
         new("Mcg.AgentOrchestrator.Infrastructure.GitCli", "Shared git runner", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/GitCli.cs:111"),
         new("Mcg.AgentOrchestrator.Infrastructure.LockAttribution", "Handle probe for build-lock attribution", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/LockAttribution.cs:462"),
@@ -58,7 +59,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.Infrastructure.WindowsSandboxAclHelper", "icacls sandbox reset", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.cs:247")
     ];
 
-    // ProcessStartAllowlistDifferences: none. The empty-allowlist control must prove all 22 entries.
+    // ProcessStartAllowlistDifferences: none. The empty-allowlist control must prove every entry.
     // If the IL model omits a method-group reference, record its type, source and cause here before removing it.
 
     [Fact]

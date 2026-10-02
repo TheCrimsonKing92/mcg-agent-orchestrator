@@ -117,7 +117,7 @@ public static class DotnetBuildEnvironmentManager
     private const string LeaseJournalFileName = "lease.journal.jsonl";
     private const long LeaseJournalMaxBytes = 1_048_576;
     private const int StaleLeaseIntegrityProbeAttempts = 3;
-    private const string LandingTestsRootDirectoryName = "mcg-landing-tests";
+    internal const string LandingTestsRootDirectoryName = "mcg-landing-tests";
     private const string LandingTestFixtureMarkerFileName = ".mcg-landing-fixture.json";
     private static readonly TimeSpan LandingFixtureMarkerStaleAge = TimeSpan.FromHours(2);
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";

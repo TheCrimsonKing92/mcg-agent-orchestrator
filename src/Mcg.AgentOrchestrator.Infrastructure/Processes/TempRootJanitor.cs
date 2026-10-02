@@ -55,7 +55,10 @@ internal sealed record TempRootJanitorOwnedParentDeleteResult(
 /// </summary>
 internal static partial class TempRootJanitor
 {
-    private const string OwnedRootParentName = "mcg-tests";
+    internal const string OwnedRootParentName = "mcg-tests";
+
+    internal static string ResolveLowIntegrityOwnedRootParent(string localApplicationData) =>
+        Path.Combine(localApplicationData, "Temp", "Low", OwnedRootParentName);
     private const int DeleteAttemptLimit = 6;
     private static readonly TimeSpan InitialDeleteRetryDelay = TimeSpan.FromMilliseconds(50);
 
@@ -586,7 +589,7 @@ internal static partial class TempRootJanitor
         {
             if (!string.IsNullOrWhiteSpace(localAppData))
             {
-                yield return Path.Combine(localAppData, "Temp", "Low", OwnedRootParentName);
+                yield return ResolveLowIntegrityOwnedRootParent(localAppData);
             }
         }
     }

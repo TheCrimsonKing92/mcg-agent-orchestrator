@@ -526,6 +526,11 @@ internal static partial class CliCommandHandlers
                 RepoProcessCliCommand.PrintInfo(parts, Console.Out);
                 return false;
 
+            case "host-exclusions":
+                if (CliHostExclusionsCommand.Run(parts) != 0)
+                    throw new CliExitException(1);
+                return false;
+
             case "repo-process-stop":
                 if (!RepoProcessCliCommand.Stop(parts, Console.Out))
                 {
