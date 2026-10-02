@@ -75,6 +75,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? _selfRelaunch;
     private readonly bool _selfRelaunchEnabled;
     private readonly PostLandingCanaryCoordinator? _postLandingCanary;
+    private readonly PromptRolloutWatchCoordinator? _promptRolloutWatch;
     private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
@@ -123,7 +124,8 @@ internal sealed partial class ConductorBatchLoop
         OrchestratorWorkspace? workspace = null,
         Action<string>? janitorialPhaseProbe = null,
         Func<long>? janitorialTimestamp = null,
-        Func<string?>? readRelaunchDrainCap = null)
+        Func<string?>? readRelaunchDrainCap = null,
+        PromptRolloutWatchCoordinator? promptRolloutWatch = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -156,6 +158,7 @@ internal sealed partial class ConductorBatchLoop
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
+        _promptRolloutWatch = promptRolloutWatch ?? PromptRolloutWatchCoordinator.CreateDefault(workspace, line => EmitProgress(line));
         _janitorialPhaseProbe = janitorialPhaseProbe;
         _janitorialTimestamp = janitorialTimestamp ?? Stopwatch.GetTimestamp;
         if (_blockedRecheckHeartbeatInterval <= TimeSpan.Zero || _blockedRecheckHeartbeatInterval > TimeSpan.FromMinutes(10))
@@ -343,6 +346,7 @@ internal sealed partial class ConductorBatchLoop
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         driver.SuccessfulLandingSink = receipt =>
         {
+            var landedAt = _promptRolloutWatch is null ? default : _utcNow();
             RecordSuccessfulLanding(landedGoalIds, receipt.GoalId);
             var decision = RepositoryChangeClassifier.DecideConductorRelaunch(receipt.ChangedFiles);
             if (decision.Required && _selfRelaunchEnabled && _selfRelaunch is not null)
@@ -375,6 +379,7 @@ internal sealed partial class ConductorBatchLoop
                 }
             }
 
+            _promptRolloutWatch?.NoteLanding(receipt, landedAt);
             previousSuccessfulLandingSink?.Invoke(receipt);
         };
         var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
@@ -718,6 +723,7 @@ internal sealed partial class ConductorBatchLoop
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "sweep", sweepClock.Elapsed,
                 $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}{FormatSweepPhaseAttribution(_tickPhaseElapsedMs)}"));
 
+            _promptRolloutWatch?.EvaluateTick(kernel);
             var preWalkClock = Stopwatch.StartNew();
             RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => RetireUntilGoalLessons(kernel));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
@@ -1985,7 +1991,7 @@ internal sealed partial class ConductorBatchLoop
 
         var required = kind is "loop-start-deferred" or "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or "sweep-owned-root-deferred" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or "exit-unapplied" or
-            "blocked-recheck-heartbeat" or "policy-reload-failed" ||
+            "blocked-recheck-heartbeat" or "policy-reload-failed" or "prompt-rollout-suspect" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
         {
@@ -2070,6 +2076,7 @@ internal sealed partial class ConductorBatchLoop
             "TICK_WRITE_DEGRADED" => "lock-blocker",
             "GLANCE" => "progressive-review-glance",
             "WATCH_TRANSITION" => "watch-transition",
+            "PROMPT_ROLLOUT_SUSPECT" => "prompt-rollout-suspect",
             _ => string.Empty
         };
 
