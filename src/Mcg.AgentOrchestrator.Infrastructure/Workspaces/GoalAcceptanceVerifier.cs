@@ -408,7 +408,7 @@ public interface IGoalAcceptanceVerifier
         IAcceptanceFocusedVerificationOwner executionOwner,
         FindingEvidenceNegativeControl negativeControl,
         int? stableSlotIndex = null, DotnetBuildEnvironmentLease? stableSlotLease = null,
-        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null) => throw new NotSupportedException("Negative-control focused evidence is not supported.");
+        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) => throw new NotSupportedException("Negative-control focused evidence is not supported.");
 }
 
 public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -1449,11 +1449,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null) =>
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) =>
         FocusedEvidenceExecution.RunFocusedEvidenceAsync(
             RunNegativeControlFocusedEvidenceOwnedAsync, RunFocusedEvidenceOwnedAsync,
             worktreePath, goalId, request, stableSlotIndex, stableSlotLease, runBaselineArm,
-            cancellationToken, negativeControl, revertPaths);
+            cancellationToken, negativeControl, revertPaths, mutation);
 
     public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
         string worktreePath,
@@ -1483,12 +1483,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null) =>
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) =>
         FocusedEvidenceExecution.RunOwnedFocusedEvidenceAsync(
             _executionContext, RunFocusedEvidenceArmAsync, RunBaselineFocusedEvidenceArmAsync,
             AddSourceRevertedEvidenceAsync, ResolveFocusedEvidenceMergeBase,
             worktreePath, goalId, request, stableSlotIndex, stableSlotLease, runBaselineArm,
-            cancellationToken, negativeControl, revertPaths);
+            cancellationToken, negativeControl, revertPaths, mutation);
 
     private Task<FocusedEvidenceArmRunResult> RunFocusedEvidenceArmAsync(
         FindingEvidenceArm arm,

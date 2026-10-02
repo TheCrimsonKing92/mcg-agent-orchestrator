@@ -776,7 +776,7 @@ internal sealed partial class ConductorDriver
             DotnetBuildEnvironmentLease? stableSlotLease,
             bool runBaselineArm,
             CancellationToken cancellationToken,
-            FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null)
+            FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null)
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null)
@@ -793,7 +793,7 @@ internal sealed partial class ConductorDriver
             var result = AcceptanceExecutionRunner.RunFocusedVerification(
                 acceptanceVerifier, worktreePath, goal.Id, request,
                 stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
-                runBaselineArm, cancellationToken, negativeControl, revertPaths);
+                runBaselineArm, cancellationToken, negativeControl, revertPaths, mutation);
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
@@ -810,8 +810,8 @@ internal sealed partial class ConductorDriver
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: false, cancellationToken);
         _runDualArmFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
-        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, mode, paths) =>
-            RunFocusedEvidence(goal, request, lease, baseline, token, mode, paths);
+        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, mode, paths, mutation) =>
+            RunFocusedEvidence(goal, request, lease, baseline, token, mode, paths, mutation);
         _focusedEvidenceRunnerConfigured = true;
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
@@ -1218,7 +1218,7 @@ internal sealed partial class ConductorDriver
                 Checks: []))
             : ((goal, request, _, _) => runFocusedEvidence(goal, request));
         _runDualArmFocusedEvidence = _runFocusedEvidence;
-        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, _, _) =>
+        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, _, _, _) =>
             (baseline ? _runDualArmFocusedEvidence : _runFocusedEvidence)(goal, request, lease, token);
         _focusedEvidenceRunnerConfigured = runFocusedEvidence is not null;
         _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??
@@ -2114,7 +2114,7 @@ internal sealed partial class ConductorDriver
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
-            initialRequestDispositions, NegativeControl: runnable.TypedRequest.NegativeControl, RevertPaths: runnable.TypedRequest.RevertPaths);
+            initialRequestDispositions, NegativeControl: runnable.TypedRequest.NegativeControl, RevertPaths: runnable.TypedRequest.RevertPaths, Mutation: runnable.TypedRequest.Mutation);
         if (TryResumeUnconfirmedCandidateRed(
                 goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint,
                 requestContext, out decision))
@@ -2623,6 +2623,7 @@ internal sealed partial class ConductorDriver
     {
         if (left.NegativeControl != right.NegativeControl) return "different-negative-control";
         if (!FindingEvidenceRevertPaths.SamePaths(left.RevertPaths, right.RevertPaths)) return "different-revert-paths";
+        if (!FindingEvidenceMutation.Same(left.Mutation, right.Mutation)) return "different-mutation";
         var leftProjects = left.Selections
             .Select(selection => selection.TestProject)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -2807,7 +2808,7 @@ internal sealed partial class ConductorDriver
                 candidate,
                 policy,
                 request,
-                SelectFindingEvidenceRunner(requestContext?.NegativeControl, runBaselineArm: true, requestContext?.RevertPaths),
+                SelectFindingEvidenceRunner(requestContext?.NegativeControl, runBaselineArm: true, requestContext?.RevertPaths, requestContext?.Mutation),
                 requestContext);
         }
         catch (AcceptanceArtifactWriterLeaseBusyException ex)

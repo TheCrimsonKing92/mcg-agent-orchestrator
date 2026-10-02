@@ -154,7 +154,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     [property: JsonConverter(typeof(FindingEvidenceNegativeControlJsonConverter))]
     FindingEvidenceNegativeControl? FocusedEvidenceNegativeControl = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<string>? FocusedEvidenceRevertPaths = null)
+    IReadOnlyList<string>? FocusedEvidenceRevertPaths = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    FindingEvidenceMutation? FocusedEvidenceMutation = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -166,7 +168,7 @@ internal sealed record ConductorFocusedEvidenceRequestContext(
     bool RunBaselineArm = false,
     FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null,
     FindingEvidenceNegativeControl? NegativeControl = null,
-    IReadOnlyList<string>? RevertPaths = null);
+    IReadOnlyList<string>? RevertPaths = null, FindingEvidenceMutation? Mutation = null);
 
 internal sealed record ConductorParallelAcceptanceAttemptDecision(
     ConductorParallelAcceptanceAttemptDecisionKind Kind,
@@ -739,6 +741,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) &&
         attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
         FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) &&
+        FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation) &&
         string.Equals(
             attempt.FindingRoundFingerprint,
             requestContext?.FindingRoundFingerprint,
@@ -802,7 +805,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         if (!string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) ||
             attempt.FocusedEvidenceNegativeControl != requestContext?.NegativeControl ||
-            !FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths))
+            !FindingEvidenceRevertPaths.SamePaths(attempt.FocusedEvidenceRevertPaths, requestContext?.RevertPaths) ||
+            !FindingEvidenceMutation.Same(attempt.FocusedEvidenceMutation, requestContext?.Mutation))
         {
             return ConductorEvidenceSupersessionCause.FocusedRequestChanged;
         }
@@ -1222,7 +1226,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     (attemptCandidate, request, lease, runBaselineArm, cancellationToken) =>
                         driver.RunPreReviewBaselineArmFocusedEvidence(
                             attemptCandidate, request, lease, runBaselineArm, cancellationToken,
-                            activeAttempt.FocusedEvidenceNegativeControl, activeAttempt.FocusedEvidenceRevertPaths));
+                            activeAttempt.FocusedEvidenceNegativeControl, activeAttempt.FocusedEvidenceRevertPaths, activeAttempt.FocusedEvidenceMutation));
             }
             else
             {
@@ -2048,6 +2052,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             FocusedEvidenceRunsBaselineArm: requestContext?.RunBaselineArm ?? false,
             FocusedEvidenceNegativeControl: requestContext?.NegativeControl,
             FocusedEvidenceRevertPaths: requestContext?.RevertPaths,
+            FocusedEvidenceMutation: requestContext?.Mutation,
             CandidateEvidenceBeforeBaseline: requestContext?.CandidateEvidenceBeforeBaseline,
             FocusedEvidenceMemberRequests: focusedMembers,
             FocusedEvidenceRequestDisposition: requestContext?.RequestDispositions

@@ -6,14 +6,14 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, bool, CancellationToken,
-        FindingEvidenceNegativeControl, IReadOnlyList<string>?, FocusedEvidenceRunResult> _runNegativeControlFocusedEvidence;
+        FindingEvidenceNegativeControl, IReadOnlyList<string>?, FindingEvidenceMutation?, FocusedEvidenceRunResult> _runNegativeControlFocusedEvidence;
 
     private Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult>
         SelectFindingEvidenceRunner(FindingEvidenceNegativeControl? mode, bool runBaselineArm,
-            IReadOnlyList<string>? revertPaths = null) =>
+            IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) =>
         mode is { } control
             ? (goal, request, lease, token) =>
-                _runNegativeControlFocusedEvidence(goal, request, lease, runBaselineArm, token, control, revertPaths)
+                _runNegativeControlFocusedEvidence(goal, request, lease, runBaselineArm, token, control, revertPaths, mutation)
             : runBaselineArm ? _runDualArmFocusedEvidence : _runFocusedEvidence;
 
     private static FocusedEvidenceRunResult RetainNegativeControlEvidence(

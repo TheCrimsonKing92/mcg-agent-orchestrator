@@ -156,6 +156,7 @@ internal sealed partial class ConductorDriver
             RunBaselineArm = true,
             NegativeControl = null,
             RevertPaths = null,
+            Mutation = null,
             CandidateEvidenceBeforeBaseline = initialEvidence
         };
         if (!TryReconcileFocusedEvidenceAttempt(
@@ -294,6 +295,7 @@ internal sealed partial class ConductorDriver
             RunBaselineArm = false,
             NegativeControl = null,
             RevertPaths = null,
+            Mutation = null,
             CandidateEvidenceBeforeBaseline = null
         };
         if (!TryReconcileFocusedEvidenceAttempt(
@@ -686,10 +688,10 @@ internal sealed partial class ConductorDriver
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm,
         CancellationToken cancellationToken,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null) =>
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) =>
         ConductorParallelAcceptanceRunResult.Focused(
             candidate,
-            SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm, revertPaths)(
+            SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm, revertPaths, mutation)(
                 candidate.Goal, request, stableSlotLease, cancellationToken));
 
     private static bool IsCandidateOnlyRed(
