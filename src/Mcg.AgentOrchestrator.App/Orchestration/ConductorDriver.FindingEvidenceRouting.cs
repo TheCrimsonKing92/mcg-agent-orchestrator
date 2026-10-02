@@ -154,6 +154,7 @@ internal sealed partial class ConductorDriver
         {
             BatchId = requestContext.BatchId + "-baseline-arm",
             RunBaselineArm = true,
+            NegativeControl = null,
             CandidateEvidenceBeforeBaseline = initialEvidence
         };
         if (!TryReconcileFocusedEvidenceAttempt(
@@ -191,8 +192,9 @@ internal sealed partial class ConductorDriver
                 reason, out decision);
         }
 
-        evidence = baselineEvidence;
-        arms = baselineArms;
+        evidence = RetainNegativeControlEvidence(baselineEvidence, initialEvidence);
+        arms = initialEvidence.NegativeControlOutcome is null ? baselineArms :
+            [.. baselineArms, .. initialArms.Where(arm => arm.Arm == FindingEvidenceArm.SourceReverted)];
         _focusedEvidenceAttemptCoordinator.MarkReconciled(baselineAttempt!);
         return true;
     }
@@ -218,7 +220,8 @@ internal sealed partial class ConductorDriver
         var receipt = new FindingEvidenceReceipt(
             receiptId, candidateSha, batch.TypedRequest, candidateEvidence.Accepted,
             candidateEvidence.IsValidEvidence, candidateEvidence.Summary, candidateArms,
-            FindingRoundFingerprint: findingRoundFingerprint);
+            FindingRoundFingerprint: findingRoundFingerprint,
+            NegativeControlOutcome: candidateEvidence.NegativeControlOutcome);
         foreach (var finding in batch.Findings)
         {
             _recordFindingEvidenceOutcome(
@@ -287,6 +290,7 @@ internal sealed partial class ConductorDriver
         {
             BatchId = requestContext.BatchId + "-candidate-rerun",
             RunBaselineArm = false,
+            NegativeControl = null,
             CandidateEvidenceBeforeBaseline = null
         };
         if (!TryReconcileFocusedEvidenceAttempt(
@@ -510,6 +514,7 @@ internal sealed partial class ConductorDriver
         out FailedGoalFindingObservation decision)
     {
         decision = FailedGoalFindingObservation.None;
+        if (request.NegativeControl is not null) return false;
         if (!TryResolveReusableRedFindingEvidenceReceipt(
                 requestingTask, request, candidateSha, executionBasisIdentity, out var receipt))
         {
@@ -677,10 +682,11 @@ internal sealed partial class ConductorDriver
         string request,
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        FindingEvidenceNegativeControl? negativeControl = null) =>
         ConductorParallelAcceptanceRunResult.Focused(
             candidate,
-            (runBaselineArm ? _runDualArmFocusedEvidence : _runFocusedEvidence)(
+            SelectFindingEvidenceRunner(runBaselineArm ? null : negativeControl, runBaselineArm)(
                 candidate.Goal, request, stableSlotLease, cancellationToken));
 
     private static bool IsCandidateOnlyRed(
