@@ -19,7 +19,8 @@ internal sealed class ConductorStewardDeterministicRoute(
     internal string? TryBuild(ConductorStewardTrigger trigger, string worktree)
     {
         if (trigger.Kind is ConductorStewardTriggerKind.DeveloperNoChangeWithConfirmedRed or
-            ConductorStewardTriggerKind.DeveloperGateReopenNoCommit)
+            ConductorStewardTriggerKind.DeveloperGateReopenNoCommit or
+            ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit)
             return null;
         var text = trigger.Kind == ConductorStewardTriggerKind.AcceptanceCollectionGuardClass
             ? BuildCollectionText(trigger, worktree)
