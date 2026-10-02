@@ -179,6 +179,53 @@ public static partial class GoalWorktrees
         return new GoalWorktreeChangedFilesResult(true, files, null);
     }
 
+    private static GoalWorktreeRebaseResult? TrySquashMergeCommitsOntoBase(
+        string executionDirectory, string worktreePath, string branch, string baseBranch, GoalId goalId)
+    {
+        if (!TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{baseBranch}^{{commit}}"], out var mainHead) ||
+            !TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{branch}"], out var oldHead) ||
+            !CommitShaPattern.IsMatch(mainHead) || !CommitShaPattern.IsMatch(oldHead) ||
+            !HasMergeCommitsOutsideBase(executionDirectory, mainHead, oldHead) ||
+            !TryReadCleanMergeTree(executionDirectory, mainHead, oldHead, out var tree))
+        {
+            return null;
+        }
+
+        // Keep the committed resolution's tree, rather than replaying the commits it resolved.
+        var commit = GitCli.Run(worktreePath,
+            "-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
+            "commit-tree", tree, "-p", mainHead, "-m", $"squashed-merge-commits onto {baseBranch} from {oldHead}");
+        var newHead = commit.Output.Trim();
+        if (!commit.Succeeded || commit.DrainTimedOut || !CommitShaPattern.IsMatch(newHead)) return null;
+
+        // The old SHA makes this a compare-and-swap; never overwrite a concurrently moved branch.
+        var update = GitCli.Run(worktreePath,
+            "update-ref", "-m", $"squashed-merge-commits from {oldHead} tree {tree}", $"refs/heads/{branch}", newHead, oldHead);
+        if (!update.Succeeded || update.DrainTimedOut)
+        {
+            return new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.Failed, branch,
+                $"Squash ref update for {branch} from {oldHead} to {newHead} failed: {DescribeGitFailure(update)}",
+                [], $"goal-recovery {Prefix(goalId)}");
+        }
+
+        var reset = GitCli.Run(worktreePath, "reset", "--hard", newHead);
+        if (IsRebaseStatPathFailure(reset)) reset = RunGitDirect(worktreePath, "reset", "--hard", newHead);
+        if (!reset.Succeeded || reset.DrainTimedOut)
+        {
+            var restore = GitCli.Run(worktreePath,
+                "update-ref", "-m", "squash-reset-failed", $"refs/heads/{branch}", oldHead, newHead);
+            return new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.Failed, branch,
+                $"Squash materialization for {branch} from {oldHead} to {newHead} failed: " +
+                $"{DescribeGitFailure(reset)}; ref restore: {DescribeGitFailure(restore)}. Inspect the worktree before recovery.",
+                [], $"goal-recovery {Prefix(goalId)}");
+        }
+
+        var materialized = ValidatePostRebaseMaterialization(worktreePath, branch, baseBranch, goalId);
+        return materialized.Status == GoalWorktreeRebaseStatus.Rebased
+            ? materialized with { Detail = "squashed-merge-commits" }
+            : materialized;
+    }
+
     public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId)
     {
         RequireGitWorkTree(executionDirectory);
@@ -225,6 +272,9 @@ public static partial class GoalWorktrees
                 [],
                 $"acceptance {Prefix(goalId)}");
         }
+
+        var squash = TrySquashMergeCommitsOntoBase(executionDirectory, worktreePath, branch, baseBranch, goalId);
+        if (squash is not null) return squash;
 
         // Use the "merge" backend (a real per-commit 3-way merge), NOT "--apply" (the legacy am/patch
         // backend). --apply matches on patch CONTEXT, so it spuriously conflicts when main changed lines

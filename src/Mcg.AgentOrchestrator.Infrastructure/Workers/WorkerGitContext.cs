@@ -242,7 +242,11 @@ internal sealed class WorkerGitContext
         }
         if (mergeTreeResult.ExitCode == 0)
         {
-            return new ReviewerMergeTreeStatus(IsClean: true, [], 0);
+            var tree = mergeTreeResult.Output
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+            return new ReviewerMergeTreeStatus(IsClean: true, [], 0,
+                TreeId: !mergeTreeResult.DrainTimedOut && tree is not null && IsFullSha(tree) ? tree : null);
         }
 
         var conflictPaths = ParseMergeTreeConflictPaths(mergeTreeResult.Output);
@@ -633,7 +637,8 @@ internal sealed record ReviewerChangedFileScope(
 internal sealed record ReviewerMergeTreeStatus(
     bool IsClean,
     IReadOnlyList<string> ConflictPaths,
-    int TotalConflictPathCount)
+    int TotalConflictPathCount,
+    string? TreeId = null)
 {
     public bool Truncated => ConflictPaths.Count < TotalConflictPathCount;
 }
