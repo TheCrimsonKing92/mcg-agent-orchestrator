@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record OwnerDigestGoalInput(
@@ -6,6 +8,9 @@ public sealed record OwnerDigestGoalInput(
 
 public sealed record OwnerDigestCanaryReceipt(
     string? LandingSha, DateTimeOffset OccurredAt, bool Passed);
+
+public sealed record OwnerDigestEscapeRecord(
+    string GoalId, string? FoundByGoalId, DateTimeOffset RecordedAt, string Reason);
 
 public sealed record OwnerDigestActorTotals(int Human, int Agent, int Other)
 {
@@ -21,7 +26,8 @@ public sealed record OwnerDigestGoalRow(
     string GoalId, DateTimeOffset LandedAt, string? LandingSha,
     OwnerDigestActorTotals Interventions, string LandingStatus,
     double? TailHours, OwnerDigestHours MechanicalHours,
-    double UnresolvedHoldHours, double ObservedAfterLandingHours);
+    double UnresolvedHoldHours, double ObservedAfterLandingHours,
+    [property: JsonIgnore] string? EscapeSource = null);
 
 public sealed record OwnerDigestTotals(
     int LandedGoals, OwnerDigestActorTotals Interventions,
@@ -33,7 +39,9 @@ public sealed record OwnerDigestTotals(
 public sealed record OwnerDigestResult(
     DateTimeOffset Since, DateTimeOffset Until, string Reverts,
     IReadOnlyList<OwnerDigestGoalRow> Goals, OwnerDigestTotals Totals,
-    int NonLandedGoalsWithInterventions, int MalformedLifecycleLines = 0);
+    int NonLandedGoalsWithInterventions, int MalformedLifecycleLines = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<OwnerDigestEscapeRecord>? Escapes = null);
 
 public static class OwnerDigestReport
 {
@@ -41,7 +49,8 @@ public static class OwnerDigestReport
         IReadOnlyList<OwnerDigestGoalInput> goals,
         IReadOnlyList<OwnerDigestCanaryReceipt> receipts,
         IClock clock, DateTimeOffset? since = null, DateTimeOffset? until = null,
-        int malformedLifecycleLines = 0)
+        int malformedLifecycleLines = 0,
+        IReadOnlyList<OwnerDigestEscapeRecord>? escapeRecords = null)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(receipts);
@@ -56,7 +65,11 @@ public static class OwnerDigestReport
         var landingBySha = goals.Where(g => g.LandedAt is not null && !string.IsNullOrWhiteSpace(g.LandingSha))
             .GroupBy(g => g.LandingSha!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Min(goal => goal.LandedAt!.Value), StringComparer.OrdinalIgnoreCase);
-        var rows = landed.Select(g => BuildRow(g, receipts, end, landingBySha)).ToArray();
+        var landedIds = landed.Select(g => g.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var records = (escapeRecords ?? []).Where(r => r.RecordedAt < end && landedIds.Contains(r.GoalId))
+            .OrderBy(r => r.RecordedAt).ThenBy(r => r.GoalId, StringComparer.Ordinal).ToArray();
+        var escapedIds = records.Select(r => r.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rows = landed.Select(g => BuildRow(g, receipts, end, landingBySha, escapedIds.Contains(g.GoalId))).ToArray();
         var nonLanded = goals.Count(g => g.LandedAt is null &&
             g.Timeline.Any(e => e.OperatorIntentApplied is not null && e.OccurredAt >= start && e.OccurredAt < end));
         var interventionTotals = new OwnerDigestActorTotals(
@@ -76,12 +89,13 @@ public static class OwnerDigestReport
             Percentile(tails, .5), Percentile(tails, .9), tails.Length,
             rows.Length - tails.Length, hourTotals, rows.Sum(r => r.UnresolvedHoldHours));
         return new OwnerDigestResult(start, end, "not tracked", rows, totals,
-            nonLanded, malformedLifecycleLines);
+            nonLanded, malformedLifecycleLines, records.Length == 0 ? null : records);
     }
 
     private static OwnerDigestGoalRow BuildRow(
         OwnerDigestGoalInput goal, IReadOnlyList<OwnerDigestCanaryReceipt> receipts,
-        DateTimeOffset end, IReadOnlyDictionary<string, DateTimeOffset> landingBySha)
+        DateTimeOffset end, IReadOnlyDictionary<string, DateTimeOffset> landingBySha,
+        bool recordedEscape)
     {
         var landedAt = goal.LandedAt!.Value;
         var events = goal.Timeline.Where(e => e.OccurredAt <= landedAt)
@@ -124,12 +138,14 @@ public static class OwnerDigestReport
                     landingBySha.TryGetValue(r.LandingSha, out var receiptLanding) &&
                     receiptLanding >= landedAt && receiptLanding <= r.OccurredAt)
                 .OrderBy(r => r.OccurredAt).Take(1).ToArray();
-        var status = matching.Length == 0 ? "pending" :
-            matching.Any(r => !r.Passed) ? "escape" : "correct";
+        var canaryFailed = matching.Any(r => !r.Passed);
+        var source = canaryFailed ? (recordedEscape ? "canary,record" : "canary") :
+            recordedEscape ? "record" : null;
+        var status = source is not null ? "escape" : matching.Length == 0 ? "pending" : "correct";
         return new OwnerDigestGoalRow(goal.GoalId, landedAt, goal.LandingSha,
             interventions, status, tail, new OwnerDigestHours(human, agent, other),
             open is null ? 0 : (landedAt - open.Value).TotalHours,
-            (end - landedAt).TotalHours);
+            (end - landedAt).TotalHours, source);
     }
 
     private static bool IsOperatorEscalation(ConductorTickOutcomePayload? tick) =>

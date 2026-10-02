@@ -2082,7 +2082,9 @@ internal sealed partial class ConductorBatchLoop
         Dictionary<string, BlockedRecheckRecurrence> recurrences)
     {
         var current = sweepResult?.Goals
-            .SelectMany(goal => goal.Blockers.Select(blocker => new
+            .SelectMany(goal => goal.Blockers
+                .Where(blocker => !ReconcileSweepRemediationCoordinator.IsAwaitingConductorAcceptanceGate(blocker))
+                .Select(blocker => new
             {
                 Key = $"{goal.GoalId.Value}:{blocker.Kind}",
                 GoalId = goal.GoalId.Value,

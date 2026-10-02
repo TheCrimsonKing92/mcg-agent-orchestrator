@@ -36,6 +36,8 @@ internal sealed partial class OperatorIntentCoordinator
                 {
                     OperatorIntentVerbs.LessonRecord => ApplyLessonRecord(kernel, intent, Lessons),
                     OperatorIntentVerbs.LessonRetire => ApplyLessonRetire(intent, Lessons),
+                    OperatorIntentVerbs.EscapeRecord => ApplyEscapeRecord(kernel, intent, Lessons,
+                        Escapes ?? throw new InvalidOperationException("Escape intent services are unavailable.")),
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
             }

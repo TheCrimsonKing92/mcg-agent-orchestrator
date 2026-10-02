@@ -106,7 +106,14 @@ internal sealed partial class OperatorIntentCoordinator
                         .ListGoalMetadataAsync().GetAwaiter().GetResult()
                         .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                         .Select(goal => goal.Id).ToArray(),
-                BuildLessonLandedPredicate(workspace.ExecutionDirectory))
+                BuildLessonLandedPredicate(workspace.ExecutionDirectory)),
+            Escapes = new OperatorEscapeIntentServices(
+                new SqliteOperatorEscapeStore(workspace.OperatorEscapesStorePath),
+                () => File.Exists(workspace.SqliteStatePath)
+                    ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                        .ListGoalMetadataAsync().GetAwaiter().GetResult().Select(g => g.Id).ToArray()
+                    : [],
+                id => HasGoalLandedEvent(workspace.GoalLifecycleEventsDirectory, id))
         };
     }
 

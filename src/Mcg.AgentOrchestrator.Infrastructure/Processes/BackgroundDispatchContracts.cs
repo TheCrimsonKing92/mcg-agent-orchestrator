@@ -20,7 +20,8 @@ public sealed record DispatchRefreshOutcome(
     DispatchAutoRequeueDisposition? AutoRequeueDisposition = null,
     ProviderReportedUsage? ProviderUsage = null,
     string ProviderUsageUnavailableReason = "unsupported",
-    DateTimeOffset? DispatchAttemptAt = null);
+    DateTimeOffset? DispatchAttemptAt = null,
+    DateTimeOffset? ReceiptlessUsageAttemptAt = null);
 
 public sealed record DispatchDiagnosticPayload(int ExitCode, string StandardOutput, string StandardError);
 
