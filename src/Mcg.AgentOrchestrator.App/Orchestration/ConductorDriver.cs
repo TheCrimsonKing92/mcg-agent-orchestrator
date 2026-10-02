@@ -2986,7 +2986,7 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        if (HasActiveApparatusHold(goal, out _))
+        if (HasActiveApparatusHold(goal, out _) || HasActiveOwnerReviewHold(goal, out _, out _))
         {
             return null;
         }
@@ -3022,6 +3022,9 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(policy);
+
+        if (HasActiveOwnerReviewHold(goal, out _, out _))
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
 
         if (HasActiveApparatusHold(goal, out _))
         {
@@ -5798,6 +5801,9 @@ internal sealed partial class ConductorDriver
 
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
+            if (TryHoldForOwnerReview(goal, goalPrefix, policy, acceptance) is { } ownerReviewHold)
+                return ownerReviewHold;
+
             var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
             var attemptedAllFlakyDisposition = false;
             if (retryDisposition.ActionableCriteria.Count == 0 &&
