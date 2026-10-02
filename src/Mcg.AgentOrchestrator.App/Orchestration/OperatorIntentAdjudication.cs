@@ -15,7 +15,8 @@ internal sealed class OperatorIntentAdjudication(
     AdjudicationEvidenceResolver evidenceResolver,
     Func<GoalId, string?>? goalHeadResolver = null,
     AcceptanceFailingTestIndex? regateIndex = null,
-    int regateCap = ApparatusRedGate.DefaultPerGoalRegateCap)
+    int regateCap = ApparatusRedGate.DefaultPerGoalRegateCap,
+    Func<GoalId, bool>? hasLiveAcceptanceAttempt = null)
 {
     private const string TemplateVersion = "operator-adjudication-v1";
     internal const string StewardAssurance = "steward";
@@ -244,7 +245,7 @@ internal sealed class OperatorIntentAdjudication(
             decisionId,
             outcome);
 
-    private static string? Validate(
+    private string? Validate(
         Goal goal,
         TaskSpec task,
         AdjudicateOperatorIntentPayload payload,
@@ -256,7 +257,15 @@ internal sealed class OperatorIntentAdjudication(
         if (string.IsNullOrWhiteSpace(payload.Text)) return "missing-explanation";
         if (payload.EvidenceReferences is null || payload.EvidenceReferences.All(string.IsNullOrWhiteSpace)) return "missing-evidence";
         if (shape is not ("close" or "reopen-regate" or "route")) return "unknown-shape";
-        if (shape == "reopen-regate" && goal.Status != GoalStatus.AcceptanceFailed) return "goal-not-acceptance-failed";
+        if (shape == "reopen-regate" && goal.Status == GoalStatus.Verifying)
+        {
+            if (goal.Tasks.Any(candidate => candidate.Status is not
+                (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)))
+                return "goal-not-acceptance-failed";
+            if (HasLiveAcceptanceAttempt(goal.Id)) return "acceptance-attempt-live";
+        }
+        else if (shape == "reopen-regate" && goal.Status != GoalStatus.AcceptanceFailed)
+            return "goal-not-acceptance-failed";
         if (shape is "close" or "reopen-regate" && task.Status is not
             (WorkTaskStatus.Assigned or WorkTaskStatus.Failed or WorkTaskStatus.Completed))
             return "task-not-closable";
@@ -269,6 +278,13 @@ internal sealed class OperatorIntentAdjudication(
         if (shape == "route") retryCause = Enum.Parse<RetryCause>(payload.Cause!, ignoreCase: true);
         if (unresolvedEvidence) return "evidence-reference-unresolved";
         return null;
+    }
+
+    private bool HasLiveAcceptanceAttempt(GoalId goalId)
+    {
+        // Reopening requires evidence that acceptance no longer reserves capacity.
+        try { return hasLiveAcceptanceAttempt?.Invoke(goalId) ?? true; }
+        catch { return true; }
     }
 
     private EvidenceManifest BuildEvidenceManifest(

@@ -48,7 +48,8 @@ internal sealed partial class OperatorIntentCoordinator
         ClarificationAnswerResolver? clarificationAnswers = null,
         ClarificationAnswerRecovery? clarificationAnswerRecovery = null,
         AcceptanceFailingTestIndex? apparatusRegateIndex = null,
-        int apparatusRegateCap = ApparatusRedGate.DefaultPerGoalRegateCap)
+        int apparatusRegateCap = ApparatusRedGate.DefaultPerGoalRegateCap,
+        Func<GoalId, bool>? hasLiveAcceptanceAttempt = null)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -61,7 +62,7 @@ internal sealed partial class OperatorIntentCoordinator
             throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
         _adjudication = decisions is null ? null : new OperatorIntentAdjudication(
             decisions, goalStateVersionResolver!, evidenceResolver ?? new AdjudicationEvidenceResolver(),
-            goalHeadResolver, apparatusRegateIndex, apparatusRegateCap);
+            goalHeadResolver, apparatusRegateIndex, apparatusRegateCap, hasLiveAcceptanceAttempt);
     }
 
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace)
@@ -78,6 +79,8 @@ internal sealed partial class OperatorIntentCoordinator
             goalStateVersionResolver: goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult(),
             evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             apparatusRegateIndex: ConductorStewardCaseDSources.CreateIndex(workspace),
+            hasLiveAcceptanceAttempt: BuildLiveAcceptanceAttemptQuery(new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.ExecutionDirectory)),
             clarificationAnswers: (key, answer, briefVersion) =>
                 refinement.TryResolveOpenClarificationAsync(key, answer, briefVersion),
             clarificationAnswerRecovery: (key, answer, briefVersion) =>
@@ -120,6 +123,10 @@ internal sealed partial class OperatorIntentCoordinator
                 id => HasGoalLandedEvent(workspace.GoalLifecycleEventsDirectory, id))
         };
     }
+
+    internal static Func<GoalId, bool> BuildLiveAcceptanceAttemptQuery(
+        ConductorParallelAcceptanceAttemptCoordinator attempts) =>
+        goalId => attempts.GetCapacityReservingAttempts([goalId.Value]).Count > 0;
 
     public IReadOnlyList<string> ListActionableGoalIds() =>
         _store.ListActionableGoalIdsAsync().GetAwaiter().GetResult();
