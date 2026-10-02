@@ -8,13 +8,10 @@ public sealed class CliChildProcessRunnerTests
     public async Task HangingChildIsTreeKilledAndNamedWhenInjectedGuardExpires()
     {
         Assert.True(CliChildProcessRunner.DefaultHangGuard >= TimeSpan.FromSeconds(120));
-        var marker = Path.Combine(Path.GetTempPath(), $"mcg-cli-child-{Guid.NewGuid():N}.pid");
+        var markerDirectory = Path.Combine(Path.GetTempPath(), $"mcg-cli-child-marker-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(markerDirectory);
+        var marker = Path.Combine(markerDirectory, "descendant.pid");
         var temporaryMarker = marker + ".tmp";
-        var markerWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watcher = new FileSystemWatcher(Path.GetDirectoryName(marker)!, Path.GetFileName(marker));
-        watcher.Created += (_, _) => markerWritten.TrySetResult();
-        watcher.Renamed += (_, _) => markerWritten.TrySetResult();
-        watcher.EnableRaisingEvents = true;
 
         var start = TreeStart(marker, temporaryMarker);
         Process? child = null;
@@ -23,15 +20,18 @@ public sealed class CliChildProcessRunnerTests
         ConductorSupervisorProcessIdentity? descendantIdentity = null;
         try
         {
+            var markerWritten = MarkerFileProbe.WaitAsync(marker, TestHangGuard.Bound,
+                () => child is null ? MarkerFileProbe.ChildState.NotStarted
+                    : child.HasExited ? MarkerFileProbe.ChildState.Exited(child.ExitCode)
+                    : MarkerFileProbe.ChildState.Running);
             var run = CliChildProcessRunner.RunAsync(start, TimeSpan.FromSeconds(10),
                 process =>
                 {
                     childIdentity = TestOwnedProcessStop.Identify(process);
                     child = Process.GetProcessById(process.Id);
-                    TestHangGuard.WaitAsync(markerWritten.Task, "descendant PID marker")
-                        .GetAwaiter().GetResult();
+                    markerWritten.GetAwaiter().GetResult();
                 });
-            await markerWritten.Task.WaitAsync(TestHangGuard.Bound);
+            await markerWritten;
             descendant = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(marker)));
             descendantIdentity = TestOwnedProcessStop.Identify(descendant);
             Assert.False(descendant.HasExited);
@@ -65,8 +65,9 @@ public sealed class CliChildProcessRunnerTests
                 }
                 child.Dispose();
             }
-            File.Delete(marker);
-            File.Delete(temporaryMarker);
+            try { Directory.Delete(markerDirectory, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 
