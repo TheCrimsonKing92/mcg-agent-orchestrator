@@ -12,7 +12,7 @@ public sealed class ConductorDriverTestsNoTickLandingHoldOwner
     [Fact]
     public void NoTickLandingDeadline_HeldCarriesBackgroundAttemptOwner()
     {
-        var root = CreateTempDirectory();
+        var root = ConductorDriverTests.CreateTempDirectory();
         try
         {
             var (kernel, goal) = SimpleGoal("No-tick landing hold owner");

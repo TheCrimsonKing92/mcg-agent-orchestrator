@@ -64,7 +64,7 @@ public sealed class ConductorDriverTestsPreReviewHoldOwner
     private sealed class EvidenceFixture : IDisposable
     {
         private static readonly DateTimeOffset Start = new(2026, 10, 2, 12, 0, 0, TimeSpan.Zero);
-        private readonly string _root = CreateTempDirectory();
+        private readonly string _root = ConductorDriverTests.CreateTempDirectory();
         private readonly AgentOrchestratorKernel _kernel;
         private readonly ConductorDriver _driver;
         private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests _gate = new();
