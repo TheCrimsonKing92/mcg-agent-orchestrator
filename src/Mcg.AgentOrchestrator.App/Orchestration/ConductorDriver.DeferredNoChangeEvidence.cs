@@ -126,13 +126,15 @@ internal sealed partial class ConductorDriver
             .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate &&
                                    string.Equals(arm.Sha, outcome.CandidateSha, StringComparison.OrdinalIgnoreCase));
         var failingTests = candidate?.FailingTestIdentities ?? [];
+        // This attempt's own FullyQualifiedName~ selections permit short-name family coverage.
         var green = completed && evidence.IsValidEvidence &&
             candidate is { Accepted: true, Passed: true, Disposition: FindingEvidenceArmDisposition.Green,
                 ExecutedTestCount: > 0 } &&
             AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(
                 candidate.TestResultPaths, candidate.ReceiptArtifacts,
                 candidate.ExecutedTestCount!.Value,
-                distinct.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase));
+                distinct.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                allowShortNamePrefixCoverage: true);
         var red = completed && evidence.Accepted &&
                   candidate is { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red };
         RecordDeferredNoChangeEvidence(green ? "green" : red ? "red" : "unusable",

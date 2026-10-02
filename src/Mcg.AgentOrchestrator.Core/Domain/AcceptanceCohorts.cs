@@ -325,7 +325,8 @@ public static class AcceptanceCohortGateEvidence
         IReadOnlyList<string>? testResultPaths,
         IReadOnlyList<AcceptanceCohortEvidenceArtifact>? artifacts,
         int expectedExecutedTestCount,
-        IReadOnlyCollection<string> requiredTestClasses)
+        IReadOnlyCollection<string> requiredTestClasses,
+        bool allowShortNamePrefixCoverage = false)
     {
         if (!HasNormalizedTestResultPaths(testResultPaths) ||
             artifacts is not { Count: > 0 } ||
@@ -372,7 +373,17 @@ public static class AcceptanceCohortGateEvidence
         }
 
         return executedCount == expectedExecutedTestCount &&
-            requiredTestClasses.All(required => executedClasses.Contains(required));
+            requiredTestClasses.All(required => executedClasses.Contains(required) ||
+                allowShortNamePrefixCoverage && executedClasses.Any(executed =>
+                    IsShortNamePrefixMatch(executed, required)));
+    }
+
+    private static bool IsShortNamePrefixMatch(string executed, string required)
+    {
+        var requiredShortName = required[(required.LastIndexOf('.') + 1)..];
+        var executedShortName = executed[(executed.LastIndexOf('.') + 1)..];
+        return requiredShortName.Length > 0 &&
+            executedShortName.StartsWith(requiredShortName, StringComparison.Ordinal);
     }
 
     public static bool HasContentBoundEvidence(
