@@ -59,16 +59,21 @@ internal sealed partial class ConductorStewardHost
 
     internal void Stop()
     {
+        var interrupted = _round is { IsCompleted: false };
         _shutdown.Cancel();
         var drained = true;
         try { drained = _round?.Wait(TimeSpan.FromSeconds(30)) ?? true; }
         catch (AggregateException) { }
-        if (!drained)
-            throw new InvalidOperationException("Steward model round did not drain after conductor shutdown cancellation.");
         if (_running is { } running)
         {
             if (_round is { IsCompletedSuccessfully: true } completed && _claimedGoalVersion is { } version)
                 _triggers.PreserveCompletedRound(running.Key, completed.Result, version);
+            else if (interrupted && (_round is { IsCompleted: false } or { IsCanceled: true } ||
+                                     _round?.Exception?.GetBaseException() is OperationCanceledException))
+            {
+                _triggers.ReleaseClaim(running.Key);
+                Record(running.Trigger, "released", "conductor-stop", null);
+            }
             else
             {
                 _triggers.MarkServiced(running.Key, "model-failure", null);
@@ -78,6 +83,8 @@ internal sealed partial class ConductorStewardHost
             _round = null;
             _claimedGoalVersion = null;
         }
+        if (!drained)
+            throw new InvalidOperationException("Steward model round did not drain after conductor shutdown cancellation.");
     }
 
     internal static ConductorStewardHost CreateDefault(OrchestratorWorkspace workspace)

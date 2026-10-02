@@ -48,6 +48,16 @@ internal sealed class ConductorAuthorClaimStore(string path)
         return result;
     }
 
+    internal void Release(string identity)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM author_claims WHERE identity = $identity AND outcome = 'in-flight'";
+        command.Parameters.AddWithValue("$identity", identity);
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"Author claim {identity} is no longer in flight.");
+    }
+
     internal void Complete(string identity, string outcome, string? intentId = null)
     {
         using var connection = Open();
