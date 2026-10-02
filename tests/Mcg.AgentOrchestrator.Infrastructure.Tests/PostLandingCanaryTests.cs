@@ -24,6 +24,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatArtifacts.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceFailureAttributionPlanner.cs",
             "src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanaryCoordinator.cs",
             "src/Mcg.AgentOrchestrator.Core/Application/PostLandingCanaryTrigger.cs",
             "tests/canary-fixture/global.json",
@@ -42,6 +43,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 "base-build-cache",
                 "gate-heartbeats",
                 "attempt-artifact-custody",
+                "acceptance-collaborators",
                 "post-landing-canary",
                 "acceptance-manifest"
             ],
