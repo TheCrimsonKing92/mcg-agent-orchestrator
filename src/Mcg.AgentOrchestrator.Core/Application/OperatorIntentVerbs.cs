@@ -14,6 +14,7 @@ public static class OperatorIntentVerbs
     public const string CriterionEvidenceRepair = "criterion-evidence-repair";
     public const string LessonRecord = "lesson-record";
     public const string LessonRetire = "lesson-retire";
+    public const string EscapeRecord = "escape-record";
 }
 
 public static class OperatorIntentScopes

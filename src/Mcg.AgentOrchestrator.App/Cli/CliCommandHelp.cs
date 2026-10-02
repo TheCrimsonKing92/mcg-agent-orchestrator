@@ -77,6 +77,7 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
+    public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
 
@@ -528,6 +529,12 @@ internal static class CliCommandHelp
         ["--situation", "--rule", "--evidence", "--applies-to", "--goal", "--actor-kind",
          "--operator-actor", "--idempotency-key", "--reason", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry Escape = new(
+        EscapeUsage,
+        "Queue an evidence-backed post-landing escape record for the conductor tick.",
+        ["--goal", "--reason", "--evidence", "--found-by-goal", "--actor-kind",
+         "--operator-actor", "--idempotency-key", "--help", "-h"]);
+
     private static readonly CommandHelpEntry Lessons = new(
         LessonsUsage,
         "List active or retired operator lessons without running a conductor.",
@@ -974,6 +981,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("owner-digest", StringComparison.OrdinalIgnoreCase))
         {
             entry = OwnerDigest;
+            return true;
+        }
+        if (args[0].Equals("escape", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Escape;
             return true;
         }
         if (args[0].Equals("lesson", StringComparison.OrdinalIgnoreCase))
