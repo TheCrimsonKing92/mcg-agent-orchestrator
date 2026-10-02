@@ -117,7 +117,7 @@ internal sealed partial class ConductorDriver
             ApparatusRedDisposition.Regate regate =>
                 HoldApparatusRedRegate(goal, goalPrefix, policy, acceptance, reading, regate),
             ApparatusRedDisposition.BoundExhausted bound =>
-                EscalateApparatusRedBound(goal, goalPrefix, policy, bound),
+                EscalateApparatusRedBound(goal, goalPrefix, policy, reading, bound),
             ApparatusRedDisposition.Genuine genuine =>
                 RecordApparatusRedGenuine(goal, acceptance, genuine)
         };
@@ -169,7 +169,7 @@ internal sealed partial class ConductorDriver
         var reason =
             $"Acceptance RED classified as apparatus ({regate.EvidenceKind}) for candidate " +
             $"{FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: every failing test lies outside the " +
-            $"candidate's changed paths ({string.Join(", ", regate.TestIdentities)}). Re-gating on the next " +
+            $"candidate's changed paths ({ApparatusRedFailureSummary.Format(regate.TestIdentities, reading.FailingTests)}). Re-gating on the next " +
             $"conduct tick ({regate.RegateOrdinal}/{regate.RegateCap}); no worker was reopened.";
         return MakeResult(
             goal.Id.Value,
@@ -204,6 +204,7 @@ internal sealed partial class ConductorDriver
         Goal goal,
         string goalPrefix,
         ConductorAutonomyPolicy policy,
+        ApparatusRedGateReading reading,
         ApparatusRedDisposition.BoundExhausted bound) =>
         Escalate(
             goal,
@@ -212,7 +213,7 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Verified,
             $"{ApparatusRedClassifier.BoundExhaustedToken}: this goal already re-gated " +
             $"{bound.RegateCount}/{bound.RegateCap} apparatus REDs without a green gate. The current RED is " +
-            $"apparatus again ({bound.EvidenceKind}) on {string.Join(", ", bound.TestIdentities)}. " +
+            $"apparatus again ({bound.EvidenceKind}) on {ApparatusRedFailureSummary.Format(bound.TestIdentities, reading.FailingTests)}. " +
             "Repair the apparatus or confirm acceptance-retry; no worker was reopened.");
 
     private void WriteApparatusRedRegateJournal(

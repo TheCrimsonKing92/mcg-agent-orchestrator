@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductorAuthorHost
 {
     internal const string EnabledEnvironmentVariable = "MCG_ORCHESTRATOR_AUTHOR_ENABLED";
+    private const int MaxAttempts = 2;
     private readonly ConductorAuthorClaimStore _claims;
     private readonly ICollaborationItemStore _collaboration;
     private readonly IConductorAuthorModelRound _model;
@@ -143,9 +144,12 @@ internal sealed class ConductorAuthorHost
             var item = running.Item;
             if (!running.Round.IsCompletedSuccessfully)
             {
-                _claims.Complete(identity, "model-failure");
-                Record(item, "model-failure", running.Round.IsCanceled ? "timeout" :
-                    running.Round.Exception?.GetBaseException().GetType().Name ?? "model-failure");
+                var attempt = _claims.Attempt(identity);
+                var retry = attempt < MaxAttempts;
+                var reason = running.Round.IsCanceled ? "timeout" :
+                    running.Round.Exception?.GetBaseException().GetType().Name ?? "model-failure";
+                _claims.Complete(identity, retry ? "retryable" : "model-failure");
+                Record(item, retry ? "retry-scheduled" : "model-failure", $"{reason} attempt={attempt}/{MaxAttempts}");
                 continue;
             }
             _claims.Preserve(item, running.Round.Result);
