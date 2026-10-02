@@ -40,6 +40,7 @@ internal sealed partial class WorkerArtifactWriter
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
         Directory.CreateDirectory(contextDirectory);
+        WorkerStandingRules.WriteContextArtifact(task.RequiredRole, contextDirectory);
 
         // Self-ignore the scratch tree so it never dirties repositories whose root
         // .gitignore lacks the tracked orchestrator rule.
@@ -1105,6 +1106,11 @@ internal sealed partial class WorkerArtifactWriter
             "context-package.json"
         };
 
+        if (WorkerStandingRules.ContextFileNameForRole(task.RequiredRole) is { } standingRulesFile)
+        {
+            artifactNames.Add(standingRulesFile);
+        }
+
         foreach (var optionalArtifact in new[] { "research-notes.md", "planner-plan.md", "source-survey.md", "prior-goal-evidence.md", CriteriaSelfCheckPromptContext.FileName })
         {
             if (File.Exists(Path.Combine(contextDirectory, optionalArtifact)))
@@ -1187,6 +1193,8 @@ internal sealed partial class WorkerArtifactWriter
             "context-package.json" => "Task-scoped context package metadata and missing-artifact fallback guidance.",
             "subscription-preflight.md" => "Subscription dispatch preflight findings.",
             "AGENTS.md" => "Repository-local agent instructions.",
+            WorkerStandingRules.ContextFileName => "Standing rules for the current Developer or Tester task.",
+            WorkerStandingRules.PlannerContextFileName => "Standing Planner mapping and citation rules.",
             _ => "Copied repository guidance artifact."
         };
     }
@@ -1215,6 +1223,8 @@ internal sealed partial class WorkerArtifactWriter
     {
         return relativePath switch
         {
+            WorkerStandingRules.ContextFileName => ["Developer", "Tester"],
+            WorkerStandingRules.PlannerContextFileName => ["Planner"],
             "deterministic-verification.md" => ["Tester", "Reviewer"],
             CriteriaSelfCheckPromptContext.FileName => ["Developer", "Tester", "Reviewer"],
             "diff-summary.md" => ["Developer", "Tester", "Reviewer"],

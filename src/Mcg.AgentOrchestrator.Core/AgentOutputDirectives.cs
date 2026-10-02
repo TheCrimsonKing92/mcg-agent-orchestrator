@@ -16,6 +16,12 @@ public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directi
 
 public static class AgentOutputDirectives
 {
+    public const string PlannerStandingRules =
+        "The literal text `disposition=` may appear only on mapping lines. " +
+        "Only mapping lines may begin with a digit and a period. " +
+        "Required sections must not contain the marker words `placeholder`, `TBD` or `TODO`. " +
+        "Cite the root readme as `./README.md`; a bare `README.md` is rejected as ambiguous.";
+
     private static readonly string[] NoHumanInputMarkers = ["none", "no", "not needed", "no input needed"];
     private static readonly string[] BaseWorkerResultFields =
         ["files", "commands", "tests", "blockers", "model_fit", "skills", "confidence"];
@@ -23,7 +29,7 @@ public static class AgentOutputDirectives
     public static IReadOnlyList<string> WorkerResultTemplateLines =>
         WorkerResultTemplateLinesForRole(null);
 
-    public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role)
+    public static IReadOnlyList<string> WorkerResultTemplateLinesForRole(AgentRole? role, string? contextDirectory = null)
     {
         var lines = new List<string>();
         if (role == AgentRole.Developer)
@@ -55,7 +61,10 @@ public static class AgentOutputDirectives
                 "The descriptive form must end at a period, semicolon, or the end of the line. Alternatively, use the words 'new file', 'create', or 'add' within 24 characters before the path containing no other backtick. " +
                 "A marker applies only to the single citation it is adjacent to, not to the whole line, so mark every new path individually. " +
                 "To cite a symbol, use a double colon such as `Path/File.cs::SymbolName`, or `Path/File.cs:123`, or `Path/File.cs#L12`; " +
-                "a single colon before a symbol name is not recognised and the whole string is then treated as a file path that does not exist.");
+                "a single colon before a symbol name is not recognised and the whole string is then treated as a file path that does not exist. " +
+                (string.IsNullOrWhiteSpace(contextDirectory)
+                    ? PlannerStandingRules
+                    : WorkerStandingRules.ContextReference(AgentRole.Planner)));
         }
         else if (role == AgentRole.Researcher)
         {

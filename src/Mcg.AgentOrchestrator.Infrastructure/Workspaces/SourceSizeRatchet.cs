@@ -190,7 +190,10 @@ internal static class SourceSizeRatchet
             // WorkerSubscriptionPreflightFindings; 3000 includes the typed exhaustion error-code mapping.
             // Lowered for goal 754f3c5f after role and model selection moved to
             // WorkerSubscriptionModelResolver; 2605 is the measured post-extraction size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 2605),
+            // Raised two lines for goal ed9b76cf: the dispatcher's context-artifact registry must declare
+            // Developer/Tester and Planner standing-rule files as mandatory delivery sources. Rule text
+            // and artifact rendering remain in WorkerStandingRules; 2607 is the measured integrated size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 2607),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
