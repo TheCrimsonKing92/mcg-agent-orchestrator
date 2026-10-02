@@ -580,6 +580,141 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_ContextualMissPrefersRepositoryRootFile()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "docs", "incidents"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "tests", "Sample"));
+        File.WriteAllText(Path.Combine(workingDirectory, "README.md"), "root readme");
+        File.WriteAllText(Path.Combine(workingDirectory, "docs", "cli-reference.md"), "cli reference");
+        File.WriteAllText(Path.Combine(workingDirectory, "docs", "incidents", "README.md"), "incident readme");
+        File.WriteAllText(Path.Combine(workingDirectory, "tests", "Sample", "README.md"), "test readme");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Inspect `docs/cli-reference.md` and `README.md` for the documented contract.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains("`README.md`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_CommandLinesAndAngleBracketPatternsAreProse()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "src"));
+        File.WriteAllText(Path.Combine(workingDirectory, "src", "Present.cs"), "// fixture");
+        var targetBody = """
+            - Inspect `src/Present.cs` for the concrete implementation seam.
+            - Verify with `.\scripts\Invoke-TestSummary.ps1 -Target tests\...\*.Tests.csproj`.
+            - Restore permissions with `icacls /reset /T /C /Q`.
+            - Observe the runtime artifact `waiters/gate-<pid>-<guid>.json`.
+            """.ReplaceLineEndings("\n");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains(targetBody, result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("src/Absent/Missing.cs")]
+    [Xunit.InlineData("*.cs")]
+    [Xunit.InlineData("tests/**/*.csproj")]
+    [Xunit.InlineData("src/Absent/Missing.cs::Some Method")]
+    [Xunit.InlineData("src/Absent/Missing.cs::Method<T>")]
+    public void PlannerContract_WildcardAndAbsentPathsStillFailAsMissing(string citation)
+    {
+        var workingDirectory = CreateTempDirectory();
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Inspect `{citation}` for the concrete implementation seam.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains($"target citation '{citation}' does not exist", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Offending citation: '{citation}'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("src/Some Missing.cs")]
+    [Xunit.InlineData("src/Some\tMissing.cs")]
+    [Xunit.InlineData("src/Some\u00a0Missing.cs")]
+    [Xunit.InlineData("src/<Missing.cs")]
+    [Xunit.InlineData("src/Missing>.cs")]
+    public void PlannerContract_WhitespaceOrAngleBracketInExtractedPathIsProse(string citation)
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "src"));
+        File.WriteAllText(Path.Combine(workingDirectory, "src", "Present.cs"), "// fixture");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Inspect `src/Present.cs` and describe `{citation}` as prose.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"`{citation}`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("src/Present.cs::Some Method")]
+    [Xunit.InlineData("src/Present.cs::Method<T>")]
+    [Xunit.InlineData(" src/Present.cs ")]
+    public void PlannerContract_SymbolSuffixOrSurroundingSpacePreservesFileCitation(string citation)
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "src"));
+        File.WriteAllText(Path.Combine(workingDirectory, "src", "Present.cs"), "// fixture");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Inspect `{citation}` for the concrete implementation seam.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"`{citation}`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PlannerContract_ContextualSuffixPrecedesRootFallback(bool hasContextualSuffix)
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
+        File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "// anchor");
+        var rootFilename = hasContextualSuffix ? "RootTarget.md" : "RootTarget.md.cs";
+        File.WriteAllText(Path.Combine(workingDirectory, rootFilename), "// root target");
+        if (hasContextualSuffix)
+        {
+            File.WriteAllText(Path.Combine(workingDirectory, "active", "RootTarget.md.cs"), "// contextual target");
+        }
+
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Inspect `active/Anchor.cs` and `RootTarget.md` for the concrete implementation seam.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains("Inspect `active/Anchor.cs` and `RootTarget.md.cs`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.Contains("raw citation `RootTarget.md` resolved to `RootTarget.md.cs`", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_LineRangeSuffixResolvesAgainstExistingFile()
     {
         var workingDirectory = CreateTempDirectory();

@@ -821,6 +821,36 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
+            if (!hasExplicitDirectory && !isFullyQualifiedCitation)
+            {
+                var rootCandidate = Path.Combine(workingDirectory, citedPath);
+                if (PathExistsWithExactCasing(rootCandidate, workingDirectory))
+                {
+                    continue;
+                }
+
+                foreach (var suffix in CandidatePathSuffixes)
+                {
+                    if (!PathExistsWithExactCasing(rootCandidate + suffix, workingDirectory))
+                    {
+                        continue;
+                    }
+
+                    resolvedCitation = citation + suffix;
+                    break;
+                }
+
+                if (resolvedCitation is not null)
+                {
+                    substitutions.Add(new CitationSubstitution(
+                        targetHeading.Index + match.Groups["citation"].Index,
+                        match.Groups["citation"].Length,
+                        citation,
+                        resolvedCitation));
+                    continue;
+                }
+            }
+
             if (!hasExplicitDirectory)
             {
                 var filename = Path.GetFileName(citedPath);
@@ -1076,7 +1106,8 @@ internal static partial class PlannerOutputContract
         var fileMatch = CitedFilePath().Match(citation);
         if (fileMatch.Success)
         {
-            return fileMatch.Groups["path"].Value;
+            var path = fileMatch.Groups["path"].Value;
+            return ContainsProsePathCharacters(path) ? null : path;
         }
 
         if (SpacedPathSeparator().IsMatch(citation))
@@ -1084,10 +1115,13 @@ internal static partial class PlannerOutputContract
             return null;
         }
 
-        return citation.Contains('/') || citation.Contains('\\')
+        return (citation.Contains('/') || citation.Contains('\\')) && !ContainsProsePathCharacters(citation)
             ? citation
             : null;
     }
+
+    private static bool ContainsProsePathCharacters(string path) =>
+        path.Any(character => char.IsWhiteSpace(character) || character is '<' or '>');
 
     private static bool HasRequiredSectionEvidence(string label, string body)
     {
