@@ -19,7 +19,8 @@ public sealed partial class GoalAcceptanceVerifier
                 _ => throw new InvalidOperationException("Unexpected mutation path rejection.")
             };
         if (string.IsNullOrEmpty(mutation.OldText)) return FindingEvidenceRevertPathsRejection.MutationEmptyOldText;
-        if (string.Equals(mutation.OldText, mutation.NewText, StringComparison.Ordinal))
+        if (string.Equals(NormalizeSourceMutationLineBreaks(mutation.OldText),
+            NormalizeSourceMutationLineBreaks(mutation.NewText ?? string.Empty), StringComparison.Ordinal))
             return FindingEvidenceRevertPathsRejection.MutationUnchangedText;
         var target = ResolveSourceMutationTarget(candidatePath, path);
         if (!File.Exists(target)) return FindingEvidenceRevertPathsRejection.MutationOldTextNotFound;
@@ -27,25 +28,52 @@ public sealed partial class GoalAcceptanceVerifier
         return FindSourceMutationSpan(text, mutation.OldText, out _);
     }
 
-    private static FindingEvidenceRevertPathsRejection? FindSourceMutationSpan(string text, string oldText, out int start)
+    private static FindingEvidenceRevertPathsRejection? FindSourceMutationSpan(string text, string oldText, out int start) =>
+        FindSourceMutationSpan(text, oldText, out start, out _);
+
+    private static FindingEvidenceRevertPathsRejection? FindSourceMutationSpan(
+        string text, string oldText, out int start, out int length)
     {
-        start = text.IndexOf(oldText, StringComparison.Ordinal);
+        // Break-free needles retain exact matching, even a lone CR at the edge of a CRLF.
+        var comparison = oldText.Contains('\n') ? NormalizeSourceMutationLineBreaks(text) : text;
+        var needle = NormalizeSourceMutationLineBreaks(oldText);
+        start = comparison.IndexOf(needle, StringComparison.Ordinal);
+        length = needle.Length;
         if (start < 0) return FindingEvidenceRevertPathsRejection.MutationOldTextNotFound;
-        return text.IndexOf(oldText, start + oldText.Length, StringComparison.Ordinal) < 0 ? null :
-            FindingEvidenceRevertPathsRejection.MutationOldTextAmbiguous;
+        if (comparison.IndexOf(needle, start + needle.Length, StringComparison.Ordinal) >= 0)
+            return FindingEvidenceRevertPathsRejection.MutationOldTextAmbiguous;
+        if (!oldText.Contains('\n')) return null;
+        var offsets = new int[comparison.Length + 1];
+        var normalizedOffset = 0;
+        for (var originalOffset = 0; originalOffset < text.Length; originalOffset++)
+        {
+            offsets[normalizedOffset++] = originalOffset;
+            if (text[originalOffset] == '\r' && originalOffset + 1 < text.Length && text[originalOffset + 1] == '\n')
+                originalOffset++;
+        }
+        offsets[normalizedOffset] = text.Length;
+        length = offsets[start + needle.Length] - offsets[start];
+        start = offsets[start];
+        return null;
     }
+
+    private static string NormalizeSourceMutationLineBreaks(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
 
     // Called only after the detached candidate worktree has been created and labelled.
     private static void ApplySourceMutation(string revertedPath, FindingEvidenceMutation mutation)
     {
         var target = ResolveSourceMutationTarget(revertedPath, FindingEvidenceRevertPaths.Normalize(mutation.Path));
         var (bytes, encoding, text) = ReadSourceMutationFile(target);
-        if (FindSourceMutationSpan(text, mutation.OldText, out var start) is not null)
+        if (FindSourceMutationSpan(text, mutation.OldText, out var start, out var length) is not null)
             throw new InvalidDataException("Mutation no longer has exactly one old_text occurrence in the temporary worktree.");
         var preambleLength = bytes.Length - encoding.GetByteCount(text);
         var byteStart = preambleLength + encoding.GetByteCount(text.AsSpan(0, start));
-        var byteEnd = byteStart + encoding.GetByteCount(mutation.OldText);
-        var replacement = encoding.GetBytes(mutation.NewText ?? string.Empty);
+        var matchedSpan = text.AsSpan(start, length);
+        var byteEnd = byteStart + encoding.GetByteCount(matchedSpan);
+        var replacementText = NormalizeSourceMutationLineBreaks(mutation.NewText ?? string.Empty);
+        if (matchedSpan.Contains("\r\n", StringComparison.Ordinal))
+            replacementText = replacementText.Replace("\n", "\r\n", StringComparison.Ordinal);
+        var replacement = encoding.GetBytes(replacementText);
         var result = new byte[byteStart + replacement.Length + bytes.Length - byteEnd];
         bytes.AsSpan(0, byteStart).CopyTo(result);
         replacement.CopyTo(result, byteStart);
