@@ -97,6 +97,12 @@ internal sealed class OperatorIntentAdjudication(
             RejectWithRecordedEffect(kernel, goal, task, intent, receipt, denied.Receipt.Result);
         }
 
+        // Task updates preserve Verifying; the admitted operator intent must release
+        // that acceptance hold before the unchanged retry/complete action can re-gate.
+        if (shape == "reopen-regate" && goal.Status == GoalStatus.Verifying)
+            kernel.ReconcileGoalAcceptanceVerified(goal.Id,
+                "Operator reopen-regate released stranded acceptance for re-gating.");
+
         switch (shape)
         {
             case "close":

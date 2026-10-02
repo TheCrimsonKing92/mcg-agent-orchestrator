@@ -38,6 +38,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStrandedReopen(ITes
             var capped = new ConductorBatchLoop().Run(kernel, driver,
                 ConductorAutonomyPolicy.Conservative, NoStopPath(),
                 maxIterations: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap,
+                watchInterval: TimeSpan.FromMilliseconds(1),
                 sleepFunc: _ => false);
 
             Assert.Equal(1, capped.Escalated);
