@@ -11,7 +11,8 @@ internal sealed record ApparatusRedFailingTest(
     bool CandidateRerunPassed = false,
     bool CandidateRerunFailed = false,
     string? FailureMessage = null,
-    string? MessageFingerprint = null);
+    string? MessageFingerprint = null,
+    IReadOnlyList<string>? ReferencedChangedTypes = null);
 
 /// <summary>Materialized classification inputs. No I/O happens below this record.</summary>
 internal sealed record ApparatusRedEvidence(
@@ -115,6 +116,13 @@ internal static class ApparatusRedClassifier
 
             if (failingTest.CandidateRerunPassed)
             {
+                if (failingTest.ReferencedChangedTypes is { Count: > 0 } types)
+                {
+                    return new ApparatusRedDisposition.Genuine(
+                        $"failing test {failingTest.TestIdentity} references candidate-changed type {string.Join(", ", types)}; " +
+                        "one passing candidate rerun does not separate a candidate-introduced race from a flake");
+                }
+
                 evidenceKinds.Add(CandidateRerunEvidenceKind);
                 continue;
             }

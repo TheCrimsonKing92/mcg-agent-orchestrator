@@ -179,6 +179,8 @@ internal sealed class ApparatusRedGate
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .ToArray();
         var failingTests = new List<ApparatusRedFailingTest>();
+        var declaredChangedTypes = new Lazy<IReadOnlySet<string>>(() =>
+            CandidateChangedTypeReferenceReader.ReadDeclaredTypeNames(sourceRoot, normalizedChangedPaths));
         var everyCheckHasIdentities = true;
         var failedIdentityBearingChecks = acceptance.RequiredUnmetCriteria
             .Where(check =>
@@ -256,7 +258,9 @@ internal sealed class ApparatusRedGate
                     CandidateRerunPassed: rerunPassed,
                     CandidateRerunFailed: rerunFailed,
                     FailureMessage: message,
-                    MessageFingerprint: messageFingerprint));
+                    MessageFingerprint: messageFingerprint,
+                    ReferencedChangedTypes: CandidateChangedTypeReferenceReader.MatchReferencedTypes(
+                        sourceRoot, sourcePaths, declaredChangedTypes.Value)));
             }
         }
 
