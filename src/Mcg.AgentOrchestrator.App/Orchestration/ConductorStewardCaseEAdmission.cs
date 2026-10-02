@@ -28,8 +28,8 @@ internal static class ConductorStewardCaseEAdmission
                string.Equals(candidate, dispatch.BaseCommit, StringComparison.OrdinalIgnoreCase) &&
                string.Equals(candidate, head, StringComparison.OrdinalIgnoreCase) &&
                ConductorStewardTriggerDetector.ResolveCaseEReviewer(goal, developer) == reviewer &&
-               goal.Timeline.Any(item => item.TaskId == developer.Id &&
-                   item.OperatorIntentApplied is { Actor: "steward", Channel: "conductor-steward",
+               // Intent receipts are goal-level events; their typed payload owns the task identity.
+               goal.Timeline.Any(item => item.OperatorIntentApplied is { Actor: "steward", Channel: "conductor-steward",
                        ActorKind: OperatorActorKind.Agent, AuthenticationAssurance: "steward", Outcome: "applied" } applied &&
                    applied.IntentId == closeId && applied.TaskId == developer.Id.Value &&
                    item.Message.Contains("shape=close outcome=applied", StringComparison.Ordinal));
