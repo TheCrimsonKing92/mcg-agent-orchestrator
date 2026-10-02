@@ -369,36 +369,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
     private static string PreserveWorktreeEdits(
         string workingDirectory,
         ProgressiveReviewSteerIntent intent,
-        string cancelPath)
-    {
-        try
-        {
-            var status = GitCli.Run(workingDirectory, "status", "--porcelain", "--untracked-files=all");
-            if (!status.Succeeded)
-                return $"failed=status:{Bound(status.Error)}";
-            if (string.IsNullOrWhiteSpace(status.Output))
-                return "clean-no-edits";
-
-            var message = $"progressive-review-stranded-{Short(intent.GoalId)}-{Short(intent.TaskId)}-{cancelPath}";
-            var stash = GitCli.Run(workingDirectory, "stash", "push", "--include-untracked", "-m", message);
-            if (!stash.Succeeded)
-                return $"failed=stash:{Bound(stash.Error)}";
-
-            var clean = GitCli.Run(workingDirectory, "status", "--porcelain", "--untracked-files=all");
-            if (!clean.Succeeded || !string.IsNullOrWhiteSpace(clean.Output))
-                return $"failed=worktree-not-clean:{Bound(clean.Error + clean.Output)}";
-
-            var reference = GitCli.Run(workingDirectory, "stash", "list", "-1", "--format=%H");
-            var stashRef = reference.Succeeded && !string.IsNullOrWhiteSpace(reference.Output)
-                ? reference.Output.Trim()
-                : "stash-created-ref-unavailable";
-            return $"preserved={stashRef}";
-        }
-        catch (Exception ex)
-        {
-            return $"failed=exception:{Bound(ex.Message)}";
-        }
-    }
+        string cancelPath) =>
+        WorktreeEditPreservation.Preserve(workingDirectory,
+            $"progressive-review-stranded-{Short(intent.GoalId)}-{Short(intent.TaskId)}-{cancelPath}");
 
     private static string Bound(string? value) =>
         ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(value, 240).Replace(' ', '-');

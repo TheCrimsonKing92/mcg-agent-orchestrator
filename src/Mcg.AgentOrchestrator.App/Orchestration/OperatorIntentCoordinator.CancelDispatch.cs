@@ -38,6 +38,14 @@ internal sealed partial class OperatorIntentCoordinator
         if (task.Status != WorkTaskStatus.Running)
             throw new InvalidOperationException($"Task '{task.Id}' is {task.Status}; cancel-dispatch requires Running or Cancelled.");
 
-        CancelLatestProcess(kernel, goal.Id, task.Id);
+        var cancelled = CancelLatestProcess(kernel, goal.Id, task.Id);
+        if (cancelled.WasCancelled && !string.IsNullOrWhiteSpace(cancelled.WorkingDirectory))
+        {
+            var preservation = WorktreeEditPreservation.Preserve(
+                cancelled.WorkingDirectory,
+                $"operator-cancel-dispatch-{ShortGoalId(goal.Id.Value)}-{ShortGoalId(task.Id.Value)}-{cancelled.ProcessId}");
+            kernel.RecordTaskNote(goal.Id, task.Id,
+                $"CANCEL_DISPOSITION task_status=Cancelled redispatch=awaits-operator-retry preservation={preservation}");
+        }
     }
 }
