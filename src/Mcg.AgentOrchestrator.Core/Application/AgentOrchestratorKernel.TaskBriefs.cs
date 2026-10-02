@@ -303,7 +303,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch));
+        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch, contextDirectory));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(instructionLines, task.RequiredRole, includeReference: true);
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
@@ -449,6 +449,12 @@ public sealed partial class AgentOrchestratorKernel
         if (practiceLines.Count > 0)
         {
             segments.Add(TaskBriefSegment.Fixed(practiceLines));
+        }
+
+        var standingRuleLines = WorkerStandingRules.RenderBriefSection(task.RequiredRole, contextDirectory);
+        if (standingRuleLines.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(standingRuleLines));
         }
 
         var reviewerChangedFileScope = BuildReviewerChangedFileScopeBriefBlock(
@@ -772,7 +778,8 @@ public sealed partial class AgentOrchestratorKernel
         TaskComplexity complexity,
         string? modelFitTarget,
         AgentRole role,
-        bool hasDurableResearch)
+        bool hasDurableResearch,
+        string? contextDirectory)
     {
         var modelFitInstruction = BuildModelFitInstruction(modelFitTarget);
         if (complexity == TaskComplexity.Simple)
@@ -789,7 +796,7 @@ public sealed partial class AgentOrchestratorKernel
                 role == AgentRole.Planner && hasDurableResearch
                     ? "Use the complete Durable Research Notes supplied in the context package; synthesize from them and do not run another broad repository source survey."
                     : "When surveying files, start with source-survey.md in the context directory when present, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.");
-            simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
+            simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role, contextDirectory));
             simpleLines.Add(modelFitInstruction);
             return simpleLines;
         }
@@ -815,7 +822,7 @@ public sealed partial class AgentOrchestratorKernel
                     "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
                     "Prefer source-survey.md in the context directory as the starting repository map before broad recursive file reads."
                 ]);
-        complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
+        complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role, contextDirectory));
         complexLines.Add(modelFitInstruction);
         return complexLines;
     }
