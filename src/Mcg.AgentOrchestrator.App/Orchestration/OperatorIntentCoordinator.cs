@@ -100,7 +100,13 @@ internal sealed partial class OperatorIntentCoordinator
                     var loaded = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
                         .LoadGoalsAsync([new GoalId(goalId)]).GetAwaiter().GetResult();
                     return loaded.Goals.FirstOrDefault();
-                }),
+                },
+                prefix => !File.Exists(workspace.SqliteStatePath) ? [] :
+                    SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                        .ListGoalMetadataAsync().GetAwaiter().GetResult()
+                        .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        .Select(goal => goal.Id).ToArray(),
+                BuildLessonLandedPredicate(workspace.ExecutionDirectory)),
             Escapes = new OperatorEscapeIntentServices(
                 new SqliteOperatorEscapeStore(workspace.OperatorEscapesStorePath),
                 () => File.Exists(workspace.SqliteStatePath)

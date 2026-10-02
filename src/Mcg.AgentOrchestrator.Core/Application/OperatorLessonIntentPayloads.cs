@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record LessonRecordOperatorIntentPayload(
@@ -6,7 +8,8 @@ public sealed record LessonRecordOperatorIntentPayload(
     IReadOnlyList<string> EvidenceReferences,
     IReadOnlyList<string> AppliesTo,
     string? GoalId,
-    string WorkingDirectory);
+    string WorkingDirectory,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? UntilGoal = null);
 
 public sealed record LessonRetireOperatorIntentPayload(
     string LessonId,

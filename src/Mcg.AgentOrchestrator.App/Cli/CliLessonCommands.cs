@@ -12,7 +12,7 @@ internal static class CliLessonCommands
                            args[0].Equals("lessons", StringComparison.OrdinalIgnoreCase));
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
-        TextWriter? output = null)
+        TextWriter? output = null, string? workingDirectory = null)
     {
         try
         {
@@ -30,7 +30,9 @@ internal static class CliLessonCommands
                 else
                     foreach (var lesson in lessons)
                         writer.WriteLine($"{lesson.Id} | {(lesson.RetiredAt is null ? "active" : "retired")} | {lesson.Rule}" +
-                            (lesson.RetiredAt is null ? string.Empty : $" | reason={lesson.RetireReason}"));
+                            (lesson.RetiredAt is null
+                                ? ReviewDueSuffix(lesson, workspace, workingDirectory ?? Environment.CurrentDirectory)
+                                : $" | reason={lesson.RetireReason}"));
                 return 0;
             }
             if (args.Count < 2) throw new ArgumentException(CliCommandHelp.LessonUsage);
@@ -41,12 +43,13 @@ internal static class CliLessonCommands
             if (action == "record")
             {
                 parsed = Parse(args, 2, "--situation", "--rule", "--evidence", "--applies-to",
-                    "--goal", "--actor-kind", "--operator-actor", "--idempotency-key");
+                    "--goal", "--until-goal", "--actor-kind", "--operator-actor", "--idempotency-key");
                 var goal = parsed.One("--goal");
                 payload = new LessonRecordOperatorIntentPayload(
                     parsed.Required("--situation"), parsed.Required("--rule"),
                     parsed.All("--evidence"), parsed.All("--applies-to"),
-                    goal is null ? null : ResolveGoalId(workspace, goal), Environment.CurrentDirectory);
+                    goal is null ? null : ResolveGoalId(workspace, goal),
+                    workingDirectory ?? Environment.CurrentDirectory, parsed.One("--until-goal"));
                 verb = OperatorIntentVerbs.LessonRecord;
             }
             else if (action == "retire")
@@ -80,6 +83,36 @@ internal static class CliLessonCommands
             Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
         }
+    }
+
+    private static string ReviewDueSuffix(OperatorLesson lesson, OrchestratorWorkspace workspace,
+        string workingDirectory)
+    {
+        var resolver = new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory);
+        var changed = new List<string>();
+        foreach (var recorded in lesson.Evidence)
+        {
+            try
+            {
+                Goal? goal = null;
+                if (lesson.GoalId is { } id &&
+                    (recorded.ReceiptId.StartsWith("focused-evidence:", StringComparison.OrdinalIgnoreCase) ||
+                     recorded.ReceiptId.StartsWith("acceptance-attempt:", StringComparison.OrdinalIgnoreCase)) &&
+                    File.Exists(workspace.SqliteStatePath))
+                    goal = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                        .LoadGoalsAsync([new GoalId(id)]).GetAwaiter().GetResult().Goals.FirstOrDefault();
+                if (!resolver.TryResolveForLesson(recorded.ReceiptId, workingDirectory, goal,
+                        out var current, out _))
+                    changed.Add($"evidence-missing {recorded.ReceiptId}");
+                else if (!current.ContentHash.Equals(recorded.ContentHash, StringComparison.Ordinal))
+                    changed.Add(recorded.ReceiptId);
+            }
+            catch (Exception)
+            {
+                changed.Add($"evidence-missing {recorded.ReceiptId}");
+            }
+        }
+        return changed.Count == 0 ? string.Empty : " review-due " + string.Join(" ", changed);
     }
 
     private static string ResolveGoalId(OrchestratorWorkspace workspace, string prefix)
