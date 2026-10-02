@@ -36,7 +36,7 @@ internal sealed partial class ConductorDriver
                     StableIdentity: $"acceptance-apparatus:{failure.BranchHeadSha ?? "unknown"}:{failure.MainHeadSha ?? "unknown"}"));
         }
 
-        var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy);
+        var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified);
         if (sharedAcceptance is not null)
         {
             return sharedAcceptance;
@@ -120,7 +120,7 @@ internal sealed partial class ConductorDriver
                     "Acceptance gate is owned by the conduct loop; reconciliation will handle terminal artifact"));
         }
 
-        return TryRunFallbackAcceptance(goal, goalPrefix, policy) ??
+        return TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verifying) ??
             MakeResult(
                 goal.Id.Value,
                 goalPrefix,
@@ -133,7 +133,8 @@ internal sealed partial class ConductorDriver
     private ConductorAdvanceResult? TryRunFallbackAcceptance(
         Goal goal,
         string goalPrefix,
-        ConductorAutonomyPolicy policy)
+        ConductorAutonomyPolicy policy,
+        GoalLifecycleState callerState)
     {
         if (!_parallelAcceptanceEnabled)
         {
@@ -164,6 +165,25 @@ internal sealed partial class ConductorDriver
         if (candidate is null)
         {
             return null;
+        }
+
+        if (_isConductorTick &&
+            policy.AcceptanceWidth >= ConductorAutonomyPolicy.MinimumAcceptanceWidth &&
+            _parallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count == 0)
+        {
+            // Capture at launch time so attempts started earlier in this tick consume width.
+            var admission = ConductorBatchLoop.DecideFallbackAcceptanceAdmission(
+                _parallelAcceptanceAttemptCoordinator,
+                _conductorTickKernel?.Goals.Where(active => active.Status != GoalStatus.Completed).ToArray() ?? [goal],
+                GetActiveAcceptanceCohortCapacity(),
+                goal.Id.Value,
+                Math.Min(GetAcceptanceSlotCount(goal), policy.AcceptanceWidth),
+                _conductorTick);
+            if (!admission.IsAdmitted)
+            {
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(callerState, admission.Reason));
+            }
         }
 
         ConductorParallelAcceptanceRunAcceptance runAcceptance = _isConductorTick
