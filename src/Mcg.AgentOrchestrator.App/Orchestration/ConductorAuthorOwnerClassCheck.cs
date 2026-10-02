@@ -7,7 +7,8 @@ internal static class ConductorAuthorOwnerClassCheck
     private static readonly OwnerRule[] Rules =
     [
         new("authority-widening", "grant|give|expand|widen|elevate|allow|authorize|self-approve|bypass",
-            @"agents?|authors?|workers?|authority|permissions?|access|scope|approval|gates?|allowlists?", "gave|given"),
+            @"agents?|authors?|workers?|authority|permissions?|access|scope|approval|gates?|allowlists?|unrestricted", "gave|given",
+            capabilityVerbs: "add|let|permit|have|get|receive|make|be"),
         new("acceptance-weakening", "waive|skip|remove|relax|weaken|ignore|disable|lower|drop|omit|bypass",
             @"acceptance|criterion|criteria|gates?|tests?|verification|requirements?|assertions?"),
         new("spend-beyond-budget", "exceed|over|beyond|increase|raise|ignore|override|unlimited|extra",
@@ -20,12 +21,13 @@ internal static class ConductorAuthorOwnerClassCheck
     ];
 
     private static readonly Regex SentenceBoundary = Rule(@"[.!?;](?:\s+|$)|[\r\n]+");
-    private static readonly Regex ClauseBoundary = Rule(@"[,:—(]|\b(?:but|and)\b");
+    private static readonly Regex ClauseBoundary = Rule(@"[,:—(]|\b(?:but|and|since|because|although|though|whereas)\b");
+    private static readonly Regex PronounObject = Rule(@"^\s+(?:it|them|that|those|these)\b");
     private static readonly Regex ImperativePrefix = Rule(@"^\s*(?:(?:please|just|then|so|instead|permanently)\s+){0,3}$");
     private static readonly Regex ProposalPrefix = Rule(
-        @"\b(?:should|may|might|can|could|shall|must|will|['’]ll|let['’]s|let us|propose|recommend|suggest|go ahead and|is (?:fine|ok|okay|acceptable|safe) to|instead(?!\s+of))\s+(?:(?:i|we|you|they|the|agent|author|worker|this|run|goal|just|also|now|simply|safely|permanently|be|to)\s+){0,3}$");
+        @"\b(?:should|may|might|can|could|shall|must|will|['’]ll|let['’]s|let us|propose|recommend|suggest|go ahead and|(?:is|it['’]s|that['’]s) (?:fine|ok|okay|acceptable|safe) to|instead(?!\s+of))\s+(?:(?:i|we|you|they|the|agent|author|worker|this|run|goal|just|also|now|simply|safely|permanently|be|to)\s+){0,3}$");
     private static readonly Regex ActorPrefix = Rule(
-        @"\b(?:i|we|i['’]ve|we['’]ve|the (?:agent|worker|author)|this (?:run|goal))\s+(?:(?:have|has|had|just|already|now|permanently)\s+){0,3}$");
+        @"\b(?:i|we|i['’]ve|we['’]ve|the (?:agent|worker|author)|this (?:run|goal))\s+(?:(?:have|has|had|would|just|already|now|permanently)\s+){0,3}$");
     private static readonly Regex Actor = Rule(@"\b(?:i|we|the (?:agent|worker|author)|this (?:run|goal))\b");
     private static readonly Regex PassivePrefix = Rule(@"\b(?:is|are|was|were|has been|have been|will be)\s+(?:(?:now|already)\s+){0,2}$");
     private static readonly Regex RunScope = Rule(@"\b(?:now|for this (?:run|goal|task)|in this run|on this branch)\b");
@@ -36,8 +38,15 @@ internal static class ConductorAuthorOwnerClassCheck
     {
         foreach (var text in new[] { question, answer })
         foreach (var rule in Rules)
-        foreach (var sentence in SentenceBoundary.Split(text ?? string.Empty))
-            if (RequiresOwner(sentence, rule)) return rule.Reason;
+        {
+            var previousSentence = string.Empty;
+            foreach (var sentence in SentenceBoundary.Split(text ?? string.Empty))
+            {
+                if (string.IsNullOrWhiteSpace(sentence)) continue;
+                if (RequiresOwner(sentence, previousSentence, rule)) return rule.Reason;
+                previousSentence = sentence;
+            }
+        }
 
         if (evidenceReferences is null || evidenceReferences.Count == 0 ||
             evidenceReferences.Any(reference => string.IsNullOrWhiteSpace(reference) ||
@@ -46,13 +55,22 @@ internal static class ConductorAuthorOwnerClassCheck
         return null;
     }
 
-    private static bool RequiresOwner(string sentence, OwnerRule rule)
+    private static bool RequiresOwner(string sentence, string previousSentence, OwnerRule rule)
     {
         var hasObject = rule.Objects.IsMatch(sentence);
         var markers = rule.Markers?.Matches(sentence).Cast<Match>().ToArray() ?? [];
         var actions = rule.Actions.Matches(sentence).Cast<Match>()
-            .Where(action => hasObject || markers.Any(marker => action.Index >= marker.Index &&
-                action.Index + action.Length <= marker.Index + marker.Length)).ToArray();
+            .Where(action => hasObject ||
+                (rule.Objects.IsMatch(previousSentence) &&
+                    PronounObject.IsMatch(sentence[(action.Index + action.Length)..])) ||
+                markers.Any(marker => action.Index >= marker.Index &&
+                    action.Index + action.Length <= marker.Index + marker.Length))
+            // These budget cues are quantities/prepositions, not verbs: "uniform
+            // over the result" does not act on the budget mentioned in its subject.
+            .Where(action => !Regex.IsMatch(action.Value, @"^(?:over|beyond|unlimited|extra)$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+                rule.Objects.IsMatch(sentence[(action.Index + action.Length)..]))
+            .ToArray();
         if (actions.Length == 0 && markers.Length == 0) return false;
 
         foreach (var action in actions)
@@ -71,20 +89,32 @@ internal static class ConductorAuthorOwnerClassCheck
                 ProposalPrefix.IsMatch(prefix) || ActorPrefix.IsMatch(prefix) ||
                 (PassivePrefix.IsMatch(prefix) && RunScope.IsMatch(sentence)))
                 return true;
+
+            var suffixBoundary = ClauseBoundary.Match(sentence, action.Index + action.Length);
+            var clause = clausePrefix + sentence[action.Index..(suffixBoundary.Success
+                ? suffixBoundary.Index : sentence.Length)];
+            if (Risk.IsMatch(clause)) continue;
+            if (!Actor.IsMatch(clause) && (rule.ThirdPersonActions.IsMatch(action.Value) ||
+                PassivePrefix.IsMatch(prefix))) continue;
+
+            // Unclassified action language fails closed. Negation or risk in an
+            // unrelated clause cannot suppress this action.
+            return true;
         }
 
-        // These cues describe or reject a candidate, rather than authorizing it. A
-        // separate proposal in the sentence already won above; another sentence is
-        // evaluated independently, so a description cannot hide a later proposal.
-        if (Negation.IsMatch(sentence) || Risk.IsMatch(sentence)) return false;
-        if (!Actor.IsMatch(sentence) && actions.Length > 0 &&
-            actions.All(action => rule.ThirdPersonActions.IsMatch(action.Value) ||
-                PassivePrefix.IsMatch(sentence[..action.Index])))
-            return false;
-
-        // Unclassified owner-class language needs an owner, including fragmentary
-        // proposals such as "Skipping the acceptance test".
-        return true;
+        if (actions.Length > 0) return false;
+        // Standalone irreversible markers can also be risk descriptions. Scope
+        // their descriptive cues to their clause just as for action verbs.
+        foreach (var marker in markers)
+        {
+            var prefix = sentence[..marker.Index];
+            var boundaries = ClauseBoundary.Matches(prefix);
+            var start = boundaries.Count == 0 ? 0 : boundaries[^1].Index + boundaries[^1].Length;
+            var suffixBoundary = ClauseBoundary.Match(sentence, marker.Index + marker.Length);
+            var clause = sentence[start..(suffixBoundary.Success ? suffixBoundary.Index : sentence.Length)];
+            if (!Negation.IsMatch(clause) && !Risk.IsMatch(clause)) return true;
+        }
+        return false;
     }
 
     private sealed class OwnerRule
@@ -96,15 +126,24 @@ internal static class ConductorAuthorOwnerClassCheck
         internal Regex Objects { get; }
         internal Regex? Markers { get; }
 
-        internal OwnerRule(string reason, string verbs, string objects, string irregular = "", string? markers = null)
+        internal OwnerRule(string reason, string verbs, string objects, string irregular = "", string? markers = null,
+            string? capabilityVerbs = null)
         {
             Reason = reason;
             var bases = verbs.Split('|');
-            BaseActions = Rule(@"^(?:" + string.Join('|', bases.Select(VerbPattern)) + @")$");
-            ThirdPersonActions = Rule(@"^(?:" + string.Join('|', bases.Select(verb =>
-                VerbPattern(verb) + (NeedsEs(verb) ? "es" : "s"))) + @")$");
+            var capabilities = capabilityVerbs?.Split('|') ?? [];
+            var allBases = bases.Concat(capabilities).ToArray();
+            BaseActions = Rule(@"^(?:" + string.Join('|', allBases.Select(VerbPattern)) + @")$");
+            ThirdPersonActions = Rule(@"^(?:" + string.Join('|', allBases.Select(verb =>
+                VerbPattern(verb) + (NeedsEs(verb) ? "es" : "s"))) +
+                (capabilityVerbs is null ? "" : "|has|is|are|was|were") + @")$");
             var forms = bases.Select(Inflections).ToList();
             if (irregular.Length > 0) forms.Add(irregular);
+            if (capabilities.Length > 0)
+                // Bind acquisition verbs to a capability phrase, rather than an
+                // unrelated object such as "Add a test covering agent permission".
+                forms.Add("(?:" + string.Join('|', capabilities.Select(Inflections)) +
+                    @")(?=\s+(?:(?:the|a|an|agent|author|worker|agents|authors|workers|have|be|read|write|full|network|root|admin|additional|extra|elevated|broader|wider|more|unrestricted|new)\s+){0,6}(?:unrestricted|permissions?|authority|access|self-approve|bypass)\b)");
             Actions = Rule(@"\b(?:" + string.Join('|', forms) + @")\b");
             Objects = Rule(@"\b(?:" + objects + @")\b");
             Markers = markers is null ? null : Rule(@"\b(?:" + markers + @")\b");
@@ -119,10 +158,15 @@ internal static class ConductorAuthorOwnerClassCheck
         {
             var pattern = VerbPattern(verb);
             if (verb == "give") return @"give(?:s|n)?|giving";
+            if (verb == "make") return @"make(?:s)?|made|making";
+            if (verb == "have") return @"have|has|had|having";
+            if (verb == "be") return @"be|is|are|was|were|been|being";
+            if (verb == "get") return @"get(?:s|ting)?|got";
+            if (verb == "let") return @"let(?:s|ting)?";
             if (verb.EndsWith('e')) return pattern + @"(?:s|d)?|" + VerbPattern(verb[..^1]) + "ing";
             if (verb == "hard-reset") return pattern + @"(?:s)?|" + pattern + "ting";
             if (NeedsEs(verb)) return pattern + @"(?:es|ed|ing)?";
-            if (verb is "skip" or "drop" or "omit")
+            if (verb is "skip" or "drop" or "omit" or "permit")
                 return pattern + @"(?:s)?|" + pattern + Regex.Escape(verb[^1..]) + @"(?:ed|ing)";
             return pattern + @"(?:s|ed|ing)?";
         }
