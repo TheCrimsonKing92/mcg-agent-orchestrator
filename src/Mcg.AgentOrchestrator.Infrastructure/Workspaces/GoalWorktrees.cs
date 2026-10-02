@@ -33,7 +33,8 @@ public sealed record GoalWorktreeRebaseResult(
     IReadOnlyList<string> ConflictFiles,
     string? SuggestedCommand,
     IReadOnlyList<string>? RematerializedFiles = null,
-    string? PreimageDirectory = null)
+    string? PreimageDirectory = null,
+    string? Detail = null)
 {
     public bool UpdatedBranch => Status == GoalWorktreeRebaseStatus.Rebased ||
         Status == GoalWorktreeRebaseStatus.AlreadyFastForwardable;
