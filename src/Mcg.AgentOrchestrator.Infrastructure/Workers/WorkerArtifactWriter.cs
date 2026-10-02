@@ -238,6 +238,11 @@ internal sealed partial class WorkerArtifactWriter
         }
 
         lines.Add(string.Empty);
+        if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer)
+        {
+            AddDeveloperCriteriaSelfCheck(lines, goal.Tasks);
+            lines.Add(string.Empty);
+        }
         lines.Add("## Evidence Pointers");
         lines.Add("- current-task.md: current task brief and verification plan.");
         lines.Add("- objective.md: full goal objective.");
@@ -276,6 +281,26 @@ internal sealed partial class WorkerArtifactWriter
         }
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static void AddDeveloperCriteriaSelfCheck(List<string> lines, IReadOnlyList<TaskSpec> tasks)
+    {
+        lines.Add("## Developer Criteria Self-Check");
+        var developer = tasks.Where(t => t.RequiredRole == AgentRole.Developer && t.Status == WorkTaskStatus.Completed)
+            .OrderByDescending(t => t.LastVerification?.CompletedAt)
+            .FirstOrDefault();
+        var verification = developer?.LastVerification;
+        var result = DeveloperCriteriaSelfCheck.ParseWorkerOutput(
+            verification?.AuthoritativeStandardOutput ?? verification?.StandardOutput);
+        if (result.State == DeveloperSelfCheckFieldState.Missing)
+            lines.Add("- criteria_self_check field=missing in the latest completed Developer round.");
+        else if (result.State == DeveloperSelfCheckFieldState.Malformed)
+            lines.Add($"- criteria_self_check field=malformed in the latest completed Developer round: {result.Reason}");
+        else if (result.Entries.Count == 0)
+            lines.Add("- criteria_self_check field=present with no entries.");
+        else
+            foreach (var entry in result.Entries)
+                lines.Add($"- criterion_index={entry.CriterionIndex} status={entry.StatusText} evidence={DeveloperCriteriaSelfCheck.OneLine(entry.Evidence)}");
     }
 
     private static string BuildCurrentTask(
