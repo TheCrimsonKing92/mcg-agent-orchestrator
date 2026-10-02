@@ -35,6 +35,7 @@ internal static class CliOwnerDigestRounds
     {
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         var root = JsonSerializer.SerializeToNode(digest, options)!.AsObject();
+        CliOwnerDigestCommand.AddEscapeSources(root, digest);
         root["rounds"] = JsonSerializer.SerializeToNode(Aggregate(digest, goals), options);
         writer.WriteLine(root.ToJsonString(options));
     }
