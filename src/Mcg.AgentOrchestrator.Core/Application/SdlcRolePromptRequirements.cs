@@ -16,9 +16,9 @@ internal static class SdlcRolePromptRequirements
         "- RECEIPT-FIRST: Inspect/cite. Pass iff candidate SHA/proven equivalent worktree/dispatch + `test_project`/`test_class` match; close covered/no repeat. Missing/stale/mismatched/unreadable=unproven; evidence > stale narrative.";
     private const string TesterCompactInconclusiveReceiptContract =
         "- Timeout/killed/no-results is inconclusive, not a pass. Rerun only on changed execution; only `test_project` and `test_class` define that selection. unsupported fields; cosmetic selector differences don't; full-gate/operator/acceptance owns rest. Never extend deadline/invent cause.";
-    internal const int ReviewerComplexRequirementsMaxChars = 4371;
+    internal const int ReviewerComplexRequirementsMaxChars = 4437;
     internal const int ReviewerCompactRequirementsMaxChars = 3346;
-    internal const int TesterCompactRequirementsMaxChars = 3000;
+    internal const int TesterCompactRequirementsMaxChars = 3066;
 
     private const string ReviewerExhaustiveFindingsContract =
         "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
@@ -116,7 +116,7 @@ internal static class SdlcRolePromptRequirements
                 "- A not-met criterion is a blocking finding with `category: spec-compliance`. If a criterion contradicts the pre-change contract observable on main, report `category: spec-defect` so it escalates to the operator instead of enforcing it against the implementation.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
                 "### 2. Code quality (only after section 1)",
-                "- Review findings first by severity. Cover every in-scope changed file end-to-end; state coverage or gaps. Later SHALLOW findings on unchanged code are coverage defects; DEEPER review (concurrency, durability, fault ordering, security) is desired. Never withhold an identified finding.",
+                "- Review in code-review form: findings first, ordered by severity. First-review breadth must cover every in-scope changed file end-to-end; state coverage or name exactly what you could not examine. A SHALLOW later-round finding on unchanged code is a coverage defect; going DEEPER later (concurrency, durability, fault ordering, security) is desired. Never withhold an identified finding.",
                 "- For independent scope checks use git diff main...HEAD; do not use two-dot, HEAD-only, status, or working-tree-only comparisons. Branch-behind-main alone is NOT a blocker; require concrete merge conflict, semantic overlap, or non-applying diff evidence, otherwise record staleness as advisory.",
                 "- Ignore generated bin/obj output unless the reviewed change explicitly targets generated artifacts.",
                 "- Challenge generic summaries by checking implementation evidence against verification evidence before accepting.",
@@ -254,7 +254,7 @@ internal static class SdlcRolePromptRequirements
                 NegativeControlRequestRule,
                 TesterCompactReceiptFirstContract,
                 TesterCompactInconclusiveReceiptContract,
-                "- PRIMARY PATH: prefer Conductor runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming work. The Conductor sends receipts. Execute directly only if selection cannot settle it.",
+                "- PRIMARY PATH: prefer Conductor-side runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming requested work. The Conductor returns receipts. Execute directly only if selection cannot settle it.",
                 "- A Developer-owned finding still waiting on execution MUST carry `evidence_request`; the conductor runs it once per candidate before re-dispatching Developer. In `evidence_index`, `state=pending-execution` means no run exists for that `candidate_sha` and is NOT a pass; `state=executed-on-candidate` means the receipt for that exact candidate exists. Never call the source correct, or resolve a finding, from narrative or a run that did not happen.",
                 "- Derive focused checks from requested behavior; report concrete evidence.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
