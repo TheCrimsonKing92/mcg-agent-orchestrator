@@ -254,7 +254,8 @@ public sealed partial class CohortAcceptanceStore
         string pairFingerprint,
         GoalId? innocentGoalId,
         IReadOnlyList<AcceptanceCohortAttributedMember>? attributedMembers = null,
-        IReadOnlyList<AcceptanceCohortUnrelatedFailure>? unrelatedFailures = null)
+        IReadOnlyList<AcceptanceCohortUnrelatedFailure>? unrelatedFailures = null,
+        string? attributionSource = null)
     {
         ArgumentNullException.ThrowIfNull(partitions);
         if (partitions.Count != 2 ||
@@ -296,11 +297,12 @@ public sealed partial class CohortAcceptanceStore
         using (var update = connection.CreateCommand())
         {
             update.Transaction = transaction;
-            update.CommandText = "UPDATE cohort_receipts SET attribution=$attribution, attributed_members_json=$members, unrelated_failures_json=$unrelated WHERE cohort_id=$cohort AND outcome='Failed';";
+            update.CommandText = "UPDATE cohort_receipts SET attribution=$attribution, attributed_members_json=$members, unrelated_failures_json=$unrelated, attribution_source=$source WHERE cohort_id=$cohort AND outcome='Failed';";
             update.Parameters.AddWithValue("$cohort", cohortId);
             update.Parameters.AddWithValue("$attribution", attribution.ToString());
             update.Parameters.AddWithValue("$members", JsonSerializer.Serialize(attributedMembers ?? []));
             update.Parameters.AddWithValue("$unrelated", JsonSerializer.Serialize(unrelatedFailures ?? []));
+            update.Parameters.AddWithValue("$source", (object?)attributionSource ?? DBNull.Value);
             if (update.ExecuteNonQuery() != 1)
             {
                 throw new InvalidOperationException("Attribution can update only one persisted deterministic RED cohort receipt.");
@@ -1036,6 +1038,7 @@ public sealed partial class CohortAcceptanceStore
         EnsureColumn(connection, "cohort_receipts", "gate_evidence_artifacts_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "attributed_members_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "unrelated_failures_json", "TEXT NOT NULL DEFAULT '[]'");
+        EnsureColumn(connection, "cohort_receipts", "attribution_source", "TEXT NULL");
         EnsureColumn(connection, "cohort_landing_intents", "prior_integration_revision", "TEXT NULL");
         EnsureReusablePartitionReceiptSchema(connection);
         EnsureColumn(connection, "cohort_partition_receipts", "failed_checks_json", "TEXT NULL");
@@ -1118,7 +1121,7 @@ public sealed partial class CohortAcceptanceStore
                    attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
                    infrastructure_reason_code, infrastructure_detail,
                    gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json,
-                   attributed_members_json, unrelated_failures_json
+                   attributed_members_json, unrelated_failures_json, attribution_source
             FROM cohort_receipts WHERE cohort_id=$cohort;
             """;
         command.Parameters.AddWithValue("$cohort", cohortId);
@@ -1152,6 +1155,7 @@ public sealed partial class CohortAcceptanceStore
         var gateEvidenceArtifacts = JsonSerializer.Deserialize<AcceptanceCohortEvidenceArtifact[]>(reader.GetString(14)) ?? [];
         var attributedMembers = JsonSerializer.Deserialize<AcceptanceCohortAttributedMember[]>(reader.GetString(15)) ?? [];
         var unrelatedFailures = JsonSerializer.Deserialize<AcceptanceCohortUnrelatedFailure[]>(reader.GetString(16)) ?? [];
+        var attributionSource = reader.IsDBNull(17) ? null : reader.GetString(17);
         reader.Close();
 
         using var membersCommand = connection.CreateCommand();
@@ -1237,7 +1241,8 @@ public sealed partial class CohortAcceptanceStore
             GateEvidenceArtifacts = gateEvidenceArtifacts,
             Invalidation = invalidation,
             AttributedMembers = attributedMembers,
-            UnrelatedFailures = unrelatedFailures
+            UnrelatedFailures = unrelatedFailures,
+            AttributionSource = attributionSource
         };
     }
 

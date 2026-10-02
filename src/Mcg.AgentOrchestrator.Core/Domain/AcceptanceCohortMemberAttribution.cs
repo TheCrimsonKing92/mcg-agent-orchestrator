@@ -19,6 +19,12 @@ public sealed partial record AcceptanceCohortPartitionReceipt
 
 public sealed partial record AcceptanceCohortReceipt
 {
+    public string? AttributionSource { get; init; }
     public IReadOnlyList<AcceptanceCohortAttributedMember> AttributedMembers { get; init; } = [];
     public IReadOnlyList<AcceptanceCohortUnrelatedFailure> UnrelatedFailures { get; init; } = [];
+}
+
+public static class AcceptanceCohortAttributionSources
+{
+    public const string FocusedPass = "focused-pass";
 }
