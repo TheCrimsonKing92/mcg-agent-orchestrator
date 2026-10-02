@@ -3315,11 +3315,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotLease);
         stableSlotLease?.ReleaseExecutionLock();
 
-        var telemetry = ResolveTestTelemetry(
+        var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveTestTelemetry(
             check,
             environment,
+            AcceptanceAttemptResultsPrefix,
+            _invocationContext,
             testResultsDirectoryOverride);
-        PrepareTestTelemetryForRun(telemetry);
+        GoalAcceptanceVerifierTestTelemetry.PrepareTestTelemetryForRun(telemetry);
         var arguments = BuildMtpTestArguments(check, EngineSettings, executableEnvironment ?? environment, telemetry, NeedsUnattendedHostIntegrationExclusion(check), TranslateCheckMtpFilter);
         ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
         var result = await RunLaneTestHostWithShardPermitAsync(
@@ -3331,11 +3333,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         elapsed.Stop();
         var processPassed = !IsInterrupted(result) && result.ExitCode == 0;
-        EmitMissingTrxReceiptIfNeeded(processPassed, telemetry);
-        var trxEvidence = InspectTrxCompletionEvidence(telemetry.Paths);
+        GoalAcceptanceVerifierTestTelemetry.EmitMissingTrxReceiptIfNeeded(processPassed, telemetry);
+        var trxEvidence = GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(telemetry.Paths);
         var executedTestCount = trxEvidence.ExecutedTestCount;
         var selectionCoverage = check.IsFocusedEvidenceSelection && executedTestCount != 0
-            ? InspectFocusedEvidenceSelectionCoverage(check.FocusedEvidenceSelections, telemetry.Paths)
+            ? GoalAcceptanceVerifierTestTelemetry.InspectFocusedEvidenceSelectionCoverage(check.FocusedEvidenceSelections, telemetry.Paths)
             : FocusedEvidenceSelectionCoverage.Empty;
         var uncoveredSelections = selectionCoverage.UncoveredSelections;
         var unreadableReceipts = selectionCoverage.UnreadableReceiptPaths;
@@ -3346,7 +3348,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ? AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable
                 : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
             : null;
-        var completionDecision = DecideTestShardCompletion(
+        var completionDecision = GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
             result,
             trxEvidence,
             policyFailure,
@@ -3354,8 +3356,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var passed = completionDecision.Passed;
         IReadOnlyList<string> failingTestIdentities = passed || zeroTestApparatusFailure
             ? []
-            : ExtractTrxFailureIdentities(telemetry.Paths);
-        var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(
+            : GoalAcceptanceVerifierTestTelemetry.ExtractTrxFailureIdentities(telemetry.Paths);
+        var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
             telemetry.Paths,
             _executionContext?.ResultsPrefix);
         PreserveLaunchLockSummary(result, telemetry.Paths[0], AcceptanceAttemptResultsPrefix);
@@ -3779,14 +3781,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // A testhost can exit non-zero on SHUTDOWN ("host process exited unexpectedly") even after every
             // test passed. Honor the run's own Passed!/Failed:0 summary so a benign shutdown abort does not
             // block a green goal, while never masking a build/compile failure and still surfacing the tail.
-            var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+            var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveDotnetTestTelemetry(arguments, check, environment, AcceptanceAttemptResultsPrefix, _invocationContext);
             var reportedAllPassed = telemetry is not null &&
                 !IsInterrupted(result) && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-            EmitMissingTrxReceiptIfNeeded(!IsInterrupted(result) && (result.ExitCode == 0 || reportedAllPassed), telemetry);
-            var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
+            GoalAcceptanceVerifierTestTelemetry.EmitMissingTrxReceiptIfNeeded(!IsInterrupted(result) && (result.ExitCode == 0 || reportedAllPassed), telemetry);
+            var trxEvidence = GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(telemetry?.Paths);
             var completionDecision = telemetry is null
-                ? DecideNonTestCommandCompletion(result)
-                : DecideTestShardCompletion(
+                ? GoalAcceptanceVerifierTestTelemetry.DecideNonTestCommandCompletion(result)
+                : GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
                     result,
                     trxEvidence,
                     policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
@@ -3795,8 +3797,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
-                : ExtractTrxFailureIdentities(telemetry?.Paths);
-            var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(
+                : GoalAcceptanceVerifierTestTelemetry.ExtractTrxFailureIdentities(telemetry?.Paths);
+            var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
             return (new AcceptanceCheckResult(
@@ -3867,14 +3869,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             elapsed.Stop();
-            var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+            var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveDotnetTestTelemetry(arguments, check, environment, AcceptanceAttemptResultsPrefix, _invocationContext);
             var reportedAllPassed = telemetry is not null &&
                 !IsInterrupted(result) && result.ExitCode != 0 && TestRunReportsAllPassed(result.Output);
-            EmitMissingTrxReceiptIfNeeded(!IsInterrupted(result) && (result.ExitCode == 0 || reportedAllPassed), telemetry);
-            var trxEvidence = InspectTrxCompletionEvidence(telemetry?.Paths);
+            GoalAcceptanceVerifierTestTelemetry.EmitMissingTrxReceiptIfNeeded(!IsInterrupted(result) && (result.ExitCode == 0 || reportedAllPassed), telemetry);
+            var trxEvidence = GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(telemetry?.Paths);
             var completionDecision = telemetry is null
-                ? DecideNonTestCommandCompletion(result)
-                : DecideTestShardCompletion(
+                ? GoalAcceptanceVerifierTestTelemetry.DecideNonTestCommandCompletion(result)
+                : GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
                     result,
                     trxEvidence,
                     policySignal: reportedAllPassed ? "testhost-shutdown-all-passed" : null,
@@ -3883,8 +3885,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = completionDecision.Passed;
             IReadOnlyList<string> failingTestIdentities = passed
                 ? []
-                : ExtractTrxFailureIdentities(telemetry?.Paths);
-            var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(
+                : GoalAcceptanceVerifierTestTelemetry.ExtractTrxFailureIdentities(telemetry?.Paths);
+            var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
             return (new AcceptanceCheckResult(
@@ -4325,7 +4327,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
+        var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveDotnetTestTelemetry(arguments, check, environment, AcceptanceAttemptResultsPrefix, _invocationContext);
         var effectiveArguments = WithBuildEnvironmentArguments(telemetry?.Arguments ?? arguments, environment);
         ReapRecordedGateChildBeforeManagedDotnetCommand(check, environment, goalId, stableSlotIndex);
         return await RunLaneTestHostWithShardPermitAsync(
@@ -5307,7 +5309,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool UsesMicrosoftTestingPlatform(AcceptanceManifestCheck check) =>
         AcceptanceCheckCommandBuilder.UsesMicrosoftTestingPlatform(check);
 
-    private static bool IsDotnetTestCommand(string[] arguments) =>
+    internal static bool IsDotnetTestCommand(string[] arguments) =>
         AcceptanceCheckCommandBuilder.IsDotnetTestCommand(arguments);
 
     private static string[] UseDotnetHostForManagedExecutable(IReadOnlyList<string> arguments) =>
@@ -5322,34 +5324,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string[] WithBuildEnvironmentArguments(string[] arguments, DotnetBuildEnvironment environment) =>
         AcceptanceCheckCommandBuilder.WithBuildEnvironmentArguments(arguments, environment);
 
-    private DotnetTestTelemetry? ResolveDotnetTestTelemetry(
-        string[] arguments,
-        AcceptanceManifestCheck check,
-        DotnetBuildEnvironment environment)
-    {
-        if (!IsDotnetTestCommand(arguments))
-        {
-            return null;
-        }
-
-        return ResolveTestTelemetry(check, environment) with
-        {
-            Arguments = AddVstestTelemetryArguments(arguments, check, environment)
-        };
-    }
-
-    private DotnetTestTelemetry ResolveTestTelemetry(
-        AcceptanceManifestCheck check,
-        DotnetBuildEnvironment environment,
-        string? resultsDirectoryOverride = null) =>
-        ResolveTestTelemetryCore(
-            check,
-            environment,
-            AcceptanceAttemptResultsPrefix,
-            _invocationContext?.Ordinal ?? 0,
-            resultsDirectoryOverride);
-
-    private static DotnetTestTelemetry ResolveTestTelemetryCore(
+    internal static DotnetTestTelemetry ResolveTestTelemetryCore(
         AcceptanceManifestCheck check,
         DotnetBuildEnvironment environment,
         string? attemptPrefix,
@@ -5375,314 +5350,19 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new DotnetTestTelemetry([path], []);
     }
 
-    private static void PrepareTestTelemetryForRun(DotnetTestTelemetry telemetry)
-    {
-        foreach (var path in telemetry.Paths)
-        {
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                File.Delete(path);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw new IOException($"Unable to clear stale TRX before the test run: {path}", ex);
-            }
-
-            if (File.Exists(path))
-            {
-                throw new IOException($"Unable to clear stale TRX before the test run: {path}");
-            }
-        }
-    }
-
     internal static IReadOnlyList<string>? CopyCompletedTestReceiptsToAttemptFolder(
         IReadOnlyList<string>? sourcePaths,
-        string? attemptPrefix)
-    {
-        if (sourcePaths is null)
-        {
-            return null;
-        }
+        string? attemptPrefix) =>
+        GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(sourcePaths, attemptPrefix);
 
-        if (string.IsNullOrWhiteSpace(attemptPrefix))
-        {
-            return sourcePaths;
-        }
+    internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath) =>
+        AcceptanceTrxOutcomeTaxonomy.ExtractTrxFailureEvidence(trxPath);
 
-        var receiptDirectory = Path.GetDirectoryName(attemptPrefix);
-        if (string.IsNullOrWhiteSpace(receiptDirectory))
-        {
-            throw new InvalidOperationException(
-                $"Acceptance attempt TRX prefix '{attemptPrefix}' does not identify an attempt receipt folder.");
-        }
+    internal static IReadOnlyList<string> ExtractTrxFailureIdentities(string trxPath) =>
+        AcceptanceTrxTestIdentityResolver.ExtractTrxFailureIdentities(trxPath);
 
-        var durablePaths = new string[sourcePaths.Count];
-        for (var index = 0; index < sourcePaths.Count; index++)
-        {
-            var sourcePath = sourcePaths[index];
-            if (!File.Exists(sourcePath))
-            {
-                durablePaths[index] = sourcePath;
-                continue;
-            }
-
-            var destinationPath = Path.Combine(receiptDirectory, Path.GetFileName(sourcePath));
-            try
-            {
-                Directory.CreateDirectory(receiptDirectory);
-                if (!sourcePath.Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
-                    File.Copy(sourcePath, temporaryPath, overwrite: true);
-                    File.Move(temporaryPath, destinationPath, overwrite: true);
-                }
-
-                durablePaths[index] = destinationPath;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw new IOException(
-                    $"Failed to preserve completed test receipt from '{sourcePath}' to attempt folder '{destinationPath}'.",
-                    ex);
-            }
-        }
-
-        return durablePaths;
-    }
-
-    private string[] AddVstestTelemetryArguments(
-        string[] arguments,
-        AcceptanceManifestCheck check,
-        DotnetBuildEnvironment environment)
-    {
-        var telemetry = ResolveTestTelemetry(check, environment);
-        var directory = Path.GetDirectoryName(telemetry.Paths[0]) ?? Path.Combine(environment.ArtifactsPath, "TestResults");
-        var fileName = Path.GetFileName(telemetry.Paths[0]);
-        var effectiveArguments = new List<string>(arguments)
-        {
-            "--logger",
-            $"trx;LogFileName={fileName}",
-            "--results-directory",
-            directory
-        };
-
-        return [.. effectiveArguments];
-    }
-
-    private static void EmitMissingTrxReceiptIfNeeded(bool passed, DotnetTestTelemetry? telemetry)
-    {
-        if (!passed || telemetry is null)
-        {
-            return;
-        }
-
-        var missing = telemetry.Paths
-            .Where(path => TryGetFileLength(path) <= 0)
-            .ToArray();
-        if (missing.Length == 0)
-        {
-            return;
-        }
-
-        Console.WriteLine($"TRX_TELEMETRY_UNAVAILABLE paths={QuoteProgressToken(string.Join(";", missing))}");
-        Console.Out.Flush();
-    }
-
-    internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath)
-    {
-        var document = XDocument.Load(trxPath, LoadOptions.None);
-        var definitionsByTestId = document
-            .Descendants()
-            .Where(element =>
-                element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
-                !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
-            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        return document
-            .Descendants()
-            .Where(element =>
-                element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                string.Equals(
-                    element.Attribute("outcome")?.Value,
-                    "Failed",
-                    StringComparison.OrdinalIgnoreCase))
-            .Select(result =>
-            {
-                definitionsByTestId.TryGetValue(
-                    result.Attribute("testId")?.Value ?? string.Empty,
-                    out var definition);
-                var testName = AcceptanceTrxTestIdentityResolver.Resolve(result, definition)
-                    ?? result.Attribute("testId")?.Value?.Trim()
-                    ?? "unknown test";
-                var message = result
-                    .Descendants()
-                    .FirstOrDefault(element =>
-                        element.Name.LocalName.Equals("Message", StringComparison.Ordinal) &&
-                        element.Ancestors().Any(ancestor =>
-                            ancestor.Name.LocalName.Equals("ErrorInfo", StringComparison.Ordinal)))
-                    ?.Value;
-                return $"[FAIL] {testName}: {FirstNonEmptyLine(message) ?? "failure message unavailable"}";
-            })
-            .ToArray();
-    }
-
-    internal static IReadOnlyList<string> ExtractTrxFailureIdentities(string trxPath)
-    {
-        var document = XDocument.Load(trxPath, LoadOptions.None);
-        var definitionsByTestId = document
-            .Descendants()
-            .Where(element =>
-                element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
-                !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
-            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        return document
-            .Descendants()
-            .Where(element =>
-                element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
-                AcceptanceTrxOutcomeTaxonomy.IsFatal(element.Attribute("outcome")?.Value))
-            .Select(result =>
-            {
-                definitionsByTestId.TryGetValue(
-                    result.Attribute("testId")?.Value ?? string.Empty,
-                    out var definition);
-                return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
-                    result.Attribute("testId")?.Value?.Trim() ??
-                    "unknown test";
-            })
-            .Where(identity => !string.IsNullOrWhiteSpace(identity))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-    }
-
-    private static IReadOnlyList<string> ExtractTrxFailureIdentities(IEnumerable<string>? trxPaths)
-    {
-        if (trxPaths is null)
-        {
-            return [];
-        }
-
-        var identities = new List<string>();
-        foreach (var trxPath in trxPaths.Where(File.Exists))
-        {
-            try
-            {
-                identities.AddRange(ExtractTrxFailureIdentities(trxPath));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
-            {
-                // An unreadable receipt is evidence-inconclusive. Never infer a code failure from its output tail.
-            }
-        }
-
-        return identities
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-    }
-
-    private static TrxCompletionEvidence InspectTrxCompletionEvidence(IEnumerable<string>? trxPaths)
-    {
-        var paths = trxPaths?.ToArray() ?? [];
-        if (paths.Length == 0 || paths.All(path => !File.Exists(path)))
-        {
-            return new TrxCompletionEvidence(null, null, null, "missing", false, AcceptanceShardCompletionPredicates.MissingTrx);
-        }
-
-        var discovered = 0;
-        var executed = 0;
-        var notExecuted = 0;
-        var sawReceipt = false;
-        var allPassed = true;
-        AcceptanceAssemblyCleanupEvidence.RowCounts cleanupCounts = default;
-        var outcomes = new List<string>();
-        foreach (var path in paths.Where(File.Exists))
-        {
-            try
-            {
-                var document = XDocument.Load(path, LoadOptions.None);
-                var counters = document.Descendants().FirstOrDefault(element =>
-                    element.Name.LocalName.Equals("Counters", StringComparison.Ordinal));
-                var results = document.Descendants().Where(element =>
-                    element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal)).ToArray();
-                var definitions = document.Descendants().Count(element =>
-                    element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal));
-                var receiptDiscovered = TryReadTrxCounter(counters, "total") ?? definitions;
-                var receiptExecuted = TryReadTrxCounter(counters, "executed") ?? results.Length;
-                var receiptNotExecuted = TryReadTrxCounter(counters, "notExecuted") ?? 0;
-                var resultSummary = document.Descendants().FirstOrDefault(element =>
-                    element.Name.LocalName.Equals("ResultSummary", StringComparison.Ordinal));
-                var summaryOutcome = resultSummary?.Attribute("outcome")?.Value;
-                var receiptPassed = IsPassingTrxReceipt(summaryOutcome, counters, results);
-                cleanupCounts = cleanupCounts.Add(AcceptanceAssemblyCleanupEvidence.Classify(results));
-
-                sawReceipt = true;
-                discovered = checked(discovered + receiptDiscovered);
-                executed = checked(executed + receiptExecuted);
-                notExecuted = checked(notExecuted + receiptNotExecuted);
-                allPassed &= receiptPassed;
-                outcomes.Add(string.IsNullOrWhiteSpace(summaryOutcome) ? "results-only" : summaryOutcome);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or OverflowException)
-            {
-                return new TrxCompletionEvidence(null, null, null, "malformed", false, AcceptanceShardCompletionPredicates.MalformedTrx);
-            }
-        }
-
-        if (!sawReceipt)
-        {
-            return new TrxCompletionEvidence(null, null, null, "missing", false, AcceptanceShardCompletionPredicates.MissingTrx);
-        }
-
-        return new TrxCompletionEvidence(
-            discovered,
-            executed,
-            notExecuted,
-            string.Join('+', outcomes.Distinct(StringComparer.OrdinalIgnoreCase)),
-            allPassed,
-            null,
-            outcomes.Count == paths.Length && cleanupCounts.IsCleanupOnly);
-    }
-
-    private static bool IsPassingTrxReceipt(
-        string? summaryOutcome,
-        XElement? counters,
-        IReadOnlyList<XElement> results)
-    {
-        var summaryCanBeGreen = string.IsNullOrWhiteSpace(summaryOutcome) ||
-            summaryOutcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ||
-            summaryOutcome.Equals("Completed", StringComparison.OrdinalIgnoreCase);
-        if (!summaryCanBeGreen)
-        {
-            return false;
-        }
-
-        if (AcceptanceTrxOutcomeTaxonomy.HasFatalCounter(name => TryReadTrxCounter(counters, name)))
-        {
-            return false;
-        }
-
-        return results.All(result =>
-        {
-            var outcome = result.Attribute("outcome")?.Value;
-            return string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(outcome, "NotExecuted", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(outcome, "Skipped", StringComparison.OrdinalIgnoreCase);
-        });
-    }
-
-    private static int? TryReadTrxCounter(XElement? counters, string name) =>
-        int.TryParse(
-            counters?.Attribute(name)?.Value,
-            System.Globalization.NumberStyles.None,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out var value)
-                ? value
-                : null;
+    private static TrxCompletionEvidence InspectTrxCompletionEvidence(IEnumerable<string>? trxPaths) =>
+        GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(trxPaths);
 
     private static AcceptanceShardCompletionDecision DecideTestShardCompletion(
         CommandResult result,
@@ -5690,64 +5370,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? policyFailure = null,
         string? policySignal = null,
         bool allowNonzeroExit = false,
-        bool requireTrxEvidence = true)
-    {
-        var missingTrxCompatibility = !requireTrxEvidence &&
-            string.Equals(
-                trx.FailedPredicate,
-                AcceptanceShardCompletionPredicates.MissingTrx,
-                StringComparison.Ordinal);
-        var failedPredicate = policyFailure;
-        if (failedPredicate is null && IsInterrupted(result))
-            failedPredicate = AcceptanceShardCompletionPredicates.TimedOut;
-        if (failedPredicate is null && !missingTrxCompatibility && trx.FailedPredicate is not null)
-            failedPredicate = trx.FailedPredicate;
-        if (failedPredicate is null && !missingTrxCompatibility && trx.DiscoveredTestCount == 0)
-            failedPredicate = AcceptanceShardCompletionPredicates.ZeroTests;
-        if (failedPredicate is null && !missingTrxCompatibility &&
-            trx.DiscoveredTestCount != (trx.ExecutedTestCount ?? 0) + (trx.NotExecutedTestCount ?? 0))
-            failedPredicate = AcceptanceShardCompletionPredicates.IncompleteExecution;
-        if (failedPredicate is null && !missingTrxCompatibility && !trx.Passed)
-            failedPredicate = trx.AssemblyCleanupOnly
-                ? AcceptanceShardCompletionPredicates.AssemblyCleanupFailure
-                : AcceptanceShardCompletionPredicates.FailingTrx;
-        if (failedPredicate is null && result.ExitCode != 0 && !allowNonzeroExit)
-            failedPredicate = AcceptanceShardCompletionPredicates.NonzeroExit;
-
-        var effectivePolicySignal = policyFailure ?? policySignal;
-        if (failedPredicate is null && missingTrxCompatibility && effectivePolicySignal is null)
-        {
-            effectivePolicySignal = AcceptanceShardCompletionSignals.MissingTrxInjectedRunnerCompatibility;
-        }
-
-        return new AcceptanceShardCompletionDecision(
-            failedPredicate is null,
-            failedPredicate,
-            IsInterrupted(result),
-            result.ExitCode,
-            trx.DiscoveredTestCount,
-            trx.ExecutedTestCount,
-            trx.Outcome,
-            effectivePolicySignal,
-            trx.NotExecutedTestCount);
-    }
-
-    private static AcceptanceShardCompletionDecision DecideNonTestCommandCompletion(CommandResult result)
-    {
-        var failedPredicate = IsInterrupted(result)
-            ? AcceptanceShardCompletionPredicates.TimedOut
-            : result.ExitCode != 0
-                ? AcceptanceShardCompletionPredicates.NonzeroExit
-                : null;
-        return new AcceptanceShardCompletionDecision(
-            failedPredicate is null,
-            failedPredicate,
-            IsInterrupted(result),
-            result.ExitCode,
-            null,
-            null,
-            "not-applicable");
-    }
+        bool requireTrxEvidence = true) =>
+        GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(result, trx, policyFailure, policySignal, allowNonzeroExit, requireTrxEvidence);
 
     internal static AcceptanceShardCompletionDecision DecideTestShardCompletionForTests(
         CommandResult result,
@@ -5778,76 +5402,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IEnumerable<string> trxPaths) =>
         DecideTestShardCompletion(result, InspectTrxCompletionEvidence(trxPaths));
 
-    private static FocusedEvidenceSelectionCoverage InspectFocusedEvidenceSelectionCoverage(
-        IReadOnlyList<IReadOnlyList<FocusedEvidenceFilterToken>> selections,
-        IEnumerable<string>? trxPaths)
-    {
-        if (selections.Count <= 1)
-        {
-            return FocusedEvidenceSelectionCoverage.Empty;
-        }
-
-        var extraction = ExtractTrxExecutedTestIdentities(trxPaths);
-        var uncoveredSelections = selections
-            .Where(selection => !selection.Any(token =>
-                extraction.Identities.Any(identity => IsFocusedEvidenceIdentityMatch(identity, token.Value))))
-            .Select(selection => string.Join("|", selection.Select(token => token.CanonicalToken)))
-            .ToArray();
-        return new FocusedEvidenceSelectionCoverage(uncoveredSelections, extraction.UnreadableReceiptPaths);
-    }
-
-    private static FocusedEvidenceIdentityExtraction ExtractTrxExecutedTestIdentities(IEnumerable<string>? trxPaths)
-    {
-        if (trxPaths is null)
-        {
-            return new FocusedEvidenceIdentityExtraction([], []);
-        }
-
-        var identities = new List<string>();
-        var unreadableReceiptPaths = new List<string>();
-        foreach (var trxPath in trxPaths.Where(File.Exists))
-        {
-            try
-            {
-                var document = XDocument.Load(trxPath, LoadOptions.None);
-                var definitionsByTestId = document
-                    .Descendants()
-                    .Where(element =>
-                        element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
-                        !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
-                    .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-                identities.AddRange(document
-                    .Descendants()
-                    .Where(element => element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal))
-                    .Select(result =>
-                    {
-                        definitionsByTestId.TryGetValue(
-                            result.Attribute("testId")?.Value ?? string.Empty,
-                            out var definition);
-                        return AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ??
-                            result.Attribute("testId")?.Value?.Trim() ??
-                            "unknown test";
-                    }));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
-            {
-                unreadableReceiptPaths.Add(trxPath);
-            }
-        }
-
-        return new FocusedEvidenceIdentityExtraction(
-            identities
-                .Where(identity => !string.IsNullOrWhiteSpace(identity))
-                .Distinct(StringComparer.Ordinal)
-                .ToArray(),
-            unreadableReceiptPaths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
-    }
-
-    private static bool IsFocusedEvidenceIdentityMatch(string identity, string selection) =>
-        identity.Contains(selection, StringComparison.OrdinalIgnoreCase);
-
-    private static string? FirstNonEmptyLine(string? value) =>
+    internal static string? FirstNonEmptyLine(string? value) =>
         value?
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line));
@@ -7520,20 +7075,20 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         FocusedEvidenceFilter? Filter,
         IReadOnlyList<FocusedEvidenceFilter> SelectionFilters);
 
-    private sealed record FocusedEvidenceSelectionCoverage(
+    internal sealed record FocusedEvidenceSelectionCoverage(
         IReadOnlyList<string> UncoveredSelections,
         IReadOnlyList<string> UnreadableReceiptPaths)
     {
         public static FocusedEvidenceSelectionCoverage Empty { get; } = new([], []);
     }
 
-    private sealed record FocusedEvidenceIdentityExtraction(
+    internal sealed record FocusedEvidenceIdentityExtraction(
         IReadOnlyList<string> Identities,
         IReadOnlyList<string> UnreadableReceiptPaths);
 
     internal sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
 
-    private sealed record TrxCompletionEvidence(
+    internal sealed record TrxCompletionEvidence(
         int? DiscoveredTestCount,
         int? ExecutedTestCount,
         int? NotExecutedTestCount,

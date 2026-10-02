@@ -57,4 +57,33 @@ internal static class AcceptanceTrxTestIdentityResolver
     private static bool LooksLikeQualifiedTestName(string value) =>
         value.Contains('+', StringComparison.Ordinal) ||
         value.Count(ch => ch == '.') >= 2;
+
+    internal static IReadOnlyList<string> ExtractTrxFailureIdentities(string trxPath)
+    {
+        var document = XDocument.Load(trxPath, LoadOptions.None);
+        var definitionsByTestId = document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
+            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        return document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                AcceptanceTrxOutcomeTaxonomy.IsFatal(element.Attribute("outcome")?.Value))
+            .Select(result =>
+            {
+                definitionsByTestId.TryGetValue(
+                    result.Attribute("testId")?.Value ?? string.Empty,
+                    out var definition);
+                return Resolve(result, definition) ??
+                    result.Attribute("testId")?.Value?.Trim() ??
+                    "unknown test";
+            })
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
 }
