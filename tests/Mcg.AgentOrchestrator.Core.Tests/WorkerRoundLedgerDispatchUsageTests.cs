@@ -97,7 +97,7 @@ public sealed class WorkerRoundLedgerDispatchUsageTests
     private static AgentOrchestratorKernel KernelWith(TaskDispatchSnapshot dispatch)
     {
         var task = new TaskSnapshot("task-1", "Work", AgentRole.Developer, WorkTaskStatus.Failed,
-            null, null, null, [], null, null, DispatchHistory: [dispatch]);
+            null, null, null, [], dispatch, null, DispatchHistory: [dispatch]);
         return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
             [new GoalSnapshot("goal-1", "Work", GoalStatus.Active, [task], [])], []));
     }
