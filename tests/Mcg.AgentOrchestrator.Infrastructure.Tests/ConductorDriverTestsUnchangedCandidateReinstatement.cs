@@ -180,6 +180,7 @@ public sealed class ConductorDriverTestsUnchangedCandidateReinstatement
             {
                 Kernel.RecordTaskDispatch(Goal.Id, task.Id, new TaskDispatchRecord(
                     "fixture", "worker", @"C:\repo", _clock.UtcNow, CandidateIdentity: Identity));
+                Kernel.RecordDispatchBaseCommit(Goal.Id, task.Id, Candidate);
                 Kernel.RecordDispatchResultCommit(Goal.Id, task.Id, Candidate);
                 _clock.Advance();
                 var output = task == Reviewer
@@ -195,6 +196,7 @@ public sealed class ConductorDriverTestsUnchangedCandidateReinstatement
                 if (reviewerNeedsWork && task == Reviewer)
                     Kernel.ReportTaskProgress(Goal.Id, task.Id, WorkTaskStatus.Completed, "Operator closed the review.");
                 Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
+                Xunit.Assert.Equal(Candidate, task.LastVerification!.ReviewedCommit);
                 _clock.Advance();
             }
         }
