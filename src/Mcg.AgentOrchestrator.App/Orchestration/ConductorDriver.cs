@@ -4386,7 +4386,7 @@ internal sealed partial class ConductorDriver
         if (outcome.Category == DispatchStartOutcomeCategory.Deferred)
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState, outcome.Reason!));
+                new ConductorAdvanceOutcome.Held(fromState, outcome.Reason!) { Owner = outcome.HoldOwner });
         }
 
         if (outcome.Category == DispatchStartOutcomeCategory.Started)

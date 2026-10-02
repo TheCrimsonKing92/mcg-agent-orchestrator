@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -13,6 +14,9 @@ internal sealed record DispatchStartOutcome(
     WorkerSandboxPrepRecoverableAction? SandboxPrepRecoveryAction = null,
     IReadOnlyList<DispatchedTaskIdentity>? DispatchedTasks = null)
 {
+    internal const string HoldOwnerDataKey = "ConductorHoldOwner";
+    public ConductorHoldOwner HoldOwner { get; init; } = ConductorHoldOwner.None;
+
     internal static DispatchStartOutcome Started(IReadOnlyList<TaskSpec>? tasks = null) =>
         new(
             DispatchStartOutcomeCategory.Started,
@@ -32,6 +36,10 @@ internal sealed record DispatchStartOutcome(
 
     internal static DispatchStartOutcome FromDispatchException(Exception ex, string failurePrefix) =>
         IsSpecRefinementPending(ex)
-            ? Deferred(ex.Message)
+            ? Deferred(ex.Message) with
+            {
+                HoldOwner = ex.Data[HoldOwnerDataKey] is ConductorHoldOwner owner
+                    ? owner : ConductorHoldOwner.None
+            }
             : SpawnFailed($"{failurePrefix}: {ex.Message}");
 }

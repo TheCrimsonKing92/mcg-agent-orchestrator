@@ -17,6 +17,16 @@ namespace Mcg.AgentOrchestrator.App.Application;
 /// </remarks>
 internal sealed partial class GoalDispatchOperations
 {
+    internal static InvalidOperationException SpecRefinementPendingException(
+        string message, OrchestratorStateOutboxStatus status)
+    {
+        var exception = new InvalidOperationException(message);
+        exception.Data[DispatchStartOutcome.HoldOwnerDataKey] = status is
+            OrchestratorStateOutboxStatus.Pending or OrchestratorStateOutboxStatus.Processing
+                ? ConductorHoldOwner.DurableOutbox : ConductorHoldOwner.None;
+        return exception;
+    }
+
     private readonly Func<int, bool> _isProcessRunning;
     private readonly Func<int, SpawnProcessIdentity?> _readProcessIdentity;
 
@@ -618,12 +628,12 @@ internal sealed partial class GoalDispatchOperations
             var failedClaimsDetail = failedClaims > 0
                 ? $" consecutive_failed_claims={failedClaims}"
                 : string.Empty;
-            return new InvalidOperationException(
+            return SpecRefinementPendingException(
                 $"SPEC_REFINEMENT_PENDING goal={goalId.Value} owner=durable-outbox " +
                 $"executor_started={launch.Started.ToString().ToLowerInvariant()} " +
                 $"state={stateDetail} repaired={repaired.ToString().ToLowerInvariant()} " +
                 $"pending_age={GoalRefinementWorkCoordinator.FormatPendingAge(createdAt)}" +
-                $"{failedClaimsDetail} detail={launch.Detail}");
+                $"{failedClaimsDetail} detail={launch.Detail}", outboxStatus);
         }
 
         static void ThrowFailed(GoalId goalId, string? detail)
