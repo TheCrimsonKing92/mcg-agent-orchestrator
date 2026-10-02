@@ -1183,7 +1183,7 @@ internal sealed partial class ConductorBatchLoop
                             _utcNow(),
                             effectiveGoalStallThreshold,
                             changedGoalIds,
-                            tickLines);
+                            tickLines, driver: driver);
                         tickHeld++;
                     }
 
@@ -1214,7 +1214,7 @@ internal sealed partial class ConductorBatchLoop
                         _utcNow(),
                         effectiveGoalStallThreshold,
                         changedGoalIds,
-                        tickLines);
+                        tickLines, driver: driver);
                     FinishGoalWalk("acceptance-cancellation-pending");
                     continue;
                 }
@@ -3200,10 +3200,10 @@ internal sealed partial class ConductorBatchLoop
             }
 
             results[goal.Id.Value] = new ParallelLandingOutcome(
-                ParallelAcceptanceHeld(
+                CohortMemberHeld(
                     goal,
                     policy,
-                    $"Acceptance cohort gate owns this member: {cohortHoldDetail}"),
+                    cohortHoldDetail),
                 SlotIndex: null);
             RecordParallelAcceptanceProgress(
                 $"ACCEPTANCE_COHORT tick={tick} goal={goal.Id.Value[..8]} result=held {cohortHoldDetail}",

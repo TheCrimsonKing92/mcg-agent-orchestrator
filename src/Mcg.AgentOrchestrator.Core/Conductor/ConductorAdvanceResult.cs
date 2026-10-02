@@ -13,7 +13,8 @@ public enum ConductorHoldOwner
 {
     None,
     BackgroundAttempt,
-    AcceptanceQueue
+    AcceptanceQueue,
+    DurableOutbox
 }
 
 public abstract record ConductorAdvanceOutcome

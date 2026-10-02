@@ -435,29 +435,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool CaptureLimited = false,
         long? CaptureLimitBytes = null);
 
-    private static readonly Regex TestAttrPattern = new(
-        @"^\s*\[\s*(?:Xunit\.)?(?:Fact|Theory)\s*(?:\(|,|\])",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly Regex TestMethodDeclarationPattern = new(
-        @"\b(?:public|internal|protected|private)\s+(?:static\s+)?(?:async\s+)?(?:[\w<>,.?\[\]]+\s+)+(?<name>[A-Za-z_]\w*)\s*\(",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly Regex DiffContainingTypePattern = new(
-        @"\b(?:class|struct|record(?:\s+class|\s+struct)?)\s+(?<name>[A-Za-z_]\w*)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
-    private static readonly Regex TautologyPattern = new(
-        @"Assert\.True\(\s*true\s*\)|Assert\.False\(\s*false\s*\)|Assert\.Equal\(\s*(?<v>\w+)\s*,\s*\k<v>\s*\)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     private static readonly Encoding StrictUtf16LittleEndian = new UnicodeEncoding(false, true, true);
     private static readonly Encoding StrictUtf16BigEndian = new UnicodeEncoding(true, true, true);
     private static readonly Encoding StrictUtf32LittleEndian = new UTF32Encoding(false, true, true);
     private static readonly Encoding StrictUtf32BigEndian = new UTF32Encoding(true, true, true);
 
-    private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD"];
     internal const int MaxFocusedEvidenceFilterLength = 1024;
     internal static string FocusedEvidenceSupportedProjectForms(
         AcceptanceGateEngineSettings? engineSettings) =>
@@ -1014,10 +997,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             checks.Add(checkResult.Result with { Advisory = true });
         }
 
-        var testFileChanges = changedFiles?.Where(IsTestFile).ToArray();
+        var testFileChanges = changedFiles?.Where(TestTamperAnalysis.IsTestFile).ToArray();
         if (testFileChanges is { Length: > 0 })
         {
-            checks.Add(await RunTestTamperCheckAsync(
+            checks.Add(await TestTamperAnalysis.RunTestTamperCheckAsync(
+                _runner,
+                EngineSettings,
                 worktreePath,
                 sanctionedRemovedTests,
                 cancellationToken).ConfigureAwait(false));
@@ -5356,7 +5341,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Select(line => line.Split('\t'))
             .Where(parts =>
             {
-                if (parts.Length < 2 || !IsTestFile(parts[1]))
+                if (parts.Length < 2 || !TestTamperAnalysis.IsTestFile(parts[1]))
                 {
                     return false;
                 }
@@ -5425,260 +5410,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return null;
     }
 
-    private async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(
-        string worktreePath,
-        IReadOnlyList<string> sanctionedRemovedTests,
-        CancellationToken cancellationToken)
-    {
-        const string CheckName = "test tamper guard";
-
-        string[] diffArgs = [.. DiffBaseArgs];
-
-        var result = await _runner(
-            diffArgs,
-            worktreePath,
-            EngineSettings.ResolveCheckTimeout(null),
-            cancellationToken).ConfigureAwait(false);
-
-        if (result.ExitCode != 0)
-            return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "diff unavailable");
-
-        var signals = AnalyzeTestFileDiff(FilterTestFileDiffSections(result.Output), sanctionedRemovedTests);
-
-        if (signals.Count == 0)
-            return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "no test degradation detected");
-
-        return new AcceptanceCheckResult(
-            CheckName, false, 1,
-            string.Join(Environment.NewLine, signals),
-            Advisory: true,
-            ResultSummary: $"{signals.Count} test degradation signal(s)");
-    }
-
-    private static bool IsTestFile(string path) =>
-        path.Contains("Tests", StringComparison.OrdinalIgnoreCase);
-
-    private static List<string> AnalyzeTestFileDiff(
-        string diff,
-        IReadOnlyList<string> sanctionedRemovedTests)
-    {
-        var signals = new List<string>();
-        var fileStats = new List<TestFileDiffStats>();
-        string? currentFile = null;
-        string? pendingFile = null;
-        int assertRemoved = 0, assertAdded = 0;
-        int testAttrRemoved = 0, testAttrAdded = 0;
-        var sanctionedAssertRemoved = 0;
-        var sanctionedTestAttrRemoved = 0;
-        var pendingRemovedTestAttribute = false;
-        var inSanctionedRemovedMethod = false;
-        string? currentContainingType = null;
-        var sanctionedMethodBraceDepth = 0;
-        var sanctionedMethodBodyStarted = false;
-        var tautologies = new List<string>();
-
-        void FlushFile()
-        {
-            if (currentFile is null) return;
-
-            fileStats.Add(new TestFileDiffStats(
-                currentFile,
-                Math.Max(0, assertRemoved - sanctionedAssertRemoved),
-                assertAdded,
-                Math.Max(0, testAttrRemoved - sanctionedTestAttrRemoved),
-                testAttrAdded));
-
-            foreach (var t in tautologies)
-                signals.Add($"{currentFile}: tautology assertion added: {t}");
-        }
-
-        void StartFile(string filePath)
-        {
-            FlushFile();
-            currentFile = filePath;
-            assertRemoved = assertAdded = testAttrRemoved = testAttrAdded = 0;
-            sanctionedAssertRemoved = sanctionedTestAttrRemoved = 0;
-            pendingRemovedTestAttribute = false;
-            inSanctionedRemovedMethod = false;
-            currentContainingType = null;
-            sanctionedMethodBraceDepth = 0;
-            sanctionedMethodBodyStarted = false;
-            tautologies.Clear();
-        }
-
-        foreach (var rawLine in diff.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r');
-
-            if (line.StartsWith("--- a/", StringComparison.Ordinal))
-            {
-                pendingFile = line[6..];
-            }
-            else if (line.StartsWith("+++ b/", StringComparison.Ordinal))
-            {
-                StartFile(line[6..]);
-                pendingFile = null;
-            }
-            else if (line.StartsWith("+++ /dev/null", StringComparison.Ordinal) && pendingFile is not null)
-            {
-                StartFile(pendingFile);
-                pendingFile = null;
-            }
-            else if (line.StartsWith("@@", StringComparison.Ordinal))
-            {
-                var containingTypeMatch = DiffContainingTypePattern.Match(line);
-                currentContainingType = containingTypeMatch.Success
-                    ? containingTypeMatch.Groups["name"].Value
-                    : null;
-            }
-            else if (line.Length > 1 && line[0] is '-' or '+' &&
-                     !line.StartsWith("--- ", StringComparison.Ordinal) &&
-                     !line.StartsWith("+++ ", StringComparison.Ordinal))
-            {
-                var content = line[1..];
-                var trimmed = content.TrimStart();
-
-                if (line[0] == '-')
-                {
-                    var containingTypeMatch = DiffContainingTypePattern.Match(trimmed);
-                    if (containingTypeMatch.Success)
-                        currentContainingType = containingTypeMatch.Groups["name"].Value;
-
-                    var startsSanctionedRemovedMethod = false;
-                    if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
-                    {
-                        assertRemoved++;
-                        if (inSanctionedRemovedMethod)
-                            sanctionedAssertRemoved++;
-                    }
-                    if (TestAttrPattern.IsMatch(trimmed))
-                    {
-                        testAttrRemoved++;
-                        pendingRemovedTestAttribute = true;
-                    }
-
-                    if (pendingRemovedTestAttribute &&
-                        TryGetTestMethodName(trimmed, out var methodName))
-                    {
-                        inSanctionedRemovedMethod = sanctionedRemovedTests.Any(identity =>
-                            DeclaredIdentityMatchesMethod(identity, currentFile!, currentContainingType, methodName));
-                        startsSanctionedRemovedMethod = inSanctionedRemovedMethod;
-                        if (inSanctionedRemovedMethod)
-                            sanctionedTestAttrRemoved++;
-                        pendingRemovedTestAttribute = false;
-                    }
-
-                    if (inSanctionedRemovedMethod)
-                    {
-                        var expressionBodiedMethod = startsSanctionedRemovedMethod &&
-                            content.Contains("=>", StringComparison.Ordinal) &&
-                            content.Contains(';', StringComparison.Ordinal);
-                        var opens = content.Count(ch => ch == '{');
-                        var closes = content.Count(ch => ch == '}');
-                        if (opens > 0)
-                            sanctionedMethodBodyStarted = true;
-                        sanctionedMethodBraceDepth += opens - closes;
-                        if (expressionBodiedMethod ||
-                            sanctionedMethodBodyStarted && sanctionedMethodBraceDepth <= 0)
-                        {
-                            inSanctionedRemovedMethod = false;
-                            sanctionedMethodBraceDepth = 0;
-                            sanctionedMethodBodyStarted = false;
-                        }
-                    }
-                }
-                else
-                {
-                    if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
-                        assertAdded++;
-                    if (TestAttrPattern.IsMatch(trimmed))
-                        testAttrAdded++;
-                    if (TautologyPattern.IsMatch(content))
-                        tautologies.Add(trimmed.Length > 80 ? trimmed[..80] + "..." : trimmed);
-                }
-            }
-        }
-
-        FlushFile();
-
-        var totalAssertRemoved = fileStats.Sum(file => file.AssertRemoved);
-        var totalAssertAdded = fileStats.Sum(file => file.AssertAdded);
-        var netAssertRemoved = totalAssertRemoved - totalAssertAdded;
-        if (netAssertRemoved > 0)
-        {
-            signals.Insert(
-                0,
-                $"diff-wide net -{netAssertRemoved} assertion(s) removed ({FormatTestFileDiffDetails(fileStats)})");
-        }
-
-        var totalTestAttrRemoved = fileStats.Sum(file => file.TestAttrRemoved);
-        var totalTestAttrAdded = fileStats.Sum(file => file.TestAttrAdded);
-        var netTestAttrRemoved = totalTestAttrRemoved - totalTestAttrAdded;
-        if (netTestAttrRemoved > 0)
-        {
-            signals.Insert(
-                netAssertRemoved > 0 ? 1 : 0,
-                $"diff-wide {netTestAttrRemoved} test method(s) removed ({FormatTestFileDiffDetails(fileStats)})");
-        }
-
-        return signals;
-    }
-
-    private static bool TryGetTestMethodName(string line, out string methodName)
-    {
-        var match = TestMethodDeclarationPattern.Match(line);
-        methodName = match.Success ? match.Groups["name"].Value : string.Empty;
-        return match.Success;
-    }
-
-    private static bool DeclaredIdentityMatchesMethod(
-        string identity,
-        string filePath,
-        string? containingType,
-        string methodName)
-    {
-        var normalized = identity.Trim();
-        var argumentsIndex = normalized.IndexOf('(');
-        if (argumentsIndex >= 0)
-            normalized = normalized[..argumentsIndex];
-
-        var separatorIndex = Math.Max(normalized.LastIndexOf('.'), normalized.LastIndexOf(':'));
-        var declaredMethod = separatorIndex >= 0 ? normalized[(separatorIndex + 1)..] : normalized;
-        if (!declaredMethod.Equals(methodName, StringComparison.OrdinalIgnoreCase) || separatorIndex <= 0)
-            return false;
-
-        var containingIdentity = normalized[..separatorIndex].TrimEnd('.', ':');
-        var containingSeparatorIndex = Math.Max(
-            containingIdentity.LastIndexOf('.'),
-            containingIdentity.LastIndexOf(':'));
-        var declaredClass = containingSeparatorIndex >= 0
-            ? containingIdentity[(containingSeparatorIndex + 1)..]
-            : containingIdentity;
-        return declaredClass.Equals(
-            containingType ?? Path.GetFileNameWithoutExtension(filePath),
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string FormatTestFileDiffDetails(IReadOnlyList<TestFileDiffStats> fileStats)
-    {
-        var details = fileStats
-            .Where(file =>
-                file.AssertRemoved != 0 ||
-                file.AssertAdded != 0 ||
-                file.TestAttrRemoved != 0 ||
-                file.TestAttrAdded != 0)
-            .Select(file =>
-                $"{file.FilePath}: assertions -{file.AssertRemoved}/+{file.AssertAdded}, tests -{file.TestAttrRemoved}/+{file.TestAttrAdded}");
-
-        return "per-file: " + string.Join("; ", details);
-    }
-
-    private sealed record TestFileDiffStats(
-        string FilePath,
-        int AssertRemoved,
-        int AssertAdded,
-        int TestAttrRemoved,
-        int TestAttrAdded);
+    internal static string FilterTestFileDiffSections(string diff) => TestTamperAnalysis.FilterTestFileDiffSections(diff);
 
     private static string[] BuildDotnetTestArguments(AcceptanceManifestCheck check, bool noBuild = false)
     {

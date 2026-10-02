@@ -5,6 +5,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
+    internal static ConductorAdvanceResult CohortMemberHeld(
+        Goal goal, ConductorAutonomyPolicy policy, string detail) =>
+        ParallelAcceptanceHeld(goal, policy,
+            $"Acceptance cohort gate owns this member: {detail}", ConductorHoldOwner.BackgroundAttempt);
+
     internal static void TrackGoalOutcome(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
@@ -13,7 +18,8 @@ internal sealed partial class ConductorBatchLoop
         DateTimeOffset observedAt,
         TimeSpan stallThreshold,
         HashSet<GoalId> changedGoalIds,
-        List<string> tickLines)
+        List<string> tickLines,
+        ConductEventLogWriter? conductEventLogWriter = null)
     {
         if (outcome is ConductorAdvanceOutcome.Held held)
         {
@@ -31,7 +37,8 @@ internal sealed partial class ConductorBatchLoop
                 return;
             }
 
-            if (held.Owner is ConductorHoldOwner.BackgroundAttempt or ConductorHoldOwner.AcceptanceQueue)
+            if (held.Owner is ConductorHoldOwner.BackgroundAttempt or ConductorHoldOwner.AcceptanceQueue
+                or ConductorHoldOwner.DurableOutbox)
             {
                 ClearGoalHold(kernel, goal, changedGoalIds);
                 return;
@@ -46,7 +53,9 @@ internal sealed partial class ConductorBatchLoop
                 stallThreshold,
                 changedGoalIds,
                 tickLines,
-                held.StableIdentity);
+                held.StableIdentity,
+                driver,
+                conductEventLogWriter);
             return;
         }
 
@@ -62,7 +71,9 @@ internal sealed partial class ConductorBatchLoop
         TimeSpan stallThreshold,
         HashSet<GoalId> changedGoalIds,
         List<string> tickLines,
-        string? stableIdentity = null)
+        string? stableIdentity = null,
+        ConductorDriver? driver = null,
+        ConductEventLogWriter? conductEventLogWriter = null)
     {
         try
         {
@@ -86,6 +97,9 @@ internal sealed partial class ConductorBatchLoop
             var repeatedForSeconds = Math.Max(
                 0,
                 (long)(observedAt - observation.Hold.StartedAt).TotalSeconds);
+            RaiseOwnerlessStallEscalation(
+                goal, state, blocker, repeatedForSeconds, driver,
+                conductEventLogWriter ?? CurrentConductEventLogWriter.Value);
             EmitProgress(
                 $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} owner=none " +
                 $"repeatedForSeconds={repeatedForSeconds} blocker={FormatStalledBlockerDetail(blocker)}",
@@ -105,6 +119,34 @@ internal sealed partial class ConductorBatchLoop
             catch
             {
                 // Console diagnostics are best effort during fault isolation.
+            }
+        }
+    }
+
+    private static void RaiseOwnerlessStallEscalation(
+        Goal goal, string state, string blocker, long heldForSeconds,
+        ConductorDriver? driver, ConductEventLogWriter? conduct)
+    {
+        var text = $"ownerless-hold-stalled state={Sanitize(state)} heldForSeconds={heldForSeconds} " +
+            $"blocker={blocker.Replace('\r', ' ').Replace('\n', ' ')}";
+        var lifecycleState = Enum.TryParse<GoalLifecycleState>(state, out var parsed)
+            ? parsed : GoalLifecycleState.Blocked;
+        // Each channel is independent: a failed conduct append must not suppress the timeline.
+        TryWrite(() => conduct?.Append("goal-escalation", goal.Id.Value, text));
+        TryWrite(() => driver?.HoldEscalationEventWriter?.AppendGoalEscalated(
+            goal.Id, lifecycleState, goal.Status, text, "ownerless-hold-stall"));
+
+        void TryWrite(Action write)
+        {
+            try { write(); }
+            catch (Exception ex)
+            {
+                try
+                {
+                    Console.Error.WriteLine($"GOAL_STALL_ESCALATION_FAILED goal={goal.Id.Value[..8]} " +
+                        $"exception={ex.GetType().Name} message={SanitizeHandoffDetail(ex.Message)}");
+                }
+                catch { /* Console diagnostics are best effort during fault isolation. */ }
             }
         }
     }
