@@ -18,7 +18,19 @@ internal sealed class ConductorAuthorClaimStore(string path)
         command.Parameters.AddWithValue("$identity", item.Identity);
         command.Parameters.AddWithValue("$now", now.ToString("O"));
         command.Parameters.AddWithValue("$item", JsonSerializer.Serialize(item));
+        if (command.ExecuteNonQuery() == 1) return true;
+        command.CommandText = "UPDATE author_claims SET outcome = 'in-flight', claimed_at = $now, item_json = $item, attempt = attempt + 1 WHERE identity = $identity AND outcome = 'retryable'";
         return command.ExecuteNonQuery() == 1;
+    }
+
+    internal int Attempt(string identity)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT attempt FROM author_claims WHERE identity = $identity";
+        command.Parameters.AddWithValue("$identity", identity);
+        return command.ExecuteScalar() is long attempt ? checked((int)attempt) :
+            throw new InvalidOperationException($"Author claim {identity} does not exist.");
     }
 
     internal void Preserve(ConductorAuthorItem item, string output)
@@ -84,10 +96,21 @@ internal sealed class ConductorAuthorClaimStore(string path)
                 outcome TEXT NOT NULL,
                 intent_id TEXT NULL,
                 item_json TEXT NOT NULL,
-                output TEXT NULL
+                output TEXT NULL,
+                attempt INTEGER NOT NULL DEFAULT 1
             )
             """;
         schema.ExecuteNonQuery();
+        schema.CommandText = "PRAGMA table_info(author_claims)";
+        var hasAttempt = false;
+        using (var reader = schema.ExecuteReader())
+            while (reader.Read())
+                hasAttempt |= reader.GetString(1) == "attempt";
+        if (!hasAttempt)
+        {
+            schema.CommandText = "ALTER TABLE author_claims ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1";
+            schema.ExecuteNonQuery();
+        }
         return connection;
     }
 }
