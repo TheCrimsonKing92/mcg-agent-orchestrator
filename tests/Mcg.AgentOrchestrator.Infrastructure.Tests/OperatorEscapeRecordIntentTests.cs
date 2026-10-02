@@ -31,6 +31,8 @@ public sealed class OperatorEscapeRecordIntentTests
 
         // Lose the intent completion receipt to exercise durable-store replay, not queue dedupe.
         File.Delete(Path.Combine(fixture.Workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName));
+        fixture.Intents = SqliteOperatorIntentStore.ForDirectories(
+            fixture.Workspace.OrchestratorDirectory, fixture.Workspace.LogDirectory);
         await fixture.Intents.EnqueueAsync(intent);
         fixture.Tick();
 
@@ -145,7 +147,7 @@ public sealed class OperatorEscapeRecordIntentTests
         internal const string FoundId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         internal DateTimeOffset Now { get; } = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
         internal OrchestratorWorkspace Workspace { get; }
-        internal SqliteOperatorIntentStore Intents { get; }
+        internal SqliteOperatorIntentStore Intents { get; set; }
         internal SqliteOperatorEscapeStore Store { get; }
         internal string Proof { get; }
 
