@@ -26,7 +26,10 @@ public static class AcceptanceEngineSurfaceRegistry
         new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),
         new("test-coverage-invariant", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant"]),
         new("base-build-cache", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache"]),
-        new("gate-heartbeats", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatArtifacts"]),
+        new("gate-heartbeats", [
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatArtifacts",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatLockHolderProjection"
+        ]),
         new("attempt-artifact-custody", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody"]),
         new("acceptance-collaborators", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
@@ -58,7 +61,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildStorageRoot",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateChildReapSeam",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatLockHolderProjection",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatRunClass",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLoadContextProbe",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardLaneClass",
