@@ -4600,7 +4600,7 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(
                     fromState,
                     _focusedEvidenceAttemptCoordinator.DescribeFocusedEvidenceHold(attemptDecision.Attempt),
-                    $"pre-review-evidence:{attemptDecision.Attempt.AttemptId}"));
+                    $"pre-review-evidence:{attemptDecision.Attempt.AttemptId}") { Owner = ConductorHoldOwner.BackgroundAttempt });
             return true;
         }
 
