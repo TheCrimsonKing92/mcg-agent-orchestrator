@@ -3601,6 +3601,7 @@ internal sealed partial class ConductorDriver
         AcceptanceCohortGateClassification? classification = null;
         IReadOnlyList<string> failedChecks = [];
         IReadOnlyList<string> cohortFailingTests = [];
+        IReadOnlyList<AcceptanceCheckResult> cohortFailedChecks = [];
         int? gateExitCode = null;
         IReadOnlyList<string> gateTestResultPaths = [];
         DotnetBuildEnvironmentLease? stableSlotLease = null;
@@ -3630,6 +3631,7 @@ internal sealed partial class ConductorDriver
                 .Select(check => check.Name)
                 .ToArray() ?? [];
             cohortFailingTests = CohortFailingTestIdentities(verification);
+            cohortFailedChecks = verification.Checks?.Where(check => !check.Passed && !check.Advisory).ToArray() ?? [];
             gateExecutionComplete = true;
             gateClock.Stop();
             receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
@@ -3687,25 +3689,8 @@ internal sealed partial class ConductorDriver
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
             receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
         {
-            AppendCohortAttributionStartEvent(gateProgressEventWriter, identity, bindings);
-            var first = RunCohortPartition(bindings[0], 0, identity, gateProgressEventWriter, cancellationToken);
-            var second = RunCohortPartition(bindings[1], 1, identity, gateProgressEventWriter, cancellationToken);
-            var classified = ConductorAcceptanceCohortFailingTestAttribution.Classify(cohortFailingTests, first, second);
-            var attribution = classified.Outcome;
-            var innocentGoalId = attribution switch
-            {
-                AcceptanceCohortAttributionOutcome.FirstMemberFailed => bindings[1].GoalId,
-                AcceptanceCohortAttributionOutcome.SecondMemberFailed => bindings[0].GoalId,
-                _ => (GoalId?)null
-            };
-            receipt = store.SaveAttribution(
-                identity.Value,
-                attribution,
-                [first, second],
-                pairFingerprint,
-                innocentGoalId,
-                classified.AttributedMembers,
-                classified.UnrelatedFailures);
+            receipt = AttributeFailedCohort(store, identity, bindings, pairFingerprint,
+                cohortFailingTests, cohortFailedChecks, gateProgressEventWriter, cancellationToken);
         }
 
         return receipt;

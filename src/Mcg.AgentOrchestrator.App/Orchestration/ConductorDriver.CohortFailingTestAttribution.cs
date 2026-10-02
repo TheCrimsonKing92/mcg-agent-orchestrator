@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private static IReadOnlyList<string> CohortFailingTestIdentities(AcceptanceVerificationResult result)
+    internal static IReadOnlyList<string> CohortFailingTestIdentities(AcceptanceVerificationResult result)
     {
         var fromChecks = result.Checks?
             .Where(check => !check.Passed && !check.Advisory)
