@@ -122,8 +122,12 @@ public sealed class ConductorDriverTestsUnchangedCandidateReinstatement
         scenario.FailDeveloperRetryAndClose();
         var driver = scenario.Driver();
         if (newInput)
-            scenario.Tester.RecordAcceptedRetryFeedback("Read the new test finding.",
-                scenario.Tester.LatestRetryAt!.Value.AddSeconds(1));
+        {
+            var request = scenario.Kernel.RequestHumanInput(scenario.Goal.Id, null,
+                "Which new test finding should be checked?");
+            scenario.Kernel.SubmitHumanInput(request.Id, "Read the new test finding.");
+            Xunit.Assert.True(scenario.Tester.LatestRetryInherited);
+        }
         else
             driver.OverrideCandidateIdentityResolverForTests(_ => new CandidateIdentity("changed", "base", "manifest"));
 
