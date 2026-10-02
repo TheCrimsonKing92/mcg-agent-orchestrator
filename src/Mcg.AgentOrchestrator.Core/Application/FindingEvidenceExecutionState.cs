@@ -66,9 +66,15 @@ public static class FindingEvidenceExecutionClassifier
     public static string BuildRequestIdentity(FindingEvidenceRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return string.Join(
+        var identity = string.Join(
             "|",
             (request.Selections ?? []).Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+        return request.NegativeControl switch
+        {
+            null => identity,
+            FindingEvidenceNegativeControl.RevertSrc => identity + "|negative_control=revert-src",
+            _ => throw new ArgumentOutOfRangeException(nameof(request))
+        };
     }
 
     /// <summary>
@@ -163,6 +169,8 @@ public static class FindingEvidenceExecutionClassifier
         return requestingTask.VerificationHistory
             .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
             .Where(receipt => string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))
+            .Where(receipt => request.NegativeControl is null ||
+                (receipt.Request?.NegativeControl == request.NegativeControl && receipt.NegativeControlOutcome is not null))
             .Any(receipt =>
                 CoversFindingOutcome(receipt, outcomeReceiptId) ||
                 CoversFindingDisposition(receipt, finding.StableId) ||

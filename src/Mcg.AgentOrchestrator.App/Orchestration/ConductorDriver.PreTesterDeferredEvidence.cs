@@ -14,6 +14,7 @@ internal sealed partial class ConductorDriver
         out FailedGoalFindingObservation decision)
     {
         decision = FailedGoalFindingObservation.None;
+        if (requestingFindings.Any(finding => finding.EvidenceRequest?.NegativeControl is not null)) return false;
         var tester = goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Tester);
         var receipt = PreTesterEvidenceIndexLines.Latest(
             goal, tester?.Id ?? requestingTask.Id, candidateSha);

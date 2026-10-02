@@ -266,6 +266,19 @@ private static void PrintScopeCollisionAdvisory(
         heading);
 }
 
+private static void PrintBriefLintAdvisory(string briefText)
+{
+    try
+    {
+        ConsoleViews.PrintBriefLintFindings(BriefLint.Lint(briefText));
+    }
+    catch (Exception)
+    {
+        // Advisory diagnostics must not turn goal filing into a failure.
+        Console.Error.WriteLine("BRIEF-LINT unavailable: brief diagnostics could not be computed.");
+    }
+}
+
 private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {
     switch (command)
@@ -378,6 +391,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 RejectPipelineForSimpleGoal(goalPipelineRequest);
                 var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple | goal --text-file <path> --simple");
+                PrintBriefLintAdvisory(simpleAliasObjective);
                 var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
                 AppendGoalAliasFlags(parts, simpleAliasParts, includeRoleAgentFlags: true, "--simple", "--brief-file", "--text-file");
                 return TryExecuteGoalCommand("simple-goal", simpleAliasParts, context);
@@ -406,6 +420,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(runObjectivePlan, runAgents);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 PrintScopeCollisionAdvisory(context, runObjective);
+                PrintBriefLintAdvisory(runObjective);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 context.ReportGoalCreationProgress();
@@ -431,6 +446,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             PrintScopeCollisionAdvisory(context, goalObjective);
+            PrintBriefLintAdvisory(goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             context.ReportGoalCreationProgress();
@@ -643,6 +659,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     value[..separator]);
                 answerSupersessions.Add(new GoalBriefAnswerSupersession(request.Id, value[(separator + 1)..]));
             }
+
+            if (GetFlagValue(parts, "--brief-file") is not null || GetFlagValue(parts, "--text-file") is not null)
+                PrintBriefLintAdvisory(newBrief);
 
             var result = context.Kernel.ReviseGoalBrief(
                 goal.Id,

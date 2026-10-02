@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -148,7 +149,10 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     int? AdoptedByGenerationId = null,
     bool FocusedEvidenceRunsBaselineArm = false,
     FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null,
-    string? SupersedingMainHeadSha = null)
+    string? SupersedingMainHeadSha = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonConverter(typeof(FindingEvidenceNegativeControlJsonConverter))]
+    FindingEvidenceNegativeControl? FocusedEvidenceNegativeControl = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -158,7 +162,8 @@ internal sealed record ConductorFocusedEvidenceRequestContext(
     string BatchId,
     IReadOnlyList<FindingEvidenceRequestDisposition> RequestDispositions,
     bool RunBaselineArm = false,
-    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null);
+    FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null,
+    FindingEvidenceNegativeControl? NegativeControl = null);
 
 internal sealed record ConductorParallelAcceptanceAttemptDecision(
     ConductorParallelAcceptanceAttemptDecisionKind Kind,
@@ -729,6 +734,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             dispatchKind,
             StringComparison.Ordinal) &&
         string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) &&
+        attempt.FocusedEvidenceNegativeControl == requestContext?.NegativeControl &&
         string.Equals(
             attempt.FindingRoundFingerprint,
             requestContext?.FindingRoundFingerprint,
@@ -790,7 +796,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return ConductorEvidenceSupersessionCause.CandidateChanged;
         }
 
-        if (!string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal))
+        if (!string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal) ||
+            attempt.FocusedEvidenceNegativeControl != requestContext?.NegativeControl)
         {
             return ConductorEvidenceSupersessionCause.FocusedRequestChanged;
         }
@@ -1209,7 +1216,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     coordinator, activeAttempt, candidate, policy,
                     (attemptCandidate, request, lease, runBaselineArm, cancellationToken) =>
                         driver.RunPreReviewBaselineArmFocusedEvidence(
-                            attemptCandidate, request, lease, runBaselineArm, cancellationToken));
+                            attemptCandidate, request, lease, runBaselineArm, cancellationToken,
+                            activeAttempt.FocusedEvidenceNegativeControl));
             }
             else
             {
@@ -2033,6 +2041,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             ConductEventLogPath: _conductEventLogWriter?.CurrentPath,
             FocusedEvidenceBatchId: focusedBatchId,
             FocusedEvidenceRunsBaselineArm: requestContext?.RunBaselineArm ?? false,
+            FocusedEvidenceNegativeControl: requestContext?.NegativeControl,
             CandidateEvidenceBeforeBaseline: requestContext?.CandidateEvidenceBeforeBaseline,
             FocusedEvidenceMemberRequests: focusedMembers,
             FocusedEvidenceRequestDisposition: requestContext?.RequestDispositions
