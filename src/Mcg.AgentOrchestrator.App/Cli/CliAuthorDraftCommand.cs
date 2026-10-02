@@ -62,10 +62,16 @@ internal static class CliAuthorDraftCommand
             var draftPath = Path.Combine(directory, stem + ".md");
             File.WriteAllText(draftPath, result.Markdown!);
             checks = AuthorBriefDraftChecks.Run(result.Markdown!, mainHead, seams.Repository);
+            var findings = BriefLint.Lint(result.Markdown!);
+            checks = [.. checks, .. findings
+                .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
+                .Select(finding => new AuthorBriefDraftCheck($"brief-lint:{finding.Kind}", false, LintDetail(finding)))];
             WriteReceipt(null);
             output.WriteLine($"Draft: {draftPath}");
             foreach (var check in checks.Where(check => !check.Passed))
                 output.WriteLine($"Failed {check.Name}: {check.Detail}");
+            foreach (var finding in findings.Where(finding => finding.Severity == BriefLintSeverity.Advisory))
+                output.WriteLine($"BRIEF-LINT {finding.SeverityToken} {finding.Kind}: {LintDetail(finding)}");
             output.WriteLine($"goal --brief-file \"{draftPath}\" --backlog-item {item.Id} --backlog-coverage full");
             return checks.All(check => check.Passed) ? 0 : 1;
         }
@@ -81,4 +87,8 @@ internal static class CliAuthorDraftCommand
             backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure
         }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }));
     }
+
+    private static string LintDetail(BriefLintFinding finding) => string.IsNullOrEmpty(finding.Remedy)
+        ? finding.Message
+        : $"{finding.Message} remedy: {finding.Remedy}";
 }
