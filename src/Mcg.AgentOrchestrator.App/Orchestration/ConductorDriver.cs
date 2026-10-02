@@ -775,7 +775,8 @@ internal sealed partial class ConductorDriver
             string request,
             DotnetBuildEnvironmentLease? stableSlotLease,
             bool runBaselineArm,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            FindingEvidenceNegativeControl? negativeControl = null)
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null)
@@ -792,7 +793,7 @@ internal sealed partial class ConductorDriver
             var result = AcceptanceExecutionRunner.RunFocusedVerification(
                 acceptanceVerifier, worktreePath, goal.Id, request,
                 stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
-                runBaselineArm, cancellationToken);
+                runBaselineArm, cancellationToken, negativeControl);
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
@@ -809,6 +810,8 @@ internal sealed partial class ConductorDriver
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: false, cancellationToken);
         _runDualArmFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
+        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, mode) =>
+            RunFocusedEvidence(goal, request, lease, baseline, token, mode);
         _focusedEvidenceRunnerConfigured = true;
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
@@ -1215,6 +1218,8 @@ internal sealed partial class ConductorDriver
                 Checks: []))
             : ((goal, request, _, _) => runFocusedEvidence(goal, request));
         _runDualArmFocusedEvidence = _runFocusedEvidence;
+        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, _) =>
+            (baseline ? _runDualArmFocusedEvidence : _runFocusedEvidence)(goal, request, lease, token);
         _focusedEvidenceRunnerConfigured = runFocusedEvidence is not null;
         _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??
             (_ => new PreReviewEvidenceContext(
@@ -1996,7 +2001,7 @@ internal sealed partial class ConductorDriver
                 continue;
             }
 
-            if (TryResolveFindingEvidenceCoverage(
+            if (typedRequest.NegativeControl is null && TryResolveFindingEvidenceCoverage(
                     requestingTask,
                     typedRequest,
                     telemetryCandidateSha,
@@ -2018,7 +2023,7 @@ internal sealed partial class ConductorDriver
                     continue;
                 }
 
-                typedRequest = new FindingEvidenceRequest(uncoveredSelections);
+                typedRequest = typedRequest with { Selections = uncoveredSelections };
                 request = string.Join("; ", uncoveredSelections.Select(FormatFindingEvidenceSelection));
                 reusedSourceReceipts = coverageReceipts;
                 coverageDecisionReason = coverageReason;
@@ -2108,7 +2113,7 @@ internal sealed partial class ConductorDriver
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
-            initialRequestDispositions);
+            initialRequestDispositions, NegativeControl: runnable.TypedRequest.NegativeControl);
         if (TryResumeUnconfirmedCandidateRed(
                 goal, requestingTask, policy, runnable, candidateSha!, findingRoundFingerprint,
                 requestContext, out decision))
@@ -2201,7 +2206,7 @@ internal sealed partial class ConductorDriver
             armReceipts,
             requestDispositions,
             findingRoundFingerprint,
-            executionBasisIdentity);
+            executionBasisIdentity, evidence.NegativeControlOutcome);
         if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure &&
             !armReceipts.Any(arm => arm is { Arm: FindingEvidenceArm.Candidate, Disposition: FindingEvidenceArmDisposition.Red }))
         {
@@ -2452,7 +2457,7 @@ internal sealed partial class ConductorDriver
             .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
             .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
             .ToArray();
-        normalized = new FindingEvidenceRequest(distinct);
+        normalized = request with { Selections = distinct };
         executorRequest = string.Join(
             "; ",
             distinct.Select(FormatFindingEvidenceSelection));
@@ -2599,7 +2604,7 @@ internal sealed partial class ConductorDriver
                 .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
                 .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
                 .ToArray();
-            var request = new FindingEvidenceRequest(selections);
+            var request = batch.TypedRequest with { Selections = selections };
             batches[batchIndex] = new FindingEvidenceBatch(
                 BuildFindingEvidenceIdentity(request),
                 string.Join("; ", selections.Select(FormatFindingEvidenceSelection)),
@@ -2615,6 +2620,7 @@ internal sealed partial class ConductorDriver
         FindingEvidenceRequest left,
         FindingEvidenceRequest right)
     {
+        if (left.NegativeControl != right.NegativeControl) return "different-negative-control";
         var leftProjects = left.Selections
             .Select(selection => selection.TestProject)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -2788,7 +2794,7 @@ internal sealed partial class ConductorDriver
                 candidate,
                 policy,
                 request,
-                _runDualArmFocusedEvidence,
+                SelectFindingEvidenceRunner(requestContext?.NegativeControl, runBaselineArm: true),
                 requestContext);
         }
         catch (AcceptanceArtifactWriterLeaseBusyException ex)
@@ -2986,7 +2992,7 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        if (HasActiveApparatusHold(goal, out _))
+        if (HasActiveApparatusHold(goal, out _) || HasActiveOwnerReviewHold(goal, out _, out _))
         {
             return null;
         }
@@ -3022,6 +3028,9 @@ internal sealed partial class ConductorDriver
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(policy);
+
+        if (HasActiveOwnerReviewHold(goal, out _, out _))
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
 
         if (HasActiveApparatusHold(goal, out _))
         {
@@ -5798,6 +5807,9 @@ internal sealed partial class ConductorDriver
 
         if (acceptance.RequiredUnmetCriteria.Count > 0)
         {
+            if (TryHoldForOwnerReview(goal, goalPrefix, policy, acceptance) is { } ownerReviewHold)
+                return ownerReviewHold;
+
             var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
             var attemptedAllFlakyDisposition = false;
             if (retryDisposition.ActionableCriteria.Count == 0 &&

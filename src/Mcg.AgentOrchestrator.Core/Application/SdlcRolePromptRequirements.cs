@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class SdlcRolePromptRequirements
 {
+    private const string NegativeControlRequestRule = "- Prove RED with evidence_request negative_control:\"revert-src\".";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private const string TesterFindingRequestRule =
         "- Put failures in structured findings JSON with stable IDs and locations; carry distinct prior findings until resolved. Open blocking test-evidence MUST carry evidence_request:{selections:[{test_project,test_class}]}.";
@@ -20,9 +21,9 @@ internal static class SdlcRolePromptRequirements
     private const string SelfCheckAttestation =
         "- For each proven entry in Developer Criteria Self-Check on a criterion you attest, check the named test exists in the candidate and its assertion checks the named outcome; otherwise raise a finding against that criterion.";
     // Goal 79061df4 adds one attestation line; preserve existing budget headroom.
-    internal static readonly int ReviewerComplexRequirementsMaxChars = 4371 + SelfCheckAttestation.Length + 2;
+    internal static readonly int ReviewerComplexRequirementsMaxChars = 4437 + SelfCheckAttestation.Length + 2;
     internal static readonly int ReviewerCompactRequirementsMaxChars = 3346 + SelfCheckAttestation.Length + 2;
-    internal static readonly int TesterCompactRequirementsMaxChars = 3000 + SelfCheckAttestation.Length + 2;
+    internal static readonly int TesterCompactRequirementsMaxChars = 3066 + SelfCheckAttestation.Length + 2;
 
     private const string ReviewerExhaustiveFindingsContract =
         "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
@@ -90,6 +91,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                NegativeControlRequestRule,
                 TesterReceiptFirstContract,
                 TesterInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
@@ -114,6 +116,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
+                NegativeControlRequestRule,
                 "### 1. Spec compliance (do this first)",
                 "- Walk criteria in order: report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
@@ -257,6 +260,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                NegativeControlRequestRule,
                 TesterCompactReceiptFirstContract,
                 TesterCompactInconclusiveReceiptContract,
                 "- PRIMARY PATH: prefer Conductor-side runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming requested work. The Conductor returns receipts. Execute directly only if selection cannot settle it.",
@@ -276,6 +280,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Reviewer =>
             [
                 "## Reviewer Requirements",
+                NegativeControlRequestRule,
                 "### 1. Spec compliance (do this first)",
                 "- Record met/not-met/not-verifiable with file+line evidence. Use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; main conflicts use `category: spec-defect`.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
