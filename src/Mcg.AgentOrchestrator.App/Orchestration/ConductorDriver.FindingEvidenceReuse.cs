@@ -182,6 +182,32 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
+    private static IReadOnlyList<FindingEvidenceBatch> ExcludePassedRoundFindingEvidenceBatches(
+        TaskSpec requestingTask,
+        IReadOnlyList<FindingEvidenceBatch> batches,
+        string candidateSha,
+        string findingRoundFingerprint)
+    {
+        if (candidateSha == "unavailable")
+        {
+            return batches;
+        }
+
+        // Completing a batch in this round does not require reattaching content-bound
+        // evidence. Cross-round reuse keeps its stricter artifact and coverage checks.
+        var passedReceiptIds = requestingTask.VerificationHistory
+            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+            .Where(receipt => receipt is { Accepted: true, Passed: true } &&
+                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(receipt.FindingRoundFingerprint, findingRoundFingerprint, StringComparison.Ordinal))
+            .Select(receipt => receipt.ReceiptId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return batches.Where(batch => !passedReceiptIds.Contains(
+                CreateFindingEvidenceReceiptId(candidateSha, findingRoundFingerprint, batch.Identity)))
+            .ToArray();
+    }
+
     private static bool HasCurrentFindingEvidenceReceipt(
         TaskSpec requestingTask,
         ReviewFinding finding,

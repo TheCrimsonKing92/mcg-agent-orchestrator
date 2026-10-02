@@ -2069,7 +2069,8 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var batches = BuildFindingEvidenceBatches(groups);
+        var batches = ExcludePassedRoundFindingEvidenceBatches(
+            requestingTask, BuildFindingEvidenceBatches(groups), telemetryCandidateSha, findingRoundFingerprint);
         var runnable = batches.FirstOrDefault();
         if (runnable is null)
         {
