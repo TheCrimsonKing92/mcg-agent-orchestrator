@@ -6,7 +6,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record OperatorLessonIntentServices(
     SqliteOperatorLessonStore Store,
     AdjudicationEvidenceResolver EvidenceResolver,
-    Func<string, Goal?> GoalLookup);
+    Func<string, Goal?> GoalLookup,
+    Func<string, IReadOnlyList<string>>? GoalIdsByPrefix = null,
+    Func<Goal, bool>? IsGoalLanded = null)
+{
+    internal bool HasLanded(Goal goal) => IsGoalLanded?.Invoke(goal) ?? goal.Status == GoalStatus.Completed;
+}
 
 internal sealed class OperatorLessonRejectedException(string message) : Exception(message);
 
@@ -57,13 +62,67 @@ internal sealed partial class OperatorIntentCoordinator
         var payload = DeserializeLesson<LessonRecordOperatorIntentPayload>(intent);
         if (string.IsNullOrWhiteSpace(payload.Situation) || string.IsNullOrWhiteSpace(payload.Rule))
             throw new OperatorLessonRejectedException("lesson-situation-and-rule-required");
+        var untilGoalId = ResolveUntilGoal(payload.UntilGoal, kernel, services);
         var evidence = ResolveLessonEvidence(payload.EvidenceReferences, payload.WorkingDirectory,
             payload.GoalId, kernel, services, required: true);
         var lesson = new OperatorLesson(intent.Id, payload.Situation, payload.Rule,
             payload.AppliesTo ?? [], evidence, intent.Actor, intent.ActorKind, intent.Channel,
-            _utcNow(), payload.GoalId, null, null, null, null);
+            _utcNow(), payload.GoalId, null, null, null, null, untilGoalId);
         return !services.Store.TryAppendLesson(lesson, intent.Id);
     }
+
+    private static string? ResolveUntilGoal(string? prefix, AgentOrchestratorKernel kernel,
+        OperatorLessonIntentServices services)
+    {
+        if (prefix is null) return null;
+        if (string.IsNullOrWhiteSpace(prefix))
+            throw new OperatorLessonRejectedException($"until-goal-unknown prefix={prefix}");
+        var ids = kernel.Goals.Select(goal => goal.Id.Value)
+            .Where(id => id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Concat(services.GoalIdsByPrefix?.Invoke(prefix) ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (ids.Length == 0)
+            throw new OperatorLessonRejectedException($"until-goal-unknown prefix={prefix}");
+        if (ids.Length > 1)
+            throw new OperatorLessonRejectedException($"until-goal-ambiguous prefix={prefix}");
+        var goal = kernel.Goals.FirstOrDefault(goal => goal.Id.Value == ids[0]) ?? services.GoalLookup(ids[0]);
+        if (goal is null)
+            throw new OperatorLessonRejectedException($"until-goal-unknown prefix={prefix}");
+        if (services.HasLanded(goal))
+            throw new OperatorLessonRejectedException($"until-goal-already-landed prefix={prefix}");
+        return goal.Id.Value;
+    }
+
+    internal IReadOnlyList<string> RetireLandedUntilGoalLessons(AgentOrchestratorKernel kernel)
+    {
+        if (Lessons is null) return [];
+        var lines = new List<string>();
+        foreach (var lesson in Lessons.Store.List())
+        {
+            if (lesson.UntilGoalId is not { } id) continue;
+            Goal? goal;
+            try
+            {
+                goal = kernel.Goals.FirstOrDefault(goal => goal.Id.Value == id) ?? Lessons.GoalLookup(id);
+                if (goal is null || !Lessons.HasLanded(goal)) continue;
+            }
+            catch (Exception ex)
+            {
+                lines.Add($"LESSON_RETIREMENT id={lesson.Id} result=goal-unavailable reason={Sanitize(ex.Message)}");
+                continue;
+            }
+            var reason = $"until-goal-landed goal={id}";
+            var result = Lessons.Store.TryAppendRetirement(lesson.Id, "until-goal-landed:" + lesson.Id,
+                reason, [], "conductor", OperatorActorKind.Agent, "conductor", _utcNow());
+            if (result == OperatorLessonRetireResult.Retired)
+                lines.Add($"LESSON_RETIRED id={lesson.Id} reason={reason}");
+        }
+        return lines;
+    }
+
+    internal static Func<Goal, bool> BuildLessonLandedPredicate(string executionDirectory) => goal =>
+        goal.Status == GoalStatus.Completed &&
+        GoalOperationJournal.HasDurableLandingIntent(GoalOperationJournal.Read(executionDirectory, goal.Id));
 
     private bool ApplyLessonRetire(OperatorIntentRecord intent, OperatorLessonIntentServices services)
     {

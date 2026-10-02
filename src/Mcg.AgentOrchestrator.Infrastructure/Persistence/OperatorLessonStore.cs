@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -18,7 +19,8 @@ public sealed record OperatorLesson(
     string? RetireReason,
     string? RetiredBy,
     DateTimeOffset? RetiredAt,
-    IReadOnlyList<EvidenceManifestEntry>? RetireEvidence);
+    IReadOnlyList<EvidenceManifestEntry>? RetireEvidence,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? UntilGoalId = null);
 
 public enum OperatorLessonRetireResult { Retired, Replayed, UnknownLesson, AlreadyRetired }
 
@@ -39,9 +41,9 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
         command.CommandText = """
             INSERT OR IGNORE INTO lessons
                 (id, source_intent_id, situation, rule, applies_to_json, evidence_json,
-                 actor, actor_kind, channel, recorded_at, goal_id)
+                 actor, actor_kind, channel, recorded_at, goal_id, until_goal_id)
             VALUES ($id, $source, $situation, $rule, $tags, $evidence,
-                    $actor, $kind, $channel, $at, $goal)
+                    $actor, $kind, $channel, $at, $goal, $until)
             """;
         command.Parameters.AddWithValue("$id", lesson.Id);
         command.Parameters.AddWithValue("$source", sourceIntentId);
@@ -54,6 +56,7 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
         command.Parameters.AddWithValue("$channel", lesson.Channel);
         command.Parameters.AddWithValue("$at", lesson.RecordedAt.ToString("O"));
         command.Parameters.AddWithValue("$goal", (object?)lesson.GoalId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$until", (object?)lesson.UntilGoalId ?? DBNull.Value);
         var inserted = command.ExecuteNonQuery() == 1;
         if (!inserted && !HasSource(connection, "lessons", sourceIntentId))
             throw new InvalidOperationException($"Lesson id '{lesson.Id}' is already owned by another intent.");
@@ -104,10 +107,11 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
         if (!File.Exists(_databasePath)) return [];
         using var connection = OpenReadOnly();
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        var untilColumn = HasUntilGoalColumn(connection) ? "l.until_goal_id" : "NULL";
+        command.CommandText = $"""
             SELECT l.id, l.situation, l.rule, l.applies_to_json, l.evidence_json,
                    l.actor, l.actor_kind, l.channel, l.recorded_at, l.goal_id,
-                   r.reason, r.actor, r.retired_at, r.evidence_json
+                   r.reason, r.actor, r.retired_at, r.evidence_json, {untilColumn}
             FROM lessons l LEFT JOIN lesson_retirements r ON r.lesson_id=l.id
             ORDER BY l.recorded_at DESC, l.id
             """;
@@ -128,7 +132,8 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
                 retired ? reader.GetString(10) : null,
                 retired ? reader.GetString(11) : null,
                 retired ? DateTimeOffset.Parse(reader.GetString(12)) : null,
-                retired ? JsonSerializer.Deserialize<EvidenceManifestEntry[]>(reader.GetString(13), JsonOptions) : null));
+                retired ? JsonSerializer.Deserialize<EvidenceManifestEntry[]>(reader.GetString(13), JsonOptions) : null,
+                reader.IsDBNull(14) ? null : reader.GetString(14)));
         }
         return lessons;
     }
@@ -141,20 +146,36 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
             DataSource = _databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
         }.ToString());
         connection.Open();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS lessons (
                 id TEXT PRIMARY KEY, source_intent_id TEXT NOT NULL UNIQUE,
                 situation TEXT NOT NULL, rule TEXT NOT NULL, applies_to_json TEXT NOT NULL,
                 evidence_json TEXT NOT NULL, actor TEXT NOT NULL, actor_kind TEXT NOT NULL,
-                channel TEXT NOT NULL, recorded_at TEXT NOT NULL, goal_id TEXT);
+                channel TEXT NOT NULL, recorded_at TEXT NOT NULL, goal_id TEXT, until_goal_id TEXT);
             CREATE TABLE IF NOT EXISTS lesson_retirements (
                 lesson_id TEXT PRIMARY KEY REFERENCES lessons(id), source_intent_id TEXT NOT NULL UNIQUE,
                 reason TEXT NOT NULL, evidence_json TEXT NOT NULL, actor TEXT NOT NULL,
                 actor_kind TEXT NOT NULL, channel TEXT NOT NULL, retired_at TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
+        if (!HasUntilGoalColumn(connection, transaction))
+        {
+            command.CommandText = "ALTER TABLE lessons ADD COLUMN until_goal_id TEXT";
+            command.ExecuteNonQuery();
+        }
+        transaction.Commit();
         return connection;
+    }
+
+    private static bool HasUntilGoalColumn(SqliteConnection connection, SqliteTransaction? transaction = null)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT COUNT(*) FROM pragma_table_info('lessons') WHERE name='until_goal_id'";
+        return Convert.ToInt32(command.ExecuteScalar()) == 1;
     }
 
     private SqliteConnection OpenReadOnly()

@@ -75,7 +75,7 @@ internal static class CliCommandHelp
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
     public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
-    public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
+    public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
@@ -525,7 +525,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Lesson = new(
         LessonUsage,
         "Queue an evidence-backed lesson record or retirement for the conductor tick.",
-        ["--situation", "--rule", "--evidence", "--applies-to", "--goal", "--actor-kind",
+        ["--situation", "--rule", "--evidence", "--applies-to", "--goal", "--until-goal", "--actor-kind",
          "--operator-actor", "--idempotency-key", "--reason", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Lessons = new(
