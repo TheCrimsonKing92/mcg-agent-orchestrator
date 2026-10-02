@@ -73,7 +73,8 @@ public class CanaryEngineSurfaceCoverageTests
 
         var dependencies = roots.SelectMany(type => type.Dependencies)
             .Select(dependency => dependency.Target)
-            .Where(type => type.Assembly.FullName == assemblyName && !IsVerifierType(type))
+            // Targets without an assembly are not declared in the Infrastructure assembly.
+            .Where(type => type.Assembly?.FullName == assemblyName && !IsVerifierType(type))
             .ToArray();
         Assert.NotEmpty(dependencies);
 
