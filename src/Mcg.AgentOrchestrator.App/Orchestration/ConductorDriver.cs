@@ -143,6 +143,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, GoalWorktreeRemoveResult> _cleanup;
     private readonly Action<Goal> _completeGoal;
     private readonly Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult> _writeEscalation;
+    private readonly Action<Goal, GoalLifecycleState> _resolveParkedWaitEscalations;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
@@ -986,6 +987,8 @@ internal sealed partial class ConductorDriver
         };
         _completeGoal = goal => kernel.CompleteGoal(goal.Id, "Conductor completed goal after durable landing, recording, and cleanup evidence.");
 
+        _resolveParkedWaitEscalations = (goal, state) =>
+            OperatorInbox.ResolveParkedWaitLandingEscalationsAsync(workspace, goal, state).GetAwaiter().GetResult();
         _writeEscalation = (goal, state, reason) =>
         {
             var source = $"conductor:{state}";
@@ -1177,7 +1180,8 @@ internal sealed partial class ConductorDriver
         Action<Goal, DeveloperBranchIntegrationResult>? recordPreDispatchIntegrationReceipt = null,
         Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null,
         Func<GoalId, string>? workerBuildArtifactsPath = null,
-        Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? integrateMainBeforeReadOnlyDispatch = null)
+        Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? integrateMainBeforeReadOnlyDispatch = null,
+        Action<Goal, GoalLifecycleState>? resolveParkedWaitEscalations = null)
     {
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
@@ -1267,6 +1271,7 @@ internal sealed partial class ConductorDriver
         _record = record;
         _cleanup = cleanup;
         _completeGoal = completeGoal ?? (_ => { });
+        _resolveParkedWaitEscalations = resolveParkedWaitEscalations ?? ((_, _) => { });
         _writeEscalation = writeEscalationWithResult ?? ((goal, state, reason) =>
         {
             writeEscalation(goal, state, reason);
@@ -1410,6 +1415,14 @@ internal sealed partial class ConductorDriver
 
         var facts = GetFacts(goal);
         var state = GoalLifecycle.ResolveState(goal, facts);
+        try
+        {
+            _resolveParkedWaitEscalations(goal, state);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"warning: parked-wait landing escalation resolution failed for goal {goalPrefix}: {ex.Message}");
+        }
 
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));

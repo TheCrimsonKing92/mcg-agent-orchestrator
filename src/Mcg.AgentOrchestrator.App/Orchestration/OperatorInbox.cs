@@ -751,6 +751,58 @@ internal static class OperatorInbox
         }
     }
 
+    public static async Task<int> ResolveParkedWaitLandingEscalationsAsync(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        GoalLifecycleState currentState,
+        ICollaborationItemStore? collaborationStore = null,
+        DateTimeOffset? resolvedAtUtc = null,
+        TimeSpan? landingEscalationLockTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(Path.Combine(workspace.OrchestratorDirectory, LandingEscalationFileName)))
+            return 0;
+
+        using var escalationLock = TryAcquireLandingEscalationLock(
+            workspace, landingEscalationLockTimeout ?? DefaultLandingEscalationLockTimeout);
+        if (escalationLock is null)
+            return 0;
+
+        var items = LoadLandingEscalationsUnsafe(workspace).ToArray();
+        var currentBranch = $"conductor:{currentState}";
+        var resolvedAt = resolvedAtUtc ?? DateTimeOffset.UtcNow;
+        var resolvedCount = 0;
+        for (var index = 0; index < items.Length; index++)
+        {
+            var item = items[index];
+            if (item.ResolvedAtUtc is not null ||
+                !item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
+                item.IntegrationBranch.Equals(currentBranch, StringComparison.OrdinalIgnoreCase) ||
+                !(item.IntegrationBranch.Equals($"conductor:{GoalLifecycleState.AwaitingClarification}", StringComparison.OrdinalIgnoreCase) ||
+                  item.IntegrationBranch.Equals($"conductor:{GoalLifecycleState.AwaitingHumanInput}", StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            var reason = $"Goal left {item.IntegrationBranch} (now {currentBranch}).";
+            var sourceKey = $"landing-escalation:{goal.Id.Value}:{item.Reason}";
+            var itemId = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, sourceKey);
+            var store = collaborationStore
+                ?? CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            // Resolve before saving: a failed item write must leave the record eligible for retry.
+            await store.TryResolveAsync(itemId, reason, cancellationToken).ConfigureAwait(false);
+            items[index] = item with
+            {
+                ResolvedAtUtc = resolvedAt,
+                ResolvedBy = "conductor-state-left",
+                ResolutionReason = reason
+            };
+            resolvedCount++;
+        }
+
+        if (resolvedCount > 0)
+            SaveLandingEscalationsUnsafe(workspace, items);
+        return resolvedCount;
+    }
+
     public static bool HasUnresolvedLandingEscalation(
         OrchestratorWorkspace workspace,
         Goal goal,
