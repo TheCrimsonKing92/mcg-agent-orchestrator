@@ -108,6 +108,8 @@ public static class WorkerProfileDispatcher
             ["prior-task-evidence.md"] = new(ContextArtifactKind.PriorTaskEvidence, RegistryArtifactDisposition.Deliver),
             ["prior-goal-evidence.md"] = new(ContextArtifactKind.PriorTaskEvidence, RegistryArtifactDisposition.Deliver),
             ["AGENTS.md"] = new(ContextArtifactKind.OperatorInstructions, RegistryArtifactDisposition.Deliver),
+            [WorkerStandingRules.ContextFileName] = new(ContextArtifactKind.OperatorInstructions, RegistryArtifactDisposition.Deliver, ContextDeliveryMode.MandatoryFile),
+            [WorkerStandingRules.PlannerContextFileName] = new(ContextArtifactKind.OperatorInstructions, RegistryArtifactDisposition.Deliver, ContextDeliveryMode.MandatoryFile),
             ["deterministic-verification.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
             ["workflow-brokers.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
             ["context-budget.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
