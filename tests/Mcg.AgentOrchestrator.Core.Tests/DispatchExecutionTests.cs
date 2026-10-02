@@ -504,7 +504,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
     Assert.Equal(task.Id, request.TaskId);
     Assert.Equal("Which branch should I modify?", request.Question);
-    Assert.Equal(verification, task.LastVerification);
+    Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
     Assert.True(task.LastVerification!.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
     Assert.DoesNotContain("HUMAN_INPUT:", task.LastVerification.StandardOutput, StringComparison.Ordinal);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
@@ -597,7 +597,8 @@ public sealed class DispatchExecutionTests
         verification with
         {
             CompletionVerdictVerifiedSuccess = true,
-            CompletionVerdictRule = "succeeded-dispatch-completion-evidence"
+            CompletionVerdictRule = "succeeded-dispatch-completion-evidence",
+            AcceptanceCriteriaVersionHash = "no-refined-spec"
         },
         task.LastVerification);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
@@ -3115,7 +3116,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(
-        verification with { CompletionVerdictRule = "unknown-failure" },
+        verification with { CompletionVerdictRule = "unknown-failure", AcceptanceCriteriaVersionHash = "no-refined-spec" },
         task.LastVerification);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));

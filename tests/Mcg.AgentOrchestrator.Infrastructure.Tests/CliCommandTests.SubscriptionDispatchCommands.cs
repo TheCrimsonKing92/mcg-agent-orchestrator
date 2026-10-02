@@ -2130,7 +2130,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("retry <task-number> <message>", ex!.Message);
         Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        Xunit.Assert.Equal(verification, task.LastVerification);
+        Xunit.Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
     }
 
 

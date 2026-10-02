@@ -44,6 +44,7 @@ public sealed partial class TaskSpec
     public int EmptyOutputRetryCount { get; private set; }
 
     public DateTimeOffset? LatestRetryAt { get; private set; }
+    public bool LatestRetryInherited { get; private set; }
 
     public DateTimeOffset? LatestRoleInputRetryAt { get; private set; }
 
@@ -172,7 +173,8 @@ public sealed partial class TaskSpec
                     LastVerification.CompletionVerdictVerifiedSuccess,
                     LastVerification.CompletionVerdictRule,
                     LastVerification.AssignedScopeComplete,
-                    LastVerification.CandidateIdentity),
+                    LastVerification.CandidateIdentity,
+                    LastVerification.AcceptanceCriteriaVersionHash),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -203,7 +205,8 @@ public sealed partial class TaskSpec
                     verification.CompletionVerdictVerifiedSuccess,
                     verification.CompletionVerdictRule,
                     verification.AssignedScopeComplete,
-                    verification.CandidateIdentity))
+                    verification.CandidateIdentity,
+                    verification.AcceptanceCriteriaVersionHash))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -266,7 +269,8 @@ public sealed partial class TaskSpec
             LatestProviderBudgetRecoveryAt,
             WorkerBuildCheckRecoveryCount,
             LatestRoleInputRetryAt,
-            CriterionRetryFeedbackRoundAt);
+            CriterionRetryFeedbackRoundAt,
+            LatestRetryInherited);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -339,7 +343,8 @@ public sealed partial class TaskSpec
                     CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
                     CompletionVerdictRule: verification.CompletionVerdictRule,
                     AssignedScopeComplete: verification.AssignedScopeComplete,
-                    CandidateIdentity: verification.CandidateIdentity));
+                    CandidateIdentity: verification.CandidateIdentity,
+                    AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash));
             }
         }
 
@@ -380,7 +385,8 @@ public sealed partial class TaskSpec
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
                 CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
                 AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete,
-                CandidateIdentity: snapshot.LastVerification.CandidateIdentity);
+                CandidateIdentity: snapshot.LastVerification.CandidateIdentity,
+                AcceptanceCriteriaVersionHash: snapshot.LastVerification.AcceptanceCriteriaVersionHash);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -488,6 +494,7 @@ public sealed partial class TaskSpec
         task.AcceptedRetryFeedback = snapshot.AcceptedRetryFeedback;
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
+        task.LatestRetryInherited = snapshot.LatestRetryInherited;
         task.CriterionRetryFeedbackRoundAt = snapshot.CriterionRetryFeedbackRoundAt;
         task.LatestRoleInputRetryAt = snapshot.LatestRoleInputRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
@@ -582,6 +589,15 @@ public sealed partial class TaskSpec
     }
 
     internal void ClearLatestVerification() => LastVerification = null;
+
+    internal void ReinstateVerification(TaskVerificationRecord verification)
+    {
+        if (!_verificationHistory.Any(item => ReferenceEquals(item, verification)))
+            throw new InvalidOperationException("Only this task's retained verification can be reinstated.");
+        LastVerification = verification;
+        Status = WorkTaskStatus.Completed;
+        LatestRetryInherited = false;
+    }
 
     internal void RecordCompletionVerdict(bool verifiedSuccess, string? rule)
     {
@@ -710,6 +726,7 @@ public sealed partial class TaskSpec
         bool inherited = false)
     {
         LatestRetryAt = retriedAt;
+        LatestRetryInherited = inherited;
         if (!inherited && retryCause != RetryCause.UnchangedContextRepeat)
             LatestRoleInputRetryAt = retriedAt;
         PendingRetryRoundKind = retryRoundKind;

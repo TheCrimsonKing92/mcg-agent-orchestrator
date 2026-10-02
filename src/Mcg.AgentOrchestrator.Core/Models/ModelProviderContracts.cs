@@ -92,7 +92,8 @@ public sealed record TaskVerificationRecord(
     // stdout snapshot, so kernel reparse cannot recover the classification on its own.
     HumanWaitKind? HumanInputKind = null,
     string? HumanInputEvidenceOwner = null,
-    CandidateIdentity? CandidateIdentity = null)
+    CandidateIdentity? CandidateIdentity = null,
+    string? AcceptanceCriteriaVersionHash = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -141,6 +142,7 @@ public sealed record TaskVerificationRecord(
         {
             ModelFitNote = preferred.ModelFitNote ?? ModelFitNote,
             CandidateIdentity = preferred.CandidateIdentity ?? CandidateIdentity,
+            AcceptanceCriteriaVersionHash = preferred.AcceptanceCriteriaVersionHash ?? AcceptanceCriteriaVersionHash,
             HasCommittedChanges = HasCommittedChanges || preferred.HasCommittedChanges,
             HeartbeatStandardOutputBytes = preferred.HeartbeatStandardOutputBytes ?? HeartbeatStandardOutputBytes,
             HumanInputQuestion = preferred.HumanInputQuestion ?? HumanInputQuestion,

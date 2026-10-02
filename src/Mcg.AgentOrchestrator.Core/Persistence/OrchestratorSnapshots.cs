@@ -136,7 +136,8 @@ public sealed record TaskSnapshot(
     DateTimeOffset? LatestProviderBudgetRecoveryAt = null,
     int WorkerBuildCheckRecoveryCount = 0,
     DateTimeOffset? LatestRoleInputRetryAt = null,
-    DateTimeOffset? CriterionRetryFeedbackRoundAt = null);
+    DateTimeOffset? CriterionRetryFeedbackRoundAt = null,
+    bool LatestRetryInherited = false);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -186,7 +187,8 @@ public sealed record TaskVerificationSnapshot(
     bool CompletionVerdictVerifiedSuccess = false,
     string? CompletionVerdictRule = null,
     bool? AssignedScopeComplete = null,
-    CandidateIdentity? CandidateIdentity = null)
+    CandidateIdentity? CandidateIdentity = null,
+    string? AcceptanceCriteriaVersionHash = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

@@ -5,6 +5,10 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public static class EffectiveAcceptanceCriteriaVersion
 {
+    public static string ComputeForGoal(Goal goal) => goal.RefinedSpec is { } spec
+        ? ComputeHash(spec, goal.EffectiveAcceptanceCriteriaCorrections)
+        : "no-refined-spec";
+
     public static IReadOnlyList<string> BuildSnapshot(
         RefinedSpec spec,
         IEnumerable<EffectiveAcceptanceCriteriaCorrection> corrections)

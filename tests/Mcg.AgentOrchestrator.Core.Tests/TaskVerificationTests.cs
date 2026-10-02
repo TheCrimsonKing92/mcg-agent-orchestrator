@@ -410,9 +410,9 @@ public sealed class TaskVerificationTests
 
     kernel.RecordTaskVerification(goal.Id, task.Id, verification);
 
-    Assert.Equal(verification, task.LastVerification);
+    Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
     Assert.Equal(1, task.VerificationHistory.Count);
-    Assert.Equal(verification, task.VerificationHistory.Single());
+    Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.VerificationHistory.Single());
     Assert.True(task.LastVerification!.Succeeded);
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
@@ -433,10 +433,10 @@ public sealed class TaskVerificationTests
     kernel.RecordTaskVerification(goal.Id, task.Id, first);
     kernel.RecordTaskVerification(goal.Id, task.Id, second);
 
-    Assert.Equal(second, task.LastVerification);
+    Assert.Equal(second with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
     Assert.Equal(2, task.VerificationHistory.Count);
-    Assert.Equal(first, task.VerificationHistory[0]);
-    Assert.Equal(second, task.VerificationHistory[1]);
+    Assert.Equal(first with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.VerificationHistory[0]);
+    Assert.Equal(second with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.VerificationHistory[1]);
 }
     [Xunit.Fact(DisplayName = "TaskVerificationRecord_bounds_large_path_output_at_creation")]
     public void TaskVerificationRecordBoundsLargePathOutputAtCreation()
@@ -864,7 +864,7 @@ public sealed class TaskVerificationTests
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal<TaskVerificationRecord?>(null, task.LastVerification);
     Assert.Equal(1, task.VerificationHistory.Count);
-    Assert.Equal(failed, task.VerificationHistory.Single());
+    Assert.Equal(failed with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.VerificationHistory.Single());
     Assert.Equal(VerificationGateStatus.NotReady, gate.GateStatus);
     Assert.Equal(StageReadinessStatus.ReadyToRun, stage.StageStatus);
     Assert.Contains(goal.Timeline, evt =>
@@ -888,7 +888,7 @@ public sealed class TaskVerificationTests
 
     Assert.Contains("Retry message cannot be empty", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(verification, task.LastVerification);
+    Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
     Assert.True(!goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
 }
     [Xunit.Fact(DisplayName = "RetryTask_mechanical_round_marker_persists_and_clears_after_verification")]
