@@ -26,7 +26,8 @@ internal static class DeveloperDeferredNoChangeQualifier
         outcome = default!;
         var candidate = task.LastDispatch?.BaseCommit;
         if (task.RequiredRole != AgentRole.Developer ||
-            (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0) ||
+            (task.LatestRetryAt is null && task.CriterionRetryCount == 0 && task.CriterionRetryFeedback.Count == 0 &&
+                !ResumedAfterCommittedDispatchAnswer(goal, task)) ||
             !clean || hasRelevantCommitAfterDispatch ||
             string.IsNullOrWhiteSpace(candidate) ||
             !Regex.IsMatch(candidate, "^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$") ||
@@ -74,6 +75,21 @@ internal static class DeveloperDeferredNoChangeQualifier
 
         outcome = new DeferredNoChangeOutcome(candidate, classes, rationale.Value.Trim());
         return true;
+    }
+
+    private static bool ResumedAfterCommittedDispatchAnswer(Goal goal, TaskSpec task)
+    {
+        if (task.LastDispatch is not { } current) return false;
+        var previous = task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt < current.DispatchedAt);
+        if (previous is null || string.IsNullOrWhiteSpace(previous.ResultCommit) ||
+            string.Equals(previous.ResultCommit, previous.BaseCommit, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Conductor integrations append commits, so the previous ResultCommit is an ancestor
+        // of the current BaseCommit by construction; no separate git ancestry query is needed.
+        return goal.Timeline.Any(item => item.TaskId == task.Id &&
+            item.Kind == ProgressKind.HumanInputReceived &&
+            item.OccurredAt > previous.DispatchedAt && item.OccurredAt < current.DispatchedAt);
     }
 
     private static string DeclaringClass(string identity)
