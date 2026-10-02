@@ -141,7 +141,8 @@ internal sealed class ConductEventLogWriter
             timestamp ?? _utcNow(),
             eventKind,
             string.IsNullOrWhiteSpace(goalId) ? null : goalId,
-            detail);
+            detail,
+            ConductEventOperatorClassifier.Classify(eventKind, detail));
         return JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
     }
 
@@ -354,7 +355,8 @@ internal sealed record ConductEventRecord(
     DateTimeOffset Timestamp,
     string EventKind,
     string? GoalId,
-    string Detail);
+    string Detail,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Operator = null);
 
 internal sealed record ConductEvidenceLifecycleEvent(
     DateTimeOffset Timestamp,
