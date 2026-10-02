@@ -1635,6 +1635,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
                 };
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
+                var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var intentGoalReloadObservations = new Dictionary<string, ConductorGoalReloadObservation>(StringComparer.Ordinal);
@@ -1796,10 +1797,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
                             context.Workspace);
                     }
-                    RunEventMaintenanceCadence.TryRunIfDue(
-                        context.Workspace.RunEventStorePath,
-                        context.Workspace.ConductEventsLogPath,
-                        workspace: context.Workspace);
+                    maintenanceCadence.OnTick();
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }

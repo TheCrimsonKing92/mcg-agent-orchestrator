@@ -16,6 +16,9 @@ internal static class RunEventMaintenanceCadence
     private static readonly ConcurrentDictionary<string, DateTimeOffset> NextDueByStorePath =
         new(StringComparer.OrdinalIgnoreCase);
 
+    internal static bool IsKnownFresh(string runEventStorePath, DateTimeOffset now) =>
+        NextDueByStorePath.TryGetValue(Path.GetFullPath(runEventStorePath), out var nextDue) && now < nextDue;
+
     public static RunEventMaintenanceCadenceResult TryRunIfDue(
         string runEventStorePath,
         string conductEventsLogPath,
