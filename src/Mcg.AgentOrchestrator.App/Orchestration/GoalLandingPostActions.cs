@@ -104,36 +104,50 @@ internal static class GoalLandingPostActions
 
         try
         {
-            var criteria = goal.Tasks
-                .Select(task => task.VerificationPlan)
-                .Where(plan => !string.IsNullOrWhiteSpace(plan))
-                .Select(plan => plan!)
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
-
-            var testSummary = verification?.Checks is { Count: > 0 } checks
-                ? string.Join(Environment.NewLine, checks
-                    .Where(check => !string.IsNullOrWhiteSpace(check.ResultSummary))
-                    .Select(check => $"{check.Name}: {check.ResultSummary}"))
-                : null;
-
-            var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(worktreePath);
-            var inputs = new SemanticAcceptanceInputs(
-                goal.Objective,
-                criteria,
-                GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath),
-                GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
-                testSummary,
-                perFileDiffs);
-
             var judges = baseJudges
                 .Select(j => (ISemanticJudge)new RecursivePerFileSemanticJudge(j))
                 .ToList();
+            var history = SemanticJudgeSuspension.ReadHistory(workspace.SemanticAcceptanceLogPath);
+            var decisions = judges.Select(judge => SemanticJudgeSuspension.Decide(
+                history.TryGetValue(judge.Name, out var entries) ? entries : [])).ToList();
+            var invokedJudges = judges.Where((_, index) =>
+                decisions[index] != SemanticJudgeSuspension.Decision.Suspended).ToList();
+            IReadOnlyList<JudgeVerdict> invokedVerdicts = [];
+            if (invokedJudges.Count > 0)
+            {
+                var criteria = goal.Tasks
+                    .Select(task => task.VerificationPlan)
+                    .Where(plan => !string.IsNullOrWhiteSpace(plan))
+                    .Select(plan => plan!)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
 
-            var report = SemanticAcceptanceEvaluator
-                .EvaluateAsync(judges, inputs, TimeSpan.FromSeconds(90))
-                .GetAwaiter()
-                .GetResult();
+                var testSummary = verification?.Checks is { Count: > 0 } checks
+                    ? string.Join(Environment.NewLine, checks
+                        .Where(check => !string.IsNullOrWhiteSpace(check.ResultSummary))
+                        .Select(check => $"{check.Name}: {check.ResultSummary}"))
+                    : null;
+
+                var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(worktreePath);
+                var inputs = new SemanticAcceptanceInputs(
+                    goal.Objective,
+                    criteria,
+                    GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath),
+                    GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
+                    testSummary,
+                    perFileDiffs);
+
+                invokedVerdicts = SemanticAcceptanceEvaluator
+                    .EvaluateAsync(invokedJudges, inputs, TimeSpan.FromSeconds(90))
+                    .GetAwaiter()
+                    .GetResult().Verdicts;
+            }
+
+            var invokedIndex = 0;
+            var report = new SemanticAcceptanceReport(judges.Select((judge, index) =>
+                decisions[index] == SemanticJudgeSuspension.Decision.Suspended
+                    ? new JudgeVerdict(judge.Name, SemanticAcceptanceVerdict.Invalid(SemanticJudgeSuspension.SuspendedError))
+                    : invokedVerdicts[invokedIndex++]).ToList());
 
             PrintSemanticAcceptanceReport(report, writeLine);
             AppendSemanticAcceptanceReceipt(workspace.SemanticAcceptanceLogPath, goal, report);
@@ -273,6 +287,12 @@ internal static class GoalLandingPostActions
         foreach (var entry in report.Verdicts)
         {
             var verdict = entry.Verdict;
+            if (!verdict.IsValid && SemanticJudgeSuspension.IsSuspendedError(verdict.ValidationErrors))
+            {
+                writeLine?.Invoke($"  {entry.Judge}: suspended ({verdict.ValidationErrors[0]})");
+                continue;
+            }
+
             if (!verdict.IsValid)
             {
                 writeLine?.Invoke($"  {entry.Judge}: no verdict ({string.Join("; ", verdict.ValidationErrors)})");
