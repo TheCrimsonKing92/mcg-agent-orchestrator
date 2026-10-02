@@ -25,7 +25,7 @@ public sealed partial class GoalAcceptanceVerifier
     private static bool StopsOnCaptureLimit(GateHeartbeatContext context) =>
         string.Equals(context.RunClass, GateHeartbeatRunClass.FocusedEvidence, StringComparison.Ordinal);
 
-    private static bool IsInterrupted(CommandResult result) => result.TimedOut || result.CaptureLimited;
+    internal static bool IsInterrupted(CommandResult result) => result.TimedOut || result.CaptureLimited;
 
     private static bool IsCaptureLimitFailureName(string name) =>
         name.StartsWith("acceptance-check-capture-limit:", StringComparison.Ordinal);

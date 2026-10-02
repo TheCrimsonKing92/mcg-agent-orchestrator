@@ -51,7 +51,10 @@ internal static class SourceSizeRatchet
             // Goal 6c6778ce extracted test-tamper analysis into TestTamperAnalysis.
             // Goal 29c53339 extracted remaining dotnet and MTP argument construction into AcceptanceCheckCommandBuilder.
             // Goal d2ed62af extracted focused-evidence execution into its own type.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 8040),
+            // Goal c0cfa8ae extracted 445 lines of test telemetry and TRX receipt inspection.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 7595),
+            // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 423),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 740),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
