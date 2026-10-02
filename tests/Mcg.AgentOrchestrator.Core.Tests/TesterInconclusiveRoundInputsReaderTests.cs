@@ -232,7 +232,7 @@ public sealed class TesterInconclusiveRoundInputsReaderTests
             if (manualVerification)
                 Kernel.RecordTaskVerification(Goal.Id, Tester.Id, verification);
             else
-                Kernel.RecordTaskDispatchExecutionResult(Goal.Id, Tester.Id, verification);
+                Kernel.RecordDispatchExecutionResult(Goal.Id, Tester.Id, verification);
             Assert.Equal(WorkTaskStatus.Failed, Tester.Status);
         }
 
