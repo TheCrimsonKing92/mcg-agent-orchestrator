@@ -4,6 +4,64 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GoalWorktreeTestsRebaseMergeSquash : GoalWorktreeTestBase
 {
     [Xunit.Fact]
+    public void SquashMessageCarriesNewestDeveloperSubjectCommitListAndGoalTrailer()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var prefix = $"Developer({goalId.Value[..8]}): ";
+            var firstSubject = prefix + "first goal change";
+            var secondSubject = prefix + "second goal change with \"quotes\", $value; | & `ticks`";
+            var baseBranch = RunGitOutput(repo, "branch", "--show-current");
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            CommitFile(path, "one.txt", "first goal change", firstSubject);
+            var firstCommit = RunGitOutput(path, "log", "-1", "--format=%h %s");
+            CommitFile(repo, "main-a.txt", "first main change", prefix + "main-only change");
+            RunGit(path, "merge", "--no-edit", baseBranch);
+            var mergeCommit = RunGitOutput(path, "log", "-1", "--format=%h %s");
+            CommitFile(path, "two.txt", "second goal change", secondSubject);
+            var secondCommit = RunGitOutput(path, "log", "-1", "--format=%h %s");
+            CommitFile(repo, "main-b.txt", "later main change", prefix + "newer main-only change");
+            var oldHead = RunGitOutput(path, "rev-parse", "HEAD");
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD");
+            var tree = RunGitOutput(repo, "merge-tree", "--write-tree", mainHead, oldHead);
+            Assert.Equal("1", RunGitOutput(path, "rev-list", "--merges", "--count", $"{mainHead}..{oldHead}"));
+
+            var result = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, result.Status);
+            Assert.Equal("squashed-merge-commits", result.Detail);
+            Assert.Equal(secondSubject, RunGitOutput(path, "log", "-1", "--format=%s"));
+            var body = RunGitOutput(path, "log", "-1", "--format=%b").Replace("\r\n", "\n");
+            Assert.Equal($"Squashed onto {baseBranch} from {oldHead} (tree {tree}).\n" +
+                $"- {firstCommit}\n- {secondCommit}\n\nGoal: {goalId.Value}", body);
+            Assert.DoesNotContain(mergeCommit, body, StringComparison.Ordinal);
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
+    [Xunit.Fact]
+    public void SquashMessageFallsBackWhenNoDeveloperCommitExists()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = CreateResolvedMerge(repo, goalId);
+
+            var result = GoalWorktrees.TryRebaseOntoMain(repo, goalId);
+
+            Assert.Equal(GoalWorktreeRebaseStatus.Rebased, result.Status);
+            Assert.Equal("squashed-merge-commits", result.Detail);
+            Assert.Equal($"Developer({goalId.Value[..8]}): squashed goal branch",
+                RunGitOutput(path, "log", "-1", "--format=%s"));
+            Assert.EndsWith($"\n\nGoal: {goalId.Value}", RunGitOutput(path, "log", "-1", "--format=%b"));
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
+    [Xunit.Fact]
     public void ResolvedMergeIsSquashedOntoMain()
     {
         var repo = CreateSeededRepository();
@@ -146,11 +204,11 @@ public sealed class GoalWorktreeTestsRebaseMergeSquash : GoalWorktreeTestBase
         return path;
     }
 
-    private static void CommitFile(string path, string name, string content)
+    private static void CommitFile(string path, string name, string content, string? message = null)
     {
         File.WriteAllText(Path.Combine(path, name), content);
         RunGit(path, "add", name);
-        RunGit(path, "commit", "-m", $"Edit {name}");
+        RunGit(path, "commit", "-m", message ?? $"Edit {name}");
     }
 
     private static void AssertRestoredConflict(string repo, GoalId goalId, string path, string oldHead)

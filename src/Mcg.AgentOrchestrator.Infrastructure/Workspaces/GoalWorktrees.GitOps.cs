@@ -194,7 +194,7 @@ public static partial class GoalWorktrees
         // Keep the committed resolution's tree, rather than replaying the commits it resolved.
         var commit = GitCli.Run(worktreePath,
             "-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
-            "commit-tree", tree, "-p", mainHead, "-m", $"squashed-merge-commits onto {baseBranch} from {oldHead}");
+            "commit-tree", tree, "-p", mainHead, "-m", ComposeSquashCommitMessage(executionDirectory, baseBranch, mainHead, oldHead, tree, goalId));
         var newHead = commit.Output.Trim();
         if (!commit.Succeeded || commit.DrainTimedOut || !CommitShaPattern.IsMatch(newHead)) return null;
 
