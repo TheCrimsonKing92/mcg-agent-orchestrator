@@ -51,6 +51,11 @@ internal static class TerminalGoalSweepAttention
 
             foreach (var blocker in goalResult.Blockers.Where(HasConcreteRemediationCommand))
             {
+                if (ReconcileSweepRemediationCoordinator.IsAwaitingConductorAcceptanceGate(blocker))
+                {
+                    continue;
+                }
+
                 var correlationKey = BuildCorrelationKey(goalResult.GoalId, blocker.Kind);
                 activeKeys.Add(correlationKey);
                 await store.RaiseAsync(

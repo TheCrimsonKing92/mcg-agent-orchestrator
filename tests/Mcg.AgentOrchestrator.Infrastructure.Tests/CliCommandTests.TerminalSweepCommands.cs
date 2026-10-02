@@ -969,11 +969,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 .GetAttentionQueueAsync()
                 .GetAwaiter()
                 .GetResult();
-            var item = Xunit.Assert.Single(attention);
-            Xunit.Assert.Equal(CollaborationItemStatus.Raised, item.Status);
-            Xunit.Assert.Contains("completed-branch-unmerged", item.Subject, StringComparison.Ordinal);
-            Xunit.Assert.Contains(expected, item.Body, StringComparison.Ordinal);
-            Xunit.Assert.Contains($"Command: acceptance {goal.Id.Value[..8]}", item.Body, StringComparison.Ordinal);
+            Xunit.Assert.Empty(attention);
             Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
         }
         finally
