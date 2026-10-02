@@ -25,11 +25,7 @@ internal sealed partial class ConductorDriver
 
         // An absent apparatus signature alone is not failure evidence. Require a fatal test
         // result; unreadable/missing TRX and all-apparatus failures cannot implicate a tree.
-        return receipt.GateTestResultPaths.Select(AcceptanceTrxFailureReader.Read)
-            .Where(result => result.Status == AcceptanceTrxReadStatus.Readable)
-            .SelectMany(result => result.Failures)
-            .Any(failure => AcceptanceTrxOutcomeTaxonomy.IsFatal(failure.Outcome) &&
-                ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace) is null);
+        return MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths).Count != 0;
     }
 
     private void RecordTrainImplicatedMember(MergeTrainMemberBinding dropped, MergeTrainReceipt redReceipt)

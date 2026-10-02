@@ -99,7 +99,8 @@ public enum MergeTrainEjectionReason
     RebaseConflict,
     StaleBinding,
     MaterializationFailure,
-    RedNewestMember
+    RedNewestMember,
+    RedAttributedMember
 }
 
 public sealed record MergeTrainEjection(

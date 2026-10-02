@@ -81,7 +81,7 @@ internal sealed partial class ConductorDriver
         }
         IReadOnlyList<MergeTrainMemberBinding> composition = originalBindings;
         var admitted = false;
-        MergeTrainMemberBinding? redNewest = null;
+        MergeTrainMemberBinding? redDropped = null;
         MergeTrainReceipt? redReceipt = null;
 
         for (var attempt = 0; attempt <= 1; attempt++)
@@ -260,8 +260,8 @@ internal sealed partial class ConductorDriver
 
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
-                if (redNewest is not null && redReceipt is not null)
-                    RecordTrainImplicatedMember(redNewest, redReceipt);
+                if (redDropped is not null && redReceipt is not null)
+                    RecordTrainImplicatedMember(redDropped, redReceipt);
                 if (gateOnly)
                 {
                     return new ConductorMergeTrainRunResult(receipt,
@@ -336,25 +336,31 @@ internal sealed partial class ConductorDriver
                     $"outcome=passed attempts={attempt + 1} landings={goals.Length} receipt={receipt.ReceiptId}");
             }
 
+            var attributed = IsGenuineTrainRed(receipt)
+                ? MergeTrainRedAttribution.TryAttribute(receipt, workspace.Path, members)
+                : null;
             if (receipt.Outcome != MergeTrainGateOutcome.Failed || members.Count == 2 || attempt == 1)
             {
+                if (attributed is not null)
+                    RecordTrainImplicatedMember(attributed, receipt);
                 RecordTrainRedPair(selection, members, receipt);
                 return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
             }
 
-            // The bounded bisection is deliberately drop-newest, not a full search. The dropped member
-            // remains absent from MemberResults so ordinary admission attributes its later solo gate.
-            var dropped = members[^1];
-            redNewest = dropped;
+            // Keep the bounded bisection; absent source attribution, retain drop-newest.
+            // The dropped member remains absent from MemberResults for its later solo gate.
+            var dropped = attributed ?? members[^1];
+            redDropped = dropped;
             redReceipt = receipt;
             var ejection = new MergeTrainEjection(
                 dropped.GoalId,
-                MergeTrainEjectionReason.RedNewestMember,
+                attributed is null ? MergeTrainEjectionReason.RedNewestMember : MergeTrainEjectionReason.RedAttributedMember,
                 [],
                 $"Dropped after RED receipt {receipt.ReceiptId}.");
             allEjections.Add(ejection);
             _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]);
-            var remainingIds = members.Take(members.Count - 1).Select(member => member.GoalId).ToHashSet();
+            var remainingIds = members.Where(member => member.GoalId != dropped.GoalId)
+                .Select(member => member.GoalId).ToHashSet();
             composition = originalBindings.Where(member => remainingIds.Contains(member.GoalId)).ToArray();
         }
 
