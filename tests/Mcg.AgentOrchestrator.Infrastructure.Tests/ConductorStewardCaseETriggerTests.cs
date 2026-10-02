@@ -96,7 +96,7 @@ public sealed class ConductorStewardCaseETriggerTests
                 ? task with { LatestRetryInherited = true } : task).ToArray()
         });
         var goal = Assert.Single(harness.Kernel.Goals);
-        var developer = goal.FindTask(harness.Developer.Id);
+        var developer = goal.Tasks.Single(task => task.Id == harness.Developer.Id);
 
         Assert.True(developer.LatestRetryInherited);
         Assert.False(ConductorStewardTriggerDetector.IsCaseETask(goal, developer, harness.Head));
