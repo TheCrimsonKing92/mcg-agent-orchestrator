@@ -99,7 +99,9 @@ internal static class SourceSizeRatchet
             // Raised deliberately by six for goal e46c3d92: the only addition is the candidate-currency
             // guard that defers to VerifyingFindingCurrency.IsCurrent, whose logic lives in the model.
             // Goal 3ca963ea moved attribution exclusion types and formatting to the apparatus-red partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 6434),
+            // Goal 98952a12 (backlog c35852c4) moved finding-evidence request construction unchanged to its partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 5465),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 918),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
