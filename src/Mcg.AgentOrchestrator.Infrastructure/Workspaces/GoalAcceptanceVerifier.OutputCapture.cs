@@ -65,7 +65,7 @@ public sealed partial class GoalAcceptanceVerifier
 
                         read = await readTask.ConfigureAwait(false);
                     }
-                    catch (IOException ex) when (IsClosedPipe(ex))
+                    catch (IOException ex) when (GoalAcceptanceVerifierCaptureCustody.IsClosedPipe(ex))
                     {
                         break;
                     }
@@ -139,7 +139,7 @@ public sealed partial class GoalAcceptanceVerifier
 
         if (limitReached)
         {
-            await FinalizeCappedCaptureAsync(
+            await GoalAcceptanceVerifierCaptureCustody.FinalizeCappedCaptureAsync(
                 path,
                 limitBytes,
                 writtenBytes,

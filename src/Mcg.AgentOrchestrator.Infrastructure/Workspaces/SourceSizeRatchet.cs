@@ -53,11 +53,14 @@ internal static class SourceSizeRatchet
             // Goal d2ed62af extracted focused-evidence execution into its own type.
             // Goal c0cfa8ae extracted 445 lines of test telemetry and TRX receipt inspection.
             // Goal efdff7b2 extracted 268 lines of build-artifact lock waiting and attribution.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 7327),
+            // Goal 78053cf4 extracted 313 lines of capture custody and process start-info construction.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 7014),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 423),
             // Goal efdff7b2 build-artifact lock collaborator measured at 334 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.BuildArtifactLock.cs", 334),
+            // Goal 78053cf4 capture custody collaborator measured at 378 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 378),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 740),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance

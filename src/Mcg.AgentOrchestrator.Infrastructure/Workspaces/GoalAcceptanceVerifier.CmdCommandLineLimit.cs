@@ -4,7 +4,7 @@ public sealed partial class GoalAcceptanceVerifier
 {
     private const int MaxCmdCommandLineLength = 8191;
 
-    private static void ThrowIfCmdCommandLineTooLong(string composedArguments, string[] arguments)
+    internal static void ThrowIfCmdCommandLineTooLong(string composedArguments, string[] arguments)
     {
         if (composedArguments.Length > MaxCmdCommandLineLength)
             throw new CommandLineTooLongException(composedArguments.Length, MaxCmdCommandLineLength,
