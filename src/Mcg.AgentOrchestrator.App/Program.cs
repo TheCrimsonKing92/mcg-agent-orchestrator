@@ -62,6 +62,12 @@ if (args.Length >= 1 && args[0].Equals("repo-process-stop", StringComparison.Ord
     }
 }
 
+// Explicit host setup bypasses workspace and conductor startup, including elevated runs.
+if (CliHostExclusionsCommand.IsCommand(args) && !CliCommandHelp.IsCommandSpecificHelp(args))
+{
+    return CliHostExclusionsCommand.Run(args);
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;

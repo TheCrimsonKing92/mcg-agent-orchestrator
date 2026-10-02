@@ -80,6 +80,7 @@ internal static class CliCommandHelp
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
+    public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
     public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
 
     private static readonly CommandHelpEntry Conduct = new(
@@ -550,6 +551,10 @@ internal static class CliCommandHelp
         AuthorDraftUsage,
         "Draft and check a goal brief from a backlog item without filing a goal.",
         ["--help", "-h"]);
+    private static readonly CommandHelpEntry HostExclusions = new(
+        HostExclusionsUsage,
+        "Report required Windows Defender exclusions; add missing roots only with --apply while elevated.",
+        ["--apply", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
@@ -716,6 +721,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  recover           Recover a goal with an operator note.");
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
         Console.WriteLine("  conductor         Start, report or stop the conductor.");
+        Console.WriteLine("  host-exclusions   Report or explicitly apply host scan exclusions.");
         Console.WriteLine("  help <command>    Show command-specific help.");
     }
 
@@ -1003,6 +1009,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("lessons", StringComparison.OrdinalIgnoreCase))
         {
             entry = Lessons;
+            return true;
+        }
+
+        if (args[0].Equals("host-exclusions", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = HostExclusions;
             return true;
         }
 

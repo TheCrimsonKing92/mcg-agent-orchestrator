@@ -74,7 +74,7 @@ public sealed partial class GoalAcceptanceVerifier
         IAcceptanceRunExecutionContext executionOwner, IReadOnlyList<string>? revertPaths)
     {
         string? revertedPath = null;
-        var root = OrchestratorTempRoot.GetPurposeDirectory("mcg-focused-evidence-baselines");
+        var root = OrchestratorTempRoot.GetPurposeDirectory(FocusedEvidenceBaselinesRootDirectoryName);
         DotnetBuildEnvironment? environment = null;
         GoalId? environmentId = null;
         try

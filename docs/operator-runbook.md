@@ -1,5 +1,7 @@
 # Operator Runbook
 
+On a new Windows host, run `.\mcg-orchestrator.cmd host-exclusions --apply` once from an elevated PowerShell as the same user account that runs the orchestrator. Run `host-exclusions` without a switch to inspect the required roots first; it changes nothing. New orchestrator roots must be created through `OrchestratorTempRoot`, `DotnetBuildEnvironmentManager` root resolution, `TempRootJanitor` low-integrity root resolution, or the `GoalAcceptanceVerifier` root-name members and included by `HostScanExclusionRoots`, so this verb lists the roots that the creating code owns.
+
 Repository scripts, diagnostic probes, and evidence utilities use PowerShell and .NET. Do not use Python for this work or introduce a Python installation requirement for repository users.
 
 **If you are a new AI instance about to operate this orchestrator, read this first.** It is the canonical guide for *driving, observing, and recovering* goals. It supersedes the older "Core Loop" in `docs/cli-reference.md` (manual verbs) and the manual sequence in `.agents/skills/orchestrator-dogfood/SKILL.md` — those are fallbacks, not the default path.

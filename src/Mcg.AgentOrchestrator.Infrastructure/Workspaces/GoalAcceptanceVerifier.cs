@@ -1731,7 +1731,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return InconclusiveBaseline("baseline merge-base could not be resolved");
         }
 
-        var baselineRoot = Path.Combine(Path.GetTempPath(), "mcg-focused-evidence-baselines");
+        var baselineRoot = Path.Combine(Path.GetTempPath(), FocusedEvidenceBaselinesRootDirectoryName);
         Directory.CreateDirectory(baselineRoot);
         var baselinePath = Path.Combine(
             baselineRoot,
@@ -6004,7 +6004,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             candidate = candidate.Parent;
         }
 
-        return Path.Combine(Path.GetTempPath(), "mcg-acceptance-owner-results");
+        return Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName);
     }
 
     private static bool UsesMicrosoftTestingPlatform(AcceptanceManifestCheck check) =>
@@ -6973,7 +6973,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return stableSlotIndex.HasValue
             ? GateHeartbeatArtifacts.GetStableSlotPath(stableSlotIndex.Value, storageRoot)
             : GateHeartbeatArtifacts.GetManualPath(
-                worktreePath ?? Path.Combine(Path.GetTempPath(), "mcg-acceptance-owner-results"));
+                worktreePath ?? Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName));
     }
 
     internal static string ResolveGateHeartbeatPathForTests(
@@ -7089,7 +7089,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? buildEnvironmentRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        environment.TryGetValue("NUGET_PACKAGES", out var nugetPackages);
+        environment.TryGetValue(NuGetPackagesVariable, out var nugetPackages);
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         var allowed = environment
@@ -7105,13 +7105,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment[pair.Key] = pair.Value;
         }
 
-        var profileRoot = Path.Combine(Path.GetTempPath(), "mcg-hvp");
+        var profileRoot = Path.Combine(Path.GetTempPath(), HermeticProfileRootDirectoryName);
         Directory.CreateDirectory(profileRoot);
         var dotnetCliHome = string.IsNullOrWhiteSpace(buildEnvironmentRoot)
             ? profileRoot : Path.Combine(buildEnvironmentRoot, "dotnet-cli-home");
         Directory.CreateDirectory(dotnetCliHome);
         nugetPackages = string.IsNullOrWhiteSpace(nugetPackages)
-            ? Path.Combine(string.IsNullOrWhiteSpace(userProfile) ? profileRoot : userProfile, ".nuget", "packages")
+            ? DefaultNuGetGlobalPackagesFolder(string.IsNullOrWhiteSpace(userProfile) ? profileRoot : userProfile)
             : nugetPackages;
         environment["HOME"] = profileRoot;
         environment["USERPROFILE"] = profileRoot;
@@ -7151,7 +7151,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // allowing a nested test apphost startup failure to block the desktop with a modal error dialog.
         environment["MSBUILDDISABLENODEREUSE"] = "1";
         environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-        environment["NUGET_PACKAGES"] = nugetPackages;
+        environment[NuGetPackagesVariable] = nugetPackages;
         if (!string.IsNullOrWhiteSpace(buildEnvironmentRoot))
         {
             // NUGET_PACKAGES isolates restored packages, but NuGet's HTTP cache is derived from
