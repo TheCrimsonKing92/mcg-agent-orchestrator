@@ -3057,27 +3057,36 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     }
 
     private int CountConsecutiveTransientFailures(ConductorParallelAcceptanceAttempt attempt)
+        => TransientFailureCount(ReadNewestCandidateAttempt(
+            Path.GetDirectoryName(attempt.MetadataPath), attempt.CandidateKey, attempt.AttemptId));
+
+    internal int CountPendingTransientRetries(ConductorParallelAcceptanceCandidate candidate)
     {
-        var directory = Path.GetDirectoryName(attempt.MetadataPath);
+        var latest = ReadNewestCandidateAttempt(
+            Path.Combine(_rootDirectory, candidate.Goal.Id.Value), candidate.CandidateKey);
+        return latest is not null && IsReconciled(latest) ? TransientFailureCount(latest) : 0;
+    }
+
+    private static int TransientFailureCount(ConductorParallelAcceptanceAttempt? attempt) =>
+        attempt is not null && IsTransientTerminalFailure(attempt)
+            ? Math.Max(1, attempt.TransientFailureCount) : 0;
+
+    private static ConductorParallelAcceptanceAttempt? ReadNewestCandidateAttempt(
+        string? directory, string candidateKey, string? excludedAttemptId = null)
+    {
         if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
         {
-            return 0;
+            return null;
         }
 
-        foreach (var prior in Directory.EnumerateFiles(directory, "*.attempt.json")
+        return Directory.EnumerateFiles(directory, "*.attempt.json")
             .Select(TryReadAttemptFile)
             .OfType<ConductorParallelAcceptanceAttempt>()
             .Where(candidate =>
-                string.Equals(candidate.CandidateKey, attempt.CandidateKey, StringComparison.Ordinal) &&
-                !string.Equals(candidate.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
-            .OrderByDescending(candidate => candidate.StartedAt))
-        {
-            return IsTransientTerminalFailure(prior)
-                ? Math.Max(1, prior.TransientFailureCount)
-                : 0;
-        }
-
-        return 0;
+                string.Equals(candidate.CandidateKey, candidateKey, StringComparison.Ordinal) &&
+                !string.Equals(candidate.AttemptId, excludedAttemptId, StringComparison.Ordinal))
+            .OrderByDescending(candidate => candidate.StartedAt)
+            .FirstOrDefault();
     }
 
     internal static bool IsTransientTerminalFailure(ConductorParallelAcceptanceAttempt attempt) =>

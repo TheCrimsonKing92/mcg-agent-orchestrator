@@ -2634,7 +2634,17 @@ internal sealed partial class ConductorBatchLoop
         }
         (cohortEligible, productionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
             driver, policy, cohortEligible, productionCandidates, results, tick, changedGoalLines);
+        var oldestWaiterObservation = suppressNewAcceptanceAdmission
+            ? new ParallelAcceptanceOldestWaiterObservation(null, 0)
+            : ObserveOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
+        var transientRetryPriorityGoal = !suppressNewAcceptanceAdmission &&
+            (driver.MergeTrainsEnabled || driver.AcceptanceCohortsEnabled)
+            ? SelectTransientRetryPriorityGoal(kernel, driver, cohortEligible, policy,
+                acceptanceCensus, configuredAcceptanceWidth, activeAttemptSlotIndexes,
+                activeCandidates, liveAttemptGoalIds, oldestWaiterObservation, results, tick, changedGoalLines)
+            : null;
         var groupedAdmissionOpen = !suppressNewAcceptanceAdmission &&
+            transientRetryPriorityGoal is null &&
             trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
             cohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
@@ -2680,6 +2690,7 @@ internal sealed partial class ConductorBatchLoop
         ConductorAcceptanceCohortFairnessPriority? forcedCohortPriority = null;
         var cohortAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, configuredAcceptanceWidth);
         if (!suppressNewAcceptanceAdmission &&
+            transientRetryPriorityGoal is null &&
             cohortAdmission.IsAdmitted &&
             driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
@@ -2802,7 +2813,6 @@ internal sealed partial class ConductorBatchLoop
         if (suppressNewAcceptanceAdmission) return results;
         HoldLoneReadyGoalForInReviewCohortPartner(kernel, scopedGoals, orderedEligible, productionCandidates,
             acceptanceCensus, driver, policy, results, tick, changedGoalLines);
-        var oldestWaiterObservation = ObserveOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
         var oldestWaiter = oldestWaiterObservation.Waiter;
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
@@ -2813,177 +2823,21 @@ internal sealed partial class ConductorBatchLoop
             }
             try
             {
-            if (goal.Status == GoalStatus.Completed)
+            var soloAdmission = EvaluateSoloAcceptanceAdmissibility(
+                kernel, driver, goal, policy, acceptanceCensus, configuredAcceptanceWidth,
+                activeAttemptSlotIndexes, activeCandidates, liveAttemptGoalIds,
+                oldestWaiterObservation, oldestServedThisTick, tick);
+            if (soloAdmission.Kind != SoloAcceptanceAdmissionKind.Admissible)
             {
-                const string reason = "Completed goal requires operator acceptance; background acceptance cannot reopen a landed goal.";
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(goal, policy, reason),
-                    null);
-                RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=held reason=completed-goal-operator-acceptance goal={goal.Id.Value[..8]}",
-                    changedGoalLines);
-                continue;
-            }
-
-            var verificationGate = kernel.BuildVerificationGate(goal.Id);
-            if (!verificationGate.IsSatisfied)
-            {
-                var blockingReasons = string.Join(
-                    ',',
-                    verificationGate.Tasks
-                        .Where(task => task.GateStatus != VerificationGateStatus.Passed)
-                        .Select(task => $"{task.Role}:{task.Reason}"));
-                var reason = BoundSingleLine(
-                    $"inconsistent {goal.Status} state: authoritative task verification gate unsatisfied ({blockingReasons}); " +
-                    "apply verify-manual or retry before acceptance");
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
-                    null);
-                RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=escalated reason=authoritative-verification-gate-unsatisfied goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
-                    changedGoalLines);
-                continue;
-            }
-
-            var engineHealth = _acceptanceEngineCircuit?.Read();
-            if (IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth))
-            {
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(
-                        goal,
-                        policy,
-                        BuildAcceptanceEngineHoldReason(engineHealth!)),
-                    null);
-                RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=held reason=acceptance-engine-circuit goal={goal.Id.Value[..8]} health={engineHealth.Health}",
-                    changedGoalLines);
-                continue;
-            }
-
-            int acceptanceSlotCount;
-            try
-            {
-                acceptanceSlotCount = driver.GetAcceptanceSlotCount(goal);
-                if (acceptanceSlotCount is < 1 || acceptanceSlotCount > MaxParallelAcceptanceCapacity)
+                if (soloAdmission.Kind == SoloAcceptanceAdmissionKind.Capacity) deferredByAdmission++;
+                if (ApplySoloAcceptanceHold(soloAdmission, driver, goal, policy, changedGoalLines) is { } held)
                 {
-                    throw new InvalidDataException(
-                        $"Acceptance slot count {acceptanceSlotCount} must be between 1 and maximum {MaxParallelAcceptanceCapacity}.");
+                    results[goal.Id.Value] = held;
                 }
-                acceptanceSlotCount = Math.Min(acceptanceSlotCount, configuredAcceptanceWidth);
-            }
-            catch (Exception ex)
-            {
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    driver.EscalateParallelLandingAcceptance(
-                        goal,
-                        policy,
-                        $"invalid parallel acceptance slot settings: {SanitizeReason(ex.Message)}"),
-                    null);
-                RecordParallelAcceptanceProgress(
-                    $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-slot-settings goal={goal.Id.Value[..8]} detail={SanitizeReason(ex.Message)}",
-                    changedGoalLines);
                 continue;
             }
-
-            var ordinaryAdmission = DecideLiveAcceptanceAdmission(acceptanceCensus, acceptanceSlotCount);
-            if (!ordinaryAdmission.IsAdmitted)
-            {
-                deferredByAdmission++;
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    AdmissionDeniedHeld(goal, policy, ordinaryAdmission),
-                    null);
-                continue;
-            }
-
-            ParallelAcceptanceOldestWaiterObservation? stalledOldestBypass = null;
-            if (!liveAttemptGoalIds.Contains(goal.Id.Value) &&
-                oldestWaiter is not null &&
-                goal.Id != oldestWaiter.Id &&
-                !oldestServedThisTick &&
-                ShouldDeferForParallelAcceptanceFairness(oldestWaiter.Id.Value))
-            {
-                if (oldestWaiterObservation.IsStalled)
-                {
-                    stalledOldestBypass = oldestWaiterObservation;
-                }
-                else
-                {
-                    var deferredCandidate = TryBuildParallelAcceptanceCandidate(
-                        driver,
-                        goal,
-                        policy,
-                        SelectAvailableParallelAcceptanceSlot(
-                            activeAttemptSlotIndexes,
-                            acceptanceSlotCount),
-                        out var deferredBuildException);
-                    if (deferredCandidate is not null)
-                    {
-                        results[goal.Id.Value] = new ParallelLandingOutcome(
-                            ParallelAcceptanceHeld(
-                                deferredCandidate,
-                                policy,
-                                $"parallel acceptance fairness waiting for oldest verified goal {oldestWaiter.Id.Value[..8]}; retry on next conduct tick"),
-                            null);
-                        RecordParallelAcceptanceProgress(
-                            $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]}",
-                            changedGoalLines);
-                    }
-                    else if (deferredBuildException is not null)
-                    {
-                        var unavailableReason = FormatParallelAcceptanceCandidateUnavailable(deferredBuildException);
-                        results[goal.Id.Value] = new ParallelLandingOutcome(
-                            ParallelAcceptanceHeld(
-                                goal,
-                                policy,
-                                unavailableReason),
-                            null);
-                        RecordParallelAcceptanceProgress(
-                            $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(deferredBuildException)}",
-                            changedGoalLines);
-                    }
-
-                    continue;
-                }
-            }
-
-            var candidate = TryBuildParallelAcceptanceCandidate(
-                driver,
-                goal,
-                policy,
-                SelectAvailableParallelAcceptanceSlot(
-                    activeAttemptSlotIndexes,
-                    acceptanceSlotCount),
-                out var buildException);
-            if (candidate is null)
-            {
-                if (buildException is not null)
-                {
-                    var unavailableReason = FormatParallelAcceptanceCandidateUnavailable(buildException);
-                    results[goal.Id.Value] = new ParallelLandingOutcome(
-                        ParallelAcceptanceHeld(
-                            goal,
-                            policy,
-                            unavailableReason),
-                        null);
-                    RecordParallelAcceptanceProgress(
-                        $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(buildException)}",
-                        changedGoalLines);
-                }
-
-                continue;
-            }
-
-            if (activeCandidates.Any(existing => existing.Overlaps(candidate)))
-            {
-                results[goal.Id.Value] = new ParallelLandingOutcome(
-                    ParallelAcceptanceHeld(
-                        candidate,
-                        policy,
-                        "parallel acceptance resource conflict; retry on next conduct tick"),
-                    null);
-                continue;
-            }
-
+            var candidate = soloAdmission.Candidate!;
+            var stalledOldestBypass = soloAdmission.StalledOldestBypass;
             var documentationExclusionAdmission = BuildDocumentationExclusionAdmissionRecord(
                 candidate,
                 activeCandidates,
