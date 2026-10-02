@@ -183,6 +183,11 @@ if (CliContextUsageCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliContextUsageCommand.Run(startupArgs, workspace));
 }
 
+if (CliAuthorDraftCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliAuthorDraftCommand.Run(startupArgs, workspace));
+}
+
 if (CliConductorCommand.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliConductorCommand.Run(startupArgs, workspace));
