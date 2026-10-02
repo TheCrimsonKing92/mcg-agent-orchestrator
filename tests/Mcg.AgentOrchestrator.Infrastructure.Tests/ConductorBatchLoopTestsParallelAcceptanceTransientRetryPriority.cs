@@ -160,7 +160,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
                         return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
                     }
                     throw new AcceptanceInfrastructureDeferredException(
-                        "structural-coverage-permit-unavailable", 1, "test transient deferral");
+                        "trusted-main-build-failed", 1, "test transient deferral");
                 },
                 classifyRisk: _ => ChangeRiskTier.DocsOnly,
                 getLandingFileScopes: goal => _paths[goal.Id],
