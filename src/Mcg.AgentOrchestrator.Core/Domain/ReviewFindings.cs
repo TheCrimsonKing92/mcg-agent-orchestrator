@@ -203,7 +203,10 @@ public sealed record FindingEvidenceRequest(
     FindingEvidenceNegativeControl? NegativeControl = null,
     [property: JsonPropertyName("revert_paths")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<string>? RevertPaths = null);
+    IReadOnlyList<string>? RevertPaths = null,
+    [property: JsonPropertyName("mutation")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    FindingEvidenceMutation? Mutation = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<FindingEvidenceArm>))]
 public enum FindingEvidenceArm
@@ -393,7 +396,15 @@ public sealed record FindingEvidenceReceipt(
     FindingEvidenceNegativeControlOutcome? NegativeControlOutcome = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [property: JsonConverter(typeof(FindingEvidenceRevertPathsRejectionJsonConverter))]
-    FindingEvidenceRevertPathsRejection? RevertPathsRejection = null);
+    FindingEvidenceRevertPathsRejection? RevertPathsRejection = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MutationPath => Request?.Mutation is { } mutation ? FindingEvidenceRevertPaths.Normalize(mutation.Path) : null;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MutationOldTextHash => Request?.Mutation is { } mutation ? FindingEvidenceMutation.ShortHash(mutation.OldText) : null;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MutationNewTextHash => Request?.Mutation is { } mutation ? FindingEvidenceMutation.ShortHash(mutation.NewText) : null;
+}
 
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,
@@ -1073,6 +1084,7 @@ public static class ReviewFindingConvergence
 
         return left.NegativeControl == right.NegativeControl &&
             FindingEvidenceRevertPaths.SamePaths(left.RevertPaths, right.RevertPaths) &&
+            FindingEvidenceMutation.Same(left.Mutation, right.Mutation) &&
             Keys(left).SequenceEqual(Keys(right), StringComparer.Ordinal);
     }
 
@@ -1301,6 +1313,10 @@ public static class ReviewFindingConvergence
     {
         foreach (var finding in findings)
         {
+            if (finding.EvidenceRequest is { Mutation: not null, RevertPaths: not null })
+                throw new ArgumentException("mutation and revert_paths are mutually exclusive");
+            if (finding.EvidenceRequest is { Mutation: not null, NegativeControl: null })
+                throw new ArgumentException("mutation requires negative_control 'revert-src'");
             if (finding.EvidenceRequest is { RevertPaths: not null, NegativeControl: null })
                 throw new ArgumentException("revert_paths requires negative_control 'revert-src'");
             if (string.IsNullOrWhiteSpace(finding.StableId) ||

@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -11,6 +12,10 @@ internal sealed class SourceRevertedProbeFixture : IDisposable
     internal const string UnlistedAdded = "src/UnlistedAdded.cs";
     internal const string Deleted = "src/Deleted.cs";
     internal const string Unchanged = "src/Unchanged.cs";
+    internal const string Behavior = "src/Behavior.cs";
+    internal const string BehaviorLine = "public static bool Enabled => true;";
+    internal const string RestoredBehaviorLine = "public static bool Enabled => false;";
+    internal const string CandidateBehavior = "// café 🌱\r\npublic static class Behavior {\r\n    public static bool AddedMember => true;\r\n    public static bool Enabled => true;\r\n}\r\n";
     internal const string Test = "tests/Mcg.AgentOrchestrator.Core.Tests/AddedProbeTests.cs";
     internal const string Identity = "AddedProbeTests.AddedBehavior";
     internal const string BaselineFeature = "public static class Feature { public static bool Enabled => false; }";
@@ -21,8 +26,10 @@ internal sealed class SourceRevertedProbeFixture : IDisposable
     internal string CandidateSha { get; private set; } = "";
     internal string CandidateTest { get; } = "public sealed class AddedProbeTests { [Xunit.Fact] public void AddedBehavior() => Xunit.Assert.True(Feature.Enabled && Other.AddedMember); }";
 
-    internal SourceRevertedProbeFixture()
+    internal SourceRevertedProbeFixture(bool includeMutationProbe = false, Encoding? mutationEncoding = null)
     {
+        if (includeMutationProbe)
+            CandidateTest = "public sealed class AddedProbeTests { [Xunit.Fact] public void AddedBehavior() => Xunit.Assert.True(Behavior.Enabled && Behavior.AddedMember); }";
         Write("config/acceptance-manifest.json", """
             { "version": 1, "engine": {
               "slotCount": 1, "maxConcurrentShards": 1, "enforceStructuralCoverage": false,
@@ -41,7 +48,9 @@ internal sealed class SourceRevertedProbeFixture : IDisposable
         Write(Other, "public static class Other { public static bool Enabled => true; }");
         Write(Unchanged, "public static class Unchanged { }");
         Write(Deleted, "public static class Deleted { }");
+        if (includeMutationProbe) Write(Behavior, "public static class Behavior { public static bool Enabled => false; }");
         Git("init", "-b", "main");
+        if (includeMutationProbe) Git("config", "core.autocrlf", "false");
         Git("config", "user.email", "source-reverted@example.invalid");
         Git("config", "user.name", "Source Reverted Probe");
         Git("add", ".");
@@ -51,6 +60,8 @@ internal sealed class SourceRevertedProbeFixture : IDisposable
         Write(Other, CandidateOther);
         Write(Added, "public static class Added { }");
         Write(UnlistedAdded, "public static class UnlistedAdded { }");
+        if (includeMutationProbe)
+            File.WriteAllText(Path.Combine(Root, Behavior), CandidateBehavior, mutationEncoding ?? new UTF8Encoding(false));
         File.Delete(Path.Combine(Root, Deleted));
         Write(Test, CandidateTest);
         Git("add", ".");
@@ -61,6 +72,10 @@ internal sealed class SourceRevertedProbeFixture : IDisposable
     internal Task<FocusedEvidenceRunResult> RunAsync(GoalAcceptanceVerifier verifier, IReadOnlyList<string>? paths) =>
         verifier.RunFocusedEvidenceAsync(Root, _goalId, "Core.Tests: AddedProbeTests",
             negativeControl: FindingEvidenceNegativeControl.RevertSrc, revertPaths: paths);
+
+    internal Task<FocusedEvidenceRunResult> RunMutationAsync(GoalAcceptanceVerifier verifier, FindingEvidenceMutation mutation) =>
+        verifier.RunFocusedEvidenceAsync(Root, _goalId, "Core.Tests: AddedProbeTests",
+            negativeControl: FindingEvidenceNegativeControl.RevertSrc, mutation: mutation);
 
     internal string Read(string path) => File.ReadAllText(Path.Combine(Root, path));
 

@@ -66,7 +66,14 @@ public enum FindingEvidenceRevertPathsRejection
     EmptyList,
     UnderTests,
     OutsideSrc,
-    NotChangedByGoal
+    NotChangedByGoal,
+    MutationUnderTests,
+    MutationOutsideSrc,
+    MutationNotChangedByGoal,
+    MutationEmptyOldText,
+    MutationUnchangedText,
+    MutationOldTextNotFound,
+    MutationOldTextAmbiguous
 }
 
 public sealed class FindingEvidenceRevertPathsRejectionJsonConverter : JsonConverter<FindingEvidenceRevertPathsRejection>
@@ -78,6 +85,13 @@ public sealed class FindingEvidenceRevertPathsRejectionJsonConverter : JsonConve
             "revert-paths-under-tests" => FindingEvidenceRevertPathsRejection.UnderTests,
             "revert-paths-outside-src" => FindingEvidenceRevertPathsRejection.OutsideSrc,
             "revert-paths-not-changed" => FindingEvidenceRevertPathsRejection.NotChangedByGoal,
+            "mutation-under-tests" => FindingEvidenceRevertPathsRejection.MutationUnderTests,
+            "mutation-outside-src" => FindingEvidenceRevertPathsRejection.MutationOutsideSrc,
+            "mutation-not-changed" => FindingEvidenceRevertPathsRejection.MutationNotChangedByGoal,
+            "mutation-old-text-empty" => FindingEvidenceRevertPathsRejection.MutationEmptyOldText,
+            "mutation-old-text-equals-new-text" => FindingEvidenceRevertPathsRejection.MutationUnchangedText,
+            "mutation-old-text-missing" => FindingEvidenceRevertPathsRejection.MutationOldTextNotFound,
+            "mutation-old-text-ambiguous" => FindingEvidenceRevertPathsRejection.MutationOldTextAmbiguous,
             _ => throw new JsonException("Unknown revert_paths rejection")
         } : throw new JsonException("Expected a revert_paths rejection string");
 
@@ -90,6 +104,13 @@ public sealed class FindingEvidenceRevertPathsRejectionJsonConverter : JsonConve
         FindingEvidenceRevertPathsRejection.UnderTests => "revert-paths-under-tests",
         FindingEvidenceRevertPathsRejection.OutsideSrc => "revert-paths-outside-src",
         FindingEvidenceRevertPathsRejection.NotChangedByGoal => "revert-paths-not-changed",
+        FindingEvidenceRevertPathsRejection.MutationUnderTests => "mutation-under-tests",
+        FindingEvidenceRevertPathsRejection.MutationOutsideSrc => "mutation-outside-src",
+        FindingEvidenceRevertPathsRejection.MutationNotChangedByGoal => "mutation-not-changed",
+        FindingEvidenceRevertPathsRejection.MutationEmptyOldText => "mutation-old-text-empty",
+        FindingEvidenceRevertPathsRejection.MutationUnchangedText => "mutation-old-text-equals-new-text",
+        FindingEvidenceRevertPathsRejection.MutationOldTextNotFound => "mutation-old-text-missing",
+        FindingEvidenceRevertPathsRejection.MutationOldTextAmbiguous => "mutation-old-text-ambiguous",
         _ => throw new ArgumentOutOfRangeException(nameof(value))
     };
 }
