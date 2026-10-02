@@ -200,6 +200,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptanceWidthAdmission : Co
                 });
             Driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
                 getLandingFileScopes: _ => ["docs/test-audit/critical-lanes-2026-10.md"],
                 parallelAcceptanceAttemptCoordinator: Coordinator);
         }
