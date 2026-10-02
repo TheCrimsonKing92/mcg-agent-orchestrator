@@ -55,9 +55,11 @@ internal static class ConductorStewardRoutePolicy
         string workingDirectory,
         AdjudicationEvidenceResolver evidenceResolver)
     {
-        var caseDClose = trigger.Kind == ConductorStewardTriggerKind.DeveloperGateReopenNoCommit && adjudication.Kind == "close";
+        var caseDClose = trigger.Kind is (ConductorStewardTriggerKind.DeveloperGateReopenNoCommit or
+            ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit) && adjudication.Kind == "close";
         if (!caseDClose && (adjudication.Kind != "route" ||
-            trigger.Kind == ConductorStewardTriggerKind.DeveloperGateReopenNoCommit)) return "disallowed-action";
+            trigger.Kind is (ConductorStewardTriggerKind.DeveloperGateReopenNoCommit or
+                ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit))) return "disallowed-action";
         if (!string.Equals(adjudication.TargetTaskId, trigger.TaskId, StringComparison.Ordinal))
             return "different-target-task";
         if (!caseDClose && adjudication.Cause is not (nameof(RetryCause.NewTestFinding) or nameof(RetryCause.ContractClarification)))

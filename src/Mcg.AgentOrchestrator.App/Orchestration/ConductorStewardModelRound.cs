@@ -30,13 +30,15 @@ internal sealed class ClaudeConductorStewardModelRound(
         var sessionId = _newSessionId().ToString("D");
         var prompt = $"""
             You are the conductor Steward. This is a read-only adjudication. Return exactly one fenced JSON object.
-            Allowed kinds: {(trigger.Kind == ConductorStewardTriggerKind.DeveloperGateReopenNoCommit ? "close, ask-owner, no-action" : "route, ask-owner, no-action")}. A route has fields kind, targetTaskId,
+            Allowed kinds: {(trigger.Kind is ConductorStewardTriggerKind.DeveloperGateReopenNoCommit or ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit ? "close, ask-owner, no-action" : "route, ask-owner, no-action")}. A route has fields kind, targetTaskId,
             cause (NewTestFinding or ContractClarification), text (diagnosis), instruction,
             evidenceReferences (array), reversibility (reversible or reversible-with-cost), and precedent.
             An ask-owner has kind, question, and evidenceReferences. A no-action has kind and reason.
             You may not choose another task or an irreversible action. When evidence is insufficient, ask-owner.
             {(trigger.Kind == ConductorStewardTriggerKind.DeveloperGateReopenNoCommit
                 ? "For case D return close, ask-owner, or no-action. A close has targetTaskId, text (diagnosis), and evidenceReferences; the host appends the Developer WORKER_RESULT verbatim. Inspect failing tests, changed paths, genuine reason and passing candidate receipts before closing; insufficient evidence requires ask-owner."
+                : trigger.Kind == ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit
+                ? "For case E judge only whether the Developer's no-change explanation answers the Reviewer finding in the trigger evidence. If sufficient return close with targetTaskId, text (diagnosis), and evidenceReferences; the host closes the Developer with its own WORKER_RESULT and retries the Reviewer with that result verbatim. The Reviewer remains the judge of whether the finding is resolved; you do not resolve or waive it. If insufficient return ask-owner naming the Developer task and unanswered finding."
                 : string.Empty)}
 
             Case: {trigger.CaseLetter}; trigger: {trigger.Identity}; task: {trigger.TaskId}

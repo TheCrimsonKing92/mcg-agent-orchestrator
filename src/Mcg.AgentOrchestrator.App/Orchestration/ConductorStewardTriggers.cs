@@ -9,7 +9,8 @@ internal enum ConductorStewardTriggerKind
     DeveloperNoChangeWithConfirmedRed,
     PlannerOutputContractRejected,
     AcceptanceCollectionGuardClass,
-    DeveloperGateReopenNoCommit
+    DeveloperGateReopenNoCommit,
+    DeveloperReviewerFindingNoCommit
 }
 
 internal sealed record ConductorStewardTrigger(
@@ -28,6 +29,7 @@ internal sealed record ConductorStewardTrigger(
         ConductorStewardTriggerKind.DeveloperNoChangeWithConfirmedRed => "A",
         ConductorStewardTriggerKind.PlannerOutputContractRejected => "B",
         ConductorStewardTriggerKind.DeveloperGateReopenNoCommit => "D",
+        ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit => "E",
         _ => "C"
     };
 
@@ -128,6 +130,7 @@ internal sealed partial class ConductorStewardTriggerDetector(
             }
         }
         DetectCaseD(goal, needsInspection, result);
+        DetectCaseE(goal, needsInspection, result);
         return result;
     }
 

@@ -283,6 +283,12 @@ internal sealed partial class ConductorStewardHost
                 harvestVersion ?? _claimedGoalVersion, changed, versionDetail);
             return;
         }
+        if (trigger.Kind == ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit)
+        {
+            HarvestCaseEClose(kernel, goal, stored, adjudication, worktree,
+                harvestVersion ?? _claimedGoalVersion, changed, versionDetail);
+            return;
+        }
         var feedback = ConductorStewardRetryTemplate.Compose(trigger, adjudication);
         if (adjudication.Kind == "route" && feedback is null)
         {

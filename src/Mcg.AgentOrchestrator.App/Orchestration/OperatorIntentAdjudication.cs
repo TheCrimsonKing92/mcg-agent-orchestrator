@@ -31,13 +31,15 @@ internal sealed class OperatorIntentAdjudication(
         var shape = NormalizeShape(payload.Shape);
         var manifest = BuildEvidenceManifest(goal, payload, out var unresolvedEvidence);
         var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause);
+        var caseE = (payload.EvidenceReferences ?? []).Contains("steward-case=E", StringComparer.Ordinal);
         var stewardClose = intent.AuthenticationAssurance == StewardAssurance && shape == "close" &&
             AdmitsStewardClose(goal, task, payload);
         if (intent.AuthenticationAssurance == StewardAssurance &&
             (intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "steward" ||
              intent.Channel != "conductor-steward" ||
              !(stewardClose || shape == "route" &&
-               retryCause is (RetryCause.NewTestFinding or RetryCause.ContractClarification))))
+               retryCause is (RetryCause.NewTestFinding or RetryCause.ContractClarification) &&
+               (!caseE || ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id))))))
             reason = "steward-capability-boundary";
         var reversibility = ParseReversibility(payload.Reversibility, shape, out var invalidReversibility);
         if (reason is null && invalidReversibility)
@@ -97,7 +99,13 @@ internal sealed class OperatorIntentAdjudication(
         switch (shape)
         {
             case "close":
-                if (stewardClose)
+                if (stewardClose && caseE)
+                {
+                    if (!ConductorStewardCaseEAdmission.Admits(goal, task, payload, ResolveHead(goal.Id)))
+                        Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
+                            "steward-capability-boundary", now);
+                }
+                else if (stewardClose)
                 {
                     // Recheck after recording the decision, immediately before the consequential action.
                     var head = ResolveHead(goal.Id);
@@ -126,6 +134,10 @@ internal sealed class OperatorIntentAdjudication(
                 CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
             case "route":
+                if (intent.AuthenticationAssurance == StewardAssurance && caseE &&
+                    !ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id)))
+                    Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
+                        "steward-capability-boundary", now);
                 kernel.RetryTaskWithAuthoritativeFeedback(
                     goal.Id,
                     task.Id,
@@ -147,8 +159,10 @@ internal sealed class OperatorIntentAdjudication(
     }
 
     private bool AdmitsStewardClose(Goal goal, TaskSpec task, AdjudicateOperatorIntentPayload payload) =>
-        regateIndex is not null && ConductorStewardCaseDAdmission.Admits(
-            goal, task, payload, ResolveHead(goal.Id), regateIndex.Read(), regateCap);
+        (payload.EvidenceReferences ?? []).Contains("steward-case=E", StringComparer.Ordinal)
+            ? ConductorStewardCaseEAdmission.Admits(goal, task, payload, ResolveHead(goal.Id))
+            : regateIndex is not null && ConductorStewardCaseDAdmission.Admits(
+                goal, task, payload, ResolveHead(goal.Id), regateIndex.Read(), regateCap);
 
     private string? ResolveHead(GoalId goalId)
     {
