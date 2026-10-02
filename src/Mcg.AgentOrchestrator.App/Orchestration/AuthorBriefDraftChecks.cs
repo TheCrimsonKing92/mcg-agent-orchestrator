@@ -34,7 +34,7 @@ internal static class AuthorBriefDraftChecks
                 var token = citation.Groups[1].Value;
                 var lineSuffix = Regex.Match(token, @":([0-9]+)$", RegexOptions.CultureInvariant);
                 var path = lineSuffix.Success ? token[..lineSuffix.Index] : token;
-                if (!path.Contains('/') && !path.Contains('\\') &&
+                if (!lineSuffix.Success && !path.Contains('/') && !path.Contains('\\') &&
                     !Regex.IsMatch(path, @"\.[a-z0-9]+$", RegexOptions.CultureInvariant)) continue;
                 if (path.StartsWith("./", StringComparison.Ordinal)) path = path[2..];
                 var count = repository.TrackedLineCount(mainHead, path);

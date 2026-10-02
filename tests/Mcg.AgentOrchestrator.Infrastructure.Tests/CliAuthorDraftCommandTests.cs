@@ -176,6 +176,52 @@ public sealed class CliAuthorDraftCommandTests
         Assert.Contains(citation, failed.GetProperty("detail").GetString());
     }
 
+    [Theory]
+    [InlineData("LICENSE:1", null, "file is not tracked")]
+    [InlineData("LICENSE:0", 2, "line is outside file")]
+    [InlineData("LICENSE:3", 2, "line is outside file")]
+    [InlineData("LICENSE:9999999999999999999999", 2, "line is outside file")]
+    public void Extensionless_premise_citations_validate_tracking_and_line_bounds(
+        string citation, int? trackedLines, string detail)
+    {
+        using var fixture = new Fixture();
+        if (trackedLines is not null) fixture.Repository.TrackedFiles.Add("LICENSE", trackedLines.Value);
+        var markdown = ValidMarkdown.Replace("docs/role-capability-matrix.md:1", citation);
+
+        Assert.Equal(1, fixture.Run(Draft(markdown)));
+
+        Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
+        using var receipt = fixture.Receipt();
+        Assert.Equal(4, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        var failed = Assert.Single(receipt.RootElement.GetProperty("checks").EnumerateArray()
+            .Where(check => !check.GetProperty("passed").GetBoolean()));
+        Assert.Equal("premise-citations", failed.GetProperty("name").GetString());
+        Assert.Contains(citation, failed.GetProperty("detail").GetString());
+        Assert.Contains(detail, failed.GetProperty("detail").GetString());
+        Assert.Contains("Failed premise-citations:", fixture.Output.ToString());
+        Assert.Contains(citation, fixture.Output.ToString());
+        Assert.Empty(fixture.Error.ToString());
+    }
+
+    [Theory]
+    [InlineData("LICENSE:1")]
+    [InlineData("LICENSE:2")]
+    public void Tracked_extensionless_premise_lines_pass(string citation)
+    {
+        using var fixture = new Fixture();
+        fixture.Repository.TrackedFiles.Add("LICENSE", 2);
+        var markdown = ValidMarkdown.Replace("docs/role-capability-matrix.md:1", citation);
+
+        Assert.Equal(0, fixture.Run(Draft(markdown)));
+
+        Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
+        using var receipt = fixture.Receipt();
+        Assert.Equal(4, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.All(receipt.RootElement.GetProperty("checks").EnumerateArray(),
+            check => Assert.True(check.GetProperty("passed").GetBoolean()));
+        Assert.Empty(fixture.Error.ToString());
+    }
+
     [Fact]
     public void Missing_section_is_reported_and_citations_outside_premise_are_not_checked()
     {
@@ -246,11 +292,15 @@ public sealed class CliAuthorDraftCommandTests
     internal sealed class FakeRepository : IAuthorBriefDraftRepository
     {
         internal Func<string> Head { get; set; } = () => Fixture.MainSha;
+        internal Dictionary<string, int> TrackedFiles { get; } = new(StringComparer.Ordinal)
+        {
+            ["docs/role-capability-matrix.md"] = 100
+        };
         public string ResolveMainHead() => Head();
         public int? TrackedLineCount(string sha, string path)
         {
             Assert.Equal(Fixture.MainSha, sha);
-            return path == "docs/role-capability-matrix.md" ? 100 : null;
+            return TrackedFiles.TryGetValue(path, out var count) ? count : null;
         }
     }
 }
