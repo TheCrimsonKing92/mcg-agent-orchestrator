@@ -86,6 +86,7 @@ public sealed class OperatorLessonUntilGoalRecordTests
         using var fixture = new OperatorLessonHarness();
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Persisted fix");
+        _ = StateDbMigrations.EnsureUpToDate(fixture.Workspace.SqliteStatePath);
         await new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath).SaveAsync(kernel);
         var coordinator = OperatorIntentCoordinator.CreateDefault(fixture.Workspace);
         var first = await Enqueue(fixture, goal.Id.Value[..8]);
