@@ -132,6 +132,50 @@ public sealed class RunEventMaintenanceCadenceRunnerTests : IDisposable
         Assert.Single(ReadEvents("storage-retention-sweep-started"));
     }
 
+    [Xunit.Fact]
+    public async Task CommandExitWaitJoinsBlockedCadenceUntilReleased()
+    {
+        var entered = NewSignal();
+        var release = NewSignal();
+        var waitReturned = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? waitTask = null;
+        Task? invokeWait = null;
+        var runner = new RunEventMaintenanceCadenceRunner(LogPath, () =>
+        {
+            entered.TrySetResult();
+            TestHangGuard.WaitAsync(release.Task, "command exit cadence release").GetAwaiter().GetResult();
+        });
+        try
+        {
+            Assert.True(await TickAsync(runner));
+            await TestHangGuard.WaitAsync(entered.Task, "command exit cadence entry");
+            invokeWait = Task.Run(() =>
+            {
+                // Publish the actual join task after invoking the method, so a no-op join
+                // fails deterministically rather than depending on thread-pool scheduling.
+                waitReturned.TrySetResult(runner.WaitForCurrentRunAsync());
+            });
+            waitTask = await TestHangGuard.WaitAsync(waitReturned.Task, "command exit wait task returned");
+            Assert.False(release.Task.IsCompleted);
+            Assert.False(runner.CurrentRun!.IsCompleted);
+            Assert.False(waitTask.IsCompleted);
+
+            release.TrySetResult();
+            await TestHangGuard.WaitAsync(waitTask, "command exit wait completion");
+            Assert.True(runner.CurrentRun!.IsCompletedSuccessfully);
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (runner.CurrentRun is { } run)
+                await TestHangGuard.WaitAsync(run, "command exit cadence cleanup");
+            if (waitTask is not null)
+                await TestHangGuard.WaitAsync(waitTask, "command exit wait cleanup");
+            if (invokeWait is not null)
+                await TestHangGuard.WaitAsync(invokeWait, "command exit wait invocation cleanup");
+        }
+    }
+
     private JsonElement[] ReadEvents(string kind) => File.ReadAllLines(LogPath)
         .Select(line =>
         {

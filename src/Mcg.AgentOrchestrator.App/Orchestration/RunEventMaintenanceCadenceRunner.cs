@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// Owned by one loop generation. Stop and handoff deliberately never join its background run.
+// Owned by one loop generation. The tick never joins its background run; command exit joins.
 internal sealed class RunEventMaintenanceCadenceRunner(
     string conductEventsLogPath,
     Action cadenceOperation,
@@ -18,6 +18,19 @@ internal sealed class RunEventMaintenanceCadenceRunner(
     internal Task? CurrentRun
     {
         get { lock (_gate) return _currentRun; }
+    }
+
+    internal async Task WaitForCurrentRunAsync()
+    {
+        // Command exit owns this join, after the loop has stopped scheduling new runs.
+        // Do not hold the scheduling lock while waiting for background IO to finish.
+        var run = CurrentRun;
+        try
+        {
+            if (run is not null)
+                await run.ConfigureAwait(false);
+        }
+        catch (Exception ex) { ReportFailure(ex); }
     }
 
     internal bool OnTick()
@@ -44,17 +57,22 @@ internal sealed class RunEventMaintenanceCadenceRunner(
                 }
                 catch (Exception ex)
                 {
-                    var message = string.IsNullOrWhiteSpace(ex.Message)
-                        ? "none"
-                        : ex.Message.ReplaceLineEndings(" ").Replace(' ', '_');
-                    var line = $"RUN_EVENTS_MAINTENANCE_FAILED exception={ex.GetType().Name} message={message}";
-                    TryAppendJournal("run-events-maintenance-failed", line);
-                    try { Console.WriteLine(line); }
-                    catch { /* A closed output stream must not fault the maintenance task. */ }
+                    ReportFailure(ex);
                 }
             });
             return true;
         }
+    }
+
+    private void ReportFailure(Exception ex)
+    {
+        var message = string.IsNullOrWhiteSpace(ex.Message)
+            ? "none"
+            : ex.Message.ReplaceLineEndings(" ").Replace(' ', '_');
+        var line = $"RUN_EVENTS_MAINTENANCE_FAILED exception={ex.GetType().Name} message={message}";
+        TryAppendJournal("run-events-maintenance-failed", line);
+        try { Console.WriteLine(line); }
+        catch { /* A closed output stream must not fault the maintenance task. */ }
     }
 
     private void TryAppendJournal(string eventKind, string detail)

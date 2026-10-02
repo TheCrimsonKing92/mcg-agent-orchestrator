@@ -1820,66 +1820,73 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         Path.GetFileName(conductorOutputLogPath).EndsWith(".out.log", StringComparison.OrdinalIgnoreCase)
                             ? Path.GetFileName(conductorOutputLogPath)[..^8] + ".crash.log"
                             : Path.GetFileName(conductorOutputLogPath) + ".crash.log");
-                var loopSummary = new ConductorBatchLoop(
-                    measuredSweepWithCheckpointHolds: reconcileSweep,
-                    reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                    detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                    recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(
-                        loopKernel,
-                        (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
-                            context.ReloadKernel(),
-                            goalId,
-                            taskId)),
-                    refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
-                    {
-                        return new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, loopReaper);
-                    },
-                    handoffOnMaxDuration: supervisedChild ? null : handoff,
-                    conductEventLogWriter: conductEventLogWriter,
-                    operatorIntents: operatorIntents,
-                    progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
-                    progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
-                    selfRelaunch: delegateSelfRelaunchToSupervisor
-                            ? ConductorSelfRelaunch.CreateSupervisorDelegated()
-                            : selfRelaunch,
-                    selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
-                        Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),
-                        Console.Error.WriteLine),
-                    postLandingCanary: postLandingCanary,
-                    goalReloadObservation: resolveGoalReloadObservation,
-                    lifecycleRecorder: new ConductorLifecycleRecorder(
-                        new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
-                    blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
-                    workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
-                    .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
-                    .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace)).Run(
-                    context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
-                    watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
-                    persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
-                    persistGoalTick: context.PersistGoalCheckpoint,
-                    buildOperatorDispositions: loopKernel => ConductorOperatorDispositionSnapshots.Build(loopKernel, context.Workspace.ExecutionDirectory),
-                    quiet: quietWatchProgress,
-                    stallWarningThreshold: stallWarningThreshold,
-                    unscopedStallTickThreshold: unscopedStallTickThreshold,
-                    journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
-                    policySource: loopPolicyResolution.Source,
-                    reloadPolicy: loopPolicyName is null
-                        ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
-                        : null,
-                    checkpointGoalTick: context.CheckpointGoals,
-                    hasTransientLoadHold: () => scheduledLoadHold is not null,
-                    maxDurationDeferralCeiling: maxDurationDeferralCeiling,
-                    onMaxDurationDeferralStateChanged: active => suppressGoalRefinementForMaxDurationDeferral = active,
-                    emitActivationHeartbeat: supervisedChild);
-                if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
+                try
                 {
-                    ConductorContinuityExitArtifact.Write(
-                        continuityExitArtifactPath,
-                        ConductorContinuityExitArtifactFactory.FromLoopSummary(
-                            loopSummary, delegateSelfRelaunchToSupervisor));
+                    var loopSummary = new ConductorBatchLoop(
+                        measuredSweepWithCheckpointHolds: reconcileSweep,
+                        reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                        detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                        recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(
+                            loopKernel,
+                            (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                                context.ReloadKernel(),
+                                goalId,
+                                taskId)),
+                        refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
+                        {
+                            return new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, loopReaper);
+                        },
+                        handoffOnMaxDuration: supervisedChild ? null : handoff,
+                        conductEventLogWriter: conductEventLogWriter,
+                        operatorIntents: operatorIntents,
+                        progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
+                        progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
+                        selfRelaunch: delegateSelfRelaunchToSupervisor
+                                ? ConductorSelfRelaunch.CreateSupervisorDelegated()
+                                : selfRelaunch,
+                        selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
+                            Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),
+                            Console.Error.WriteLine),
+                        postLandingCanary: postLandingCanary,
+                        goalReloadObservation: resolveGoalReloadObservation,
+                        lifecycleRecorder: new ConductorLifecycleRecorder(
+                            new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
+                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
+                        workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
+                        .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
+                        .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace)).Run(
+                        context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
+                        watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
+                        persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
+                        persistGoalTick: context.PersistGoalCheckpoint,
+                        buildOperatorDispositions: loopKernel => ConductorOperatorDispositionSnapshots.Build(loopKernel, context.Workspace.ExecutionDirectory),
+                        quiet: quietWatchProgress,
+                        stallWarningThreshold: stallWarningThreshold,
+                        unscopedStallTickThreshold: unscopedStallTickThreshold,
+                        journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
+                        policySource: loopPolicyResolution.Source,
+                        reloadPolicy: loopPolicyName is null
+                            ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
+                            : null,
+                        checkpointGoalTick: context.CheckpointGoals,
+                        hasTransientLoadHold: () => scheduledLoadHold is not null,
+                        maxDurationDeferralCeiling: maxDurationDeferralCeiling,
+                        onMaxDurationDeferralStateChanged: active => suppressGoalRefinementForMaxDurationDeferral = active,
+                        emitActivationHeartbeat: supervisedChild);
+                    if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
+                    {
+                        ConductorContinuityExitArtifact.Write(
+                            continuityExitArtifactPath,
+                            ConductorContinuityExitArtifactFactory.FromLoopSummary(
+                                loopSummary, delegateSelfRelaunchToSupervisor));
+                    }
+                    Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
+                    return loopSummary.Escalated == 0;
                 }
-                Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
-                return loopSummary.Escalated == 0;
+                finally
+                {
+                    maintenanceCadence.WaitForCurrentRunAsync().GetAwaiter().GetResult();
+                }
             }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
