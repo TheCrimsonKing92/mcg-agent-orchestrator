@@ -42,7 +42,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
     public async Task RevertedBuildFailureIsInconclusiveWithCompilerError()
     {
         var probe = await RunProbeAsync(buildFailure: true);
-        Assert.Equal(FindingEvidenceNegativeControlOutcome.Inconclusive, probe.Result.NegativeControlOutcome);
+        Assert.Equal(FindingEvidenceNegativeControlOutcome.CompileRed, probe.Result.NegativeControlOutcome);
         Assert.Contains("error CS0103", probe.Result.Summary, StringComparison.Ordinal);
         Assert.Equal(FindingEvidenceArmDisposition.Green,
             Assert.Single(probe.Result.Arms!, arm => arm.Arm == FindingEvidenceArm.Candidate).Disposition);

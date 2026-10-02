@@ -346,7 +346,10 @@ public sealed record FocusedEvidenceRunResult(
     FocusedEvidenceRejection? Rejection = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     [property: System.Text.Json.Serialization.JsonConverter(typeof(FindingEvidenceNegativeControlOutcomeJsonConverter))]
-    FindingEvidenceNegativeControlOutcome? NegativeControlOutcome = null)
+    FindingEvidenceNegativeControlOutcome? NegativeControlOutcome = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(FindingEvidenceRevertPathsRejectionJsonConverter))]
+    FindingEvidenceRevertPathsRejection? RevertPathsRejection = null)
 {
     public bool IsValidEvidence =>
         Accepted &&
@@ -361,7 +364,10 @@ public sealed record FocusedEvidenceArmRunResult(
     bool Accepted,
     bool Passed,
     string Summary,
-    IReadOnlyList<AcceptanceCheckResult> Checks);
+    IReadOnlyList<AcceptanceCheckResult> Checks,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(FindingEvidenceRevertPathsRejectionJsonConverter))]
+    FindingEvidenceRevertPathsRejection? RevertPathsRejection = null);
 
 public sealed record FocusedEvidenceTargetCoverage(
     string Target,
@@ -401,7 +407,7 @@ public interface IGoalAcceptanceVerifier
         IAcceptanceFocusedVerificationOwner executionOwner,
         FindingEvidenceNegativeControl negativeControl,
         int? stableSlotIndex = null, DotnetBuildEnvironmentLease? stableSlotLease = null,
-        bool runBaselineArm = false) => throw new NotSupportedException("Negative-control focused evidence is not supported.");
+        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null) => throw new NotSupportedException("Negative-control focused evidence is not supported.");
 }
 
 public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -1457,7 +1463,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null)
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null)
     {
         var executionOwner = AcceptanceExecutionOwners.CreateFocusedVerification(
             worktreePath, goalId, stableSlotIndex, cancellationToken);
@@ -1465,7 +1471,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             if (negativeControl is { } mode)
                 return await RunNegativeControlFocusedEvidenceOwnedAsync(worktreePath, goalId, request,
-                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm).ConfigureAwait(false);
+                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths).ConfigureAwait(false);
             return await RunFocusedEvidenceOwnedAsync(
                 worktreePath, goalId, request, executionOwner, stableSlotIndex,
                 stableSlotLease, runBaselineArm).ConfigureAwait(false);
@@ -1500,7 +1506,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null)
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null)
     {
         var executionOwner = (AcceptanceFocusedVerificationOwner)(_executionContext ?? throw new InvalidOperationException(
             "Focused verification execution context was not supplied."));
@@ -1574,7 +1580,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 OutcomeReason: candidate.Disposition == FindingEvidenceArmDisposition.ApparatusFailure
                     ? FindingEvidenceOutcomeReason.ApparatusFailure
                     : null), negativeControl, worktreePath, goalId, focusedChecks, coverage,
-                stableSlotIndex, stableSlotLease, executionOwner).ConfigureAwait(false);
+                stableSlotIndex, stableSlotLease, executionOwner, revertPaths: revertPaths).ConfigureAwait(false);
         }
 
         var baselineSha = ResolveFocusedEvidenceMergeBase(worktreePath);
@@ -1622,7 +1628,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return await AddSourceRevertedEvidenceAsync(evidence, negativeControl, worktreePath, goalId,
-            focusedChecks, coverage, stableSlotIndex, stableSlotLease, executionOwner, baselineSha).ConfigureAwait(false);
+            focusedChecks, coverage, stableSlotIndex, stableSlotLease, executionOwner, baselineSha, revertPaths).ConfigureAwait(false);
     }
 
     private async Task<FocusedEvidenceArmRunResult> RunFocusedEvidenceArmAsync(

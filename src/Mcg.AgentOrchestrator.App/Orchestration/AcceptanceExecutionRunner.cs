@@ -42,7 +42,7 @@ internal static class AcceptanceExecutionRunner
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm,
         CancellationToken cancellationToken,
-        FindingEvidenceNegativeControl? negativeControl = null)
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null)
     {
         ArgumentNullException.ThrowIfNull(verifier);
         var executionOwner = AcceptanceExecutionOwners.CreateFocusedVerification(
@@ -54,7 +54,7 @@ internal static class AcceptanceExecutionRunner
             executionOwner,
             () => (negativeControl is { } mode
                 ? verifier.RunNegativeControlFocusedEvidenceOwnedAsync(worktreePath, goalId, request,
-                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm)
+                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths)
                 : verifier.RunFocusedEvidenceOwnedAsync(
                 worktreePath,
                 goalId,
