@@ -37,6 +37,8 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
                 runAcceptanceAttemptsInCurrentProcess: true, cleanupHooks: cleanup.Hooks);
             Assert.True(driver.MergeTrainsEnabled);
             Assert.True(driver.AcceptanceCohortsEnabled);
+            Assert.All(goals, goal => Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+                driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive)));
             var starts = new BackgroundGateStartHarness();
             // Capture keeps the train live throughout the tick without running a background task.
             starts.Capture(driver);
@@ -58,6 +60,16 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
             Assert.All(trainMembers, member => Assert.Contains(goals, goal => goal.Id.Value == member));
             var remaining = goals.Where(goal => !trainMembers.Contains(goal.Id.Value)).ToArray();
             Assert.Equal(goalCount - 3, remaining.Length);
+            if (remaining.Length == 2)
+            {
+                var pairCandidates = remaining.Select(goal =>
+                {
+                    var projection = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive);
+                    Assert.IsType<GateReadyCandidateProjectionResult.Ready>(projection);
+                    return new ConductorSpeculativeAcceptanceCandidate(goal.Id, projection);
+                }).ToArray();
+                Assert.NotNull(ConductorAcceptanceCohortSelector.Select(pairCandidates).Selection);
+            }
             Assert.All(remaining, goal =>
             {
                 Assert.DoesNotContain(progress, line =>
@@ -70,6 +82,8 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
                 line.Contains("ACCEPTANCE_COHORT_ENTRY tick=1 ", StringComparison.Ordinal));
             Assert.DoesNotContain(progress, line =>
                 line.Contains("ACCEPTANCE_COHORT tick=1 members=", StringComparison.Ordinal));
+            Assert.DoesNotContain(progress, line =>
+                line.Contains("detail=live-census-unavailable", StringComparison.Ordinal));
             Assert.Contains(progress, line =>
                 line.Contains("ADMISSION tick=1 result=deferred reason=parallel-acceptance-slot-cap cap=1 ",
                     StringComparison.Ordinal) &&
@@ -93,8 +107,8 @@ public sealed class ConductorBatchLoopTestsTrainStartWidthOccupancy : Acceptance
             "tests/Mcg.AgentOrchestrator.Core.Tests/WidthFirst.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WidthSecond.cs",
             "tests/Mcg.AgentOrchestrator.Dashboard.Tests/WidthThird.cs",
-            "src/Mcg.AgentOrchestrator.App/Orchestration/WidthFourth.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/WidthFifth.cs"
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WidthFourth.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WidthFifth.cs"
         };
         var goals = Enumerable.Range(0, count)
             .Select(index => CreateCompletedGoal(kernel, $"Train width {index}", repo)).ToArray();
