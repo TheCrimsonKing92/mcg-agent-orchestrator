@@ -17,6 +17,7 @@ internal sealed partial class ConductorStewardHost
     private readonly IGoalLifecycleEventWriter _lifecycle;
     private readonly ConductEventLogWriter _conduct;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly ConductorStewardCaseDSources? _caseDSources;
     private readonly CancellationTokenSource _shutdown = new();
     private Task<string>? _round;
     private ConductorStewardStoredTrigger? _running;
@@ -35,7 +36,8 @@ internal sealed partial class ConductorStewardHost
         ConductEventLogWriter conduct,
         Func<DateTimeOffset>? utcNow = null,
         bool enabled = true,
-        ConductorStewardDeterministicRoute? deterministicRoute = null)
+        ConductorStewardDeterministicRoute? deterministicRoute = null,
+        ConductorStewardCaseDSources? caseDSources = null)
     {
         _triggers = triggers;
         _detector = detector;
@@ -47,6 +49,7 @@ internal sealed partial class ConductorStewardHost
         _lifecycle = lifecycle;
         _conduct = conduct;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _caseDSources = caseDSources;
         _deterministicRoute = deterministicRoute ?? new ConductorStewardDeterministicRoute();
         Enabled = enabled;
     }
@@ -80,11 +83,12 @@ internal sealed partial class ConductorStewardHost
     internal static ConductorStewardHost CreateDefault(OrchestratorWorkspace workspace)
     {
         var enabledSetting = Environment.GetEnvironmentVariable(EnabledEnvironmentVariable);
+        var caseDSources = ConductorStewardCaseDSources.CreateDefault(workspace);
         return new ConductorStewardHost(
             new ConductorStewardTriggerStore(Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")),
             new ConductorStewardTriggerDetector(
                 (goal, className) => CandidateAddedClassCollection(workspace, goal, className),
-                goal => ConductorStewardAcceptanceTrxResolver.Resolve(workspace.OrchestratorDirectory, goal)),
+                goal => ConductorStewardAcceptanceTrxResolver.Resolve(workspace.OrchestratorDirectory, goal), caseDSources),
             new ClaudeConductorStewardModelRound(Path.Combine(workspace.OrchestratorDirectory, "steward-rounds"),
                 lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
                     message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
@@ -100,7 +104,8 @@ internal sealed partial class ConductorStewardHost
             enabled: !string.Equals(enabledSetting, "false", StringComparison.OrdinalIgnoreCase) &&
                      enabledSetting != "0",
             deterministicRoute: new ConductorStewardDeterministicRoute(
-                new GitConductorStewardTrackedFileLister(), new ManifestConductorStewardLaneSubstringResolver()));
+                new GitConductorStewardTrackedFileLister(), new ManifestConductorStewardLaneSubstringResolver()),
+            caseDSources: caseDSources);
     }
 
     internal IReadOnlySet<GoalId> ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
@@ -265,6 +270,12 @@ internal sealed partial class ConductorStewardHost
         }
 
         var worktree = _workingDirectory(goal);
+        if (trigger.Kind == ConductorStewardTriggerKind.DeveloperGateReopenNoCommit)
+        {
+            HarvestCaseDClose(kernel, goal, stored, adjudication, worktree,
+                harvestVersion ?? _claimedGoalVersion, changed, versionDetail);
+            return;
+        }
         var feedback = ConductorStewardRetryTemplate.Compose(trigger, adjudication);
         if (adjudication.Kind == "route" && feedback is null)
         {

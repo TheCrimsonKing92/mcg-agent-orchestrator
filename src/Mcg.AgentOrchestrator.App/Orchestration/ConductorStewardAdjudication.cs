@@ -55,16 +55,20 @@ internal static class ConductorStewardRoutePolicy
         string workingDirectory,
         AdjudicationEvidenceResolver evidenceResolver)
     {
-        if (adjudication.Kind != "route") return "disallowed-action";
+        var caseDClose = trigger.Kind == ConductorStewardTriggerKind.DeveloperGateReopenNoCommit && adjudication.Kind == "close";
+        if (!caseDClose && (adjudication.Kind != "route" ||
+            trigger.Kind == ConductorStewardTriggerKind.DeveloperGateReopenNoCommit)) return "disallowed-action";
         if (!string.Equals(adjudication.TargetTaskId, trigger.TaskId, StringComparison.Ordinal))
             return "different-target-task";
-        if (adjudication.Cause is not (nameof(RetryCause.NewTestFinding) or nameof(RetryCause.ContractClarification)))
+        if (!caseDClose && adjudication.Cause is not (nameof(RetryCause.NewTestFinding) or nameof(RetryCause.ContractClarification)))
             return "disallowed-retry-cause";
-        if (adjudication.Reversibility is not ("reversible" or "reversible-with-cost"))
+        if ((!caseDClose || adjudication.Reversibility is not null) &&
+            adjudication.Reversibility is not ("reversible" or "reversible-with-cost"))
             return "irreversible-or-unknown";
-        if (string.IsNullOrWhiteSpace(adjudication.Text) || string.IsNullOrWhiteSpace(adjudication.Instruction))
+        if (caseDClose && string.IsNullOrWhiteSpace(adjudication.Text)) return "missing-diagnosis";
+        if (!caseDClose && (string.IsNullOrWhiteSpace(adjudication.Text) || string.IsNullOrWhiteSpace(adjudication.Instruction)))
             return "missing-diagnosis-or-instruction";
-        var payload = new AdjudicateOperatorIntentPayload("route", adjudication.Text,
+        var payload = new AdjudicateOperatorIntentPayload(caseDClose ? "close" : "route", adjudication.Text,
             adjudication.EvidenceReferences ?? [], 0, workingDirectory);
         foreach (var reference in adjudication.EvidenceReferences ?? [])
             if (!evidenceResolver.TryResolve(reference, goal, payload, out _))

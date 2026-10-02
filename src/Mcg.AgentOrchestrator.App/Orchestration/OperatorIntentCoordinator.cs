@@ -46,7 +46,9 @@ internal sealed partial class OperatorIntentCoordinator
         AdjudicationEvidenceResolver? evidenceResolver = null,
         Func<GoalId, string, string?>? policyChangeFingerprintResolver = null,
         ClarificationAnswerResolver? clarificationAnswers = null,
-        ClarificationAnswerRecovery? clarificationAnswerRecovery = null)
+        ClarificationAnswerRecovery? clarificationAnswerRecovery = null,
+        AcceptanceFailingTestIndex? apparatusRegateIndex = null,
+        int apparatusRegateCap = ApparatusRedGate.DefaultPerGoalRegateCap)
     {
         _store = store;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -58,7 +60,8 @@ internal sealed partial class OperatorIntentCoordinator
         if ((decisions is null) != (goalStateVersionResolver is null))
             throw new ArgumentException("Adjudication requires both a decision store and a goal-state-version resolver.");
         _adjudication = decisions is null ? null : new OperatorIntentAdjudication(
-            decisions, goalStateVersionResolver!, evidenceResolver ?? new AdjudicationEvidenceResolver());
+            decisions, goalStateVersionResolver!, evidenceResolver ?? new AdjudicationEvidenceResolver(),
+            goalHeadResolver, apparatusRegateIndex, apparatusRegateCap);
     }
 
     public static OperatorIntentCoordinator CreateDefault(OrchestratorWorkspace workspace)
@@ -74,6 +77,7 @@ internal sealed partial class OperatorIntentCoordinator
             decisions: collaboration,
             goalStateVersionResolver: goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult(),
             evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
+            apparatusRegateIndex: ConductorStewardCaseDSources.CreateIndex(workspace),
             clarificationAnswers: (key, answer, briefVersion) =>
                 refinement.TryResolveOpenClarificationAsync(key, answer, briefVersion),
             clarificationAnswerRecovery: (key, answer, briefVersion) =>

@@ -8,7 +8,8 @@ internal enum ConductorStewardTriggerKind
 {
     DeveloperNoChangeWithConfirmedRed,
     PlannerOutputContractRejected,
-    AcceptanceCollectionGuardClass
+    AcceptanceCollectionGuardClass,
+    DeveloperGateReopenNoCommit
 }
 
 internal sealed record ConductorStewardTrigger(
@@ -26,6 +27,7 @@ internal sealed record ConductorStewardTrigger(
     {
         ConductorStewardTriggerKind.DeveloperNoChangeWithConfirmedRed => "A",
         ConductorStewardTriggerKind.PlannerOutputContractRejected => "B",
+        ConductorStewardTriggerKind.DeveloperGateReopenNoCommit => "D",
         _ => "C"
     };
 
@@ -35,7 +37,8 @@ internal sealed record ConductorStewardTrigger(
 
 internal sealed partial class ConductorStewardTriggerDetector(
     Func<Goal, string, string?>? candidateAddedClassCollection = null,
-    Func<Goal, IReadOnlyList<string>>? acceptanceTrxPaths = null)
+    Func<Goal, IReadOnlyList<string>>? acceptanceTrxPaths = null,
+    ConductorStewardCaseDSources? caseDSources = null)
 {
     private const string GuardName = "AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource";
     private static readonly Regex OffendingClass = new(
@@ -124,6 +127,7 @@ internal sealed partial class ConductorStewardTriggerDetector(
                 }
             }
         }
+        DetectCaseD(goal, needsInspection, result);
         return result;
     }
 

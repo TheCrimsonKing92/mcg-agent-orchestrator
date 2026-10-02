@@ -7,7 +7,7 @@ internal static class ConductorStewardAcceptanceTrxResolver
 {
     internal static IReadOnlyList<string> Resolve(string orchestratorDirectory, Goal goal)
     {
-        var candidateSha = goal.LatestAcceptanceFailure?.BranchHeadSha;
+        var candidateSha = goal.LatestAcceptanceFailure?.BranchHeadSha ?? goal.RetainedAcceptanceFailure?.BranchHeadSha;
         if (string.IsNullOrWhiteSpace(candidateSha)) return [];
         var attempts = GoalTerminalReconciliationEvidenceResolver.ResolveForGoal(
             Path.Combine(orchestratorDirectory, "acceptance-gate-attempts"), goal.Id);

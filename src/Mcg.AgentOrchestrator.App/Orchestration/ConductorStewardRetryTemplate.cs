@@ -17,6 +17,8 @@ internal static class ConductorStewardRetryTemplate
         frame.AppendLine().AppendLine("Decision procedure:");
         frame.AppendLine(trigger.Kind switch
         {
+            ConductorStewardTriggerKind.DeveloperGateReopenNoCommit =>
+                "Diagnose the gate evidence on the unchanged candidate; only a case D close or owner question is allowed.",
             ConductorStewardTriggerKind.DeveloperNoChangeWithConfirmedRed =>
                 "Run the named failing test against the same candidate and input; quote its assertion, then fix that failure and recheck it.",
             ConductorStewardTriggerKind.PlannerOutputContractRejected =>

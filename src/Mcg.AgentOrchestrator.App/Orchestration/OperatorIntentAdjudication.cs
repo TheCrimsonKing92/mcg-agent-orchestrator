@@ -12,7 +12,10 @@ internal sealed class OperatorIntentAdjudicationRejectedException(string reason)
 internal sealed class OperatorIntentAdjudication(
     ICollaborationItemStore decisions,
     Func<GoalId, long?> goalStateVersionResolver,
-    AdjudicationEvidenceResolver evidenceResolver)
+    AdjudicationEvidenceResolver evidenceResolver,
+    Func<GoalId, string?>? goalHeadResolver = null,
+    AcceptanceFailingTestIndex? regateIndex = null,
+    int regateCap = ApparatusRedGate.DefaultPerGoalRegateCap)
 {
     private const string TemplateVersion = "operator-adjudication-v1";
     internal const string StewardAssurance = "steward";
@@ -28,10 +31,13 @@ internal sealed class OperatorIntentAdjudication(
         var shape = NormalizeShape(payload.Shape);
         var manifest = BuildEvidenceManifest(goal, payload, out var unresolvedEvidence);
         var reason = Validate(goal, task, payload, shape, unresolvedEvidence, out var retryCause);
+        var stewardClose = intent.AuthenticationAssurance == StewardAssurance && shape == "close" &&
+            AdmitsStewardClose(goal, task, payload);
         if (intent.AuthenticationAssurance == StewardAssurance &&
             (intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "steward" ||
-             intent.Channel != "conductor-steward" || shape != "route" ||
-             retryCause is not (RetryCause.NewTestFinding or RetryCause.ContractClarification)))
+             intent.Channel != "conductor-steward" ||
+             !(stewardClose || shape == "route" &&
+               retryCause is (RetryCause.NewTestFinding or RetryCause.ContractClarification))))
             reason = "steward-capability-boundary";
         var reversibility = ParseReversibility(payload.Reversibility, shape, out var invalidReversibility);
         if (reason is null && invalidReversibility)
@@ -40,7 +46,9 @@ internal sealed class OperatorIntentAdjudication(
         if (reason is null && AdjudicationPrecondition.IsStale(payload, goal, task))
             reason = "stale-goal-state-version";
 
-        var actionKind = shape == "route" ? DecisionActionKind.Retry : DecisionActionKind.VerifyManual;
+        // This narrow recovery completes a task; it cannot attest or land the candidate.
+        var actionKind = stewardClose ? DecisionActionKind.Recover :
+            shape == "route" ? DecisionActionKind.Retry : DecisionActionKind.VerifyManual;
         var requiredTier = DecisionAuthorization.RequiredTierFor(actionKind);
         var assurance = ResolveAuthorizationTier(intent.AuthenticationAssurance);
         var actionToken = shape is "close" or "reopen-regate" or "route" ? shape : "invalid";
@@ -89,6 +97,21 @@ internal sealed class OperatorIntentAdjudication(
         switch (shape)
         {
             case "close":
+                if (stewardClose)
+                {
+                    // Recheck after recording the decision, immediately before the consequential action.
+                    var head = ResolveHead(goal.Id);
+                    if (regateIndex is null || !ConductorStewardCaseDAdmission.Admits(
+                            goal, task, payload, head, regateIndex.Read(), regateCap))
+                        Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
+                            "steward-capability-boundary", now);
+                    if (!ConductorStewardCaseDAdmission.RecordRegate(regateIndex!, goal, task, payload, head!, now))
+                        Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
+                            "apparatus-regate-unrecorded", now);
+                    if (!string.Equals(ResolveHead(goal.Id), head, StringComparison.OrdinalIgnoreCase))
+                        Reject(kernel, goal, task, intent, receipt, actionRef, currentVersion,
+                            "steward-capability-boundary", now);
+                }
                 CompleteAndVerify(kernel, goal, task, payload, now, CorrectionSource(intent));
                 break;
             case "reopen-regate":
@@ -121,6 +144,16 @@ internal sealed class OperatorIntentAdjudication(
         if (!applied.Applied)
             throw new InvalidOperationException($"Decision effect was unexpectedly rejected: {applied.Receipt.Result}");
         RecordTimeline(kernel, goal, task, intent, receipt.Id, "applied");
+    }
+
+    private bool AdmitsStewardClose(Goal goal, TaskSpec task, AdjudicateOperatorIntentPayload payload) =>
+        regateIndex is not null && ConductorStewardCaseDAdmission.Admits(
+            goal, task, payload, ResolveHead(goal.Id), regateIndex.Read(), regateCap);
+
+    private string? ResolveHead(GoalId goalId)
+    {
+        try { return goalHeadResolver?.Invoke(goalId); }
+        catch { return null; }
     }
 
     private void Reject(
