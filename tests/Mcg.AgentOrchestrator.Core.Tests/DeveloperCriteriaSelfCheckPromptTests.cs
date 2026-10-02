@@ -42,4 +42,30 @@ public sealed class DeveloperCriteriaSelfCheckPromptTests
             Assert.DoesNotContain("Developer Criteria Self-Check", requirements, StringComparison.Ordinal);
         }
     }
+
+    [Theory]
+    [InlineData(AgentRole.Developer, "Update the label.")]
+    [InlineData(AgentRole.Developer, "Design and implement production architecture and distributed integration.")]
+    [InlineData(AgentRole.Tester, "Verify the label.")]
+    [InlineData(AgentRole.Reviewer, "Review the label.")]
+    public void FileBriefReferencesFullSelfCheckInstructionsWhileApiKeepsThemInline(AgentRole role, string description)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), description, role);
+        var goal = kernel.CreateGoal("Maintain the label.", [task]);
+        var api = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+        // Brief projection is a query: it must not require or create this directory.
+        var file = kernel.BuildTaskBrief(goal.Id, task.Id,
+            workingDirectory: "C:\\repo", contextDirectory: "C:\\repo\\context").Content;
+
+        Assert.Contains("Read criteria-self-check.md in the context directory before WORKER_RESULT.", file, StringComparison.Ordinal);
+        Assert.DoesNotContain("criteria-self-check.md", api, StringComparison.Ordinal);
+        foreach (var line in CriteriaSelfCheckPromptContext.BuildArtifact(role)!.Split(Environment.NewLine))
+        {
+            Assert.Contains(line, api, StringComparison.Ordinal);
+            Assert.DoesNotContain(line, file, StringComparison.Ordinal);
+        }
+        if (role == AgentRole.Developer)
+            Assert.Contains("assigned_scope_complete:", file, StringComparison.Ordinal);
+    }
 }

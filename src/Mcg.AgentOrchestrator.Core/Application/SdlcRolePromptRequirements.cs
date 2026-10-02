@@ -16,9 +16,9 @@ internal static class SdlcRolePromptRequirements
         "- RECEIPT-FIRST: Inspect/cite. Pass iff candidate SHA/proven equivalent worktree/dispatch + `test_project`/`test_class` match; close covered/no repeat. Missing/stale/mismatched/unreadable=unproven; evidence > stale narrative.";
     private const string TesterCompactInconclusiveReceiptContract =
         "- Timeout/killed/no-results is inconclusive, not a pass. Rerun only on changed execution; only `test_project` and `test_class` define that selection. unsupported fields; cosmetic selector differences don't; full-gate/operator/acceptance owns rest. Never extend deadline/invent cause.";
-    private const string DeveloperSelfCheckProcedure =
+    internal const string DeveloperSelfCheckProcedure =
         "- Before WORKER_RESULT, for each criterion naming Developer as owner, open the test written/changed for it: its assertion must check the specific named outcome, not a weaker property, and fail on pre-change code. If both hold, report proven with the test in criteria_self_check; else strengthen it or report unmet and set assigned_scope_complete: false.";
-    private const string SelfCheckAttestation =
+    internal const string SelfCheckAttestation =
         "- For each proven entry in Developer Criteria Self-Check on a criterion you attest, check the named test exists in the candidate and its assertion checks the named outcome; otherwise raise a finding against that criterion.";
     // Goal 79061df4 adds one attestation line; preserve existing budget headroom.
     internal static readonly int ReviewerComplexRequirementsMaxChars = 4437 + SelfCheckAttestation.Length + 2;
