@@ -9,6 +9,9 @@ internal sealed partial class ConductorDriver
     internal GateReadyCandidateProjectionResult ProjectInReviewCohortPartner(
         Goal goal, ConductorAutonomyPolicy policy)
     {
+        if (HasActiveOwnerReviewHold(goal, out _, out _))
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
+
         if (HasActiveApparatusHold(goal, out _))
             return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.ApparatusHold);
 

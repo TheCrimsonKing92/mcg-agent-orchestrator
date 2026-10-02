@@ -14,6 +14,9 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        if (HasActiveOwnerReviewHold(goal, out var ownerSha, out var ownerReceipt))
+            return OwnerReviewHeld(goal, goalPrefix, policy, ownerSha, ownerReceipt!);
+
         if (RouteRecordedCohortAttributionFailure(goal, goalPrefix, policy) is { } attributedFailure)
         {
             return attributedFailure;
