@@ -884,7 +884,7 @@ public sealed partial class BackgroundDispatchRunner
         TaskId taskId,
         DispatchRefreshOutcome outcome)
     {
-        var task = kernel.GetTask(goalId, taskId);
+        var task = GetTaskAfterReceiptlessUsage(kernel, goalId, taskId, outcome);
         if (outcome.Verification is not null && outcome.DispatchAttemptAt is { } dispatchAttemptAt)
         {
             var dispatch = task.DispatchHistory.SingleOrDefault(candidate => candidate.DispatchedAt == dispatchAttemptAt)
@@ -1864,7 +1864,7 @@ public sealed partial class BackgroundDispatchRunner
                 recoveryDecision),
             ProviderUsage: providerUsage.Usage,
             ProviderUsageUnavailableReason: providerUsage.UnavailableReason,
-            DispatchAttemptAt: contextReceiptAttemptAt);
+            DispatchAttemptAt: contextReceiptAttemptAt, ReceiptlessUsageAttemptAt: ReceiptlessUsageAttemptAt(dispatchAttempt));
         _processLogReader.Evict(processRecord);
         return outcome;
     }

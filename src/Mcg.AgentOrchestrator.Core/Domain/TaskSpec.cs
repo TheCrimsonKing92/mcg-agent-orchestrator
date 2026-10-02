@@ -993,6 +993,27 @@ public sealed partial class TaskSpec
         }
     }
 
+    internal void SetDispatchProviderUsage(DateTimeOffset dispatchedAt, DispatchProviderUsage usage)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        var matches = _dispatchHistory
+            .Select((dispatch, index) => (dispatch, index))
+            .Where(item => item.dispatch.DispatchedAt == dispatchedAt)
+            .Select(item => item.index)
+            .ToArray();
+        if (matches.Length == 0)
+            throw new InvalidOperationException($"Cannot record provider usage for unknown dispatch attempt {dispatchedAt:O}.");
+        if (matches.Length > 1)
+            throw new InvalidOperationException(
+                $"Cannot record provider usage because dispatch attempt timestamp {dispatchedAt:O} is ambiguous ({matches.Length} records).");
+
+        var index = matches[0];
+        var updated = _dispatchHistory[index] with { ProviderUsage = usage };
+        _dispatchHistory[index] = updated;
+        if (index == _dispatchHistory.Count - 1)
+            LastDispatch = updated;
+    }
+
     internal void RecordProcess(TaskProcessRecord process)
     {
         LastProcess = process;
@@ -1036,7 +1057,8 @@ public sealed partial class TaskSpec
         dispatch.ConductorRoutingRevision,
         dispatch.PreDispatchIntegrationReceipt,
         dispatch.GoalId,
-        dispatch.CandidateIdentity);
+        dispatch.CandidateIdentity,
+        dispatch.ProviderUsage);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1076,7 +1098,8 @@ public sealed partial class TaskSpec
         dispatch.ConductorRoutingRevision,
         dispatch.PreDispatchIntegrationReceipt,
         dispatch.GoalId,
-        dispatch.CandidateIdentity);
+        dispatch.CandidateIdentity,
+        dispatch.ProviderUsage);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
