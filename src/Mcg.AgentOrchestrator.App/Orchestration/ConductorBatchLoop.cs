@@ -2081,7 +2081,9 @@ internal sealed partial class ConductorBatchLoop
         Dictionary<string, BlockedRecheckRecurrence> recurrences)
     {
         var current = sweepResult?.Goals
-            .SelectMany(goal => goal.Blockers.Select(blocker => new
+            .SelectMany(goal => goal.Blockers
+                .Where(blocker => !ReconcileSweepRemediationCoordinator.IsAwaitingConductorAcceptanceGate(blocker))
+                .Select(blocker => new
             {
                 Key = $"{goal.GoalId.Value}:{blocker.Kind}",
                 GoalId = goal.GoalId.Value,
@@ -3178,6 +3180,14 @@ internal sealed partial class ConductorBatchLoop
                 $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', trainSelection.Members.Select(member => member.GoalId.Value[..8]))} " +
                 $"ejected={string.Join(',', trainRun.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {trainRun.Detail}",
                 changedGoalLines);
+            activeCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
+            acceptanceCensus = CaptureLiveAcceptanceCensus(
+                liveAttempts,
+                activeAttemptIds,
+                activeCohortCapacity,
+                tick,
+                changedGoalLines,
+                blockAdmissionOnFailure: true);
             cohortEligible = cohortEligible
                 .Where(goal => !results.ContainsKey(goal.Id.Value))
                 .ToArray();

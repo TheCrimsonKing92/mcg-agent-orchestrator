@@ -1569,6 +1569,16 @@ public sealed partial class AgentOrchestratorKernel
         goal.FindTask(taskId).SetDispatchContextPackageReceipt(dispatchedAt, receipt);
     }
 
+    public void RecordDispatchProviderUsage(
+        GoalId goalId,
+        TaskId taskId,
+        DateTimeOffset dispatchedAt,
+        DispatchProviderUsage usage)
+    {
+        var goal = GetGoal(goalId);
+        goal.FindTask(taskId).SetDispatchProviderUsage(dispatchedAt, usage);
+    }
+
     public void RecordTaskDispatch(
         GoalId goalId,
         TaskId taskId,

@@ -233,7 +233,10 @@ public sealed record TaskDispatchSnapshot(
     int ConductorRoutingRevision = 0,
     PreDispatchIntegrationReceipt? PreDispatchIntegrationReceipt = null,
     GoalId? GoalId = null,
-    CandidateIdentity? CandidateIdentity = null);
+    CandidateIdentity? CandidateIdentity = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    DispatchProviderUsage? ProviderUsage = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

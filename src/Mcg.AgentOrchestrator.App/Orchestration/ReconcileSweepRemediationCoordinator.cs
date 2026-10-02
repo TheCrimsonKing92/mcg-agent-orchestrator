@@ -61,6 +61,11 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                     events.Add(RenderBlocker(goal.GoalPrefix, blocker));
                 }
 
+                if (IsAwaitingConductorAcceptanceGate(blocker))
+                {
+                    continue;
+                }
+
                 if (!IsAutoRunnable(blocker, remedy))
                 {
                     if (store.TryMarkEscalationEmitted(stateKey))
@@ -212,6 +217,10 @@ internal sealed class ReconcileSweepRemediationCoordinator(
             events.Add(RenderEscalation(goalPrefix, blocker, "attempt-budget-exhausted"));
         }
     }
+
+    internal static bool IsAwaitingConductorAcceptanceGate(TerminalGoalSweepBlocker blocker) =>
+        string.Equals(blocker.Kind, "completed-branch-unmerged", StringComparison.Ordinal) &&
+        blocker.Remedy is { Verb: TerminalGoalRemedyVerb.Acceptance, GateArtifact: null };
 
     private bool IsAutoRunnable(TerminalGoalSweepBlocker blocker, TerminalGoalRemedy remedy)
     {

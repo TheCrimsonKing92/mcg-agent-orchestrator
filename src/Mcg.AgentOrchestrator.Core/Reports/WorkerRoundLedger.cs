@@ -58,12 +58,14 @@ public static class WorkerRoundLedger
                 var cause = ending is not null ? StopCause(ending.Kind)!.Value
                     : nextAt is null && task.Status is WorkTaskStatus.Running or WorkTaskStatus.Assigned
                         ? WorkerRoundStopCause.Open : WorkerRoundStopCause.Unknown;
-                var usage = dispatch.ContextPackageReceipt;
+                var receipt = dispatch.ContextPackageReceipt;
+                var input = receipt is not null ? receipt.InputTokens : dispatch.ProviderUsage?.InputTokens;
+                var cached = receipt is not null ? receipt.CachedInputTokens : dispatch.ProviderUsage?.CachedInputTokens;
+                var output = receipt is not null ? receipt.OutputTokens : dispatch.ProviderUsage?.OutputTokens;
                 records.Add(new WorkerRoundRecord(goal.Id.Value, task.Id.Value, task.RequiredRole,
                     dispatch.WorkerName, index + 1, dispatch.DispatchedAt, ending?.OccurredAt,
                     cause, dispatch.ProviderName, dispatch.ModelName, dispatch.DispatchLane,
-                    Reported(usage?.InputTokens), Reported(usage?.CachedInputTokens),
-                    Reported(usage?.OutputTokens)));
+                    Reported(input), Reported(cached), Reported(output)));
             }
         }
         return records;
