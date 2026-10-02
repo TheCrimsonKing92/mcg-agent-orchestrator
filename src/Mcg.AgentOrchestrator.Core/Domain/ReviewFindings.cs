@@ -196,13 +196,18 @@ public sealed record FindingEvidenceSelection(
     [property: JsonPropertyName("test_class")] string TestClass);
 
 public sealed record FindingEvidenceRequest(
-    [property: JsonPropertyName("selections")] IReadOnlyList<FindingEvidenceSelection> Selections);
+    [property: JsonPropertyName("selections")] IReadOnlyList<FindingEvidenceSelection> Selections,
+    [property: JsonPropertyName("negative_control")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonConverter(typeof(FindingEvidenceNegativeControlJsonConverter))]
+    FindingEvidenceNegativeControl? NegativeControl = null);
 
 [JsonConverter(typeof(JsonStringEnumConverter<FindingEvidenceArm>))]
 public enum FindingEvidenceArm
 {
     Candidate,
-    Baseline
+    Baseline,
+    SourceReverted
 }
 
 [JsonConverter(typeof(FindingEvidenceArmDispositionJsonConverter))]
@@ -379,7 +384,10 @@ public sealed record FindingEvidenceReceipt(
     IReadOnlyList<FindingEvidenceArmReceipt>? Arms = null,
     IReadOnlyList<FindingEvidenceRequestDisposition>? RequestDispositions = null,
     string? FindingRoundFingerprint = null,
-    string? ExecutionBasisIdentity = null);
+    string? ExecutionBasisIdentity = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [property: JsonConverter(typeof(FindingEvidenceNegativeControlOutcomeJsonConverter))]
+    FindingEvidenceNegativeControlOutcome? NegativeControlOutcome = null);
 
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,
@@ -1057,7 +1065,8 @@ public static class ReviewFindingConvergence
             .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
 
-        return Keys(left).SequenceEqual(Keys(right), StringComparer.Ordinal);
+        return left.NegativeControl == right.NegativeControl &&
+            Keys(left).SequenceEqual(Keys(right), StringComparer.Ordinal);
     }
 
     private static IReadOnlyList<ReviewFindingIdentityMismatch> CollectIdentityMismatches(
