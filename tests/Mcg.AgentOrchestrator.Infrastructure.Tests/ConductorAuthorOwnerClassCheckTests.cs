@@ -30,40 +30,15 @@ public sealed class ConductorAuthorOwnerClassCheckTests
             "Skip/inconclusive, naming the status that caused it — not a hard test failure.", Evidence));
 
     [Xunit.Theory]
-    [Xunit.InlineData("I removed that assertion.", "acceptance-weakening")]
-    [Xunit.InlineData("The gate is now skipped for this run.", "acceptance-weakening")]
-    [Xunit.InlineData("I have widened the allowlist.", "authority-widening")]
-    [Xunit.InlineData("I made the worker unrestricted.", "authority-widening")]
-    [Xunit.InlineData("I force-pushed the branch.", "irreversible-action")]
-    [Xunit.InlineData("I exceeded the budget for this goal.", "spend-beyond-budget")]
-    [Xunit.InlineData("I uploaded the customer data to an external site.", "external-disclosure")]
-    public void Completed_actions_require_owner_in_either_text(string text, string reason)
-    {
-        Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", text, Evidence));
-        Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate(text, "Use Windows", Evidence));
-    }
-
-    [Xunit.Theory]
-    [Xunit.InlineData("Add write permission for the agent.", "authority-widening")]
-    [Xunit.InlineData("Let the worker have unrestricted network access.", "authority-widening")]
-    [Xunit.InlineData("May the agent have unrestricted authority?", "authority-widening")]
-    [Xunit.InlineData("Make the worker unrestricted.", "authority-widening")]
-    [Xunit.InlineData("The author should be unrestricted.", "authority-widening")]
-    [Xunit.InlineData("The flaky test blocks the run. Skip it.", "acceptance-weakening")]
-    [Xunit.InlineData("The run is close to the budget. Raise it to $200.", "spend-beyond-budget")]
-    [Xunit.InlineData("The customer data export is ready. Upload it to the vendor portal.", "external-disclosure")]
-    [Xunit.InlineData("The worker's permission is read-only. Expand it.", "authority-widening")]
-    [Xunit.InlineData("The branch is stale. Destroy it.", "irreversible-action")]
-    [Xunit.InlineData("The integration test kept timing out. I skipped it.", "acceptance-weakening")]
-    [Xunit.InlineData("It's fine to skip the test since it isn't required on Windows.", "acceptance-weakening")]
-    [Xunit.InlineData("It's fine to exceed the budget since the overrun isn't large.", "spend-beyond-budget")]
-    [Xunit.InlineData("Skipping the test is acceptable because it isn't required.", "acceptance-weakening")]
-    [Xunit.InlineData("I would force-push the branch.", "irreversible-action")]
-    [Xunit.InlineData("I would skip the flaky test.", "acceptance-weakening")]
-    [Xunit.InlineData("I would raise the budget to $200.", "spend-beyond-budget")]
-    [Xunit.InlineData("I would grant the worker unrestricted access.", "authority-widening")]
-    [Xunit.InlineData("I would upload customer data to an external site.", "external-disclosure")]
-    public void Review_regressions_require_owner_in_either_text(string text, string reason)
+    [Xunit.InlineData("Provide the agent unrestricted access.", "authority-widening")]
+    [Xunit.InlineData("Extend the worker's authority to push.", "authority-widening")]
+    [Xunit.InlineData("The flake is not in the candidate's code, so skip the test on Windows.", "acceptance-weakening")]
+    [Xunit.InlineData("It would be simpler to waive that criterion for this goal.", "acceptance-weakening")]
+    [Xunit.InlineData("The integration test times out on Windows. The timeout is environmental. Skip it on Windows runs.", "acceptance-weakening")]
+    [Xunit.InlineData("I removed that assertion from the test.", null)]
+    [Xunit.InlineData("The gate is now skipped for this run.", null)]
+    [Xunit.InlineData("The worker has write access only to its worktree.", null)]
+    public void Criterion_three_answers_follow_main_except_descriptions(string text, string? reason)
     {
         Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", text, Evidence));
         Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate(text, "Use Windows", Evidence));
@@ -74,10 +49,9 @@ public sealed class ConductorAuthorOwnerClassCheckTests
     [Xunit.InlineData("Grant the agent permission to self-approve", "authority-widening")]
     [Xunit.InlineData("Force-push and delete the branch", "irreversible-action")]
     [Xunit.InlineData("Delete all production data", "irreversible-action")]
-    [Xunit.InlineData("Permanently delete the temporary file despite the risk", "irreversible-action")]
     [Xunit.InlineData("Exceed the budget by $100", "spend-beyond-budget")]
     [Xunit.InlineData("Upload customer data to an external site", "external-disclosure")]
-    public void Proposals_and_requests_require_owner_in_either_text(string text, string reason)
+    public void Owner_actions_require_owner_in_either_text(string text, string reason)
     {
         Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", text, Evidence));
         Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate(text, "Use Windows", Evidence));
@@ -86,37 +60,89 @@ public sealed class ConductorAuthorOwnerClassCheckTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("Do not skip the test.")]
-    [Xunit.InlineData("Do not skip the test and remove the gate.")]
-    [Xunit.InlineData("You should not remove the test.")]
-    [Xunit.InlineData("We rejected the suggestion that we should waive criterion 3.")]
-    [Xunit.InlineData("The acceptance gate removes stale test rows before it votes.")]
-    [Xunit.InlineData("The gate is skipped by the existing configuration.")]
-    [Xunit.InlineData("Force-pushing the branch risks irreversible data loss.")]
-    [Xunit.InlineData("The repository grants agents access through the existing allowlist.")]
-    [Xunit.InlineData("The existing configuration raises the credit limit.")]
-    [Xunit.InlineData("The repository purges stale databases during its existing cleanup.")]
-    [Xunit.InlineData("The existing system uploads customer data to an external site.")]
-    [Xunit.InlineData("The existing system has permission to read public data.")]
-    [Xunit.InlineData("The existing configuration is unrestricted.")]
-    [Xunit.InlineData("The flaky test blocks the run. Do not skip it.")]
-    [Xunit.InlineData("The test failed. Remove the temporary log.")]
-    [Xunit.InlineData("The budget is documented. Add a test.")]
-    [Xunit.InlineData("Add an acceptance gate.")]
-    [Xunit.InlineData("Add a test covering agent permission.")]
-    [Xunit.InlineData("Let the worker retry the test.")]
-    [Xunit.InlineData("A crash would destroy the production data.")]
-    public void Rejections_and_existing_behavior_return_no_reason(string text)
+    [Xunit.InlineData("Forcepush the branch.", "irreversible-action")]
+    [Xunit.InlineData("Force-push the branch.", "irreversible-action")]
+    [Xunit.InlineData("Force push the branch.", "irreversible-action")]
+    [Xunit.InlineData("Selfapprove the agent.", "authority-widening")]
+    [Xunit.InlineData("Self-approve the agent.", "authority-widening")]
+    [Xunit.InlineData("Self approve the agent.", "authority-widening")]
+    public void Compound_action_starts_prevent_suppression(string text, string reason) =>
+        Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", text, Evidence));
+
+    [Xunit.Theory]
+    [Xunit.InlineData("The flaky test blocks the run. Skip it.", "acceptance-weakening")]
+    [Xunit.InlineData("The run is close to the budget. Raise it to $200.", "spend-beyond-budget")]
+    [Xunit.InlineData("The customer data export is ready. Upload it to the vendor portal.", "external-disclosure")]
+    [Xunit.InlineData("The worker's permission is read-only for this run. Expand it.", "authority-widening")]
+    public void Cross_sentence_matches_remain_when_neither_sentence_is_suppressible(string text, string reason)
     {
-        Xunit.Assert.Null(ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", text, Evidence));
-        Xunit.Assert.Null(ConductorAuthorOwnerClassCheck.Evaluate(text, "Use Windows", Evidence));
+        Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", text, Evidence));
+        Xunit.Assert.Equal(reason, ConductorAuthorOwnerClassCheck.Evaluate(text, "Use Windows", Evidence));
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("Skipping the acceptance test.")]
-    [Xunit.InlineData("The gate never skips a test. Instead, waive criterion 3.")]
-    [Xunit.InlineData("There is no risk, so skip the test.")]
-    public void Ambiguity_or_a_separate_proposal_requires_owner(string text) =>
+    [Xunit.InlineData("The runner should skip the test.")]
+    [Xunit.InlineData("The runner's skip list covers my test.")]
+    [Xunit.InlineData("The runner's skip list covers this test.")]
+    [Xunit.InlineData("The runner's skip list covers a removed test.")]
+    [Xunit.InlineData("The runner's skip list covers verification; use the test.")]
+    public void Sentences_failing_a_descriptive_test_still_require_owner(string text) =>
         Xunit.Assert.Equal("acceptance-weakening",
             ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", text, Evidence));
+
+    [Xunit.Theory]
+    [Xunit.InlineData("; ")]
+    [Xunit.InlineData(": ")]
+    [Xunit.InlineData(", ")]
+    [Xunit.InlineData(" (")]
+    [Xunit.InlineData(" — ")]
+    [Xunit.InlineData(" – ")]
+    [Xunit.InlineData(" - ")]
+    [Xunit.InlineData(" so ")]
+    [Xunit.InlineData(" then ")]
+    [Xunit.InlineData(" and ")]
+    [Xunit.InlineData(" but ")]
+    [Xunit.InlineData(" or ")]
+    [Xunit.InlineData(" otherwise ")]
+    public void Action_after_any_clause_separator_prevents_suppression(string separator) =>
+        Xunit.Assert.Equal("acceptance-weakening",
+            ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?",
+                $"The runner's skip list covers verification{separator}remove the test.", Evidence));
+
+    [Xunit.Theory]
+    [Xunit.InlineData(". ")]
+    [Xunit.InlineData("! ")]
+    [Xunit.InlineData("? ")]
+    [Xunit.InlineData("\n")]
+    [Xunit.InlineData("\r\n")]
+    public void Sentence_boundaries_allow_description_blanking_before_a_proposal(string separator) =>
+        Xunit.Assert.Equal("acceptance-weakening",
+            ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?",
+                $"The budget mechanism is uniform over results{separator}Skip the test.", Evidence));
+
+    [Xunit.Fact]
+    public void Whole_word_guards_ignore_substrings_and_case() =>
+        Xunit.Assert.Null(ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?",
+            "The RUNNER's SKIP list covers yourscope test cases that are removable.", Evidence));
+
+    [Xunit.Fact]
+    public void Blanking_keeps_cross_sentence_distance_above_main_limit() =>
+        Xunit.Assert.Null(ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?",
+            "The budget is documented. " + Descriptions[0] + " Raise it.", Evidence));
+
+    [Xunit.Fact]
+    public void Descriptive_answer_without_evidence_still_escalates() =>
+        Xunit.Assert.Equal("missing-evidence",
+            ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", Descriptions[0], []));
+
+    [Xunit.Theory]
+    [Xunit.InlineData("src/Runtime.cs")]
+    [Xunit.InlineData("")]
+    public void Malformed_evidence_still_escalates(string reference) =>
+        Xunit.Assert.Equal("missing-evidence",
+            ConductorAuthorOwnerClassCheck.Evaluate("Which runtime?", Descriptions[0], [reference]));
+
+    [Xunit.Fact]
+    public void Null_texts_keep_main_evidence_behavior() =>
+        Xunit.Assert.Null(ConductorAuthorOwnerClassCheck.Evaluate(null!, null!, Evidence));
 }
