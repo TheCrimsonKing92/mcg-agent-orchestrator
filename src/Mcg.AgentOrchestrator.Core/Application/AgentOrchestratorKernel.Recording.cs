@@ -13,7 +13,11 @@ public sealed partial class AgentOrchestratorKernel
             goal,
             task,
             AttachAuthoritativeReviewFindingContext(task, verification));
-        verification = verification with { CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal) };
+        verification = verification with
+        {
+            CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal),
+            AcceptanceCriteriaVersionHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal)
+        };
         task.RecordVerification(verification);
 
         if (verification.AuthoritativeStandardOutput is { } workerOutput)
@@ -118,7 +122,11 @@ public sealed partial class AgentOrchestratorKernel
             goal,
             task,
             AttachAuthoritativeReviewFindingContext(task, verification));
-        verification = verification with { CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal) };
+        verification = verification with
+        {
+            CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal),
+            AcceptanceCriteriaVersionHash = EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal)
+        };
         task.RecordVerification(verification);
         if (verification.AuthoritativeStandardOutput is { } dispatchOutput)
             RecordIgnoredCriteriaCorrection(goal, taskId, CriteriaCorrectionSource.WorkerResult, dispatchOutput);

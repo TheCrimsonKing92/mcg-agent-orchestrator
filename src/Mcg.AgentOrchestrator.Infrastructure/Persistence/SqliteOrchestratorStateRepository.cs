@@ -2101,6 +2101,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             AcceptedRetryFeedback = PickStoreOwned(baseline.AcceptedRetryFeedback, stored.AcceptedRetryFeedback, current.AcceptedRetryFeedback),
             EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount),
             LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),
+            LatestRetryInherited = PickStoreOwned(baseline.LatestRetryInherited, stored.LatestRetryInherited, current.LatestRetryInherited),
             PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind),
             PendingRetryCause = PickStoreOwned(baseline.PendingRetryCause, stored.PendingRetryCause, current.PendingRetryCause),
             RetryAdmissionHistory = MergeRetryAdmissionHistory(
