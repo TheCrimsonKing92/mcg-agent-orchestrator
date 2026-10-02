@@ -223,6 +223,7 @@ cancel-dispatch <task-number>
 verify <task-number> <command>
 verify-manual <task-number> <passed|failed> <note>
 verifications <task-number>
+operator-intent-status <intent-id> [--wait [seconds]]
 progress <task-number> <running|completed|failed|cancelled> <message>
 ask <task-number> <question>
 ask-goal <question>
@@ -235,6 +236,8 @@ config <agents|profiles|policy|doctor>
 conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]
 exit
 ```
+
+`operator-intent-status` reads the intent once and prints one status line, with exit code 0, when no option is supplied. Add `--wait [seconds]` (or `--wait=seconds`) to poll once per second until Applied, Rejected or the deadline, printing only the final status line. The duration is a positive integer and defaults to 300 seconds; the option may appear before or after the intent id. With `--wait`, exit codes are 0 for Applied, 2 for Rejected (including its outcome text), and 3 for Pending or Claimed at the deadline. Invalid arguments and missing intents retain exit code 1.
 
 `task` accepts either a display number or a task id prefix. `tasks` lists the current goal's tasks and can filter by `status`, `role`, task `id` prefix, evidence kind, and timeline event kind. Evidence kinds include `none`, `execution`, `dispatch`, `process`, `running-process`, `completed-process`, `verification`, `passed-verification`, and `failed-verification`. Timeline event kinds match `ProgressKind` names such as `TaskDispatchRecorded` or `TaskVerificationRecorded`. `add-task` appends a custom task to the current goal and delegates it immediately when a matching available agent role exists. Valid roles are `Planner`, `Researcher`, `Developer`, `Tester`, and `Reviewer`. `verification-plan <task-number>` prints the current task plan; add plan text to update the pre-work verification checklist included in task details and prompts. Use `task-timeline` to inspect only the events for one task.
 

@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 // Queues evidence requests and observes durable intent outcomes; the conductor owns their application.
-internal static class CliCriterionEvidenceIntents
+internal static partial class CliCriterionEvidenceIntents
 {
     public static void Submit(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         GoalId goalId, CliPersistentStateRunner.OperatorIntentAttribution attribution)
@@ -39,7 +39,7 @@ internal static class CliCriterionEvidenceIntents
             .GetResult();
         Console.WriteLine(
             $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goalId.Value} " +
-            $"status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+            $"status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
         if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
         {
             Console.WriteLine(ConductorLoopLease.InactiveWarning);
@@ -114,30 +114,23 @@ internal static class CliCriterionEvidenceIntents
         IReadOnlyList<string> args,
         OrchestratorWorkspace workspace)
     {
-        if (args.Count != 2)
-        {
-            throw new ArgumentException("Usage: operator-intent-status <intent-id>");
-        }
+        var (intentId, _) = ParseStatusArguments(args);
 
         var databasePath = Path.Combine(
             workspace.OrchestratorDirectory,
             SqliteOperatorIntentStore.DatabaseFileName);
         if (!File.Exists(databasePath))
         {
-            throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
+            throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
         }
 
-        var intent = SqliteOperatorIntentStore
-            .OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
-            .GetAsync(args[1])
-            .GetAwaiter()
-            .GetResult()
-            ?? throw new KeyNotFoundException($"Operator intent '{args[1]}' was not found.");
-        Console.WriteLine(
-            $"Operator intent {intent.Id}: verb={intent.Verb} goal={intent.GoalId[..Math.Min(8, intent.GoalId.Length)]} " +
-            $"task={(intent.TaskId is null ? "none" : intent.TaskId[..Math.Min(8, intent.TaskId.Length)])} " +
-            $"status={intent.Status} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance} " +
-            $"outcome={intent.Outcome ?? "pending"}");
+        var exitCode = PrintStatus(args,
+            SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory),
+            Console.Out, TimeProvider.System, TimeSpan.FromSeconds(1), Thread.Sleep);
+        if (exitCode != 0)
+        {
+            throw new CliExitException(exitCode);
+        }
     }
 
     public static string? ResolveFlagValue(IReadOnlyList<string> args, string flag)

@@ -36,7 +36,7 @@ internal static partial class CliPersistentStateRunner
             attribution.AuthenticationAssurance, DateTimeOffset.UtcNow, ActorKind: attribution.ActorKind);
         var persisted = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .EnqueueAsync(record).GetAwaiter().GetResult();
-        Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goalId.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+        Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goalId.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
         if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
             Console.WriteLine(ConductorLoopLease.InactiveWarning);
         return false;
