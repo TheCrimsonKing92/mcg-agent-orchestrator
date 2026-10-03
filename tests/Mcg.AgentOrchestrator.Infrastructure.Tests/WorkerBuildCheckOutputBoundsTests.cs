@@ -58,6 +58,8 @@ public sealed class WorkerBuildCheckOutputBoundsTests
 
     private static async Task<ProcessResult> RunFixtureAsync(string scenario)
     {
+        // Hang-only bound exceeds the Warnings scenario's two 120-second child guards.
+        const int FixtureHangBoundSeconds = 300;
         var repositoryRoot = FindRepositoryRoot();
         var fixturePath = Path.Combine(
             repositoryRoot,
@@ -72,7 +74,6 @@ public sealed class WorkerBuildCheckOutputBoundsTests
             WorkingDirectory = repositoryRoot,
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
@@ -85,22 +86,9 @@ public sealed class WorkerBuildCheckOutputBoundsTests
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Fixture process did not start.");
-        process.StandardInput.Close();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException($"Fixture scenario '{scenario}' did not exit within 45 seconds.");
-        }
-
-        return new ProcessResult(process.ExitCode, await stdoutTask, await stderrTask);
+        var capture = await Task.Run(() => TestChildProcessCapture.Run(
+            startInfo, hangBound: TimeSpan.FromSeconds(FixtureHangBoundSeconds)));
+        return new ProcessResult(capture.ExitCode, capture.Stdout, capture.Stderr);
     }
 
     private static string FindRepositoryRoot([CallerFilePath] string sourcePath = "")
