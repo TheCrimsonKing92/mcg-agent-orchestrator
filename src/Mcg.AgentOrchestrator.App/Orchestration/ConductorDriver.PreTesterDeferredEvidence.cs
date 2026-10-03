@@ -265,7 +265,9 @@ internal sealed partial class ConductorDriver
     {
         result = default!;
         var tester = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+        var lastOperatorAnswer = LastOperatorRedLoopAnswerIndex(goal);
         var redHistory = goal.Timeline
+            .Where((evt, index) => index > lastOperatorAnswer)
             .Where(evt => evt.TaskId == tester.Id && evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
                           evt.Message.StartsWith("finding-evidence pre-tester outcome=actionable-red;", StringComparison.Ordinal))
             .ToArray();
@@ -278,5 +280,25 @@ internal sealed partial class ConductorDriver
             "PRE_TESTER_RED_LOOP: three consecutive candidate RED runs without Tester dispatch; " +
             $"failing_sets={string.Join(" | ", redHistory.Where(evt => evt.OccurredAt > lastTesterDispatch).TakeLast(3).Select(evt => evt.Message))}");
         return true;
+    }
+
+    private static int LastOperatorRedLoopAnswerIndex(Goal goal)
+    {
+        var lastEscalation = goal.Timeline
+            .Select((evt, index) => (evt, index))
+            .Where(item => item.evt.TaskId is null && item.evt.Kind == ProgressKind.GoalPolicyDecision &&
+                           item.evt.Message.Contains("PRE_TESTER_RED_LOOP:", StringComparison.Ordinal))
+            .Select(item => item.index).DefaultIfEmpty(-1).Max();
+        if (lastEscalation < 0) return -1;
+
+        for (var index = goal.Timeline.Count - 1; index > lastEscalation; index--)
+        {
+            var evt = goal.Timeline[index];
+            if (evt.Kind == ProgressKind.TaskRetried &&
+                !evt.Message.StartsWith("ACTIONABLE_CANDIDATE_RED ", StringComparison.Ordinal) &&
+                goal.Tasks.Any(task => task.Id == evt.TaskId && task.RequiredRole == AgentRole.Developer))
+                return index;
+        }
+        return -1;
     }
 }
